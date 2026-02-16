@@ -1,0 +1,19 @@
+[package]
+name = "hadron-driver-api"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Driver subsystem API traits and types for Hadron OS"
+
+[lib]
+bench = false
+doctest = false
+
+[dependencies]
+hadron-core = { workspace = true }
+
+[lints]
+workspace = true

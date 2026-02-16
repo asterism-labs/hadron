@@ -1,0 +1,10 @@
+[book]
+title = "Hadron Kernel Development Plan"
+authors = ["hxyulin"]
+language = "en"
+src = "src"
+
+[output.html]
+default-theme = "dark"
+preferred-dark-theme = "ayu"
+git-repository-url = "https://github.com/hxyulin/hadron"

@@ -1,0 +1,11 @@
+/target/
+Cargo.lock
+*.swp
+*.swo
+.idea/
+.vscode/
+*.iso
+*.img
+.worktrees/
+
+/docs/book

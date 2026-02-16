@@ -1,0 +1,46 @@
+[package]
+name = "uefi"
+version.workspace = true
+rust-version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+readme.workspace = true
+publish.workspace = true
+
+[lib]
+test = false
+bench = false
+doctest = false
+
+[dependencies]
+bitflags = { workspace = true }
+
+[dev-dependencies]
+hadron-test = { workspace = true, default-features = false, features = ["uefi"] }
+
+[lints]
+workspace = true
+
+[package.metadata.image-runner.boot]
+type = "uefi"
+
+[package.metadata.image-runner.bootloader]
+kind = "none"
+
+[package.metadata.image-runner.image]
+format = "directory"
+
+[package.metadata.image-runner.runner]
+kind = "qemu"
+
+[package.metadata.image-runner.runner.qemu]
+machine = "q35"
+memory = 256
+extra-args = ["-serial", "stdio"]
+
+[package.metadata.image-runner.test]
+success-exit-code = 33
+timeout = 30
+extra-args = ["-device", "isa-debug-exit,iobase=0xf4,iosize=0x04", "-display", "none"]

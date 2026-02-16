@@ -1,0 +1,16 @@
+[package]
+name = "xtask"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+hadris-cpio = { workspace = true, features = ["std", "write"] }
+hadron-dwarf = { workspace = true }
+hadron-elf = { workspace = true }
+rustc-demangle = "0.1"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+xshell = "0.2"

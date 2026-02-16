@@ -1,0 +1,120 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/*",
+    "kernel/hadron-kernel",
+    "kernel/hadron-driver-api",
+    "kernel/hadron-drivers",
+    "kernel/boot/*",
+    "xtask",
+    "kernel/hadron-core",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+authors = ["hxyulin"]
+repository = "https://github.com/hxyulin/hadron"
+license = "GPL-3.0-only"
+readme = "README.md"
+publish = false
+
+[workspace.dependencies]
+# Internal crates
+hadron-acpi = { path = "crates/acpi" }
+hadron-driver-api = { path = "kernel/hadron-driver-api" }
+hadron-drivers = { path = "kernel/hadron-drivers" }
+hadron-core = { path = "kernel/hadron-core" }
+hadron-kernel = { path = "kernel/hadron-kernel" }
+hadron-test = { path = "crates/hadron-test", default-features = false }
+limine = { path = "crates/limine" }
+hadron-dwarf = { path = "crates/dwarf" }
+hadron-elf = { path = "crates/elf" }
+noalloc = { path = "crates/noalloc" }
+uefi = { path = "crates/uefi" }
+
+# External dependencies
+bitflags = "2"
+hadris-cpio = { git = "https://github.com/hxyulin/hadris", default-features = false }
+hadris-io = { git = "https://github.com/hxyulin/hadris", default-features = false }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"
+
+[profile.dev]
+# panic = abort is in target spec
+
+[profile.release]
+# panic = abort is in target spec
+
+[workspace.metadata.hadron]
+default-target = "x86_64-unknown-hadron"
+
+[workspace.metadata.image-runner]
+verbose = true
+
+[workspace.metadata.image-runner.boot]
+type = "bios"
+
+[workspace.metadata.image-runner.bootloader]
+kind = "limine"
+config-file = "limine.conf"
+
+[workspace.metadata.image-runner.bootloader.limine]
+version = "v10.7.0-binary"
+
+[workspace.metadata.image-runner.extra-files]
+"boot/initrd.cpio" = "target/initrd.cpio"
+"boot/backtrace.hbtf" = "target/backtrace.hbtf"
+
+[workspace.metadata.image-runner.image]
+format = "iso"
+
+[workspace.metadata.image-runner.runner]
+kind = "qemu"
+
+[workspace.metadata.image-runner.runner.qemu]
+machine = "q35"
+memory = 256
+extra-args = ["-serial", "stdio"]
+
+[workspace.metadata.image-runner.test]
+success-exit-code = 33
+timeout = 30
+extra-args = [
+    "-device",
+    "isa-debug-exit,iobase=0xf4,iosize=0x04",
+    "-display",
+    "none",
+    "-no-reboot",
+]
+
+[workspace.metadata.image-runner.run]
+gui = true
+
+[workspace.metadata.image-runner.profiles.stress]
+[workspace.metadata.image-runner.profiles.stress.runner.qemu]
+memory = 1024
+cores = 4
+extra-args = ["-serial", "stdio"]
+[workspace.metadata.image-runner.profiles.stress.test]
+timeout = 120
+
+[workspace.metadata.image-runner.profiles.debug]
+[workspace.metadata.image-runner.profiles.debug.runner.qemu]
+memory = 512
+extra-args = ["-serial", "stdio", "-s", "-S"]
+[workspace.metadata.image-runner.profiles.debug.test]
+timeout = 3600
+
+[workspace.metadata.image-runner.profiles.minimal]
+[workspace.metadata.image-runner.profiles.minimal.runner.qemu]
+memory = 64
+cores = 1
+extra-args = ["-serial", "stdio"]

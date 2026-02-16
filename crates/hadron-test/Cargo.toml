@@ -1,0 +1,26 @@
+[package]
+name = "hadron-test"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Test harness for Hadron OS kernel integration tests"
+
+[lib]
+test = false
+bench = false
+doctest = false
+
+[features]
+default = ["limine"]
+limine = ["dep:limine"]
+uefi = ["dep:uefi"]
+
+[dependencies]
+limine = { workspace = true, optional = true }
+uefi = { workspace = true, optional = true }
+
+[lints]
+workspace = true
