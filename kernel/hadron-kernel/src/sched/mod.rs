@@ -20,9 +20,8 @@ use hadron_core::percpu::{CpuLocal, MAX_CPUS};
 use hadron_core::task::TaskId;
 
 /// Per-CPU preemption flag.
-static PREEMPT_PENDING: CpuLocal<AtomicBool> = CpuLocal::new(
-    [const { AtomicBool::new(false) }; MAX_CPUS],
-);
+static PREEMPT_PENDING: CpuLocal<AtomicBool> =
+    CpuLocal::new([const { AtomicBool::new(false) }; MAX_CPUS]);
 
 /// Returns a reference to the current CPU's executor.
 pub fn executor() -> &'static Executor {

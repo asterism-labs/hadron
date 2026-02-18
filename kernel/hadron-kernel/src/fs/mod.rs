@@ -205,20 +205,10 @@ pub trait FileSystem: Send + Sync {
     fn root(&self) -> Arc<dyn Inode>;
 }
 
-/// Poll a future that is expected to resolve immediately (single poll).
-///
-/// Constructs a noop waker, polls once, and panics if the future returns
-/// `Pending`. This is appropriate for in-memory filesystem operations
-/// (ramfs, devfs) that never yield.
-///
-/// # Panics
-///
-/// Panics if the future returns `Pending`.
-#[must_use]
-pub fn poll_immediate<T>(mut future: Pin<Box<dyn Future<Output = T> + Send + '_>>) -> T {
-    use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+/// Construct a noop waker for single-poll helpers.
+fn noop_waker() -> core::task::Waker {
+    use core::task::{RawWaker, RawWakerVTable, Waker};
 
-    // Noop waker -- never actually wakes anything.
     fn noop_clone(_: *const ()) -> RawWaker {
         noop_raw_waker()
     }
@@ -231,11 +221,47 @@ pub fn poll_immediate<T>(mut future: Pin<Box<dyn Future<Output = T> + Send + '_>
     }
 
     // SAFETY: The noop waker vtable functions are valid (they do nothing).
-    let waker = unsafe { Waker::from_raw(noop_raw_waker()) };
+    unsafe { Waker::from_raw(noop_raw_waker()) }
+}
+
+/// Poll a future that is expected to resolve immediately (single poll).
+///
+/// Constructs a noop waker, polls once, and panics if the future returns
+/// `Pending`. This is appropriate for in-memory filesystem operations
+/// (ramfs, devfs) that never yield.
+///
+/// # Panics
+///
+/// Panics if the future returns `Pending`.
+#[must_use]
+pub fn poll_immediate<T>(mut future: Pin<Box<dyn Future<Output = T> + Send + '_>>) -> T {
+    use core::task::{Context, Poll};
+
+    let waker = noop_waker();
     let mut cx = Context::from_waker(&waker);
 
     match future.as_mut().poll(&mut cx) {
         Poll::Ready(val) => val,
         Poll::Pending => panic!("poll_immediate: future returned Pending"),
+    }
+}
+
+/// Try to poll a future once, returning `Some(value)` if it resolves
+/// immediately or `None` if it would block.
+///
+/// Used by syscall handlers that need to attempt synchronous I/O first
+/// and fall back to the async TRAP_IO mechanism if the future is not ready.
+#[must_use]
+pub fn try_poll_immediate<T>(
+    mut future: Pin<Box<dyn Future<Output = T> + Send + '_>>,
+) -> Option<T> {
+    use core::task::{Context, Poll};
+
+    let waker = noop_waker();
+    let mut cx = Context::from_waker(&waker);
+
+    match future.as_mut().poll(&mut cx) {
+        Poll::Ready(val) => Some(val),
+        Poll::Pending => None,
     }
 }

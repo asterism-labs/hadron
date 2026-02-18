@@ -1,8 +1,8 @@
 use limine::{
     BaseRevision, BootloaderInfoRequest, BootloaderPerformanceRequest, DateAtBootRequest,
     DeviceTreeBlobRequest, ExecutableAddressRequest, ExecutableCmdlineRequest, FirmwareTypeRequest,
-    FramebufferRequest, HhdmRequest, MemMapRequest, ModuleRequest, MpRequest,
-    PagingModeRequest, RequestsEndMarker, RequestsStartMarker, RsdpRequest, SmbiosRequest,
+    FramebufferRequest, HhdmRequest, MemMapRequest, ModuleRequest, MpRequest, PagingModeRequest,
+    RequestsEndMarker, RequestsStartMarker, RsdpRequest, SmbiosRequest,
 };
 
 #[repr(C, align(8))]

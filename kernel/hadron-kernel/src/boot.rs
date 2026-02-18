@@ -172,7 +172,7 @@ impl SmpCpuEntry {
     /// - `extra` is passed in RSI to the entry function.
     /// - The pointed-to bootloader memory must still be valid and mapped.
     pub unsafe fn start(&self, entry: usize, extra: u64) {
-        use core::sync::atomic::{fence, Ordering};
+        use core::sync::atomic::{Ordering, fence};
         // SAFETY: Caller guarantees the pointers are still valid.
         unsafe {
             core::ptr::write_volatile(self.extra_argument_ptr, extra);
@@ -514,13 +514,14 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
         // SAFETY: We have exclusive BSP access during init. The pointers
         // are to static CpuLocal elements that live forever.
         unsafe {
-            let percpu_mut = percpu as *const hadron_core::percpu::PerCpu
-                as *mut hadron_core::percpu::PerCpu;
+            let percpu_mut =
+                percpu as *const hadron_core::percpu::PerCpu as *mut hadron_core::percpu::PerCpu;
             (*percpu_mut).user_context_ptr = crate::proc::user_context_ptr() as u64;
             (*percpu_mut).saved_kernel_rsp_ptr = crate::proc::saved_kernel_rsp_ptr() as u64;
             (*percpu_mut).trap_reason_ptr = crate::proc::trap_reason_ptr() as u64;
-            (*percpu_mut).saved_regs_ptr =
-                hadron_core::arch::x86_64::syscall::SYSCALL_SAVED_REGS.get().get() as u64;
+            (*percpu_mut).saved_regs_ptr = hadron_core::arch::x86_64::syscall::SYSCALL_SAVED_REGS
+                .get()
+                .get() as u64;
         }
     }
 

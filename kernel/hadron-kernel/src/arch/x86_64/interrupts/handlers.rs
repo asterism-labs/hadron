@@ -33,11 +33,7 @@ fn terminate_user_fault(name: &str, frame: &InterruptStackFrame) -> ! {
 }
 
 /// Like [`terminate_user_fault`] but includes an error code in the log.
-fn terminate_user_fault_with_error(
-    name: &str,
-    frame: &InterruptStackFrame,
-    error_code: u64,
-) -> ! {
+fn terminate_user_fault_with_error(name: &str, frame: &InterruptStackFrame, error_code: u64) -> ! {
     hadron_core::kerr!("USER {name} (error_code={error_code:#x})\n{frame:#?}");
     // SAFETY: Same as terminate_user_fault.
     unsafe {

@@ -22,9 +22,8 @@ use hadron_core::sync::{IrqSpinLock, LazyLock};
 use hadron_core::task::{Priority, TaskId, TaskMeta};
 
 /// Per-CPU executor instances, initialized on first access.
-static EXECUTORS: CpuLocal<LazyLock<Executor>> = CpuLocal::new(
-    [const { LazyLock::new(Executor::new as fn() -> Executor) }; MAX_CPUS],
-);
+static EXECUTORS: CpuLocal<LazyLock<Executor>> =
+    CpuLocal::new([const { LazyLock::new(Executor::new as fn() -> Executor) }; MAX_CPUS]);
 
 /// Returns a reference to the current CPU's executor.
 pub fn global() -> &'static Executor {
@@ -177,7 +176,10 @@ impl Executor {
         // Hold ready_queues lock while checking tasks to prevent the
         // stolen task ID from being lost. try_lock avoids deadlock with
         // spawn (which takes tasks then ready_queues — opposite order).
-        let entry = self.tasks.try_lock().and_then(|mut tasks| tasks.remove(&id));
+        let entry = self
+            .tasks
+            .try_lock()
+            .and_then(|mut tasks| tasks.remove(&id));
         match entry {
             Some(entry) => Some((id, priority, entry)),
             None => {

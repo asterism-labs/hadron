@@ -266,14 +266,25 @@ pub fn spawn_process(path: &str, parent_pid: u32) -> Result<Arc<Process>, Binary
 
     // Inherit fd 0/1/2 from parent, or fall back to /dev/console.
     {
+        let parent = super::lookup_process(parent_pid).expect("spawn_process: parent not found");
+        let parent_fds = parent.fd_table.lock();
         let console = vfs::with_vfs(|vfs| {
             vfs.resolve("/dev/console")
                 .expect("spawn_process: /dev/console not found")
         });
         let mut fd_table = process.fd_table.lock();
-        fd_table.insert_at(0, console.clone(), OpenFlags::READ);
-        fd_table.insert_at(1, console.clone(), OpenFlags::WRITE);
-        fd_table.insert_at(2, console, OpenFlags::WRITE);
+        for fd_num in 0..=2usize {
+            if let Some(parent_fd) = parent_fds.get(fd_num) {
+                fd_table.insert_at(fd_num, parent_fd.inode.clone(), parent_fd.flags);
+            } else {
+                let flags = if fd_num == 0 {
+                    OpenFlags::READ
+                } else {
+                    OpenFlags::WRITE
+                };
+                fd_table.insert_at(fd_num, console.clone(), flags);
+            }
+        }
     }
 
     let process = Arc::new(process);

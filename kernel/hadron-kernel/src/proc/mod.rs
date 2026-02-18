@@ -16,7 +16,7 @@ use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::cell::UnsafeCell;
-use core::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 
 use hadron_core::addr::PhysAddr;
 use hadron_core::arch::x86_64::paging::PageTableMapper;
@@ -43,6 +43,8 @@ pub const TRAP_PREEMPTED: u8 = 1;
 pub const TRAP_FAULT: u8 = 2;
 /// Syscall requested blocking wait (sys_task_wait).
 pub const TRAP_WAIT: u8 = 3;
+/// Syscall requested blocking I/O (pipe read/write).
+pub const TRAP_IO: u8 = 4;
 
 // ── Global statics ──────────────────────────────────────────────────
 
@@ -55,21 +57,18 @@ static NEXT_PID: AtomicU32 = AtomicU32::new(1);
 
 /// Per-CPU saved kernel RSP for `restore_kernel_context`.
 /// `pub(crate)` for access from the timer preemption stub.
-pub(crate) static SAVED_KERNEL_RSP: CpuLocal<AtomicU64> = CpuLocal::new(
-    [const { AtomicU64::new(0) }; MAX_CPUS],
-);
+pub(crate) static SAVED_KERNEL_RSP: CpuLocal<AtomicU64> =
+    CpuLocal::new([const { AtomicU64::new(0) }; MAX_CPUS]);
 
 /// Per-CPU exit status written by `sys_task_exit` / fault handler before restoring context.
 /// `usize::MAX` is a sentinel meaning "killed by fault".
-static PROCESS_EXIT_STATUS: CpuLocal<AtomicU64> = CpuLocal::new(
-    [const { AtomicU64::new(0) }; MAX_CPUS],
-);
+static PROCESS_EXIT_STATUS: CpuLocal<AtomicU64> =
+    CpuLocal::new([const { AtomicU64::new(0) }; MAX_CPUS]);
 
 /// Per-CPU currently running user-mode process.
 /// Set before entering userspace, cleared after returning.
-static CURRENT_PROCESS: CpuLocal<SpinLock<Option<Arc<Process>>>> = CpuLocal::new(
-    [const { SpinLock::new(None) }; MAX_CPUS],
-);
+static CURRENT_PROCESS: CpuLocal<SpinLock<Option<Arc<Process>>>> =
+    CpuLocal::new([const { SpinLock::new(None) }; MAX_CPUS]);
 
 /// Wrapper to make `UnsafeCell<UserRegisters>` usable in a `static`.
 ///
@@ -116,25 +115,33 @@ impl SyncUserContext {
 /// Per-CPU saved user register state. Written by the preemption stub when
 /// preempting from ring 3. Read by `enter_userspace_resume` when
 /// re-entering.
-pub(crate) static USER_CONTEXT: CpuLocal<SyncUserContext> = CpuLocal::new(
-    [const { SyncUserContext::new() }; MAX_CPUS],
-);
+pub(crate) static USER_CONTEXT: CpuLocal<SyncUserContext> =
+    CpuLocal::new([const { SyncUserContext::new() }; MAX_CPUS]);
 
 /// Per-CPU trap reason. Set before `restore_kernel_context`.
 /// `pub(crate)` for access from the timer preemption stub.
-pub(crate) static TRAP_REASON: CpuLocal<AtomicU8> = CpuLocal::new(
-    [const { AtomicU8::new(TRAP_EXIT) }; MAX_CPUS],
-);
+pub(crate) static TRAP_REASON: CpuLocal<AtomicU8> =
+    CpuLocal::new([const { AtomicU8::new(TRAP_EXIT) }; MAX_CPUS]);
 
 /// Per-CPU target PID for `sys_task_wait`. Set by syscall handler, read by `process_task`.
-static WAIT_TARGET_PID: CpuLocal<AtomicU32> = CpuLocal::new(
-    [const { AtomicU32::new(0) }; MAX_CPUS],
-);
+static WAIT_TARGET_PID: CpuLocal<AtomicU32> =
+    CpuLocal::new([const { AtomicU32::new(0) }; MAX_CPUS]);
 
 /// Per-CPU user-space pointer where `sys_task_wait` should write the exit status.
-static WAIT_STATUS_PTR: CpuLocal<AtomicU64> = CpuLocal::new(
-    [const { AtomicU64::new(0) }; MAX_CPUS],
-);
+static WAIT_STATUS_PTR: CpuLocal<AtomicU64> =
+    CpuLocal::new([const { AtomicU64::new(0) }; MAX_CPUS]);
+
+/// Per-CPU file descriptor for TRAP_IO.
+static IO_FD: CpuLocal<AtomicU64> = CpuLocal::new([const { AtomicU64::new(0) }; MAX_CPUS]);
+
+/// Per-CPU user buffer pointer for TRAP_IO.
+static IO_BUF_PTR: CpuLocal<AtomicU64> = CpuLocal::new([const { AtomicU64::new(0) }; MAX_CPUS]);
+
+/// Per-CPU user buffer length for TRAP_IO.
+static IO_BUF_LEN: CpuLocal<AtomicU64> = CpuLocal::new([const { AtomicU64::new(0) }; MAX_CPUS]);
+
+/// Per-CPU I/O direction for TRAP_IO: 0 = read, 1 = write.
+static IO_IS_WRITE: CpuLocal<AtomicU8> = CpuLocal::new([const { AtomicU8::new(0) }; MAX_CPUS]);
 
 // ── Global process table ────────────────────────────────────────────
 
@@ -313,7 +320,9 @@ pub unsafe fn terminate_current_process_from_fault() -> ! {
         let percpu = IA32_KERNEL_GS_BASE.read();
         IA32_GS_BASE.write(percpu);
     }
-    PROCESS_EXIT_STATUS.get().store(usize::MAX as u64, Ordering::Release);
+    PROCESS_EXIT_STATUS
+        .get()
+        .store(usize::MAX as u64, Ordering::Release);
     TRAP_REASON.get().store(TRAP_FAULT, Ordering::Release);
     // SAFETY: saved_kernel_rsp() returns the RSP saved by enter_userspace_save,
     // which is still valid on the executor stack.
@@ -480,6 +489,16 @@ pub fn set_wait_params(target_pid: u32, status_ptr: u64) {
     WAIT_STATUS_PTR.get().store(status_ptr, Ordering::Release);
 }
 
+/// Sets the I/O parameters for a `TRAP_IO` syscall.
+pub fn set_io_params(fd: usize, buf_ptr: usize, buf_len: usize, is_write: bool) {
+    IO_FD.get().store(fd as u64, Ordering::Release);
+    IO_BUF_PTR.get().store(buf_ptr as u64, Ordering::Release);
+    IO_BUF_LEN.get().store(buf_len as u64, Ordering::Release);
+    IO_IS_WRITE
+        .get()
+        .store(u8::from(is_write), Ordering::Release);
+}
+
 /// The async task that represents a running process.
 ///
 /// Enters userspace and re-enters after preemption in a loop.
@@ -564,9 +583,20 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                 // while we are suspended in .await.
                 // SAFETY: SYSCALL_SAVED_REGS is only written by syscall entry
                 // assembly with interrupts masked, and we haven't yielded yet.
-                let (saved_rip, saved_rflags, saved_rbx, saved_rbp, saved_r12, saved_r13, saved_r14, saved_r15, saved_user_rsp) = unsafe {
-                    let saved =
-                        &*hadron_core::arch::x86_64::syscall::SYSCALL_SAVED_REGS.get().get();
+                let (
+                    saved_rip,
+                    saved_rflags,
+                    saved_rbx,
+                    saved_rbp,
+                    saved_r12,
+                    saved_r13,
+                    saved_r14,
+                    saved_r15,
+                    saved_user_rsp,
+                ) = unsafe {
+                    let saved = &*hadron_core::arch::x86_64::syscall::SYSCALL_SAVED_REGS
+                        .get()
+                        .get();
                     (
                         saved.user_rip,
                         saved.user_rflags,
@@ -633,12 +663,173 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                 }
                 continue;
             }
+            TRAP_IO => {
+                // The syscall handler set IO_FD, IO_BUF_PTR, IO_BUF_LEN, IO_IS_WRITE.
+                // Perform the async I/O here where we can .await.
+                let io_fd = IO_FD.get().load(Ordering::Acquire) as usize;
+                let io_buf_ptr = IO_BUF_PTR.get().load(Ordering::Acquire) as usize;
+                let io_buf_len = IO_BUF_LEN.get().load(Ordering::Acquire) as usize;
+                let is_write = IO_IS_WRITE.get().load(Ordering::Acquire) != 0;
+
+                // Snapshot saved user registers (same pattern as TRAP_WAIT).
+                // SAFETY: SYSCALL_SAVED_REGS is only written by syscall entry
+                // assembly with interrupts masked, and we haven't yielded yet.
+                let (
+                    saved_rip,
+                    saved_rflags,
+                    saved_rbx,
+                    saved_rbp,
+                    saved_r12,
+                    saved_r13,
+                    saved_r14,
+                    saved_r15,
+                    saved_user_rsp,
+                ) = unsafe {
+                    let saved = &*hadron_core::arch::x86_64::syscall::SYSCALL_SAVED_REGS
+                        .get()
+                        .get();
+                    (
+                        saved.user_rip,
+                        saved.user_rflags,
+                        saved.rbx,
+                        saved.rbp,
+                        saved.r12,
+                        saved.r13,
+                        saved.r14,
+                        saved.r15,
+                        hadron_core::percpu::current_cpu().user_rsp,
+                    )
+                };
+
+                // Get inode from the process fd table.
+                let io_result = {
+                    let fd_table = process.fd_table.lock();
+                    fd_table
+                        .get(io_fd)
+                        .map(|f| (f.inode.clone(), f.offset, f.flags))
+                };
+
+                let result: isize = if let Some((inode, offset, flags)) = io_result {
+                    if is_write {
+                        if !flags.contains(crate::fs::file::OpenFlags::WRITE) {
+                            -hadron_core::syscall::EBADF
+                        } else {
+                            // Copy user data to kernel buffer under user CR3.
+                            let mut kbuf = alloc::vec![0u8; io_buf_len];
+                            // SAFETY: Switching to user CR3 to copy data.
+                            unsafe {
+                                Cr3::write(process.user_cr3);
+                            }
+                            let uslice = hadron_core::syscall::userptr::UserSlice::new(
+                                io_buf_ptr, io_buf_len,
+                            );
+                            if let Ok(slice) = uslice {
+                                // SAFETY: UserSlice validated pointer range under user CR3.
+                                let src = unsafe { slice.as_slice() };
+                                kbuf.copy_from_slice(src);
+                            }
+                            // SAFETY: Restore kernel CR3.
+                            unsafe {
+                                Cr3::write(kernel_cr3());
+                            }
+
+                            match inode.write(offset, &kbuf).await {
+                                Ok(n) => {
+                                    let mut fd_table = process.fd_table.lock();
+                                    if let Some(f) = fd_table.get_mut(io_fd) {
+                                        f.offset += n;
+                                    }
+                                    #[expect(
+                                        clippy::cast_possible_wrap,
+                                        reason = "byte counts are small"
+                                    )]
+                                    {
+                                        n as isize
+                                    }
+                                }
+                                Err(e) => -e.to_errno(),
+                            }
+                        }
+                    } else {
+                        if !flags.contains(crate::fs::file::OpenFlags::READ) {
+                            -hadron_core::syscall::EBADF
+                        } else {
+                            let mut kbuf = alloc::vec![0u8; io_buf_len];
+                            match inode.read(offset, &mut kbuf).await {
+                                Ok(n) => {
+                                    // Copy kernel buffer to user memory under user CR3.
+                                    // SAFETY: Switching to user CR3.
+                                    unsafe {
+                                        Cr3::write(process.user_cr3);
+                                    }
+                                    let uslice = hadron_core::syscall::userptr::UserSlice::new(
+                                        io_buf_ptr, n,
+                                    );
+                                    if let Ok(slice) = uslice {
+                                        // SAFETY: UserSlice validated pointer range under user CR3.
+                                        let dst = unsafe { slice.as_mut_slice() };
+                                        dst.copy_from_slice(&kbuf[..n]);
+                                    }
+                                    // SAFETY: Restore kernel CR3.
+                                    unsafe {
+                                        Cr3::write(kernel_cr3());
+                                    }
+                                    let mut fd_table = process.fd_table.lock();
+                                    if let Some(f) = fd_table.get_mut(io_fd) {
+                                        f.offset += n;
+                                    }
+                                    #[expect(
+                                        clippy::cast_possible_wrap,
+                                        reason = "byte counts are small"
+                                    )]
+                                    {
+                                        n as isize
+                                    }
+                                }
+                                Err(e) => {
+                                    // Ensure kernel CR3 is active.
+                                    -e.to_errno()
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    -hadron_core::syscall::EBADF
+                };
+
+                // Restore user registers and set result in rax.
+                // SAFETY: USER_CONTEXT is per-CPU, only accessed from this
+                // task and the preemption stub (mutually exclusive).
+                unsafe {
+                    let ctx = &mut *USER_CONTEXT.get().get();
+                    ctx.rip = saved_rip;
+                    ctx.rflags = saved_rflags;
+                    ctx.rsp = saved_user_rsp;
+                    ctx.rbx = saved_rbx;
+                    ctx.rbp = saved_rbp;
+                    ctx.r12 = saved_r12;
+                    ctx.r13 = saved_r13;
+                    ctx.r14 = saved_r14;
+                    ctx.r15 = saved_r15;
+                    ctx.rax = result as u64;
+                    ctx.rcx = 0;
+                    ctx.rdx = 0;
+                    ctx.rsi = 0;
+                    ctx.rdi = 0;
+                    ctx.r8 = 0;
+                    ctx.r9 = 0;
+                    ctx.r10 = 0;
+                    ctx.r11 = 0;
+                }
+                continue;
+            }
             _ => unreachable!("invalid trap reason"),
         }
     }
 
-    // Unregister from process table and drop.
-    unregister_process(pid);
+    // Process remains in the table as a zombie until reaped by waitpid.
+    // The Arc in PROCESS_TABLE keeps the Process alive so handle_wait
+    // can still look it up and read exit_status.
     drop(process);
 }
 
@@ -679,6 +870,9 @@ async fn handle_wait(parent_pid: u32, target_pid: u32) -> (isize, u64) {
         {
             let status = child.exit_status.lock();
             if let Some(exit_code) = *status {
+                // Reap: remove child from the process table now that
+                // the parent has collected the exit status.
+                unregister_process(child.pid);
                 return (child.pid as isize, exit_code);
             }
         }

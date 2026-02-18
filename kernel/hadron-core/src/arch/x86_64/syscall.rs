@@ -75,9 +75,8 @@ impl SyncSavedRegs {
 /// Per-CPU user registers saved at every SYSCALL entry for blocking
 /// syscall resume. Indexed by CPU ID. The syscall entry stub accesses
 /// the correct element via `GS:[56]` (PerCpu.saved_regs_ptr).
-pub static SYSCALL_SAVED_REGS: crate::percpu::CpuLocal<SyncSavedRegs> = crate::percpu::CpuLocal::new(
-    [const { SyncSavedRegs::new() }; crate::percpu::MAX_CPUS],
-);
+pub static SYSCALL_SAVED_REGS: crate::percpu::CpuLocal<SyncSavedRegs> =
+    crate::percpu::CpuLocal::new([const { SyncSavedRegs::new() }; crate::percpu::MAX_CPUS]);
 
 /// Initializes the SYSCALL/SYSRET mechanism.
 ///

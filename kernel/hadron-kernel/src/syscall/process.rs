@@ -103,10 +103,7 @@ pub(super) fn sys_task_wait(pid: usize, status_ptr: usize) -> isize {
     }
 
     // Set up wait parameters for process_task to read.
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "PID fits in u32"
-    )]
+    #[expect(clippy::cast_possible_truncation, reason = "PID fits in u32")]
     crate::proc::set_wait_params(pid as u32, status_ptr as u64);
     crate::proc::set_trap_reason(crate::proc::TRAP_WAIT);
 

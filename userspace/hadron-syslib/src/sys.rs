@@ -3,8 +3,8 @@
 use hadron_syscall::raw::{syscall0, syscall1, syscall2, syscall4};
 use hadron_syscall::{
     CLOCK_MONOTONIC, KernelVersionInfo, MemoryInfo, QUERY_KERNEL_VERSION, QUERY_MEMORY,
-    QUERY_UPTIME, SYS_CLOCK_GETTIME, SYS_HANDLE_PIPE, SYS_QUERY, SYS_TASK_EXIT, SYS_TASK_INFO,
-    SYS_TASK_SPAWN, SYS_TASK_WAIT, Timespec, UptimeInfo,
+    QUERY_UPTIME, SYS_CLOCK_GETTIME, SYS_HANDLE_DUP, SYS_HANDLE_PIPE, SYS_QUERY, SYS_TASK_EXIT,
+    SYS_TASK_INFO, SYS_TASK_SPAWN, SYS_TASK_WAIT, Timespec, UptimeInfo,
 };
 
 // ── Functions ─────────────────────────────────────────────────────────
@@ -46,6 +46,14 @@ pub fn waitpid(pid: u32, status_out: Option<&mut u64>) -> isize {
         None => 0,
     };
     syscall2(SYS_TASK_WAIT, pid as usize, status_ptr)
+}
+
+/// Duplicate a file descriptor (dup2 semantics).
+///
+/// Copies `old_fd` to `new_fd`, closing `new_fd` first if it was open.
+/// Returns `new_fd` on success, or a negative errno on failure.
+pub fn dup2(old_fd: usize, new_fd: usize) -> isize {
+    syscall2(SYS_HANDLE_DUP, old_fd, new_fd)
 }
 
 /// Create a pipe. Returns `(read_fd, write_fd)` on success.
@@ -116,11 +124,7 @@ pub fn query_kernel_version() -> Option<KernelVersionInfo> {
 /// Get the current monotonic time.
 pub fn clock_gettime() -> Option<Timespec> {
     let mut ts = core::mem::MaybeUninit::<Timespec>::uninit();
-    let ret = syscall2(
-        SYS_CLOCK_GETTIME,
-        CLOCK_MONOTONIC,
-        ts.as_mut_ptr() as usize,
-    );
+    let ret = syscall2(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, ts.as_mut_ptr() as usize);
     if ret >= 0 {
         // SAFETY: The kernel wrote a valid Timespec into the buffer on success.
         Some(unsafe { ts.assume_init() })

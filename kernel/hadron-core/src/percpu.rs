@@ -5,7 +5,7 @@
 //! via `GS:[0]` self-pointer. The BSP uses a static instance; APs allocate
 //! theirs on the heap during bootstrap.
 
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 
 /// Syscall stack size for early boot (16 KiB).
 ///
@@ -193,8 +193,9 @@ pub unsafe fn init_gs_base() {
         // the SYSCALL entry stub (GS:[56]) doesn't dereference a null
         // pointer. This is needed both in the full kernel boot path and
         // in the test harness (which calls cpu_init but not kernel_init).
-        (*percpu_ptr).saved_regs_ptr =
-            crate::arch::x86_64::syscall::SYSCALL_SAVED_REGS.get_for(0).get() as u64;
+        (*percpu_ptr).saved_regs_ptr = crate::arch::x86_64::syscall::SYSCALL_SAVED_REGS
+            .get_for(0)
+            .get() as u64;
 
         IA32_GS_BASE.write(percpu_addr);
         IA32_KERNEL_GS_BASE.write(percpu_addr);

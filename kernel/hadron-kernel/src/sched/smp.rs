@@ -41,11 +41,8 @@ pub fn register_cpu_apic_id(cpu_id: u32, apic_id: u8) {
 ///
 /// Must be called before APs enter their executor loops.
 pub fn init() {
-    crate::arch::x86_64::interrupts::dispatch::register_handler(
-        IPI_WAKE_VECTOR,
-        ipi_wake_handler,
-    )
-    .expect("Failed to register IPI wake vector");
+    crate::arch::x86_64::interrupts::dispatch::register_handler(IPI_WAKE_VECTOR, ipi_wake_handler)
+        .expect("Failed to register IPI wake vector");
 }
 
 /// IPI wakeup handler — intentionally empty.

@@ -22,7 +22,7 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use alloc::boxed::Box;
 
 use hadron_core::arch::x86_64::registers::model_specific::{IA32_GS_BASE, IA32_KERNEL_GS_BASE};
-use hadron_core::percpu::{PerCpu, MAX_CPUS};
+use hadron_core::percpu::{MAX_CPUS, PerCpu};
 use hadron_core::{kdebug, kinfo, kwarn};
 use hadron_drivers::apic::local_apic::LocalApic;
 
@@ -215,11 +215,7 @@ pub fn boot_aps(boot_info: &impl BootInfo) {
 
     let ready = AP_READY_COUNT.load(Ordering::Acquire);
     hadron_core::percpu::set_cpu_count(1 + ready);
-    kinfo!(
-        "SMP: {} APs online ({} total CPUs)",
-        ready,
-        1 + ready
-    );
+    kinfo!("SMP: {} APs online ({} total CPUs)", ready, 1 + ready);
 }
 
 /// Full AP initialization. Called from [`ap_early_park`] after release, or
@@ -270,16 +266,13 @@ fn ap_entry(_mp_info: u64, percpu_addr: u64) -> ! {
     unsafe {
         use crate::proc;
         let percpu_mut = percpu_addr as *mut PerCpu;
-        (*percpu_mut).user_context_ptr =
-            proc::USER_CONTEXT.get_for(cpu_id).get() as u64;
+        (*percpu_mut).user_context_ptr = proc::USER_CONTEXT.get_for(cpu_id).get() as u64;
         (*percpu_mut).saved_kernel_rsp_ptr =
             proc::SAVED_KERNEL_RSP.get_for(cpu_id) as *const _ as u64;
-        (*percpu_mut).trap_reason_ptr =
-            proc::TRAP_REASON.get_for(cpu_id) as *const _ as u64;
-        (*percpu_mut).saved_regs_ptr =
-            hadron_core::arch::x86_64::syscall::SYSCALL_SAVED_REGS
-                .get_for(cpu_id)
-                .get() as u64;
+        (*percpu_mut).trap_reason_ptr = proc::TRAP_REASON.get_for(cpu_id) as *const _ as u64;
+        (*percpu_mut).saved_regs_ptr = hadron_core::arch::x86_64::syscall::SYSCALL_SAVED_REGS
+            .get_for(cpu_id)
+            .get() as u64;
     }
 
     // 5. Enable this AP's Local APIC and start its timer.
@@ -288,7 +281,11 @@ fn ap_entry(_mp_info: u64, percpu_addr: u64) -> ! {
     // 6. Signal BSP that we are ready.
     AP_READY_COUNT.fetch_add(1, Ordering::Release);
 
-    kinfo!("SMP: AP {} online (LAPIC ID={})", cpu_id, percpu.get_apic_id());
+    kinfo!(
+        "SMP: AP {} online (LAPIC ID={})",
+        cpu_id,
+        percpu.get_apic_id()
+    );
 
     // 7. Enable interrupts and enter this AP's executor loop.
     // SAFETY: All interrupt infrastructure is initialized.
@@ -303,8 +300,7 @@ fn ap_entry(_mp_info: u64, percpu_addr: u64) -> ! {
 fn init_ap_lapic(cpu_id: u32) {
     use crate::arch::x86_64::interrupts::dispatch::vectors;
 
-    let lapic_virt = super::acpi::lapic_virt()
-        .expect("AP bootstrap: LAPIC not initialized by BSP");
+    let lapic_virt = super::acpi::lapic_virt().expect("AP bootstrap: LAPIC not initialized by BSP");
 
     // SAFETY: lapic_virt was mapped by BSP and is valid for this CPU's LAPIC.
     let lapic = unsafe { LocalApic::new(lapic_virt) };
@@ -322,6 +318,9 @@ fn init_ap_lapic(cpu_id: u32) {
             divide
         );
     } else {
-        kwarn!("SMP: AP {} LAPIC timer not started (BSP calibration not available)", cpu_id);
+        kwarn!(
+            "SMP: AP {} LAPIC timer not started (BSP calibration not available)",
+            cpu_id
+        );
     }
 }

@@ -172,4 +172,3 @@ pub mod px16 {
             .map(|i| GLYPH_INDEX[i].1)
     }
 }
-

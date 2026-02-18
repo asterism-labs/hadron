@@ -259,6 +259,30 @@ userspace.add("hadron-init", "userspace/init")
     .root("src/main.rs")
     .deps(#{ hadron_syslib: "hadron-syslib" });
 
+userspace.add("hadron-shell", "userspace/shell")
+    .crate_type(BIN).root("src/main.rs")
+    .deps(#{ hadron_syslib: "hadron-syslib" });
+
+userspace.add("hadron-spinner", "userspace/spinner")
+    .crate_type(BIN).root("src/main.rs")
+    .deps(#{ hadron_syslib: "hadron-syslib" });
+
+userspace.add("hadron-spawn-worker", "userspace/spawn-worker")
+    .crate_type(BIN).root("src/main.rs")
+    .deps(#{ hadron_syslib: "hadron-syslib" });
+
+userspace.add("hadron-spawn-stress", "userspace/spawn-stress")
+    .crate_type(BIN).root("src/main.rs")
+    .deps(#{ hadron_syslib: "hadron-syslib" });
+
+userspace.add("hadron-pipe-consumer", "userspace/pipe-consumer")
+    .crate_type(BIN).root("src/main.rs")
+    .deps(#{ hadron_syslib: "hadron-syslib" });
+
+userspace.add("hadron-pipe-test", "userspace/pipe-test")
+    .crate_type(BIN).root("src/main.rs")
+    .deps(#{ hadron_syslib: "hadron-syslib" });
+
 // ===========================================================================
 // Rules (custom artifact generation)
 // ===========================================================================
@@ -269,7 +293,9 @@ rule("hbtf")
     .handler("hbtf");
 
 rule("initrd")
-    .inputs(["hadron-init"])
+    .inputs(["hadron-init", "hadron-shell", "hadron-spinner",
+             "hadron-spawn-stress", "hadron-spawn-worker",
+             "hadron-pipe-test", "hadron-pipe-consumer"])
     .output("build/initrd.cpio")
     .handler("initrd");
 

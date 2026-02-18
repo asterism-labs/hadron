@@ -1,0 +1,14 @@
+[package]
+name = "hadron-spawn-worker"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[[bin]]
+name = "hadron-spawn-worker"
+path = "src/main.rs"
+
+[dependencies]
+hadron-syslib = { path = "../hadron-syslib" }

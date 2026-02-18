@@ -153,9 +153,8 @@ hadron_syscall_macros::define_syscalls! {
         /// Close a handle (file descriptor).
         fn handle_close(handle: usize) = 0x00;
 
-        /// Duplicate a handle.
-        #[reserved(phase = 11)]
-        fn handle_dup(handle: usize) = 0x01;
+        /// Duplicate a handle (dup2 semantics): copy `old_fd` to `new_fd`.
+        fn handle_dup(old_fd: usize, new_fd: usize) = 0x01;
 
         /// Query handle info.
         #[reserved(phase = 11)]

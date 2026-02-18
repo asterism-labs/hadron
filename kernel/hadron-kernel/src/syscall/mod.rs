@@ -38,6 +38,10 @@ impl SyscallHandler for HadronDispatch {
         vfs::sys_handle_close(handle)
     }
 
+    fn sys_handle_dup(&self, old_fd: usize, new_fd: usize) -> isize {
+        vfs::sys_handle_dup(old_fd, new_fd)
+    }
+
     fn sys_handle_pipe(&self, fds_ptr: usize) -> isize {
         vfs::sys_handle_pipe(fds_ptr)
     }

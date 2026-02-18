@@ -4,7 +4,7 @@
 //! and stores parsed ACPI information (MADT, HPET, MCFG) for use by the
 //! interrupt controller and timer subsystems.
 
-use core::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 
 use hadron_acpi::{AcpiHandler, AcpiTables, madt};
 use hadron_core::addr::{PhysAddr, VirtAddr};
