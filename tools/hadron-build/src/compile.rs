@@ -6,7 +6,9 @@
 use crate::config::{ResolvedConfig, ResolvedValue};
 use crate::crate_graph::ResolvedCrate;
 use anyhow::{Context, Result, bail};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -106,7 +108,7 @@ pub fn build_config_crate(
         .arg(sysroot_dir)
         .arg("--out-dir")
         .arg(&out_dir)
-        .arg("--emit=metadata,link")
+        .arg("--emit=dep-info,metadata,link")
         .arg(&src_path);
 
     let output = cmd.output().context("failed to run rustc for hadron_config")?;
@@ -417,4 +419,87 @@ fn host_sysroot_lib_dir() -> Result<PathBuf> {
 /// Sanitize a crate name for use as a rustc crate name (hyphens -> underscores).
 pub fn crate_name_sanitized(name: &str) -> String {
     name.replace('-', "_")
+}
+
+/// Compute the output directory for a kernel crate compilation.
+pub fn kernel_out_dir(config: &ResolvedConfig, out_dir_suffix: Option<&str>) -> PathBuf {
+    let suffix = out_dir_suffix.unwrap_or(&config.target_name);
+    config
+        .root
+        .join("build/kernel")
+        .join(suffix)
+        .join("debug")
+}
+
+/// Predict the artifact path for a kernel crate without compiling.
+pub fn crate_artifact_path(
+    krate: &ResolvedCrate,
+    config: &ResolvedConfig,
+    out_dir_suffix: Option<&str>,
+    mode: CompileMode,
+) -> PathBuf {
+    let out_dir = kernel_out_dir(config, out_dir_suffix);
+    let is_check = mode == CompileMode::Check || mode == CompileMode::Clippy;
+    let sanitized = crate_name_sanitized(&krate.name);
+
+    if !is_check && krate.crate_type == "bin" {
+        out_dir.join(&sanitized)
+    } else if is_check {
+        out_dir.join(format!("lib{sanitized}.rmeta"))
+    } else {
+        out_dir.join(format!("lib{sanitized}.rlib"))
+    }
+}
+
+/// Predict the dep-info path for a kernel crate.
+pub fn crate_dep_info_path(
+    krate: &ResolvedCrate,
+    config: &ResolvedConfig,
+    out_dir_suffix: Option<&str>,
+) -> PathBuf {
+    let out_dir = kernel_out_dir(config, out_dir_suffix);
+    out_dir.join(format!("{}.d", crate_name_sanitized(&krate.name)))
+}
+
+/// Predict the artifact path for a host crate without compiling.
+pub fn host_crate_artifact_path(krate: &ResolvedCrate, project_root: &Path) -> PathBuf {
+    let out_dir = project_root.join("build/host");
+    let sanitized = crate_name_sanitized(&krate.name);
+
+    if krate.crate_type == "proc-macro" {
+        let ext = if cfg!(target_os = "macos") {
+            "dylib"
+        } else {
+            "so"
+        };
+        out_dir.join(format!("lib{sanitized}.{ext}"))
+    } else {
+        out_dir.join(format!("lib{sanitized}.rlib"))
+    }
+}
+
+/// Predict the dep-info path for a host crate.
+pub fn host_crate_dep_info_path(krate: &ResolvedCrate, project_root: &Path) -> PathBuf {
+    let out_dir = project_root.join("build/host");
+    out_dir.join(format!("{}.d", crate_name_sanitized(&krate.name)))
+}
+
+/// Predict the dep-info path for the hadron_config crate.
+pub fn config_crate_dep_info_path(config: &ResolvedConfig) -> PathBuf {
+    let out_dir = config
+        .root
+        .join("build/kernel")
+        .join(&config.target_name)
+        .join("debug");
+    out_dir.join("hadron_config.d")
+}
+
+/// Hash an arbitrary list of `OsStr` values for cache keying.
+pub fn hash_args(args: &[&OsStr]) -> String {
+    let mut hasher = Sha256::new();
+    for arg in args {
+        hasher.update(arg.as_encoded_bytes());
+        hasher.update(b"\0");
+    }
+    format!("{:x}", hasher.finalize())
 }

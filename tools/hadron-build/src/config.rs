@@ -57,6 +57,7 @@ pub struct ConfigOption {
     #[serde(rename = "type")]
     pub ty: String,
     pub default: toml::Value,
+    #[allow(dead_code)] // used by future `configure --help` output
     #[serde(default)]
     pub help: Option<String>,
     #[serde(default, rename = "depends-on")]
@@ -107,6 +108,7 @@ pub struct ProfileTest {
 
 /// `[qemu]` section.
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)] // used by `run` command's QEMU invocation
 pub struct QemuConfig {
     #[serde(default = "default_machine")]
     pub machine: String,
@@ -142,6 +144,7 @@ pub struct QemuTestConfig {
     #[serde(default = "default_success_exit")]
     #[serde(rename = "success-exit-code")]
     pub success_exit_code: u32,
+    #[allow(dead_code)] // used by kernel test runner
     #[serde(default = "default_timeout")]
     pub timeout: u32,
     #[serde(default, rename = "extra-args")]
@@ -166,6 +169,7 @@ fn default_timeout() -> u32 {
 }
 
 /// `[bootloader]` section.
+#[allow(dead_code)] // used by image generation
 #[derive(Debug, Deserialize)]
 pub struct BootloaderConfig {
     #[serde(default = "default_bootloader_kind")]
@@ -189,6 +193,7 @@ fn default_bootloader_kind() -> String {
 
 /// `[image]` section.
 #[derive(Debug, Default, Deserialize)]
+#[allow(dead_code)] // used by image generation
 pub struct ImageConfig {
     #[serde(default, rename = "extra-files")]
     pub extra_files: BTreeMap<String, String>,
@@ -199,13 +204,16 @@ pub struct ImageConfig {
 pub struct TestsConfig {
     #[serde(default, rename = "host-testable")]
     pub host_testable: Vec<String>,
+    #[allow(dead_code)] // used by kernel test discovery
     #[serde(default, rename = "kernel-tests-dir")]
     pub kernel_tests_dir: Option<String>,
+    #[allow(dead_code)] // used by crash test runner
     #[serde(default)]
     pub crash: Vec<CrashTest>,
 }
 
 /// `[[tests.crash]]` entry.
+#[allow(dead_code)] // used by crash test runner
 #[derive(Debug, Deserialize)]
 pub struct CrashTest {
     pub name: String,
@@ -226,7 +234,9 @@ pub struct ResolvedConfig {
     pub options: BTreeMap<String, ResolvedValue>,
     pub profile: ResolvedProfile,
     pub qemu: QemuConfig,
+    #[allow(dead_code)] // used by image generation
     pub bootloader: BootloaderConfig,
+    #[allow(dead_code)] // used by image generation
     pub image: ImageConfig,
     pub tests: TestsConfig,
 }

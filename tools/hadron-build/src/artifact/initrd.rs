@@ -7,16 +7,26 @@ use hadris_cpio::write::file_tree::{FileNode, FileTree};
 use hadris_cpio::write::{CpioWriteOptions, CpioWriter};
 use std::path::PathBuf;
 
+use crate::cache::CacheManifest;
 use crate::compile::{self, ArtifactMap, CompileMode};
 use crate::config::ResolvedConfig;
 use crate::crate_graph::{self, CrateContext};
 use crate::sysroot;
 
 /// Builds all userspace binaries and packages them into `build/initrd.cpio`.
-pub fn build_initrd(config: &ResolvedConfig) -> Result<PathBuf> {
+///
+/// Accepts pre-compiled host artifacts to avoid recompiling proc-macros
+/// (which would invalidate the host crate cache by changing artifact mtimes).
+/// Also accepts the cache manifest for userspace sysroot caching.
+pub fn build_initrd(
+    config: &ResolvedConfig,
+    host_artifacts: &ArtifactMap,
+    cache: &mut CacheManifest,
+    force: bool,
+) -> Result<PathBuf> {
     let output_path = config.root.join("build/initrd.cpio");
 
-    // Step 1: Build userspace sysroot (core + compiler_builtins only, no alloc).
+    // Step 1: Build userspace sysroot (with cache check).
     let user_target_name = "x86_64-unknown-hadron-user";
     let user_target_spec = config.root.join(format!("targets/{user_target_name}.json"));
     if !user_target_spec.exists() {
@@ -26,13 +36,30 @@ pub fn build_initrd(config: &ResolvedConfig) -> Result<PathBuf> {
         );
     }
 
-    println!("  Building userspace sysroot for {user_target_name}...");
-    let user_sysroot = sysroot::build_sysroot(
-        &config.root,
-        &user_target_spec,
-        user_target_name,
-        2, // always optimize userspace
-    )?;
+    let user_sysroot_dir = if !force
+        && cache
+            .is_sysroot_fresh(user_target_name, 2)
+            .is_fresh()
+    {
+        println!("  Userspace sysroot unchanged, skipping.");
+        sysroot::sysroot_output_paths(&config.root, user_target_name).sysroot_dir
+    } else {
+        println!("  Building userspace sysroot for {user_target_name}...");
+        let user_sysroot = sysroot::build_sysroot(
+            &config.root,
+            &user_target_spec,
+            user_target_name,
+            2, // always optimize userspace
+        )?;
+        cache.record_sysroot(
+            user_target_name,
+            2,
+            user_sysroot.core_rlib,
+            user_sysroot.compiler_builtins_rlib,
+            user_sysroot.alloc_rlib,
+        );
+        user_sysroot.sysroot_dir
+    };
 
     // Step 2: Compile userspace crates.
     let registry = crate_graph::load_crate_registry(&config.root)?;
@@ -49,20 +76,19 @@ pub fn build_initrd(config: &ResolvedConfig) -> Result<PathBuf> {
         .to_str()
         .expect("target spec path is valid UTF-8");
 
-    // Host artifacts are needed for proc-macros used by userspace crates.
+    // Use the pre-compiled host artifacts (proc-macros) passed from the main
+    // pipeline instead of recompiling them. This is critical: recompiling host
+    // crates here would overwrite their artifacts and invalidate the cache.
     let mut artifacts = ArtifactMap::default();
-
-    // First compile any host crates needed (proc-macros).
     let host_crates =
         crate_graph::resolve_and_sort(&registry, &config.root, &sysroot_src, &CrateContext::Host)?;
     for krate in &host_crates {
-        if artifacts.get(&krate.name).is_none() {
-            let artifact = compile::compile_host_crate(krate, &config.root, &artifacts)?;
-            artifacts.insert(&krate.name, artifact);
+        if let Some(path) = host_artifacts.get(&krate.name) {
+            artifacts.insert(&krate.name, path.to_path_buf());
         }
     }
 
-    // Then compile userspace crates.
+    // Compile userspace crates.
     let mut bin_artifacts = Vec::new();
     for krate in &user_crates {
         println!("  Compiling {} (userspace)...", krate.name);
@@ -70,7 +96,7 @@ pub fn build_initrd(config: &ResolvedConfig) -> Result<PathBuf> {
             krate,
             config,
             user_target_str,
-            &user_sysroot.sysroot_dir,
+            &user_sysroot_dir,
             &artifacts,
             None, // no hadron_config for userspace
             Some(user_target_name), // separate output dir for userspace

@@ -11,6 +11,7 @@ use std::process::Command;
 /// Paths to the compiled sysroot rlibs.
 pub struct SysrootOutput {
     pub sysroot_dir: PathBuf,
+    #[allow(dead_code)] // available for direct rlib access
     pub lib_dir: PathBuf,
     pub core_rlib: PathBuf,
     pub compiler_builtins_rlib: PathBuf,
@@ -65,6 +66,25 @@ fn detect_edition(crate_dir: &Path) -> Result<String> {
     }
     // Fall back to 2021 if we can't detect.
     Ok("2021".into())
+}
+
+/// Compute sysroot output paths without compiling.
+///
+/// Used by the cache layer to check if the sysroot rlibs still exist.
+pub fn sysroot_output_paths(project_root: &Path, target_name: &str) -> SysrootOutput {
+    let sysroot_dir = project_root.join("build/sysroot");
+    let lib_dir = sysroot_dir
+        .join("lib/rustlib")
+        .join(target_name)
+        .join("lib");
+
+    SysrootOutput {
+        core_rlib: lib_dir.join("libcore.rlib"),
+        compiler_builtins_rlib: lib_dir.join("libcompiler_builtins.rlib"),
+        alloc_rlib: lib_dir.join("liballoc.rlib"),
+        sysroot_dir,
+        lib_dir,
+    }
 }
 
 /// Compile the sysroot crates (core, compiler_builtins, alloc) for the given target.

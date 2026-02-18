@@ -40,6 +40,7 @@ pub enum DepSpec {
     Table {
         #[serde(rename = "crate")]
         crate_name: String,
+        #[allow(dead_code)] // used by feature-gated compilation
         #[serde(default)]
         features: Vec<String>,
         #[serde(default, rename = "proc-macro")]

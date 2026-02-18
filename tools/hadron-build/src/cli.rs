@@ -17,6 +17,10 @@ pub struct Cli {
     /// Target triple (overrides profile default).
     #[arg(long, global = true)]
     pub target: Option<String>,
+
+    /// Force rebuild, bypassing all cache checks.
+    #[arg(long, short = 'f', global = true)]
+    pub force: bool,
 }
 
 /// Available subcommands.
