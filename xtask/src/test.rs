@@ -13,6 +13,7 @@ use xshell::{Shell, cmd};
 
 /// Crates that compile and pass tests on the host (no kernel target needed).
 const HOST_TESTABLE_CRATES: &[&str] = &[
+    "hadron-codegen",
     "hadron-dwarf",
     "hadron-elf",
     "noalloc",

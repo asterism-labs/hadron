@@ -8,6 +8,7 @@ publish = false
 anyhow = "1"
 clap = { version = "4", features = [ "derive" ] }
 hadris-cpio = { workspace = true, features = [ "std", "write" ] }
+hadron-codegen = { workspace = true }
 hadron-dwarf = { workspace = true }
 hadron-elf = { workspace = true }
 rustc-demangle = "0.1"

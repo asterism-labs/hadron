@@ -1,11 +1,23 @@
-//\! Embedded 8x16 VGA BIOS font (public domain).
-//\!
-//\! 256 glyphs, 16 bytes each = 4096 bytes total. Extracted from
-//\! the early framebuffer driver to keep font data separate from
-//\! rendering logic.
+//! Font rasterization and Rust source emission.
+//!
+//! Generates `no_std`-compatible Rust source files containing bitmap font data,
+//! either from a TTF file (via `fontdue`) or from the embedded VGA 8x16 fallback.
 
+use std::path::Path;
+
+use crate::config::{FontSpec, PixelFormat};
+use crate::error::CodegenError;
+
+/// Number of bytes in the VGA 8x16 font: 256 glyphs x 16 bytes each.
+const VGA_FONT_LEN: usize = 4096;
+
+/// Embedded VGA 8x16 BIOS font (public domain).
+///
+/// 128 printable glyphs for ASCII 0x00..=0x7F, 16 bytes each = 2048 bytes.
+/// The remaining 128 entries (0x80..=0xFF) are blank.
+/// Total: 256 glyphs x 16 bytes = 4096 bytes.
 #[rustfmt::skip]
-pub(crate) static VGA_FONT_8X16: [u8; 4096] = [
+static VGA_FONT_8X16: [u8; VGA_FONT_LEN] = [
     // 0x00 - NUL
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     // 0x01 - SOH (smiley)
@@ -262,7 +274,7 @@ pub(crate) static VGA_FONT_8X16: [u8; 4096] = [
     0x00, 0x00, 0x76, 0xDC, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     // 0x7F - DEL
     0x00, 0x00, 0x00, 0x00, 0x10, 0x38, 0x6C, 0xC6, 0xC6, 0xC6, 0xFE, 0x00, 0x00, 0x00, 0x00, 0x00,
-    // 0x80..0xFF - fill remaining 128 glyphs with blank
+    // 0x80..0xFF - fill remaining 128 glyphs with blank (2048 zero bytes)
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -392,3 +404,414 @@ pub(crate) static VGA_FONT_8X16: [u8; 4096] = [
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 ];
+
+/// Collects sorted codepoints from the configured ranges.
+fn collect_codepoints(ranges: &[[u32; 2]]) -> Result<Vec<char>, CodegenError> {
+    let mut codepoints = Vec::new();
+    for &[start, end] in ranges {
+        for cp in start..=end {
+            let ch = char::from_u32(cp).ok_or(CodegenError::InvalidCodepoint(cp))?;
+            codepoints.push(ch);
+        }
+    }
+    codepoints.sort();
+    codepoints.dedup();
+    Ok(codepoints)
+}
+
+/// Font generation output: `(width, height, bytes_per_glyph, data, glyph_index)`.
+type FontOutput = (u32, u32, usize, Vec<u8>, Vec<(char, usize)>);
+
+/// Generates the VGA fallback font (only supports size 16, 1bpp).
+fn generate_vga_fallback(
+    codepoints: &[char],
+    size: u32,
+    format: PixelFormat,
+) -> Result<FontOutput, CodegenError> {
+    if size != 16 {
+        return Err(CodegenError::FontLoad(format!(
+            "VGA fallback only supports size 16, got {size}"
+        )));
+    }
+
+    let width: u32 = 8;
+    let height: u32 = 16;
+    let bytes_per_glyph = match format {
+        PixelFormat::Bitmap1bpp => (width.div_ceil(8) * height) as usize,
+        PixelFormat::Grayscale8bpp => (width * height) as usize,
+    };
+
+    let mut data = Vec::new();
+    let mut index = Vec::new();
+
+    for &ch in codepoints {
+        let cp = ch as u32;
+        let offset = data.len();
+        index.push((ch, offset));
+
+        if cp < 256 {
+            let src = &VGA_FONT_8X16[(cp as usize) * 16..][..16];
+            match format {
+                PixelFormat::Bitmap1bpp => {
+                    // VGA font is already 1bpp, 8 pixels wide, MSB-first
+                    data.extend_from_slice(src);
+                }
+                PixelFormat::Grayscale8bpp => {
+                    // Expand each bit to a full byte (0x00 or 0xFF)
+                    for &scanline in src {
+                        for bit in (0..8).rev() {
+                            data.push(if (scanline >> bit) & 1 != 0 {
+                                0xFF
+                            } else {
+                                0x00
+                            });
+                        }
+                    }
+                }
+            }
+        } else {
+            // Codepoint not in VGA font — emit blank glyph
+            data.extend(std::iter::repeat_n(0u8, bytes_per_glyph));
+        }
+    }
+
+    Ok((width, height, bytes_per_glyph, data, index))
+}
+
+/// Generates font data from a TTF file using `fontdue`.
+fn generate_ttf(
+    ttf_bytes: &[u8],
+    codepoints: &[char],
+    size: u32,
+    format: PixelFormat,
+) -> Result<FontOutput, CodegenError> {
+    let font = fontdue::Font::from_bytes(ttf_bytes, fontdue::FontSettings::default())
+        .map_err(|e| CodegenError::FontLoad(e.to_string()))?;
+
+    // Determine the cell width: use the max advance width across all codepoints.
+    // For a monospace font this should be consistent.
+    let height = size;
+    let mut max_width: u32 = 0;
+    for &ch in codepoints {
+        let metrics = font.metrics(ch, size as f32);
+        let advance = metrics.advance_width.ceil() as u32;
+        if advance > max_width {
+            max_width = advance;
+        }
+    }
+    // Ensure at least 1px wide
+    let width = max_width.max(1);
+
+    let bytes_per_glyph = match format {
+        PixelFormat::Bitmap1bpp => (width.div_ceil(8) * height) as usize,
+        PixelFormat::Grayscale8bpp => (width * height) as usize,
+    };
+
+    let mut data = Vec::new();
+    let mut index = Vec::new();
+
+    for &ch in codepoints {
+        let offset = data.len();
+        index.push((ch, offset));
+
+        let (metrics, bitmap) = font.rasterize(ch, size as f32);
+
+        // Create a cell-sized buffer, center the glyph within it.
+        let glyph_w = metrics.width as u32;
+        let glyph_h = metrics.height as u32;
+
+        // Horizontal centering
+        let x_offset = if glyph_w < width {
+            (width - glyph_w) / 2
+        } else {
+            0
+        };
+
+        // Vertical positioning: align to baseline.
+        // metrics.ymin is the distance from the baseline to the bottom of the glyph (can be negative).
+        // We position so that the baseline is near the bottom of the cell.
+        let baseline_from_top = height.saturating_sub(height / 4);
+        let y_start = baseline_from_top
+            .saturating_sub(metrics.height as u32)
+            .saturating_sub(metrics.ymin.unsigned_abs());
+
+        match format {
+            PixelFormat::Bitmap1bpp => {
+                let row_bytes = width.div_ceil(8) as usize;
+                let mut cell = vec![0u8; bytes_per_glyph];
+
+                for gy in 0..glyph_h.min(height) {
+                    let cy = y_start + gy;
+                    if cy >= height {
+                        break;
+                    }
+                    for gx in 0..glyph_w.min(width) {
+                        let cx = x_offset + gx;
+                        if cx >= width {
+                            break;
+                        }
+                        let coverage = bitmap[(gy * glyph_w + gx) as usize];
+                        if coverage >= 128 {
+                            // MSB-first packing
+                            let byte_idx = cy as usize * row_bytes + (cx / 8) as usize;
+                            let bit_idx = 7 - (cx % 8);
+                            cell[byte_idx] |= 1 << bit_idx;
+                        }
+                    }
+                }
+                data.extend_from_slice(&cell);
+            }
+            PixelFormat::Grayscale8bpp => {
+                let mut cell = vec![0u8; bytes_per_glyph];
+
+                for gy in 0..glyph_h.min(height) {
+                    let cy = y_start + gy;
+                    if cy >= height {
+                        break;
+                    }
+                    for gx in 0..glyph_w.min(width) {
+                        let cx = x_offset + gx;
+                        if cx >= width {
+                            break;
+                        }
+                        let coverage = bitmap[(gy * glyph_w + gx) as usize];
+                        cell[(cy * width + cx) as usize] = coverage;
+                    }
+                }
+                data.extend_from_slice(&cell);
+            }
+        }
+    }
+
+    Ok((width, height, bytes_per_glyph, data, index))
+}
+
+/// Emits a Rust source string for a single size module.
+fn emit_size_module(
+    size: u32,
+    width: u32,
+    height: u32,
+    bytes_per_glyph: usize,
+    data: &[u8],
+    index: &[(char, usize)],
+) -> String {
+    let mut out = String::new();
+
+    out.push_str(&format!("/// {size}px variant.\n"));
+    out.push_str(&format!("pub mod px{size} {{\n"));
+    out.push_str("    /// Glyph cell width in pixels.\n");
+    out.push_str(&format!("    pub const WIDTH: u32 = {width};\n"));
+    out.push_str("    /// Glyph cell height in pixels.\n");
+    out.push_str(&format!("    pub const HEIGHT: u32 = {height};\n"));
+    out.push_str("    /// Number of bytes per glyph in the DATA array.\n");
+    out.push_str(&format!(
+        "    pub const BYTES_PER_GLYPH: usize = {bytes_per_glyph};\n"
+    ));
+    out.push('\n');
+
+    // Emit DATA array
+    out.push_str("    /// Raw glyph bitmap data.\n");
+    out.push_str("    #[rustfmt::skip]\n");
+    out.push_str(&format!(
+        "    pub static DATA: &[u8; {}] = &[\n",
+        data.len()
+    ));
+    for chunk in data.chunks(16) {
+        out.push_str("        ");
+        for (i, &byte) in chunk.iter().enumerate() {
+            if i > 0 {
+                out.push_str(", ");
+            }
+            out.push_str(&format!("0x{byte:02X}"));
+        }
+        out.push_str(",\n");
+    }
+    out.push_str("    ];\n\n");
+
+    // Emit GLYPH_INDEX
+    out.push_str("    #[rustfmt::skip]\n");
+    out.push_str(&format!(
+        "    static GLYPH_INDEX: &[(char, usize); {}] = &[\n",
+        index.len()
+    ));
+    for chunk in index.chunks(8) {
+        out.push_str("        ");
+        for (i, &(ch, offset)) in chunk.iter().enumerate() {
+            if i > 0 {
+                out.push_str(", ");
+            }
+            let escaped = escape_char(ch);
+            out.push_str(&format!("('{escaped}', {offset})"));
+        }
+        out.push_str(",\n");
+    }
+    out.push_str("    ];\n\n");
+
+    // Emit glyph_index function
+    out.push_str("    /// Looks up the byte offset of a glyph in [`DATA`].\n");
+    out.push_str("    pub fn glyph_index(ch: char) -> Option<usize> {\n");
+    out.push_str("        GLYPH_INDEX\n");
+    out.push_str("            .binary_search_by_key(&ch, |&(c, _)| c)\n");
+    out.push_str("            .ok()\n");
+    out.push_str("            .map(|i| GLYPH_INDEX[i].1)\n");
+    out.push_str("    }\n");
+    out.push_str("}\n");
+
+    out
+}
+
+/// Escapes a char for use in a Rust char literal.
+fn escape_char(ch: char) -> String {
+    match ch {
+        '\'' => "\\'".to_string(),
+        '\\' => "\\\\".to_string(),
+        '\n' => "\\n".to_string(),
+        '\r' => "\\r".to_string(),
+        '\t' => "\\t".to_string(),
+        '\0' => "\\0".to_string(),
+        c if c.is_ascii_graphic() || c == ' ' => c.to_string(),
+        c => format!("\\u{{{:X}}}", c as u32),
+    }
+}
+
+/// Generates a complete Rust source file for a font specification.
+///
+/// If `spec.ttf_path` is `None`, uses the embedded VGA 8x16 fallback.
+/// Otherwise loads the TTF from disk (relative to `workspace_root`).
+pub fn generate(spec: &FontSpec, workspace_root: &Path) -> Result<String, CodegenError> {
+    let codepoints = collect_codepoints(&spec.ranges)?;
+
+    let ttf_bytes = match &spec.ttf_path {
+        Some(path) => {
+            let abs_path = workspace_root.join(path);
+            Some(std::fs::read(&abs_path).map_err(|e| {
+                CodegenError::FontIo(std::io::Error::new(
+                    e.kind(),
+                    format!("{}: {e}", abs_path.display()),
+                ))
+            })?)
+        }
+        None => None,
+    };
+
+    let source_line = match &spec.ttf_path {
+        Some(path) => format!("//! Source: {}", path.display()),
+        None => "//! Source: embedded VGA 8x16 fallback".to_string(),
+    };
+
+    let mut output = String::new();
+    output.push_str("//! Auto-generated font data — do not edit.\n");
+    output.push_str(&source_line);
+    output.push('\n');
+    output.push_str("//! Re-generate with: `cargo xtask codegen`\n");
+    output.push('\n');
+
+    for &size in &spec.sizes {
+        let (width, height, bytes_per_glyph, data, index) = match &ttf_bytes {
+            Some(bytes) => generate_ttf(bytes, &codepoints, size, spec.format)?,
+            None => generate_vga_fallback(&codepoints, size, spec.format)?,
+        };
+
+        let module = emit_size_module(size, width, height, bytes_per_glyph, &data, &index);
+        output.push_str(&module);
+        output.push('\n');
+    }
+
+    Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{FontSpec, PixelFormat};
+    use std::path::PathBuf;
+
+    #[test]
+    fn vga_fallback_generates_valid_output() {
+        let spec = FontSpec {
+            name: "test".to_string(),
+            ttf_path: None,
+            sizes: vec![16],
+            ranges: vec![[0x20, 0x7E]],
+            format: PixelFormat::Bitmap1bpp,
+            output: PathBuf::from("test.rs"),
+        };
+
+        let result = generate(&spec, Path::new(".")).unwrap();
+        assert!(result.contains("pub mod px16"));
+        assert!(result.contains("pub const WIDTH: u32 = 8;"));
+        assert!(result.contains("pub const HEIGHT: u32 = 16;"));
+        assert!(result.contains("pub static DATA:"));
+        assert!(result.contains("static GLYPH_INDEX:"));
+        assert!(result.contains("pub fn glyph_index"));
+    }
+
+    #[test]
+    fn vga_fallback_space_glyph_is_blank() {
+        let spec = FontSpec {
+            name: "test".to_string(),
+            ttf_path: None,
+            sizes: vec![16],
+            ranges: vec![[0x20, 0x20]],
+            format: PixelFormat::Bitmap1bpp,
+            output: PathBuf::from("test.rs"),
+        };
+
+        let codepoints = collect_codepoints(&spec.ranges).unwrap();
+        let (_, _, bytes_per_glyph, data, _) =
+            generate_vga_fallback(&codepoints, 16, PixelFormat::Bitmap1bpp).unwrap();
+
+        assert_eq!(bytes_per_glyph, 16);
+        assert!(
+            data.iter().all(|&b| b == 0),
+            "space glyph should be all zeros"
+        );
+    }
+
+    #[test]
+    fn vga_fallback_a_glyph_has_data() {
+        let spec = FontSpec {
+            name: "test".to_string(),
+            ttf_path: None,
+            sizes: vec![16],
+            ranges: vec![[0x41, 0x41]],
+            format: PixelFormat::Bitmap1bpp,
+            output: PathBuf::from("test.rs"),
+        };
+
+        let codepoints = collect_codepoints(&spec.ranges).unwrap();
+        let (_, _, _, data, _) =
+            generate_vga_fallback(&codepoints, 16, PixelFormat::Bitmap1bpp).unwrap();
+
+        assert!(
+            data.iter().any(|&b| b != 0),
+            "'A' glyph should have non-zero bytes"
+        );
+    }
+
+    #[test]
+    fn vga_fallback_wrong_size_errors() {
+        let codepoints = vec!['A'];
+        let result = generate_vga_fallback(&codepoints, 12, PixelFormat::Bitmap1bpp);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn collect_codepoints_deduplicates() {
+        let ranges = vec![[0x41, 0x43], [0x42, 0x44]];
+        let codepoints = collect_codepoints(&ranges).unwrap();
+        assert_eq!(codepoints, vec!['A', 'B', 'C', 'D']);
+    }
+
+    #[test]
+    fn grayscale_format_expands_bits() {
+        let codepoints = vec!['A'];
+        let (_, _, bytes_per_glyph, data, _) =
+            generate_vga_fallback(&codepoints, 16, PixelFormat::Grayscale8bpp).unwrap();
+
+        assert_eq!(bytes_per_glyph, 8 * 16);
+        assert_eq!(data.len(), 128);
+        // 'A' glyph should have some 0xFF bytes
+        assert!(data.iter().any(|&b| b == 0xFF));
+    }
+}

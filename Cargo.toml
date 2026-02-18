@@ -24,6 +24,7 @@ publish = false
 [workspace.dependencies]
 # Internal crates
 hadron-acpi = { path = "crates/acpi" }
+hadron-codegen = { path = "crates/hadron-codegen" }
 hadron-core = { path = "kernel/hadron-core" }
 hadron-driver-api = { path = "kernel/hadron-driver-api" }
 hadron-drivers = { path = "kernel/hadron-drivers" }

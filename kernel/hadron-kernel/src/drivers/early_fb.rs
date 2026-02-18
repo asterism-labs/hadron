@@ -10,16 +10,13 @@ use core::ptr;
 use hadron_core::addr::VirtAddr;
 
 use crate::boot::{FramebufferInfo, PixelFormat};
-use crate::drivers::font_8x16::VGA_FONT_8X16;
+use crate::drivers::font_console::px16;
 use crate::sync::SpinLock;
 
-/// Reference to the embedded VGA 8x16 font data for use by other sinks.
-pub(crate) static VGA_FONT_8X16_REF: &[u8] = &VGA_FONT_8X16;
-
 /// Glyph width in pixels.
-pub(crate) const GLYPH_WIDTH: u32 = 8;
+pub(crate) const GLYPH_WIDTH: u32 = px16::WIDTH;
 /// Glyph height in pixels.
-pub(crate) const GLYPH_HEIGHT: u32 = 16;
+pub(crate) const GLYPH_HEIGHT: u32 = px16::HEIGHT;
 
 /// Text console cursor position.
 pub(crate) struct CursorState {
@@ -119,7 +116,10 @@ impl EarlyFramebuffer {
     }
 
     fn draw_glyph(&self, col: u32, row: u32, ch: u8) {
-        let glyph = &VGA_FONT_8X16[(ch as usize) * 16..][..16];
+        let offset = px16::glyph_index(ch as char)
+            .or_else(|| px16::glyph_index(' '))
+            .unwrap_or(0);
+        let glyph = &px16::DATA[offset..][..px16::BYTES_PER_GLYPH];
         let x0 = col * GLYPH_WIDTH;
         let y0 = row * GLYPH_HEIGHT;
 
@@ -216,5 +216,3 @@ impl fmt::Write for EarlyFramebuffer {
         Ok(())
     }
 }
-
-// Font data lives in drivers/font_8x16.rs (VGA_FONT_8X16, imported above).

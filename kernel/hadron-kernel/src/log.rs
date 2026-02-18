@@ -131,18 +131,17 @@ impl BochsVgaSink {
 
 impl LogSink for BochsVgaSink {
     fn write_str(&self, s: &str) {
-        use crate::drivers::early_fb::{CURSOR, GLYPH_HEIGHT, GLYPH_WIDTH, VGA_FONT_8X16_REF};
+        use crate::drivers::early_fb::{CURSOR, GLYPH_HEIGHT, GLYPH_WIDTH};
         use hadron_driver_api::Framebuffer;
 
         hadron_drivers::bochs_vga::with_bochs_vga(|vga| {
             let info = vga.info();
             let cols = info.width / GLYPH_WIDTH;
             let rows = info.height / GLYPH_HEIGHT;
-            let font = VGA_FONT_8X16_REF;
 
             let mut cursor = CURSOR.lock();
             for byte in s.bytes() {
-                write_byte_to_fb(vga, &info, font, cols, rows, byte, &mut cursor);
+                write_byte_to_fb(vga, &info, cols, rows, byte, &mut cursor);
             }
         });
     }
@@ -156,11 +155,10 @@ impl LogSink for BochsVgaSink {
     }
 }
 
-/// Renders a single byte onto a [`Framebuffer`] using the VGA font.
+/// Renders a single byte onto a [`Framebuffer`] using the console font.
 fn write_byte_to_fb(
     fb: &dyn hadron_driver_api::Framebuffer,
     info: &hadron_driver_api::framebuffer::FramebufferInfo,
-    font: &[u8],
     cols: u32,
     rows: u32,
     byte: u8,
@@ -206,7 +204,7 @@ fn write_byte_to_fb(
                 scroll_up_fb(fb, info, rows);
                 cursor.row = rows - 1;
             }
-            draw_glyph_fb(fb, font, cursor.col, cursor.row, ch, FG_COLOR, BG_COLOR);
+            draw_glyph_fb(fb, cursor.col, cursor.row, ch, FG_COLOR, BG_COLOR);
             cursor.col += 1;
         }
     }
@@ -220,7 +218,6 @@ fn write_byte_to_fb(
 /// Draws a single glyph at character position (col, row) onto a framebuffer.
 fn draw_glyph_fb(
     fb: &dyn hadron_driver_api::Framebuffer,
-    font: &[u8],
     col: u32,
     row: u32,
     ch: u8,
@@ -228,7 +225,11 @@ fn draw_glyph_fb(
     bg: u32,
 ) {
     use crate::drivers::early_fb::{GLYPH_HEIGHT, GLYPH_WIDTH};
-    let glyph = &font[(ch as usize) * (GLYPH_HEIGHT as usize)..][..(GLYPH_HEIGHT as usize)];
+    use crate::drivers::font_console::px16;
+    let offset = px16::glyph_index(ch as char)
+        .or_else(|| px16::glyph_index(' '))
+        .unwrap_or(0);
+    let glyph = &px16::DATA[offset..][..px16::BYTES_PER_GLYPH];
     let x0 = col * GLYPH_WIDTH;
     let y0 = row * GLYPH_HEIGHT;
 

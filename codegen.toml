@@ -1,0 +1,6 @@
+[[fonts]]
+name = "console"
+sizes = [ 16 ]
+ranges = [ [ 0x00, 0x7F ] ]
+format = "bitmap1bpp"
+output = "kernel/hadron-kernel/src/drivers/font_console.rs"

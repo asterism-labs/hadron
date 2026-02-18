@@ -6,12 +6,14 @@
 //!   cargo xtask test     - Run all tests (host unit tests + QEMU integration)
 //!   cargo xtask test --host-only        - Run only host-side unit tests
 //!   cargo xtask test --integration-only - Run only QEMU integration tests
+//!   cargo xtask codegen  - Run code generators (fonts, etc.)
 //!   cargo xtask check    - Type-check kernel code
 //!   cargo xtask clippy   - Run clippy lints on kernel code
 //!   cargo xtask doc      - Generate documentation
 
 mod build;
 mod cargo;
+mod codegen;
 mod config;
 mod hbtf;
 mod initrd;
@@ -120,6 +122,9 @@ enum Commands {
         package: Option<String>,
     },
 
+    /// Run code generators (fonts, etc.) from codegen.toml
+    Codegen,
+
     /// Generate documentation for kernel crates
     Doc {
         /// Target triple (default: from workspace metadata)
@@ -207,6 +212,10 @@ fn main() -> Result<()> {
                 integration_only,
                 extra_args,
             )?;
+        }
+
+        Commands::Codegen => {
+            codegen::run_codegen(&config.workspace_root)?;
         }
 
         Commands::Check { target, package } => {
