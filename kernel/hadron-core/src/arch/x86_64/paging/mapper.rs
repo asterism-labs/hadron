@@ -57,7 +57,14 @@ impl PageTableMapper {
 
     /// Converts a physical address to its HHDM virtual address.
     fn phys_to_virt(&self, phys: PhysAddr) -> *mut u8 {
-        (self.hhdm_offset + phys.as_u64()) as *mut u8
+        let p = phys.as_u64();
+        assert!(
+            p <= u64::MAX - self.hhdm_offset,
+            "phys_to_virt: physical address {:#x} overflows HHDM (offset {:#x})",
+            p,
+            self.hhdm_offset,
+        );
+        (self.hhdm_offset + p) as *mut u8
     }
 
     /// Returns a mutable reference to the [`PageTable`] at `phys`.

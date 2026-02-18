@@ -80,13 +80,23 @@ pub fn generate_hbtf(kernel_elf: &Path, output: &Path, include_lines: bool) -> R
     let elf =
         hadron_elf::ElfFile::parse(&elf_data).map_err(|e| anyhow::anyhow!("parsing ELF: {e}"))?;
 
+    // Compute the kernel virtual base from the lowest PT_LOAD segment so that
+    // HBTF stores offsets (matching what the runtime backtrace code queries).
+    let kernel_virt_base = elf
+        .load_segments()
+        .map(|seg| seg.vaddr)
+        .min()
+        .unwrap_or(elf.entry_point());
+
+    println!("HBTF: kernel_virt_base = {kernel_virt_base:#x}");
+
     // Extract function symbols
-    let mut symbols = extract_symbols(&elf);
+    let mut symbols = extract_symbols(&elf, kernel_virt_base);
     symbols.sort_by_key(|s| s.addr);
 
     // Extract line info (if requested and available)
     let mut lines = if include_lines {
-        extract_lines(&elf)
+        extract_lines(&elf, kernel_virt_base)
     } else {
         Vec::new()
     };
@@ -155,7 +165,10 @@ pub fn generate_hbtf(kernel_elf: &Path, output: &Path, include_lines: bool) -> R
 }
 
 /// Extract function symbols from the ELF symbol table.
-fn extract_symbols(elf: &hadron_elf::ElfFile<'_>) -> Vec<FuncSymbol> {
+///
+/// Addresses are stored as offsets from `kernel_virt_base` so that the
+/// runtime backtrace code (which queries by offset) can find them.
+fn extract_symbols(elf: &hadron_elf::ElfFile<'_>, kernel_virt_base: u64) -> Vec<FuncSymbol> {
     let symtab = match elf.find_section_by_type(hadron_elf::SHT_SYMTAB) {
         Some(s) => s,
         None => return Vec::new(),
@@ -184,6 +197,10 @@ fn extract_symbols(elf: &hadron_elf::ElfFile<'_>) -> Vec<FuncSymbol> {
         if sym.st_value == 0 {
             continue;
         }
+        // Skip symbols below the kernel virtual base (non-kernel symbols).
+        if sym.st_value < kernel_virt_base {
+            continue;
+        }
 
         let raw_name = match strtab.get(sym.st_name) {
             Some(n) if !n.is_empty() => n,
@@ -194,7 +211,7 @@ fn extract_symbols(elf: &hadron_elf::ElfFile<'_>) -> Vec<FuncSymbol> {
         let demangled = format!("{:#}", rustc_demangle::demangle(raw_name));
 
         result.push(FuncSymbol {
-            addr: sym.st_value,
+            addr: sym.st_value.wrapping_sub(kernel_virt_base),
             size: sym.st_size as u32,
             name: demangled,
         });
@@ -204,7 +221,10 @@ fn extract_symbols(elf: &hadron_elf::ElfFile<'_>) -> Vec<FuncSymbol> {
 }
 
 /// Extract line info from DWARF `.debug_line` section.
-fn extract_lines(elf: &hadron_elf::ElfFile<'_>) -> Vec<LineInfo> {
+///
+/// Addresses are stored as offsets from `kernel_virt_base` so that the
+/// runtime backtrace code (which queries by offset) can find them.
+fn extract_lines(elf: &hadron_elf::ElfFile<'_>, kernel_virt_base: u64) -> Vec<LineInfo> {
     let debug_line = match elf.find_section_by_name(".debug_line") {
         Some(s) => s,
         None => return Vec::new(),
@@ -240,8 +260,13 @@ fn extract_lines(elf: &hadron_elf::ElfFile<'_>) -> Vec<LineInfo> {
             // Simplify paths: strip everything up to and including the workspace root
             let simplified = simplify_path(&file_path);
 
+            // Skip lines below the kernel virtual base (non-kernel code).
+            if row.address < kernel_virt_base {
+                continue;
+            }
+
             result.push(LineInfo {
-                addr: row.address,
+                addr: row.address.wrapping_sub(kernel_virt_base),
                 file: simplified,
                 line: row.line,
             });
