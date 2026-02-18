@@ -1,0 +1,14 @@
+[package]
+name = "hadron-init"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[[bin]]
+name = "hadron-init"
+path = "src/main.rs"
+
+[dependencies]
+hadron-syslib = { path = "../hadron-syslib" }

@@ -4,6 +4,7 @@
 //! filesystem implementations (ramfs, devfs, ext2, etc.). All file I/O goes
 //! through these traits via the VFS mount table.
 
+pub mod console_input;
 pub mod devfs;
 pub mod file;
 pub mod initramfs;

@@ -179,6 +179,16 @@ fn write_byte_to_fb(
         b'\r' => {
             cursor.col = 0;
         }
+        b'\x08' => {
+            // Backspace: move cursor back one position (does not erase).
+            // Erasure is done by the caller writing a space then another backspace.
+            if cursor.col > 0 {
+                cursor.col -= 1;
+            } else if cursor.row > 0 {
+                cursor.row -= 1;
+                cursor.col = cols - 1;
+            }
+        }
         b'\t' => {
             let next = (cursor.col + 4) & !3;
             cursor.col = next;

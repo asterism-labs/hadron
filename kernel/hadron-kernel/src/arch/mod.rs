@@ -61,7 +61,10 @@ pub fn platform_init(boot_info: &impl crate::boot::BootInfo) {
     }
 }
 
-/// Spawn arch-specific async tasks (serial echo, keyboard, etc.).
+/// Spawn arch-specific async tasks (serial echo, etc.).
+///
+/// Note: The keyboard-echo task has been removed to avoid racing with
+/// `DevConsole::read`, which polls the i8042 controller synchronously.
 pub fn spawn_platform_tasks() {
     #[cfg(target_arch = "x86_64")]
     {
@@ -102,35 +105,6 @@ pub fn spawn_platform_tasks() {
                 }
             },
             crate::sched::TaskMeta::new("serial-echo"),
-        );
-
-        // Keyboard echo task — reads PS/2 key events and logs them.
-        crate::sched::spawn_with(
-            async {
-                use hadron_driver_api::input::KeyboardDevice;
-
-                let kbd = match hadron_drivers::keyboard_async::AsyncKeyboard::new(
-                    &crate::services::KERNEL_SERVICES,
-                ) {
-                    Ok(k) => k,
-                    Err(e) => {
-                        hadron_core::kerr!("[kbd] Failed: {}", e);
-                        return;
-                    }
-                };
-                hadron_core::kdebug!("[kbd] Listening for key events...");
-                loop {
-                    match kbd.read_event().await {
-                        Ok(event) => {
-                            if event.pressed {
-                                hadron_core::kdebug!("[kbd] Key {:?} pressed", event.key);
-                            }
-                        }
-                        Err(e) => hadron_core::kerr!("[kbd] Error: {}", e),
-                    }
-                }
-            },
-            crate::sched::TaskMeta::new("kbd-echo"),
         );
     }
     #[cfg(target_arch = "aarch64")]

@@ -3,7 +3,7 @@
 //! Provides virtual device files:
 //! - `/dev/null` -- reads return 0 bytes, writes are discarded
 //! - `/dev/zero` -- reads fill buffer with zeros, writes are discarded
-//! - `/dev/console` -- writes go to kernel console, reads return 0
+//! - `/dev/console` -- writes go to kernel console, reads block for keyboard input
 
 extern crate alloc;
 
@@ -235,7 +235,11 @@ impl Inode for DevZero {
 
 // ── /dev/console ───────────────────────────────────────────────────────
 
-/// `/dev/console` -- writes go to kernel console output, reads return EOF.
+/// `/dev/console` -- writes go to kernel console output, reads block for keyboard input.
+///
+/// Reads poll the i8042 PS/2 controller for keyboard input using cooked-mode
+/// line editing (see [`super::console_input`]). The future loops internally
+/// via `sti; hlt; cli` until at least one byte is available.
 pub struct DevConsole;
 
 impl Inode for DevConsole {
@@ -254,10 +258,24 @@ impl Inode for DevConsole {
     fn read<'a>(
         &'a self,
         _offset: usize,
-        _buf: &'a mut [u8],
+        buf: &'a mut [u8],
     ) -> Pin<Box<dyn Future<Output = Result<usize, FsError>> + Send + 'a>> {
-        // No keyboard input support yet -- return EOF.
-        Box::pin(async { Ok(0) })
+        Box::pin(async move {
+            loop {
+                super::console_input::poll_keyboard_hardware();
+                let n = super::console_input::try_read(buf);
+                if n > 0 {
+                    return Ok(n);
+                }
+                // Wait for any interrupt (timer fires ~1ms), then retry.
+                // SAFETY: sti;hlt;cli is safe in kernel mode — enables interrupts,
+                // halts until the next interrupt, then disables them again. This
+                // yields to hardware (timer, keyboard) without busy-spinning.
+                unsafe {
+                    core::arch::asm!("sti; hlt; cli", options(nomem, nostack));
+                }
+            }
+        })
     }
 
     fn write<'a>(

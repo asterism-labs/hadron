@@ -9,6 +9,7 @@ members = [
     "xtask",
     "kernel/hadron-core",
 ]
+exclude = [ "userspace" ]
 
 [workspace.package]
 version = "0.1.0"
