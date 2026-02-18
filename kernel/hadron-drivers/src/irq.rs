@@ -9,10 +9,10 @@ use hadron_core::sync::WaitQueue;
 use hadron_driver_api::error::DriverError;
 use hadron_driver_api::services::KernelServices;
 
-/// Number of ISA IRQ lines (vectors 32-63).
-const MAX_IRQ_LINES: usize = 32;
+/// Number of IRQ wait queues covering vectors 32-255 (ISA + MSI-X).
+const MAX_IRQ_LINES: usize = 224;
 
-/// One wait queue per ISA vector (32-63). Index = vector - 32.
+/// One wait queue per vector (32-255). Index = vector - 32.
 static IRQ_WAITQUEUES: [WaitQueue; MAX_IRQ_LINES] = {
     const INIT: WaitQueue = WaitQueue::new();
     [INIT; MAX_IRQ_LINES]

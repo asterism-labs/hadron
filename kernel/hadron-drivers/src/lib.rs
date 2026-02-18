@@ -9,6 +9,7 @@ extern crate alloc;
 
 #[cfg(target_arch = "x86_64")]
 pub mod ahci;
+pub mod block;
 #[cfg(target_arch = "x86_64")]
 pub mod bus;
 pub mod display;
@@ -17,6 +18,8 @@ pub mod interrupt;
 #[cfg(target_arch = "x86_64")]
 pub mod irq;
 pub mod pci;
+#[cfg(target_arch = "x86_64")]
+pub mod virtio;
 #[cfg(target_os = "none")]
 pub mod registry;
 pub mod serial;

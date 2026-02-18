@@ -110,4 +110,18 @@ pub mod regs {
     pub const INTERRUPT_PIN: u8 = 0x3D;
     /// Secondary Bus Number (8-bit, offset 0x19) — PCI-to-PCI bridge only.
     pub const SECONDARY_BUS: u8 = 0x19;
+    /// Capabilities Pointer (8-bit, offset 0x34) — pointer to first capability.
+    pub const CAPABILITIES_PTR: u8 = 0x34;
+
+    // -- Status register bits -------------------------------------------------
+
+    /// Bit 4 of the Status register: capabilities list present.
+    pub const STATUS_CAPABILITIES_LIST: u16 = 1 << 4;
+
+    // -- PCI capability IDs ---------------------------------------------------
+
+    /// MSI-X capability ID.
+    pub const CAP_ID_MSIX: u8 = 0x11;
+    /// Vendor-specific capability ID (used by VirtIO PCI).
+    pub const CAP_ID_VENDOR: u8 = 0x09;
 }
