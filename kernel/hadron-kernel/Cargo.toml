@@ -21,6 +21,7 @@ hadron-core = { workspace = true }
 hadron-driver-api = { workspace = true }
 hadron-drivers = { workspace = true }
 hadron-elf = { workspace = true }
+hadron-syscall = { workspace = true, features = [ "kernel" ] }
 noalloc = { workspace = true }
 
 [dev-dependencies]

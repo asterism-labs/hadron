@@ -1,7 +1,7 @@
 //! Syscall dispatch table.
 //!
-//! Routes incoming syscall numbers to individual handler functions.
-//! Uses the native Hadron syscall ABI with grouped numbering.
+//! Routes incoming syscall numbers to individual handler functions via the
+//! generated [`SyscallHandler`] trait from `hadron-syscall`.
 
 mod io;
 mod memory;
@@ -10,7 +10,57 @@ mod query;
 mod time;
 mod vfs;
 
-use hadron_core::syscall::*;
+use hadron_syscall::{SyscallHandler, dispatch};
+
+/// Kernel syscall handler implementation.
+///
+/// Delegates each syscall to the corresponding handler module.
+struct HadronDispatch;
+
+impl SyscallHandler for HadronDispatch {
+    fn sys_task_exit(&self, status: usize) -> isize {
+        process::sys_task_exit(status)
+    }
+
+    fn sys_task_info(&self) -> isize {
+        process::sys_task_info()
+    }
+
+    fn sys_vnode_open(&self, path_ptr: usize, path_len: usize, flags: usize) -> isize {
+        vfs::sys_vnode_open(path_ptr, path_len, flags)
+    }
+
+    fn sys_vnode_read(&self, fd: usize, buf_ptr: usize, buf_len: usize) -> isize {
+        vfs::sys_vnode_read(fd, buf_ptr, buf_len)
+    }
+
+    fn sys_vnode_write(&self, fd: usize, buf_ptr: usize, buf_len: usize) -> isize {
+        vfs::sys_vnode_write(fd, buf_ptr, buf_len)
+    }
+
+    fn sys_mem_map(&self) -> isize {
+        memory::sys_mem_map()
+    }
+
+    fn sys_mem_unmap(&self) -> isize {
+        memory::sys_mem_unmap()
+    }
+
+    fn sys_clock_gettime(&self, clock_id: usize, tp: usize) -> isize {
+        time::sys_clock_gettime(clock_id, tp)
+    }
+
+    fn sys_query(&self, topic: usize, sub_id: usize, out_buf: usize, out_len: usize) -> isize {
+        query::sys_query(topic, sub_id, out_buf, out_len)
+    }
+
+    fn sys_debug_log(&self, buf: usize, len: usize) -> isize {
+        io::sys_debug_log(buf, len)
+    }
+}
+
+/// Global dispatch instance.
+static DISPATCH: HadronDispatch = HadronDispatch;
 
 /// Syscall dispatch entry point, called from the assembly stub in `hadron-core`.
 ///
@@ -23,29 +73,7 @@ extern "C" fn syscall_dispatch(
     a1: usize,
     a2: usize,
     a3: usize,
-    _a4: usize,
+    a4: usize,
 ) -> isize {
-    match nr {
-        // Task management
-        SYS_TASK_EXIT => process::sys_task_exit(a0),
-        SYS_TASK_INFO => process::sys_task_info(),
-
-        // Filesystem
-        SYS_VNODE_OPEN => vfs::sys_vnode_open(a0, a1, a2),
-        SYS_VNODE_READ => vfs::sys_vnode_read(a0, a1, a2),
-        SYS_VNODE_WRITE => vfs::sys_vnode_write(a0, a1, a2),
-
-        // Memory
-        SYS_MEM_MAP => memory::sys_mem_map(),
-        SYS_MEM_UNMAP => memory::sys_mem_unmap(),
-
-        // Time
-        SYS_CLOCK_GETTIME => time::sys_clock_gettime(a0, a1),
-
-        // System
-        SYS_QUERY => query::sys_query(a0, a1, a2, a3),
-        SYS_DEBUG_LOG => io::sys_debug_log(a0, a1),
-
-        _ => -ENOSYS,
-    }
+    dispatch(&DISPATCH, nr, a0, a1, a2, a3, a4)
 }

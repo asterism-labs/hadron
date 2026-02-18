@@ -30,6 +30,8 @@ hadron-drivers = { path = "kernel/hadron-drivers" }
 hadron-dwarf = { path = "crates/dwarf" }
 hadron-elf = { path = "crates/elf" }
 hadron-kernel = { path = "kernel/hadron-kernel" }
+hadron-syscall = { path = "crates/hadron-syscall" }
+hadron-syscall-macros = { path = "crates/hadron-syscall-macros" }
 hadron-test = { path = "crates/hadron-test", default-features = false }
 limine = { path = "crates/limine" }
 noalloc = { path = "crates/noalloc" }

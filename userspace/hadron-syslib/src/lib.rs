@@ -5,7 +5,8 @@
 
 #![no_std]
 
+pub use hadron_syscall;
+
 pub mod io;
 pub mod start;
 pub mod sys;
-pub mod syscall;

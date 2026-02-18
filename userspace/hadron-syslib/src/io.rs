@@ -1,15 +1,7 @@
 //! I/O primitives: `read`, `write`, and `print!`/`println!` macros.
 
-use crate::syscall::{syscall3, syscall1};
-
-// ── Syscall numbers (duplicated from hadron-core for independence) ────
-
-/// `SYS_VNODE_READ` — read from a file descriptor.
-const SYS_VNODE_READ: usize = 0x31;
-/// `SYS_VNODE_WRITE` — write to a file descriptor.
-const SYS_VNODE_WRITE: usize = 0x32;
-/// `SYS_VNODE_OPEN` — open a file by path.
-const SYS_VNODE_OPEN: usize = 0x30;
+use hadron_syscall::raw::{syscall1, syscall3};
+use hadron_syscall::{SYS_HANDLE_CLOSE, SYS_VNODE_OPEN, SYS_VNODE_READ, SYS_VNODE_WRITE};
 
 // ── File descriptor constants ─────────────────────────────────────────
 
@@ -39,8 +31,7 @@ pub fn open(path: &str, flags: usize) -> isize {
 
 /// Close a file descriptor (not yet implemented in kernel, provided for future use).
 pub fn close(fd: usize) -> isize {
-    // SYS_HANDLE_CLOSE = 0x10
-    syscall1(0x10, fd)
+    syscall1(SYS_HANDLE_CLOSE, fd)
 }
 
 // ── fmt::Write implementation for stdout/stderr ───────────────────────

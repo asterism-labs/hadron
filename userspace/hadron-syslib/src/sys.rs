@@ -1,70 +1,10 @@
 //! System calls: exit, query, clock.
 
-use crate::syscall::{syscall1, syscall4, syscall2};
-
-// ── Syscall numbers ───────────────────────────────────────────────────
-
-const SYS_TASK_EXIT: usize = 0x00;
-const SYS_CLOCK_GETTIME: usize = 0x54;
-const SYS_QUERY: usize = 0xF0;
-
-// ── Query topics ──────────────────────────────────────────────────────
-
-const QUERY_MEMORY: u64 = 0;
-const QUERY_UPTIME: u64 = 1;
-const QUERY_KERNEL_VERSION: u64 = 2;
-
-// ── Clock IDs ─────────────────────────────────────────────────────────
-
-const CLOCK_MONOTONIC: usize = 0;
-
-// ── Data structures (must match hadron-core layout) ───────────────────
-
-/// POSIX-compatible timespec.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct Timespec {
-    /// Seconds since boot.
-    pub tv_sec: u64,
-    /// Nanoseconds within the current second.
-    pub tv_nsec: u64,
-}
-
-/// Physical memory statistics.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct MemoryInfo {
-    /// Total physical memory in bytes.
-    pub total_bytes: u64,
-    /// Free physical memory in bytes.
-    pub free_bytes: u64,
-    /// Used physical memory in bytes.
-    pub used_bytes: u64,
-}
-
-/// Time since boot.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct UptimeInfo {
-    /// Nanoseconds since boot.
-    pub uptime_ns: u64,
-}
-
-/// Kernel version metadata.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct KernelVersionInfo {
-    /// Major version.
-    pub major: u16,
-    /// Minor version.
-    pub minor: u16,
-    /// Patch version.
-    pub patch: u16,
-    /// Padding.
-    pub _pad: u16,
-    /// Kernel name (UTF-8, NUL-padded).
-    pub name: [u8; 32],
-}
+use hadron_syscall::raw::{syscall1, syscall2, syscall4};
+use hadron_syscall::{
+    CLOCK_MONOTONIC, KernelVersionInfo, MemoryInfo, QUERY_KERNEL_VERSION, QUERY_MEMORY,
+    QUERY_UPTIME, SYS_CLOCK_GETTIME, SYS_QUERY, SYS_TASK_EXIT, Timespec, UptimeInfo,
+};
 
 // ── Functions ─────────────────────────────────────────────────────────
 
