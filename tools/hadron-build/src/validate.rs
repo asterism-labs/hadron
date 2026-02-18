@@ -53,6 +53,10 @@ fn validate_config_options(model: &BuildModel) -> Result<()> {
             (ConfigType::U32, ConfigValue::U32(_)) => {}
             (ConfigType::U64, ConfigValue::U64(_)) => {}
             (ConfigType::Str, ConfigValue::Str(_)) => {}
+            (ConfigType::Choice, ConfigValue::Choice(_)) => {}
+            (ConfigType::List, ConfigValue::List(_)) => {}
+            // Group uses a sentinel default (Bool(false)), skip check.
+            (ConfigType::Group, _) => {}
             _ => bail!(
                 "config option '{name}' default value type does not match declared type {:?}",
                 opt.ty
@@ -71,15 +75,41 @@ fn validate_config_options(model: &BuildModel) -> Result<()> {
             );
         }
 
-        // Choices only on string types.
-        if let Some(ref choices) = opt.choices {
+        // Choices: required for Choice type, allowed for Str type.
+        if opt.ty == ConfigType::Choice {
+            let choices = opt.choices.as_ref();
             ensure!(
-                opt.ty == ConfigType::Str,
-                "config option '{name}' has choices but is not a string"
+                choices.is_some_and(|c| !c.is_empty()),
+                "config option '{name}' is Choice type but has no variants"
+            );
+            // Default must be one of the variants.
+            if let ConfigValue::Choice(ref default) = opt.default {
+                ensure!(
+                    choices.unwrap().contains(default),
+                    "config option '{name}' default '{default}' is not in choices: {:?}",
+                    choices.unwrap()
+                );
+            }
+        } else if let Some(ref choices) = opt.choices {
+            ensure!(
+                matches!(opt.ty, ConfigType::Str | ConfigType::Choice),
+                "config option '{name}' has choices but is not a string or choice type"
             );
             ensure!(
                 !choices.is_empty(),
                 "config option '{name}' has empty choices"
+            );
+        }
+
+        // Group must not have choices or range.
+        if opt.ty == ConfigType::Group {
+            ensure!(
+                opt.choices.is_none(),
+                "config option '{name}' is Group type but has choices"
+            );
+            ensure!(
+                opt.range.is_none(),
+                "config option '{name}' is Group type but has range"
             );
         }
 
@@ -96,6 +126,15 @@ fn validate_config_options(model: &BuildModel) -> Result<()> {
             ensure!(
                 model.config_options.contains_key(sel),
                 "config option '{name}' selects '{sel}', which is not defined"
+            );
+        }
+
+        // Dotted-key referential integrity: prefix must be a defined Group.
+        if let Some(dot_pos) = name.find('.') {
+            let prefix = &name[..dot_pos];
+            ensure!(
+                model.config_options.get(prefix).is_some_and(|o| o.ty == ConfigType::Group),
+                "config option '{name}' has dotted key but '{prefix}' is not a defined Group"
             );
         }
     }
@@ -178,6 +217,16 @@ fn validate_crates(model: &BuildModel) -> Result<()> {
             ensure!(
                 model.crates.contains_key(&dep.crate_name),
                 "crate '{name}' depends on '{ext}' (crate '{dep_name}'), which is not defined",
+                ext = extern_name,
+                dep_name = dep.crate_name
+            );
+        }
+
+        // All dev dependency references must resolve.
+        for (extern_name, dep) in &krate.dev_deps {
+            ensure!(
+                model.crates.contains_key(&dep.crate_name),
+                "crate '{name}' dev-depends on '{ext}' (crate '{dep_name}'), which is not defined",
                 ext = extern_name,
                 dep_name = dep.crate_name
             );
@@ -314,5 +363,27 @@ fn validate_tests(model: &BuildModel) -> Result<()> {
             "tests.host_testable references crate '{name}', which is not defined"
         );
     }
+
+    // Validate kernel test config consistency.
+    if let Some(ref crate_name) = model.tests.kernel_tests_crate {
+        ensure!(
+            model.crates.contains_key(crate_name),
+            "tests.kernel_tests_crate references crate '{crate_name}', which is not defined"
+        );
+        let krate = &model.crates[crate_name];
+        ensure!(
+            !krate.dev_deps.is_empty(),
+            "tests.kernel_tests_crate '{crate_name}' has no dev_deps"
+        );
+        ensure!(
+            model.tests.kernel_tests_dir.is_some(),
+            "tests.kernel_tests_crate is set but kernel_tests_dir is not"
+        );
+        ensure!(
+            model.tests.kernel_tests_linker_script.is_some(),
+            "tests.kernel_tests_crate is set but kernel_tests_linker_script is not"
+        );
+    }
+
     Ok(())
 }

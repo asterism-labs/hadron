@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 anyhow = "1"
+cargo-image-runner = { version = "0.4", default-features = false, features = ["bios", "limine", "iso", "qemu"] }
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.28"
 hadris-cpio = { path = "../../vendor/hadris-cpio", default-features = false, features = ["std", "write"] }

@@ -433,9 +433,13 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
         fs::vfs::with_vfs_mut(|vfs| vfs.mount("/dev", devfs));
     }
 
-    crate::proc::save_kernel_cr3();
-    crate::proc::spawn_init();
+    // TODO: re-enable init process once userspace is stable.
+    // crate::proc::save_kernel_cr3();
+    // crate::proc::spawn_init();
+    // crate::sched::executor().run();
 
-    // 11. Run the executor — drives ALL kernel tasks including the process task.
-    crate::sched::executor().run();
+    hadron_core::kinfo!("Kernel boot complete — halting.");
+    loop {
+        core::hint::spin_loop();
+    }
 }

@@ -97,9 +97,9 @@ fn cmd_configure(cli: &cli::Cli) -> Result<()> {
 
 /// Build the kernel.
 fn cmd_build(cli: &cli::Cli) -> Result<()> {
-    let (_, kernel_binary) = do_build(cli)?;
+    let (state, _model) = do_build(cli)?;
 
-    if let Some(ref kb) = kernel_binary {
+    if let Some(ref kb) = state.kernel_binary {
         println!("  Kernel: {}", kb.display());
     }
     Ok(())
@@ -107,13 +107,13 @@ fn cmd_build(cli: &cli::Cli) -> Result<()> {
 
 /// Build and run the kernel in QEMU.
 fn cmd_run(cli: &cli::Cli, extra_args: &[String]) -> Result<()> {
-    let (resolved, kernel_binary) = do_build(cli)?;
+    let (state, _model) = do_build(cli)?;
 
-    let kernel_bin = kernel_binary.ok_or_else(|| {
+    let kernel_bin = state.kernel_binary.as_ref().ok_or_else(|| {
         anyhow::anyhow!("no kernel binary produced — check boot-binary in profile")
     })?;
 
-    run::run_kernel(&resolved, &kernel_bin, extra_args)
+    run::run_kernel(&state.config, kernel_bin, extra_args)
 }
 
 /// Type-check all kernel crates without linking.
@@ -148,23 +148,18 @@ fn cmd_clippy(cli: &cli::Cli) -> Result<()> {
 
 /// Run tests.
 fn cmd_test(cli: &cli::Cli, args: &cli::TestArgs) -> Result<()> {
-    let (resolved, _model) = resolve_config(cli)?;
-
     let run_host = !args.kernel_only && !args.crash_only;
     let run_kernel = !args.host_only && !args.crash_only;
 
     if run_host {
+        let (resolved, _model) = resolve_config(cli)?;
         test::run_host_tests(&resolved)?;
     }
 
     if run_kernel {
-        let (resolved, kernel_binary) = do_build(cli)?;
-
-        if let Some(kernel_bin) = kernel_binary {
-            run::run_kernel_tests(&resolved, &kernel_bin, &args.extra_args)?;
-        } else {
-            anyhow::bail!("no kernel binary produced for integration tests");
-        }
+        let (mut state, model) = do_build(cli)?;
+        let test_binaries = test::compile_kernel_tests(&model, &mut state)?;
+        test::run_kernel_test_binaries(&state.config, &test_binaries, &args.extra_args)?;
     }
 
     if args.crash_only {
@@ -257,6 +252,8 @@ fn prepare_pipeline_state(
             tests: config::TestsConfig {
                 host_testable: resolved.tests.host_testable.clone(),
                 kernel_tests_dir: resolved.tests.kernel_tests_dir.clone(),
+                kernel_tests_crate: resolved.tests.kernel_tests_crate.clone(),
+                kernel_tests_linker_script: resolved.tests.kernel_tests_linker_script.clone(),
                 crash: resolved.tests.crash.iter().map(|ct| config::CrashTest {
                     name: ct.name.clone(),
                     source: ct.source.clone(),
@@ -280,7 +277,10 @@ fn prepare_pipeline_state(
 }
 
 /// Shared build logic used by build, run, and test commands.
-fn do_build(cli: &cli::Cli) -> Result<(config::ResolvedConfig, Option<PathBuf>)> {
+///
+/// Returns the pipeline state (with artifact map, sysroots, etc.) and the
+/// build model, so callers like `cmd_test` can compile test binaries.
+fn do_build(cli: &cli::Cli) -> Result<(scheduler::PipelineState, model::BuildModel)> {
     let (resolved, model) = resolve_config(cli)?;
 
     let mut state = prepare_pipeline_state(&resolved, cli.force)?;
@@ -288,11 +288,11 @@ fn do_build(cli: &cli::Cli) -> Result<(config::ResolvedConfig, Option<PathBuf>)>
     println!("\nCompiling crates...");
     scheduler::execute_pipeline(&model, &mut state, CompileMode::Build)?;
 
-    state.cache.save(&resolved.root)?;
+    state.cache.save(&state.config.root)?;
     println!(
         "\nBuild complete. ({} of {} crates recompiled)",
         state.recompiled_crates, state.total_crates
     );
 
-    Ok((resolved, state.kernel_binary))
+    Ok((state, model))
 }

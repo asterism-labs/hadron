@@ -91,6 +91,12 @@ pub enum ConfigType {
     U32,
     U64,
     Str,
+    /// Dedicated enum type with a fixed set of named variants.
+    Choice,
+    /// Ordered list of strings.
+    List,
+    /// Nested config group using flat dot-notation keys (e.g. `uart.baud`).
+    Group,
 }
 
 /// A typed configuration value.
@@ -100,6 +106,10 @@ pub enum ConfigValue {
     U32(u32),
     U64(u64),
     Str(String),
+    /// Selected variant name for a `ConfigType::Choice` option.
+    Choice(String),
+    /// Ordered list of string items for a `ConfigType::List` option.
+    List(Vec<String>),
 }
 
 impl Default for ConfigValue {
@@ -137,6 +147,7 @@ pub struct CrateDef {
     /// Target for this crate (inherited from group). `"host"` = host triple.
     pub target: String,
     pub deps: BTreeMap<String, DepDef>,
+    pub dev_deps: BTreeMap<String, DepDef>,
     pub features: Vec<String>,
     pub root: Option<String>,
     /// Per-crate linker script (e.g. for kernel binary crates).
@@ -293,6 +304,10 @@ pub struct ImageDef {
 pub struct TestsDef {
     pub host_testable: Vec<String>,
     pub kernel_tests_dir: Option<String>,
+    /// Which crate owns the kernel integration tests.
+    pub kernel_tests_crate: Option<String>,
+    /// Linker script for kernel test binaries.
+    pub kernel_tests_linker_script: Option<String>,
     pub crash_tests: Vec<CrashTestDef>,
 }
 

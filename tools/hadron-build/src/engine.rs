@@ -3,7 +3,8 @@
 //! Sets up a Rhai engine with builder types and registration functions,
 //! evaluates `build.rhai`, and produces a [`BuildModel`].
 
-use std::path::Path;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
@@ -48,8 +49,15 @@ pub fn evaluate_script(root: &Path) -> Result<BuildModel> {
     register_tests_api(&mut engine, model.clone());
     register_helpers(&mut engine, &root_path);
 
-    // Evaluate build.rhai with the scope containing constants.
+    // Set up include() mechanism with circular-include detection.
+    let visited_includes = Arc::new(Mutex::new(HashSet::<PathBuf>::new()));
     let script_path = root.join("build.rhai");
+    if let Ok(canonical) = std::fs::canonicalize(&script_path) {
+        visited_includes.lock().unwrap().insert(canonical);
+    }
+    register_include_api(&mut engine, &root_path, visited_includes);
+
+    // Evaluate build.rhai with the scope containing constants.
     let ast = engine
         .compile_file(script_path.clone().into())
         .map_err(|e| anyhow::anyhow!("error compiling {}: {e}", script_path.display()))?;
@@ -129,6 +137,12 @@ fn register_target_api(engine: &mut Engine, model: SharedModel) {
 struct ConfigBuilder {
     model: SharedModel,
     name: String,
+}
+
+#[derive(Debug, Clone)]
+struct ConfigGroupBuilder {
+    model: SharedModel,
+    group_name: String,
 }
 
 fn register_config_api(engine: &mut Engine, model: SharedModel) {
@@ -252,6 +266,159 @@ fn register_config_api(engine: &mut Engine, model: SharedModel) {
             name: name.into(),
         }
     });
+
+    // config_choice(name, default, variants) -> ConfigBuilder
+    let m = model.clone();
+    engine.register_fn(
+        "config_choice",
+        move |name: &str, default: &str, variants: rhai::Array| -> ConfigBuilder {
+            let choices: Vec<String> = variants
+                .into_iter()
+                .filter_map(|v| v.into_string().ok())
+                .collect();
+            let mut model = m.lock().unwrap();
+            model.config_options.insert(
+                name.into(),
+                ConfigOptionDef {
+                    name: name.into(),
+                    ty: ConfigType::Choice,
+                    default: ConfigValue::Choice(default.into()),
+                    help: None,
+                    depends_on: Vec::new(),
+                    selects: Vec::new(),
+                    range: None,
+                    choices: Some(choices),
+                    menu: None,
+                },
+            );
+            ConfigBuilder {
+                model: m.clone(),
+                name: name.into(),
+            }
+        },
+    );
+
+    // config_list(name, default_array) -> ConfigBuilder
+    let m = model.clone();
+    engine.register_fn(
+        "config_list",
+        move |name: &str, defaults: rhai::Array| -> ConfigBuilder {
+            let items: Vec<String> = defaults
+                .into_iter()
+                .filter_map(|v| v.into_string().ok())
+                .collect();
+            let mut model = m.lock().unwrap();
+            model.config_options.insert(
+                name.into(),
+                ConfigOptionDef {
+                    name: name.into(),
+                    ty: ConfigType::List,
+                    default: ConfigValue::List(items),
+                    help: None,
+                    depends_on: Vec::new(),
+                    selects: Vec::new(),
+                    range: None,
+                    choices: None,
+                    menu: None,
+                },
+            );
+            ConfigBuilder {
+                model: m.clone(),
+                name: name.into(),
+            }
+        },
+    );
+
+    // config_group(name) -> ConfigGroupBuilder
+    let m = model.clone();
+    engine.register_fn(
+        "config_group",
+        move |name: &str| -> ConfigGroupBuilder {
+            let mut model = m.lock().unwrap();
+            model.config_options.insert(
+                name.into(),
+                ConfigOptionDef {
+                    name: name.into(),
+                    ty: ConfigType::Group,
+                    default: ConfigValue::Bool(false), // sentinel, not used
+                    help: None,
+                    depends_on: Vec::new(),
+                    selects: Vec::new(),
+                    range: None,
+                    choices: None,
+                    menu: None,
+                },
+            );
+            ConfigGroupBuilder {
+                model: m.clone(),
+                group_name: name.into(),
+            }
+        },
+    );
+
+    // ConfigGroupBuilder methods
+    engine.register_fn(
+        "field",
+        |builder: &mut ConfigGroupBuilder, name: &str, value: Dynamic| -> ConfigGroupBuilder {
+            let dotted_key = format!("{}.{name}", builder.group_name);
+            let config_val = dynamic_to_config_value(&value);
+            let ty = match &config_val {
+                ConfigValue::Bool(_) => ConfigType::Bool,
+                ConfigValue::U32(_) => ConfigType::U32,
+                ConfigValue::U64(_) => ConfigType::U64,
+                ConfigValue::Str(_) => ConfigType::Str,
+                ConfigValue::Choice(_) => ConfigType::Choice,
+                ConfigValue::List(_) => ConfigType::List,
+            };
+            let mut model = builder.model.lock().unwrap();
+            // Inherit menu from group marker.
+            let menu = model
+                .config_options
+                .get(&builder.group_name)
+                .and_then(|o| o.menu.clone());
+            model.config_options.insert(
+                dotted_key.clone(),
+                ConfigOptionDef {
+                    name: dotted_key,
+                    ty,
+                    default: config_val,
+                    help: None,
+                    depends_on: Vec::new(),
+                    selects: Vec::new(),
+                    range: None,
+                    choices: None,
+                    menu,
+                },
+            );
+            builder.clone()
+        },
+    );
+
+    engine.register_fn(
+        "help",
+        |builder: &mut ConfigGroupBuilder, help: &str| -> ConfigGroupBuilder {
+            let mut model = builder.model.lock().unwrap();
+            if let Some(opt) = model.config_options.get_mut(&builder.group_name) {
+                opt.help = Some(help.into());
+            }
+            builder.clone()
+        },
+    );
+
+    engine.register_fn(
+        "menu",
+        |builder: &mut ConfigGroupBuilder, menu: &str| -> ConfigGroupBuilder {
+            let mut model = builder.model.lock().unwrap();
+            if let Some(opt) = model.config_options.get_mut(&builder.group_name) {
+                opt.menu = Some(menu.into());
+            }
+            // Track menu category ordering (first-appearance).
+            if !model.menu_order.iter().any(|m| m == menu) {
+                model.menu_order.push(menu.into());
+            }
+            builder.clone()
+        },
+    );
 
     // ConfigBuilder methods
     engine.register_fn(
@@ -583,6 +750,7 @@ fn register_group_api(engine: &mut Engine, model: SharedModel) {
                     crate_type: CrateType::Lib,
                     target,
                     deps: std::collections::BTreeMap::new(),
+                    dev_deps: std::collections::BTreeMap::new(),
                     features: Vec::new(),
                     root: None,
                     linker_script: None,
@@ -606,6 +774,20 @@ fn register_group_api(engine: &mut Engine, model: SharedModel) {
                 for (extern_name, val) in deps {
                     let dep = parse_dep_value(&extern_name, &val);
                     krate.deps.insert(extern_name.to_string(), dep);
+                }
+            }
+            builder.clone()
+        },
+    );
+
+    engine.register_fn(
+        "dev_deps",
+        |builder: &mut CrateBuilder, deps: Map| -> CrateBuilder {
+            let mut model = builder.model.lock().unwrap();
+            if let Some(krate) = model.crates.get_mut(&builder.name) {
+                for (extern_name, val) in deps {
+                    let dep = parse_dep_value(&extern_name, &val);
+                    krate.dev_deps.insert(extern_name.to_string(), dep);
                 }
             }
             builder.clone()
@@ -959,11 +1141,99 @@ fn register_tests_api(engine: &mut Engine, model: SharedModel) {
             builder.clone()
         },
     );
+
+    engine.register_fn(
+        "kernel_tests_crate",
+        |builder: &mut TestsBuilder, name: &str| -> TestsBuilder {
+            let mut model = builder.model.lock().unwrap();
+            model.tests.kernel_tests_crate = Some(name.into());
+            builder.clone()
+        },
+    );
+
+    engine.register_fn(
+        "kernel_tests_linker_script",
+        |builder: &mut TestsBuilder, path: &str| -> TestsBuilder {
+            let mut model = builder.model.lock().unwrap();
+            model.tests.kernel_tests_linker_script = Some(path.into());
+            builder.clone()
+        },
+    );
 }
 
 #[derive(Debug, Clone)]
 struct TestsBuilder {
     model: SharedModel,
+}
+
+// ---------------------------------------------------------------------------
+// include() custom syntax
+// ---------------------------------------------------------------------------
+
+/// Shared set of already-visited include paths (for once-only semantics).
+type VisitedIncludes = Arc<Mutex<HashSet<PathBuf>>>;
+
+fn register_include_api(engine: &mut Engine, root: &Path, visited: VisitedIncludes) {
+    let root_path = root.to_path_buf();
+
+    engine
+        .register_custom_syntax(
+            ["include", "$expr$"],
+            true, // scope may be changed
+            move |context, inputs| {
+                // Evaluate the path expression.
+                let path_val = context.eval_expression_tree(&inputs[0])?;
+                let rel_path: String = path_val
+                    .into_string()
+                    .map_err(|e| {
+                        Box::new(rhai::EvalAltResult::ErrorMismatchDataType(
+                            "string".into(),
+                            e.into(),
+                            rhai::Position::NONE,
+                        ))
+                    })?;
+
+                // Resolve against project root (root-relative).
+                let abs_path = root_path.join(&rel_path);
+                let canonical = std::fs::canonicalize(&abs_path).map_err(|e| {
+                    Box::new(rhai::EvalAltResult::ErrorSystem(
+                        format!("include '{rel_path}'"),
+                        Box::new(e),
+                    ))
+                })?;
+
+                // Once-only: skip if already included.
+                {
+                    let mut set = visited.lock().unwrap();
+                    if set.contains(&canonical) {
+                        return Ok(Dynamic::UNIT);
+                    }
+                    set.insert(canonical.clone());
+                }
+
+                // Compile and evaluate the included file with shared scope.
+                let ast =
+                    context.engine().compile_file(canonical.into()).map_err(|e| {
+                        Box::new(rhai::EvalAltResult::ErrorSystem(
+                            format!("while including '{rel_path}'"),
+                            Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())),
+                        ))
+                    })?;
+
+                context
+                    .engine()
+                    .run_ast_with_scope(context.scope_mut(), &ast)
+                    .map_err(|e| {
+                        Box::new(rhai::EvalAltResult::ErrorSystem(
+                            format!("while including '{rel_path}'"),
+                            Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())),
+                        ))
+                    })?;
+
+                Ok(Dynamic::UNIT)
+            },
+        )
+        .expect("failed to register include syntax");
 }
 
 // ---------------------------------------------------------------------------
@@ -1020,6 +1290,12 @@ fn dynamic_to_config_value(val: &Dynamic) -> ConfigValue {
         ConfigValue::Bool(b)
     } else if let Some(i) = val.as_int().ok() {
         ConfigValue::U32(i as u32)
+    } else if let Some(arr) = val.clone().try_cast::<rhai::Array>() {
+        let items: Vec<String> = arr
+            .into_iter()
+            .filter_map(|v| v.into_string().ok())
+            .collect();
+        ConfigValue::List(items)
     } else if let Some(s) = val.clone().into_string().ok() {
         // Check if it's a hex number string.
         if let Some(v) = parse_integer_str(&s) {

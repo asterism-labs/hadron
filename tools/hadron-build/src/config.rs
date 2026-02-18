@@ -63,6 +63,10 @@ pub struct ImageConfig {
 pub struct TestsConfig {
     pub host_testable: Vec<String>,
     pub kernel_tests_dir: Option<String>,
+    /// Which crate owns the kernel integration tests.
+    pub kernel_tests_crate: Option<String>,
+    /// Linker script for kernel test binaries.
+    pub kernel_tests_linker_script: Option<String>,
     pub crash: Vec<CrashTest>,
 }
 
@@ -114,6 +118,10 @@ pub enum ResolvedValue {
     U32(u32),
     U64(u64),
     Str(String),
+    /// Selected variant name for a Choice option.
+    Choice(String),
+    /// Ordered list of string items.
+    List(Vec<String>),
 }
 
 impl std::fmt::Display for ResolvedValue {
@@ -123,6 +131,8 @@ impl std::fmt::Display for ResolvedValue {
             ResolvedValue::U32(v) => write!(f, "{v}"),
             ResolvedValue::U64(v) => write!(f, "{v:#x}"),
             ResolvedValue::Str(v) => write!(f, "{v}"),
+            ResolvedValue::Choice(v) => write!(f, "{v}"),
+            ResolvedValue::List(v) => write!(f, "[{}]", v.join(", ")),
         }
     }
 }
@@ -182,6 +192,9 @@ pub fn resolve_from_model(
     let mut merged_overrides = profile_overrides;
     merged_overrides.extend(file_overrides);
 
+    // Coerce override values to match declared types (e.g. Str -> Choice).
+    coerce_overrides(&mut merged_overrides, &model.config_options);
+
     // Resolve config options with merged overrides.
     let options = resolve_options(
         &model.config_options,
@@ -221,6 +234,8 @@ pub fn resolve_from_model(
     let tests = TestsConfig {
         host_testable: model.tests.host_testable.clone(),
         kernel_tests_dir: model.tests.kernel_tests_dir.clone(),
+        kernel_tests_crate: model.tests.kernel_tests_crate.clone(),
+        kernel_tests_linker_script: model.tests.kernel_tests_linker_script.clone(),
         crash: model.tests.crash_tests.iter().map(|ct| CrashTest {
             name: ct.name.clone(),
             source: ct.source.clone(),
@@ -333,6 +348,11 @@ fn resolve_options(
     let mut resolved = BTreeMap::new();
 
     for (name, opt) in options {
+        // Group markers are not resolved as values — skip them.
+        if opt.ty == ConfigType::Group {
+            continue;
+        }
+
         let value = profile_overrides
             .get(name)
             .unwrap_or(&opt.default);
@@ -342,6 +362,8 @@ fn resolve_options(
             (ConfigType::U32, ConfigValue::U32(v)) => ResolvedValue::U32(*v),
             (ConfigType::U64, ConfigValue::U64(v)) => ResolvedValue::U64(*v),
             (ConfigType::Str, ConfigValue::Str(v)) => ResolvedValue::Str(v.clone()),
+            (ConfigType::Choice, ConfigValue::Choice(v)) => ResolvedValue::Choice(v.clone()),
+            (ConfigType::List, ConfigValue::List(v)) => ResolvedValue::List(v.clone()),
             _ => bail!(
                 "config option '{name}' value type does not match declared type {:?}",
                 opt.ty
@@ -363,11 +385,16 @@ fn resolve_options(
             }
         }
 
-        // Validate choices.
+        // Validate choices (applies to both Str and Choice types).
         if let Some(ref choices) = opt.choices {
-            if let ResolvedValue::Str(ref v) = resolved_value {
+            let val_str = match &resolved_value {
+                ResolvedValue::Str(v) => Some(v.as_str()),
+                ResolvedValue::Choice(v) => Some(v.as_str()),
+                _ => None,
+            };
+            if let Some(v) = val_str {
                 ensure!(
-                    choices.contains(v),
+                    choices.contains(&v.to_string()),
                     "option '{name}' value '{v}' not in choices: {choices:?}"
                 );
             }
@@ -433,6 +460,26 @@ fn apply_selects_and_validate(
 // Utilities
 // ===========================================================================
 
+/// Coerce override values to match their declared types.
+///
+/// For example, `.hadron-config` and profile overrides produce `Str` for string
+/// values, but if the declared type is `Choice`, we coerce `Str(s)` to `Choice(s)`.
+fn coerce_overrides(
+    overrides: &mut BTreeMap<String, ConfigValue>,
+    defs: &BTreeMap<String, crate::model::ConfigOptionDef>,
+) {
+    for (name, val) in overrides.iter_mut() {
+        let Some(def) = defs.get(name) else { continue };
+        match (&def.ty, &val) {
+            // Str override for a Choice option → coerce to Choice.
+            (ConfigType::Choice, ConfigValue::Str(s)) => {
+                *val = ConfigValue::Choice(s.clone());
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Load config overrides from `.hadron-config` (key = value lines, `#` comments).
 ///
 /// Returns an empty map if the file does not exist.
@@ -460,6 +507,15 @@ pub fn load_config_overrides(root: &Path) -> Result<BTreeMap<String, ConfigValue
             ConfigValue::Bool(true)
         } else if val == "false" {
             ConfigValue::Bool(false)
+        } else if val.starts_with('[') && val.ends_with(']') {
+            // List syntax: ["a", "b", "c"] or [a, b, c]
+            let inner = &val[1..val.len() - 1];
+            let items: Vec<String> = inner
+                .split(',')
+                .map(|s| s.trim().trim_matches('"').to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            ConfigValue::List(items)
         } else if let Some(hex) = val.strip_prefix("0x") {
             let parsed = u64::from_str_radix(&hex.replace('_', ""), 16)
                 .with_context(|| format!(".hadron-config:{}: invalid hex value: {val}", lineno + 1))?;
@@ -490,6 +546,11 @@ pub fn save_config_overrides(
             ConfigValue::U32(v) => format!("{v}"),
             ConfigValue::U64(v) => format!("{v:#x}"),
             ConfigValue::Str(v) => v.clone(),
+            ConfigValue::Choice(v) => v.clone(),
+            ConfigValue::List(v) => {
+                let quoted: Vec<String> = v.iter().map(|s| format!("\"{s}\"")).collect();
+                format!("[{}]", quoted.join(", "))
+            }
         };
         content.push_str(&format!("{key} = {val_str}\n"));
     }

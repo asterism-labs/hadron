@@ -45,9 +45,8 @@ config_u32("MAX_CPUS", 1)
     .depends_on(["smp"])
     .help("Maximum number of CPUs supported");
 
-config_str("LOG_LEVEL", "debug")
+config_choice("LOG_LEVEL", "debug", ["error", "warn", "info", "debug", "trace"])
     .menu("General")
-    .choices(["error", "warn", "info", "debug", "trace"])
     .help("Kernel log level");
 
 config_u64("KERNEL_HEAP_SIZE", "0x10_0000")
@@ -194,6 +193,16 @@ kernel_drivers.add("hadron-drivers", "kernel/hadron-drivers")
     .deps(#{ bitflags: "bitflags", hadron_core: "hadron-core", hadron_driver_api: "hadron-driver-api" });
 
 // ===========================================================================
+// Test dependency crates (compiled on-demand during tests, NOT in pipeline)
+// ===========================================================================
+
+let test_deps = group("test-deps").target("x86_64-unknown-hadron").edition("2024").project(false);
+
+test_deps.add("hadron-test", "crates/hadron-test")
+    .features(["limine"])
+    .deps(#{ limine: "limine" });
+
+// ===========================================================================
 // Kernel main (hadron-kernel + boot stub)
 // ===========================================================================
 
@@ -210,6 +219,12 @@ kernel_main.add("hadron-kernel", "kernel/hadron-kernel")
         hadron_drivers: "hadron-drivers",
         hadron_elf: "hadron-elf",
         hadron_syscall: "hadron-syscall",
+        noalloc: "noalloc"
+    })
+    .dev_deps(#{
+        hadron_test: "hadron-test",
+        hadron_core: "hadron-core",
+        limine: "limine",
         noalloc: "noalloc"
     });
 
@@ -317,4 +332,6 @@ tests()
         "hadron-driver-api",
         "hadron-drivers"
     ])
-    .kernel_tests_dir("kernel/hadron-kernel/tests");
+    .kernel_tests_dir("kernel/hadron-kernel/tests")
+    .kernel_tests_crate("hadron-kernel")
+    .kernel_tests_linker_script("targets/x86_64-unknown-hadron.ld");

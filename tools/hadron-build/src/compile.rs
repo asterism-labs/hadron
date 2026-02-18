@@ -7,7 +7,7 @@ use crate::config::{ResolvedConfig, ResolvedValue};
 use crate::crate_graph::ResolvedCrate;
 use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -55,7 +55,20 @@ pub fn build_config_crate(
     source.push_str("//! Auto-generated kernel configuration constants.\n");
     source.push_str("#![no_std]\n\n");
 
+    // Collect dotted keys (group sub-fields) by their prefix for nested module codegen.
+    let mut group_fields: BTreeMap<String, Vec<(String, &ResolvedValue)>> = BTreeMap::new();
+
     for (name, value) in &config.options {
+        if let Some(dot_pos) = name.find('.') {
+            let prefix = &name[..dot_pos];
+            let field = &name[dot_pos + 1..];
+            group_fields
+                .entry(prefix.to_string())
+                .or_default()
+                .push((field.to_string(), value));
+            continue;
+        }
+
         match value {
             ResolvedValue::Bool(v) => {
                 source.push_str(&format!(
@@ -75,13 +88,71 @@ pub fn build_config_crate(
                     name.to_uppercase()
                 ));
             }
-            ResolvedValue::Str(v) => {
+            ResolvedValue::Str(v) | ResolvedValue::Choice(v) => {
                 source.push_str(&format!(
-                    "pub const {}: &str = \"{v}\";\n",
-                    name.to_uppercase()
+                    "pub const {}: &str = \"{}\";\n",
+                    name.to_uppercase(),
+                    v.replace('\\', "\\\\").replace('"', "\\\"")
+                ));
+            }
+            ResolvedValue::List(v) => {
+                let quoted: Vec<String> = v
+                    .iter()
+                    .map(|s| format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")))
+                    .collect();
+                source.push_str(&format!(
+                    "pub const {}: &[&str] = &[{}];\n",
+                    name.to_uppercase(),
+                    quoted.join(", ")
                 ));
             }
         }
+    }
+
+    // Generate nested modules for group sub-fields.
+    for (prefix, fields) in &group_fields {
+        source.push_str(&format!("pub mod {} {{\n", prefix.to_lowercase()));
+        for (field, value) in fields {
+            match value {
+                ResolvedValue::Bool(v) => {
+                    source.push_str(&format!(
+                        "    pub const {}: bool = {v};\n",
+                        field.to_uppercase()
+                    ));
+                }
+                ResolvedValue::U32(v) => {
+                    source.push_str(&format!(
+                        "    pub const {}: u32 = {v};\n",
+                        field.to_uppercase()
+                    ));
+                }
+                ResolvedValue::U64(v) => {
+                    source.push_str(&format!(
+                        "    pub const {}: u64 = {v:#x};\n",
+                        field.to_uppercase()
+                    ));
+                }
+                ResolvedValue::Str(v) | ResolvedValue::Choice(v) => {
+                    source.push_str(&format!(
+                        "    pub const {}: &str = \"{}\";\n",
+                        field.to_uppercase(),
+                        v.replace('\\', "\\\\").replace('"', "\\\"")
+                    ));
+                }
+                ResolvedValue::List(v) => {
+                    let quoted: Vec<String> = v
+                        .iter()
+                        .map(|s| format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")))
+                        .collect();
+                    source.push_str(&format!(
+                        "    pub const {}: &[&str] = &[{}];\n",
+                        field.to_uppercase(),
+                        quoted.join(", ")
+                    ));
+                }
+            }
+        }
+        source.push_str("}\n");
     }
 
     let src_path = gen_dir.join("hadron_config.rs");

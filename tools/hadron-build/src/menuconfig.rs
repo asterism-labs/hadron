@@ -89,9 +89,18 @@ impl App {
                     expanded: true,
                 });
                 for opt_name in options {
-                    entries.push(MenuEntry::Option {
-                        name: opt_name.clone(),
-                    });
+                    let opt_def = model_options.get(opt_name);
+                    if opt_def.is_some_and(|o| o.ty == ConfigType::Group) {
+                        // Group markers render as expandable sub-categories.
+                        entries.push(MenuEntry::Category {
+                            name: opt_name.clone(),
+                            expanded: true,
+                        });
+                    } else {
+                        entries.push(MenuEntry::Option {
+                            name: opt_name.clone(),
+                        });
+                    }
                 }
             }
         }
@@ -170,10 +179,60 @@ impl App {
         }
     }
 
-    /// Apply select propagation.
+    /// Cycle a Choice option forward or backward through its variants.
+    fn cycle_choice(&mut self, name: &str, forward: bool) {
+        if !self.deps_satisfied(name) {
+            return;
+        }
+        let Some(opt) = self.model_options.get(name) else { return };
+        let Some(ref choices) = opt.choices else { return };
+        if choices.is_empty() {
+            return;
+        }
+
+        let current = match self.values.get(name) {
+            Some(ConfigValue::Choice(v)) => v.as_str(),
+            Some(ConfigValue::Str(v)) => v.as_str(),
+            _ => "",
+        };
+
+        let idx = choices.iter().position(|c| c == current).unwrap_or(0);
+        let new_idx = if forward {
+            (idx + 1) % choices.len()
+        } else {
+            (idx + choices.len() - 1) % choices.len()
+        };
+
+        self.values.insert(name.into(), ConfigValue::Choice(choices[new_idx].clone()));
+        self.dirty = true;
+    }
+
+    /// Apply select and dependency propagation until stable.
+    ///
+    /// Pass 1: disable any enabled option whose `depends_on` is unsatisfied.
+    /// Pass 2: enable any option forced on by another option's `selects`.
+    /// Loop until no changes occur (fixed-point).
     fn apply_selects(&mut self) {
         loop {
             let mut changed = false;
+
+            // Pass 1: propagate disables — if an option is enabled but a
+            // dependency is off, force-disable it.
+            for (name, opt) in &self.model_options {
+                let is_enabled = matches!(self.values.get(name), Some(ConfigValue::Bool(true)));
+                if is_enabled {
+                    let deps_ok = opt.depends_on.iter().all(|dep| {
+                        matches!(self.values.get(dep), Some(ConfigValue::Bool(true)))
+                    });
+                    if !deps_ok {
+                        self.values.insert(name.clone(), ConfigValue::Bool(false));
+                        changed = true;
+                    }
+                }
+            }
+
+            // Pass 2: propagate selects — if an option is enabled and selects
+            // another, force-enable the selected option.
             for (name, opt) in &self.model_options {
                 let is_enabled = matches!(self.values.get(name), Some(ConfigValue::Bool(true)));
                 if is_enabled {
@@ -185,6 +244,7 @@ impl App {
                     }
                 }
             }
+
             if !changed {
                 break;
             }
@@ -290,6 +350,24 @@ impl App {
                 Some(ConfigType::Bool) => {
                     self.toggle_bool(&name);
                 }
+                Some(ConfigType::Choice) => {
+                    // Enter/Space cycles forward for Choice options.
+                    self.cycle_choice(&name, true);
+                }
+                Some(ConfigType::Group) => {
+                    // Group markers are not directly editable.
+                }
+                Some(ConfigType::List) => {
+                    // Open text editor pre-filled with comma-separated items.
+                    let current = match self.values.get(&name) {
+                        Some(ConfigValue::List(items)) => items.join(", "),
+                        _ => String::new(),
+                    };
+                    self.editing = Some(EditState {
+                        option_name: name,
+                        buffer: current,
+                    });
+                }
                 Some(_) => {
                     let current = self.values.get(&name).map(format_value).unwrap_or_default();
                     self.editing = Some(EditState {
@@ -318,7 +396,17 @@ impl App {
                 }
             }
             ConfigType::Str => Some(ConfigValue::Str(edit.buffer.clone())),
-            ConfigType::Bool => unreachable!("bools are toggled, not edited"),
+            ConfigType::Choice => Some(ConfigValue::Choice(edit.buffer.clone())),
+            ConfigType::List => {
+                let items: Vec<String> = edit
+                    .buffer
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                Some(ConfigValue::List(items))
+            }
+            ConfigType::Bool | ConfigType::Group => unreachable!("bools/groups are not text-edited"),
         };
 
         if let Some(val) = new_val {
@@ -418,8 +506,44 @@ fn run_event_loop(
                     };
                     match action {
                         Some(None) => app.toggle_category(),
-                        Some(Some(name)) => app.toggle_bool(&name),
+                        Some(Some(ref name)) => {
+                            let ty = app.model_options.get(name).map(|o| o.ty);
+                            match ty {
+                                Some(ConfigType::Choice) => app.cycle_choice(name, true),
+                                _ => app.toggle_bool(name),
+                            }
+                        }
                         _ => {}
+                    }
+                }
+                KeyCode::Left => {
+                    // Left arrow cycles Choice backward.
+                    let name = {
+                        let visible = app.visible_entries();
+                        visible.get(app.cursor).and_then(|&(_, entry)| match entry {
+                            MenuEntry::Option { name } => Some(name.clone()),
+                            _ => None,
+                        })
+                    };
+                    if let Some(ref name) = name {
+                        if app.model_options.get(name).is_some_and(|o| o.ty == ConfigType::Choice) {
+                            app.cycle_choice(name, false);
+                        }
+                    }
+                }
+                KeyCode::Right => {
+                    // Right arrow cycles Choice forward.
+                    let name = {
+                        let visible = app.visible_entries();
+                        visible.get(app.cursor).and_then(|&(_, entry)| match entry {
+                            MenuEntry::Option { name } => Some(name.clone()),
+                            _ => None,
+                        })
+                    };
+                    if let Some(ref name) = name {
+                        if app.model_options.get(name).is_some_and(|o| o.ty == ConfigType::Choice) {
+                            app.cycle_choice(name, true);
+                        }
                     }
                 }
                 KeyCode::Enter => {
@@ -507,6 +631,10 @@ fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
                     let val_str = match (opt.map(|o| o.ty), val) {
                         (Some(ConfigType::Bool), Some(ConfigValue::Bool(true))) => "[*]".to_string(),
                         (Some(ConfigType::Bool), _) => "[ ]".to_string(),
+                        (Some(ConfigType::Choice), Some(ConfigValue::Choice(v))) => format!("< {v} >"),
+                        (Some(ConfigType::List), Some(ConfigValue::List(items))) => {
+                            format!("[{} items]", items.len())
+                        }
                         (_, Some(v)) => format!("({})", format_value(v)),
                         _ => "(?)".to_string(),
                     };
@@ -531,7 +659,9 @@ fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
                         style
                     };
 
-                    let line = format!("      {val_str} {name:<24} {help_brief}");
+                    // Extra indent for dotted sub-fields (group children).
+                    let indent = if name.contains('.') { "          " } else { "      " };
+                    let line = format!("{indent}{val_str} {name:<24} {help_brief}");
                     ListItem::new(Line::from(Span::styled(line, style)))
                 }
             }
@@ -567,7 +697,7 @@ fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
     } else if app.search_mode {
         " Type to search  Enter/Esc Done "
     } else {
-        " ↑↓/jk Navigate  Space Toggle  Enter Edit  / Search  S Save  Q Quit "
+        " ↑↓/jk Navigate  Space Toggle  ←→ Cycle Choice  Enter Edit  / Search  S Save  Q Quit "
     };
     let hints_widget = Paragraph::new(hints)
         .block(Block::default().borders(Borders::ALL));
@@ -581,6 +711,8 @@ fn format_value(val: &ConfigValue) -> String {
         ConfigValue::U32(v) => format!("{v}"),
         ConfigValue::U64(v) => format!("{v:#x}"),
         ConfigValue::Str(v) => v.clone(),
+        ConfigValue::Choice(v) => v.clone(),
+        ConfigValue::List(v) => v.join(", "),
     }
 }
 
@@ -591,6 +723,8 @@ fn config_value_eq(a: &ConfigValue, b: &ConfigValue) -> bool {
         (ConfigValue::U32(a), ConfigValue::U32(b)) => a == b,
         (ConfigValue::U64(a), ConfigValue::U64(b)) => a == b,
         (ConfigValue::Str(a), ConfigValue::Str(b)) => a == b,
+        (ConfigValue::Choice(a), ConfigValue::Choice(b)) => a == b,
+        (ConfigValue::List(a), ConfigValue::List(b)) => a == b,
         _ => false,
     }
 }
