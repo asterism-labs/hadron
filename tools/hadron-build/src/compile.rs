@@ -38,6 +38,7 @@ impl ArtifactMap {
     pub fn get(&self, name: &str) -> Option<&Path> {
         self.artifacts.get(name).map(|p| p.as_path())
     }
+
 }
 
 /// Generate the `hadron_config` crate source and compile it.
@@ -125,12 +126,43 @@ pub fn build_config_crate(
     Ok(rlib)
 }
 
-/// Compile a single crate for a custom target.
+/// Compile a single crate.
 ///
-/// The `out_dir_suffix` determines the output subdirectory under `build/kernel/`.
-/// The `linker_script` is only applied to binary crates in `Build` mode.
-/// The `mode` controls whether to do a full build, check-only, or clippy lint.
+/// Dispatches between host and cross-compilation based on `krate.target`.
+/// Host crates (target == "host") are compiled for the host triple without a
+/// custom sysroot. Cross crates use the provided `target_spec` and `sysroot_dir`.
+/// The `config_rlib` is only linked for crates in config-enabled groups.
+/// The `mode` controls full build, check-only, or clippy lint.
 pub fn compile_crate(
+    krate: &ResolvedCrate,
+    config: &ResolvedConfig,
+    target_spec: Option<&str>,
+    sysroot_dir: Option<&Path>,
+    artifacts: &ArtifactMap,
+    config_rlib: Option<&Path>,
+    out_dir_suffix: Option<&str>,
+    mode: CompileMode,
+) -> Result<PathBuf> {
+    let is_host = krate.target == "host";
+
+    if is_host {
+        compile_crate_host(krate, &config.root, artifacts)
+    } else {
+        compile_crate_cross(
+            krate,
+            config,
+            target_spec.expect("target_spec required for cross compilation"),
+            sysroot_dir.expect("sysroot_dir required for cross compilation"),
+            artifacts,
+            config_rlib,
+            out_dir_suffix,
+            mode,
+        )
+    }
+}
+
+/// Compile a crate for a custom (cross) target.
+fn compile_crate_cross(
     krate: &ResolvedCrate,
     config: &ResolvedConfig,
     target_spec: &str,
@@ -138,10 +170,9 @@ pub fn compile_crate(
     artifacts: &ArtifactMap,
     config_rlib: Option<&Path>,
     out_dir_suffix: Option<&str>,
-    linker_script: Option<&Path>,
     mode: CompileMode,
 ) -> Result<PathBuf> {
-    let suffix = out_dir_suffix.unwrap_or(&config.target_name);
+    let suffix = out_dir_suffix.unwrap_or(&krate.target);
     let out_dir = config
         .root
         .join("build/kernel")
@@ -160,7 +191,7 @@ pub fn compile_crate(
     };
 
     // Use clippy-driver for Clippy mode on project crates.
-    let binary = if mode == CompileMode::Clippy && is_project_crate(krate) {
+    let binary = if mode == CompileMode::Clippy && krate.is_project_crate {
         "clippy-driver"
     } else {
         "rustc"
@@ -181,7 +212,7 @@ pub fn compile_crate(
     }
 
     // Clippy lint flags for project crates.
-    if mode == CompileMode::Clippy && is_project_crate(krate) {
+    if mode == CompileMode::Clippy && krate.is_project_crate {
         cmd.arg("-Wclippy::all").arg("-Wclippy::pedantic");
     }
 
@@ -191,14 +222,15 @@ pub fn compile_crate(
         .arg("--sysroot")
         .arg(sysroot_dir);
 
-    // Search paths for transitive kernel deps and host proc-macros.
+    // Search paths for transitive deps and host proc-macros.
     cmd.arg("-L").arg(&out_dir);
     cmd.arg("-L").arg(config.root.join("build/host"));
 
     // Linker args for binary crates (only in Build mode).
     if !is_check && krate.crate_type == "bin" {
-        if let Some(ld_script) = linker_script {
-            cmd.arg(format!("-Clink-arg=-T{}", ld_script.display()));
+        if let Some(ref ld_script) = krate.linker_script {
+            let ld_path = config.root.join(ld_script);
+            cmd.arg(format!("-Clink-arg=-T{}", ld_path.display()));
         }
         cmd.arg("-Clink-arg=--gc-sections");
     }
@@ -208,28 +240,24 @@ pub fn compile_crate(
         cmd.arg("--cfg").arg(format!("feature=\"{feat}\""));
     }
 
-    // Config cfgs for bool options.
-    for (name, value) in &config.options {
-        if let ResolvedValue::Bool(true) = value {
-            cmd.arg("--cfg").arg(format!("hadron_{name}"));
+    // Config cfgs for bool options (only if config_rlib is provided).
+    if config_rlib.is_some() {
+        for (name, value) in &config.options {
+            if let crate::config::ResolvedValue::Bool(true) = value {
+                cmd.arg("--cfg").arg(format!("hadron_{name}"));
+            }
         }
     }
 
     // Extern deps.
     for dep in &krate.deps {
-        if dep.is_proc_macro {
-            // Proc-macro extern: look in host artifacts.
-            if let Some(path) = artifacts.get(&dep.crate_name) {
-                cmd.arg("--extern")
-                    .arg(format!("{}={}", dep.extern_name, path.display()));
-            }
-        } else if let Some(path) = artifacts.get(&dep.crate_name) {
+        if let Some(path) = artifacts.get(&dep.crate_name) {
             cmd.arg("--extern")
                 .arg(format!("{}={}", dep.extern_name, path.display()));
         }
     }
 
-    // Always link hadron_config for kernel crates.
+    // Link config crate if provided.
     if let Some(config_path) = config_rlib {
         cmd.arg("--extern")
             .arg(format!("hadron_config={}", config_path.display()));
@@ -270,7 +298,6 @@ pub fn compile_crate(
     let artifact = if !is_check && krate.crate_type == "bin" {
         out_dir.join(crate_name_sanitized(&krate.name))
     } else if is_check {
-        // Check/clippy: metadata file (.rmeta).
         out_dir.join(format!(
             "lib{}.rmeta",
             crate_name_sanitized(&krate.name)
@@ -285,14 +312,8 @@ pub fn compile_crate(
     Ok(artifact)
 }
 
-/// Whether this crate is a project crate (not vendored or sysroot).
-fn is_project_crate(krate: &ResolvedCrate) -> bool {
-    let path = krate.path.to_string_lossy();
-    path.contains("/kernel/") || path.contains("/crates/") || path.contains("/userspace/")
-}
-
-/// Compile a single crate for the host triple (proc-macros and their deps).
-pub fn compile_host_crate(
+/// Compile a crate for the host triple (proc-macros and their deps).
+fn compile_crate_host(
     krate: &ResolvedCrate,
     project_root: &Path,
     artifacts: &ArtifactMap,
@@ -421,28 +442,41 @@ pub fn crate_name_sanitized(name: &str) -> String {
     name.replace('-', "_")
 }
 
-/// Compute the output directory for a kernel crate compilation.
-pub fn kernel_out_dir(config: &ResolvedConfig, out_dir_suffix: Option<&str>) -> PathBuf {
-    let suffix = out_dir_suffix.unwrap_or(&config.target_name);
-    config
-        .root
-        .join("build/kernel")
-        .join(suffix)
-        .join("debug")
+/// Compute the output directory for a crate compilation.
+///
+/// Host crates go to `build/host/`, cross crates to `build/kernel/<target>/debug/`.
+pub fn crate_out_dir(krate: &ResolvedCrate, project_root: &Path, out_dir_suffix: Option<&str>) -> PathBuf {
+    if krate.target == "host" {
+        project_root.join("build/host")
+    } else {
+        let suffix = out_dir_suffix.unwrap_or(&krate.target);
+        project_root
+            .join("build/kernel")
+            .join(suffix)
+            .join("debug")
+    }
 }
 
-/// Predict the artifact path for a kernel crate without compiling.
+/// Predict the artifact path for a crate without compiling.
 pub fn crate_artifact_path(
     krate: &ResolvedCrate,
-    config: &ResolvedConfig,
+    project_root: &Path,
     out_dir_suffix: Option<&str>,
     mode: CompileMode,
 ) -> PathBuf {
-    let out_dir = kernel_out_dir(config, out_dir_suffix);
+    let out_dir = crate_out_dir(krate, project_root, out_dir_suffix);
     let is_check = mode == CompileMode::Check || mode == CompileMode::Clippy;
     let sanitized = crate_name_sanitized(&krate.name);
 
-    if !is_check && krate.crate_type == "bin" {
+    if krate.target == "host" {
+        // Host crates: proc-macros are dylibs, others are rlibs.
+        if krate.crate_type == "proc-macro" {
+            let ext = if cfg!(target_os = "macos") { "dylib" } else { "so" };
+            out_dir.join(format!("lib{sanitized}.{ext}"))
+        } else {
+            out_dir.join(format!("lib{sanitized}.rlib"))
+        }
+    } else if !is_check && krate.crate_type == "bin" {
         out_dir.join(&sanitized)
     } else if is_check {
         out_dir.join(format!("lib{sanitized}.rmeta"))
@@ -451,36 +485,13 @@ pub fn crate_artifact_path(
     }
 }
 
-/// Predict the dep-info path for a kernel crate.
+/// Predict the dep-info path for a crate.
 pub fn crate_dep_info_path(
     krate: &ResolvedCrate,
-    config: &ResolvedConfig,
+    project_root: &Path,
     out_dir_suffix: Option<&str>,
 ) -> PathBuf {
-    let out_dir = kernel_out_dir(config, out_dir_suffix);
-    out_dir.join(format!("{}.d", crate_name_sanitized(&krate.name)))
-}
-
-/// Predict the artifact path for a host crate without compiling.
-pub fn host_crate_artifact_path(krate: &ResolvedCrate, project_root: &Path) -> PathBuf {
-    let out_dir = project_root.join("build/host");
-    let sanitized = crate_name_sanitized(&krate.name);
-
-    if krate.crate_type == "proc-macro" {
-        let ext = if cfg!(target_os = "macos") {
-            "dylib"
-        } else {
-            "so"
-        };
-        out_dir.join(format!("lib{sanitized}.{ext}"))
-    } else {
-        out_dir.join(format!("lib{sanitized}.rlib"))
-    }
-}
-
-/// Predict the dep-info path for a host crate.
-pub fn host_crate_dep_info_path(krate: &ResolvedCrate, project_root: &Path) -> PathBuf {
-    let out_dir = project_root.join("build/host");
+    let out_dir = crate_out_dir(krate, project_root, out_dir_suffix);
     out_dir.join(format!("{}.d", crate_name_sanitized(&krate.name)))
 }
 

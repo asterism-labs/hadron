@@ -51,17 +51,25 @@ pub fn sysroot_src_dir() -> Result<PathBuf> {
 }
 
 /// Detect the edition from a crate's Cargo.toml.
+///
+/// Uses simple string matching rather than a full TOML parser since we only
+/// need the `edition` field from `[package]`.
 fn detect_edition(crate_dir: &Path) -> Result<String> {
     let cargo_toml = crate_dir.join("Cargo.toml");
     if cargo_toml.exists() {
         let contents = std::fs::read_to_string(&cargo_toml)?;
-        let parsed: toml::Value = toml::from_str(&contents)?;
-        if let Some(edition) = parsed
-            .get("package")
-            .and_then(|p| p.get("edition"))
-            .and_then(|e| e.as_str())
-        {
-            return Ok(edition.to_string());
+        for line in contents.lines() {
+            let trimmed = line.trim();
+            if let Some(rest) = trimmed.strip_prefix("edition") {
+                let rest = rest.trim_start();
+                if let Some(rest) = rest.strip_prefix('=') {
+                    let rest = rest.trim();
+                    let rest = rest.trim_matches('"');
+                    if !rest.is_empty() {
+                        return Ok(rest.to_string());
+                    }
+                }
+            }
         }
     }
     // Fall back to 2021 if we can't detect.

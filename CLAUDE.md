@@ -24,15 +24,14 @@ hadron/
 │   └── hadron-build/       # Custom build system (invokes rustc directly)
 ├── targets/                # Custom target specs (x86_64-unknown-hadron.json)
 ├── vendor/                 # Vendored external dependencies
-├── hadron.toml             # Build configuration (profiles, options, targets)
-├── crates.toml             # Crate registry for hadron-build
+├── build.rhai              # Build configuration script (targets, crates, profiles, pipeline)
 ├── docs/                   # mdbook documentation
 └── limine.conf             # Limine bootloader config
 ```
 
 ## Build Commands
 
-The project uses `hadron-build`, a custom build tool at `tools/hadron-build/` that invokes `rustc` directly. It builds a custom sysroot, compiles all crates in dependency order, and provides Kconfig-like configuration via `hadron.toml`.
+The project uses `hadron-build`, a custom build tool at `tools/hadron-build/` that invokes `rustc` directly. It builds a custom sysroot, compiles all crates in dependency order, and provides Kconfig-like configuration via `build.rhai` (Rhai scripting).
 
 First, build the tool itself:
 ```sh
@@ -53,17 +52,21 @@ hadron-build fmt --check      # Check formatting without modifying
 hadron-build clean            # Remove build artifacts
 ```
 
-Global flags: `--profile <name>` (`-P`) selects a build profile from `hadron.toml`, `--target <triple>` overrides the target.
+Global flags: `--profile <name>` (`-P`) selects a build profile from `build.rhai`, `--target <triple>` overrides the target.
 
 ### Configuration
 
-Build configuration lives in `hadron.toml` at the project root. It defines:
+Build configuration lives in `build.rhai` at the project root, using the Rhai scripting language. The script defines:
+- **Project metadata**: name and version
 - **Targets**: custom target specs and linker scripts
-- **Config options**: typed kernel options (bool, u32, u64, str) with dependencies and validation
+- **Config options**: typed kernel options (bool, u32, u64, str) with dependencies, selects, ranges, and choices
 - **Profiles**: named configurations (default, release, stress, debug-gdb) with inheritance
+- **Groups**: crate collections with shared compilation context (sysroot, host, kernel, userspace)
+- **Rules**: artifact generation (HBTF, initrd) with built-in or script handlers
+- **Pipeline**: ordered build stages with barriers and rule execution
 - **QEMU settings**: machine type, memory, extra args, test exit codes
 
-The crate registry is in `crates.toml`, which defines all compilation units, their dependencies, features, and contexts (sysroot, host, kernel, userspace).
+The build system evaluates `build.rhai` to produce a `BuildModel`, validates it, resolves configuration, then schedules and executes compilation stages.
 
 ## Architecture
 
@@ -175,13 +178,13 @@ Clippy lints are applied by `hadron-build clippy` to project crates (kernel/, cr
 
 ## Testing
 
-- `hadron-build test --host-only` — Run host unit tests for crates listed in `hadron.toml` `[tests].host-testable`
+- `hadron-build test --host-only` — Run host unit tests for crates listed in `build.rhai` `tests().host_testable()`
 - `hadron-build test --kernel-only` — Build kernel + run integration tests in QEMU
 - `hadron-build test` — Run both host and kernel tests
 
 Integration tests run in QEMU using `hadron-test` crate:
 - Tests use `isa-debug-exit` device (iobase=0xf4) to signal pass/fail
-- Exit code 33 = success (configured in `hadron.toml` `[qemu.test]`)
+- Exit code 33 = success (configured in `build.rhai` `qemu()` section)
 - Timeout: 30 seconds per test
 
 ## Development Phases

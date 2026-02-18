@@ -10,6 +10,10 @@ bootstrap:
 configure *args: bootstrap
     {{hb}} configure {{args}}
 
+# Configure build options using a TUI Menu
+menuconfig *args: bootstrap
+    {{hb}} menuconfig {{args}}
+
 # Build the kernel
 build *args: bootstrap
     {{hb}} build {{args}}

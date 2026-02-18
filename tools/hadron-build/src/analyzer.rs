@@ -11,7 +11,8 @@ use std::path::PathBuf;
 
 use crate::compile;
 use crate::config::{ResolvedConfig, ResolvedValue};
-use crate::crate_graph::{self, CrateContext, CrateRegistry, ResolvedCrate};
+use crate::crate_graph::{self, ResolvedCrate};
+use crate::model::BuildModel;
 use crate::sysroot;
 
 /// Top-level rust-project.json structure.
@@ -46,35 +47,45 @@ struct DepEntry {
     name: String,
 }
 
-/// Generate `rust-project.json` at the project root.
-pub fn generate_rust_project(config: &ResolvedConfig) -> Result<PathBuf> {
+/// Generate `rust-project.json` from a [`BuildModel`].
+pub fn generate_rust_project(
+    config: &ResolvedConfig,
+    model: &BuildModel,
+) -> Result<PathBuf> {
     let sysroot_src = sysroot::sysroot_src_dir()?;
-    let registry = crate_graph::load_crate_registry(&config.root)?;
 
-    // Resolve all contexts.
-    let host_crates =
-        crate_graph::resolve_and_sort(&registry, &config.root, &sysroot_src, &CrateContext::Host)?;
-    let kernel_crates = crate_graph::resolve_and_sort(
-        &registry,
-        &config.root,
-        &sysroot_src,
-        &CrateContext::Kernel,
-    )?;
+    // Resolve host crates.
+    let host_crates = resolve_groups_by_target(model, "host", config, &sysroot_src)?;
 
-    // Build a combined crate list. Sysroot crates are handled by sysroot_src.
-    // Order: host crates first (proc-macros), then kernel crates.
+    // Collect all non-host groups (kernel, userspace, vendored, etc.).
+    let non_host_group_names: Vec<String> = model.groups.iter()
+        .filter(|(_, g)| g.target != "host")
+        .map(|(name, _)| name.clone())
+        .collect();
+
+    let mut non_host_crates = Vec::new();
+    for gname in &non_host_group_names {
+        let group_crates = crate_graph::resolve_group_from_model(
+            model, gname, &config.root, &sysroot_src,
+        )?;
+        for krate in group_crates {
+            if !non_host_crates.iter().any(|k: &ResolvedCrate| k.name == krate.name) {
+                non_host_crates.push(krate);
+            }
+        }
+    }
+
+    // Build combined crate list. Order: host crates first (proc-macros), then non-host.
     let mut all_crates: Vec<&ResolvedCrate> = Vec::new();
     let mut name_to_idx: BTreeMap<String, usize> = BTreeMap::new();
 
-    // Add host crates.
     for krate in &host_crates {
         let idx = all_crates.len();
         name_to_idx.insert(krate.name.clone(), idx);
         all_crates.push(krate);
     }
 
-    // Add kernel crates (skip if already present from host).
-    for krate in &kernel_crates {
+    for krate in &non_host_crates {
         if !name_to_idx.contains_key(&krate.name) {
             let idx = all_crates.len();
             name_to_idx.insert(krate.name.clone(), idx);
@@ -85,17 +96,29 @@ pub fn generate_rust_project(config: &ResolvedConfig) -> Result<PathBuf> {
     // Build cfg flags from resolved config options.
     let config_cfgs = build_config_cfgs(config);
 
-    // Build the project crate list, which excludes sysroot context crates
-    // (rust-analyzer discovers those from sysroot_src).
-    let project_crate_names = collect_project_crate_names(&registry);
+    // Collect project crate names from model.
+    let project_crate_names: Vec<String> = model.crates.iter()
+        .filter(|(_, c)| c.is_project_crate)
+        .map(|(name, _)| name.clone())
+        .collect();
 
-    // Resolve target spec path for kernel crates.
-    let kernel_target = config
-        .root
-        .join(&config.target.spec)
-        .to_str()
-        .expect("target spec path is valid UTF-8")
-        .to_string();
+    // Collect config-enabled groups.
+    let config_groups: std::collections::HashSet<String> = model.groups.iter()
+        .filter(|(_, g)| g.config)
+        .map(|(name, _)| name.clone())
+        .collect();
+
+    // Resolve target spec paths for non-host crates.
+    let mut target_spec_paths: BTreeMap<String, String> = BTreeMap::new();
+    for (tname, tdef) in &model.targets {
+        let spec_path = config
+            .root
+            .join(&tdef.spec)
+            .to_str()
+            .expect("target spec path is valid UTF-8")
+            .to_string();
+        target_spec_paths.insert(tname.clone(), spec_path);
+    }
 
     let mut entries = Vec::new();
     for krate in &all_crates {
@@ -111,34 +134,30 @@ pub fn generate_rust_project(config: &ResolvedConfig) -> Result<PathBuf> {
             .collect();
 
         let mut cfg = Vec::new();
-
-        // Add feature cfgs.
         for feat in &krate.features {
             cfg.push(format!("feature=\"{feat}\""));
         }
 
-        // Add config cfgs for kernel crates.
-        if krate.context != CrateContext::Host {
+        // Add config cfgs for crates in config-enabled groups.
+        let crate_group = model.crates.get(&krate.name)
+            .and_then(|c| c.group.as_ref());
+        let in_config_group = crate_group
+            .map(|g| config_groups.contains(g))
+            .unwrap_or(false);
+        if krate.target != "host" && in_config_group {
             cfg.extend(config_cfgs.iter().cloned());
         }
 
-        // Per-crate target: host crates use host default (None),
-        // kernel crates use the custom target spec.
-        let target = if krate.context == CrateContext::Host {
+        let target = if krate.target == "host" {
             None
         } else {
-            Some(kernel_target.clone())
+            target_spec_paths.get(&krate.target).cloned()
         };
 
         let is_workspace = project_crate_names.contains(&krate.name);
 
         let proc_macro_dylib = if krate.crate_type == "proc-macro" {
-            // Point to the compiled dylib in build/host/.
-            let ext = if cfg!(target_os = "macos") {
-                "dylib"
-            } else {
-                "so"
-            };
+            let ext = if cfg!(target_os = "macos") { "dylib" } else { "so" };
             let dylib = config.root.join(format!(
                 "build/host/lib{}.{ext}",
                 compile::crate_name_sanitized(&krate.name)
@@ -176,6 +195,32 @@ pub fn generate_rust_project(config: &ResolvedConfig) -> Result<PathBuf> {
     Ok(output_path)
 }
 
+/// Resolve all crates from groups matching a given target.
+fn resolve_groups_by_target(
+    model: &BuildModel,
+    target: &str,
+    config: &ResolvedConfig,
+    sysroot_src: &std::path::Path,
+) -> Result<Vec<ResolvedCrate>> {
+    let group_names: Vec<String> = model.groups.iter()
+        .filter(|(_, g)| g.target == target)
+        .map(|(name, _)| name.clone())
+        .collect();
+
+    let mut crates = Vec::new();
+    for gname in &group_names {
+        let group_crates = crate_graph::resolve_group_from_model(
+            model, gname, &config.root, sysroot_src,
+        )?;
+        for krate in group_crates {
+            if !crates.iter().any(|k: &ResolvedCrate| k.name == krate.name) {
+                crates.push(krate);
+            }
+        }
+    }
+    Ok(crates)
+}
+
 /// Build --cfg flags from resolved config bool options.
 fn build_config_cfgs(config: &ResolvedConfig) -> Vec<String> {
     let mut cfgs = Vec::new();
@@ -185,18 +230,4 @@ fn build_config_cfgs(config: &ResolvedConfig) -> Vec<String> {
         }
     }
     cfgs
-}
-
-/// Collect names of project crates (not vendored, not sysroot).
-fn collect_project_crate_names(registry: &CrateRegistry) -> Vec<String> {
-    let project_prefixes = ["kernel/", "crates/", "userspace/"];
-    registry
-        .crates
-        .iter()
-        .filter(|(_, def)| {
-            let path = &def.path;
-            project_prefixes.iter().any(|p| path.starts_with(p))
-        })
-        .map(|(name, _)| name.clone())
-        .collect()
 }

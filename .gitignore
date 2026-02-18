@@ -1,15 +1,29 @@
+# Build artifacts
 /target/
+/build/
+*.iso
+*.img
+
+# Vendored dependencies (fetched by hadron-build vendor)
+/vendor/
+
+# Generated files
+rust-project.json
 Cargo.lock
+
+# User-local build configuration overrides
+.hadron-config
+
+# Documentation build output
+/docs/book
+
+# Editor / IDE
 *.swp
 *.swo
 .idea/
 .vscode/
-*.iso
-*.img
-.worktrees/
-
-/docs/book
 *.DS_Store
 *.orig
-/build/
-/vendor/
+
+# Git worktrees
+.worktrees/

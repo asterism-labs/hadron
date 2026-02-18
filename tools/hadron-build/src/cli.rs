@@ -40,6 +40,8 @@ pub enum Command {
     Fmt(FmtArgs),
     /// Resolve configuration and generate rust-project.json.
     Configure,
+    /// Interactive TUI configuration editor.
+    Menuconfig,
     /// Remove build artifacts.
     Clean,
     /// Vendor external dependencies into vendor/.
