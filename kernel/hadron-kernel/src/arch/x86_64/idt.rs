@@ -5,7 +5,7 @@ use hadron_core::arch::x86_64::structures::idt::InterruptDescriptorTable;
 use crate::sync::LazyLock;
 
 use super::gdt::DOUBLE_FAULT_IST_INDEX;
-use super::interrupts::{dispatch, handlers};
+use super::interrupts::{dispatch, handlers, timer_stub};
 
 /// Static Interrupt Descriptor Table with all exception and hardware interrupt
 /// handlers wired.
@@ -59,6 +59,11 @@ static IDT: LazyLock<InterruptDescriptorTable> = LazyLock::new(|| {
     for (i, stub) in dispatch::STUBS.iter().enumerate() {
         idt.interrupts[i].set_handler(*stub);
     }
+
+    // Override vector 254 (LAPIC timer) with the custom preemption-aware
+    // stub that saves user register state on ring-3 interrupts.
+    idt.interrupts[(dispatch::vectors::TIMER - 32) as usize]
+        .set_raw_handler_addr(timer_stub::timer_preempt_stub as *const () as u64);
 
     idt
 });

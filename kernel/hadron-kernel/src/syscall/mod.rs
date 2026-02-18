@@ -26,6 +26,10 @@ impl SyscallHandler for HadronDispatch {
         process::sys_task_info()
     }
 
+    fn sys_handle_close(&self, handle: usize) -> isize {
+        vfs::sys_handle_close(handle)
+    }
+
     fn sys_vnode_open(&self, path_ptr: usize, path_len: usize, flags: usize) -> isize {
         vfs::sys_vnode_open(path_ptr, path_len, flags)
     }
@@ -36,6 +40,14 @@ impl SyscallHandler for HadronDispatch {
 
     fn sys_vnode_write(&self, fd: usize, buf_ptr: usize, buf_len: usize) -> isize {
         vfs::sys_vnode_write(fd, buf_ptr, buf_len)
+    }
+
+    fn sys_vnode_stat(&self, fd: usize, buf_ptr: usize, buf_len: usize) -> isize {
+        vfs::sys_vnode_stat(fd, buf_ptr, buf_len)
+    }
+
+    fn sys_vnode_readdir(&self, fd: usize, buf_ptr: usize, buf_len: usize) -> isize {
+        vfs::sys_vnode_readdir(fd, buf_ptr, buf_len)
     }
 
     fn sys_mem_map(&self) -> isize {

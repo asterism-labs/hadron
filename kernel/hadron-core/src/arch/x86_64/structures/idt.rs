@@ -120,7 +120,7 @@ impl IdtEntry {
     /// Sets a handler function (no error code) and returns a mutable reference
     /// to the entry options for further configuration.
     pub fn set_handler(&mut self, handler: HandlerFunc) -> &mut EntryOptions {
-        self.set_handler_addr(handler as u64)
+        self.set_raw_handler_addr(handler as u64)
     }
 
     /// Sets a handler function with error code and returns a mutable reference
@@ -129,12 +129,12 @@ impl IdtEntry {
         &mut self,
         handler: HandlerFuncWithErrCode,
     ) -> &mut EntryOptions {
-        self.set_handler_addr(handler as u64)
+        self.set_raw_handler_addr(handler as u64)
     }
 
     /// Sets a diverging handler function (no error code).
     pub fn set_diverging_handler(&mut self, handler: DivergingHandlerFunc) -> &mut EntryOptions {
-        self.set_handler_addr(handler as u64)
+        self.set_raw_handler_addr(handler as u64)
     }
 
     /// Sets a diverging handler function with error code.
@@ -142,10 +142,14 @@ impl IdtEntry {
         &mut self,
         handler: DivergingHandlerFuncWithErrCode,
     ) -> &mut EntryOptions {
-        self.set_handler_addr(handler as u64)
+        self.set_raw_handler_addr(handler as u64)
     }
 
-    fn set_handler_addr(&mut self, addr: u64) -> &mut EntryOptions {
+    /// Sets a raw handler address directly.
+    ///
+    /// Used for custom naked stubs that don't match the standard
+    /// `x86-interrupt` ABI signatures.
+    pub fn set_raw_handler_addr(&mut self, addr: u64) -> &mut EntryOptions {
         self.offset_low = addr as u16;
         self.offset_mid = (addr >> 16) as u16;
         self.offset_high = (addr >> 32) as u32;

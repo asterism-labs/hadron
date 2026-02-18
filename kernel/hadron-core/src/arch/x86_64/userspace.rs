@@ -9,7 +9,6 @@
 ///
 /// Stored when entering the kernel via SYSCALL or interrupt, and restored
 /// when returning to user mode.
-#[allow(dead_code, reason = "reserved for Phase 9 preemption")]
 #[derive(Debug, Clone, Default)]
 #[repr(C)]
 pub struct UserRegisters {
@@ -181,6 +180,76 @@ pub unsafe extern "C" fn enter_userspace_save(entry: u64, user_rsp: u64, saved_r
         user_ds = const USER_DATA_SELECTOR,
         user_cs = const USER_CODE_SELECTOR,
         rflags = const USER_RFLAGS,
+    );
+}
+
+/// Re-enters userspace from a saved [`UserRegisters`] context.
+///
+/// Like [`enter_userspace_save`], this saves callee-saved registers and
+/// the kernel RSP so that [`restore_kernel_context`] can "return" here.
+/// Then it builds an `iretq` frame from the saved user registers and
+/// restores all GPRs before transitioning to ring 3.
+///
+/// Used when re-entering a preempted process whose state was saved by
+/// the timer preemption stub.
+///
+/// # Safety
+///
+/// - `ctx` must point to a valid [`UserRegisters`] with ring-3 RIP/RSP.
+/// - `saved_rsp_ptr` must point to a valid `u64` for storing the kernel RSP.
+/// - The GDT must have user segments at the expected indices.
+/// - CR3 must already be loaded with the user address space.
+/// - Interrupts must be disabled.
+#[unsafe(naked)]
+pub unsafe extern "C" fn enter_userspace_resume(
+    ctx: *const UserRegisters,
+    saved_rsp_ptr: *mut u64,
+) {
+    core::arch::naked_asm!(
+        // Save callee-saved registers (must match enter_userspace_save layout
+        // so restore_kernel_context works identically).
+        "push rbp",
+        "push rbx",
+        "push r12",
+        "push r13",
+        "push r14",
+        "push r15",
+
+        // Save kernel RSP to *saved_rsp_ptr (rsi = 2nd argument).
+        "mov [rsi], rsp",
+
+        // Build iretq frame from UserRegisters fields.
+        // UserRegisters layout: rax(0), rbx(8), rcx(16), rdx(24), rsi(32),
+        // rdi(40), rbp(48), r8(56), r9(64), r10(72), r11(80), r12(88),
+        // r13(96), r14(104), r15(112), rip(120), rsp(128), rflags(136)
+        "push {user_ds}",                // SS
+        "push qword ptr [rdi + 128]",    // RSP from ctx
+        "push qword ptr [rdi + 136]",    // RFLAGS from ctx
+        "push {user_cs}",                // CS
+        "push qword ptr [rdi + 120]",    // RIP from ctx
+
+        // Restore all GPRs from ctx (rdi last since it holds the pointer).
+        "mov rax, [rdi + 0]",
+        "mov rbx, [rdi + 8]",
+        "mov rcx, [rdi + 16]",
+        "mov rdx, [rdi + 24]",
+        "mov rsi, [rdi + 32]",
+        "mov rbp, [rdi + 48]",
+        "mov r8,  [rdi + 56]",
+        "mov r9,  [rdi + 64]",
+        "mov r10, [rdi + 72]",
+        "mov r11, [rdi + 80]",
+        "mov r12, [rdi + 88]",
+        "mov r13, [rdi + 96]",
+        "mov r14, [rdi + 104]",
+        "mov r15, [rdi + 112]",
+        "mov rdi, [rdi + 40]",           // rdi last (was the pointer)
+
+        // Transition to ring 3.
+        "iretq",
+
+        user_ds = const USER_DATA_SELECTOR,
+        user_cs = const USER_CODE_SELECTOR,
     );
 }
 

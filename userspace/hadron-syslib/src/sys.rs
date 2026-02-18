@@ -1,9 +1,10 @@
-//! System calls: exit, query, clock.
+//! System calls: exit, getpid, query, clock.
 
-use hadron_syscall::raw::{syscall1, syscall2, syscall4};
+use hadron_syscall::raw::{syscall0, syscall1, syscall2, syscall4};
 use hadron_syscall::{
     CLOCK_MONOTONIC, KernelVersionInfo, MemoryInfo, QUERY_KERNEL_VERSION, QUERY_MEMORY,
-    QUERY_UPTIME, SYS_CLOCK_GETTIME, SYS_QUERY, SYS_TASK_EXIT, Timespec, UptimeInfo,
+    QUERY_UPTIME, SYS_CLOCK_GETTIME, SYS_QUERY, SYS_TASK_EXIT, SYS_TASK_INFO, Timespec,
+    UptimeInfo,
 };
 
 // ── Functions ─────────────────────────────────────────────────────────
@@ -17,6 +18,15 @@ pub fn exit(status: usize) -> ! {
         // but the kernel will have already killed this process.
         unsafe { core::arch::asm!("hlt", options(nomem, nostack)) };
     }
+}
+
+/// Get the current process ID.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "PIDs fit in u32; isize is sufficient"
+)]
+pub fn getpid() -> u32 {
+    syscall0(SYS_TASK_INFO) as u32
 }
 
 /// Query physical memory statistics.

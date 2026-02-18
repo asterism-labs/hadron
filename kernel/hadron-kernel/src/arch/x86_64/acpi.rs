@@ -77,6 +77,16 @@ pub fn with_io_apic<R>(f: impl FnOnce(&IoApic) -> R) -> Option<R> {
     Some(f(&ioapic))
 }
 
+/// Combined timer tick + LAPIC EOI for the custom timer preemption stub.
+///
+/// Called from both ring-0 and ring-3 paths of the naked timer stub.
+/// Performs the timer tick logic (increment counter, wake sleepers, set
+/// preempt flag) and sends LAPIC EOI.
+pub(crate) extern "C" fn timer_tick_and_eoi() {
+    timer_handler(vectors::TIMER);
+    send_lapic_eoi();
+}
+
 /// LAPIC timer interrupt handler.
 fn timer_handler(_vector: u8) {
     let tick = TIMER_TICKS.fetch_add(1, Ordering::Relaxed) + 1;

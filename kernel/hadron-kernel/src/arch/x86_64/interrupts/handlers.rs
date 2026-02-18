@@ -2,13 +2,53 @@
 //!
 //! All handlers use the `x86-interrupt` ABI. Most panic with the exception name
 //! and stack frame. `debug` and `breakpoint` log and return for debugging.
+//! Faults originating from ring 3 gracefully terminate the user process via
+//! [`crate::proc::terminate_current_process_from_fault`] instead of panicking
+//! the kernel.
 
 // Handler names are self-documenting; suppress missing_docs for this module.
 #![allow(missing_docs)]
 
 use hadron_core::arch::x86_64::structures::idt::InterruptStackFrame;
 
+/// RPL mask for the code segment selector — bits [0:1] hold the privilege level.
+const CS_RPL_MASK: u64 = 0x3;
+
+/// Returns `true` if the interrupt originated from user mode (ring 3).
+fn is_user_mode(frame: &InterruptStackFrame) -> bool {
+    frame.code_segment & CS_RPL_MASK != 0
+}
+
+/// Log and terminate the current user process on a ring-3 fault.
+///
+/// The exception `name` (e.g. "#GP") and stack frame are logged before
+/// termination.
+fn terminate_user_fault(name: &str, frame: &InterruptStackFrame) -> ! {
+    hadron_core::kerr!("USER {name}\n{frame:#?}");
+    // SAFETY: We are in an exception handler triggered by ring-3 code.
+    // A user process is running and SAVED_KERNEL_RSP is valid.
+    unsafe {
+        crate::proc::terminate_current_process_from_fault();
+    }
+}
+
+/// Like [`terminate_user_fault`] but includes an error code in the log.
+fn terminate_user_fault_with_error(
+    name: &str,
+    frame: &InterruptStackFrame,
+    error_code: u64,
+) -> ! {
+    hadron_core::kerr!("USER {name} (error_code={error_code:#x})\n{frame:#?}");
+    // SAFETY: Same as terminate_user_fault.
+    unsafe {
+        crate::proc::terminate_current_process_from_fault();
+    }
+}
+
 pub extern "x86-interrupt" fn divide_error(frame: InterruptStackFrame) {
+    if is_user_mode(&frame) {
+        terminate_user_fault("#DE", &frame);
+    }
     panic!("EXCEPTION: DIVIDE ERROR\n{:#?}", frame);
 }
 
@@ -25,18 +65,30 @@ pub extern "x86-interrupt" fn breakpoint(frame: InterruptStackFrame) {
 }
 
 pub extern "x86-interrupt" fn overflow(frame: InterruptStackFrame) {
+    if is_user_mode(&frame) {
+        terminate_user_fault("#OF", &frame);
+    }
     panic!("EXCEPTION: OVERFLOW\n{:#?}", frame);
 }
 
 pub extern "x86-interrupt" fn bound_range(frame: InterruptStackFrame) {
+    if is_user_mode(&frame) {
+        terminate_user_fault("#BR", &frame);
+    }
     panic!("EXCEPTION: BOUND RANGE EXCEEDED\n{:#?}", frame);
 }
 
 pub extern "x86-interrupt" fn invalid_opcode(frame: InterruptStackFrame) {
+    if is_user_mode(&frame) {
+        terminate_user_fault("#UD", &frame);
+    }
     panic!("EXCEPTION: INVALID OPCODE\n{:#?}", frame);
 }
 
 pub extern "x86-interrupt" fn device_not_available(frame: InterruptStackFrame) {
+    if is_user_mode(&frame) {
+        terminate_user_fault("#NM", &frame);
+    }
     panic!("EXCEPTION: DEVICE NOT AVAILABLE\n{:#?}", frame);
 }
 
@@ -62,6 +114,9 @@ pub extern "x86-interrupt" fn segment_not_present(frame: InterruptStackFrame, er
 }
 
 pub extern "x86-interrupt" fn stack_segment_fault(frame: InterruptStackFrame, error_code: u64) {
+    if is_user_mode(&frame) {
+        terminate_user_fault_with_error("#SS", &frame, error_code);
+    }
     panic!(
         "EXCEPTION: STACK-SEGMENT FAULT (error_code={:#x})\n{:#?}",
         error_code, frame
@@ -69,6 +124,9 @@ pub extern "x86-interrupt" fn stack_segment_fault(frame: InterruptStackFrame, er
 }
 
 pub extern "x86-interrupt" fn general_protection(frame: InterruptStackFrame, error_code: u64) {
+    if is_user_mode(&frame) {
+        terminate_user_fault_with_error("#GP", &frame, error_code);
+    }
     panic!(
         "EXCEPTION: GENERAL PROTECTION FAULT (error_code={:#x})\n{:#?}",
         error_code, frame
@@ -114,25 +172,13 @@ pub extern "x86-interrupt" fn page_fault(frame: InterruptStackFrame, error_code:
     // User-mode fault: log and terminate the process instead of panicking.
     if is_user {
         hadron_core::kerr!(
-            "USER PAGE FAULT: {cause} during {access}\n  \
+            "USER #PF: {cause} during {access}\n  \
              Address: {cr2:#x}\n  Error: {error:?}\n{frame:#?}"
         );
-
-        // Restore kernel address space and GS bases.
-        let kernel_cr3 = crate::proc::kernel_cr3();
+        // SAFETY: We are in a page fault handler triggered by ring-3 code.
+        // A user process is running and SAVED_KERNEL_RSP is valid.
         unsafe {
-            hadron_core::arch::x86_64::registers::control::Cr3::write(kernel_cr3);
-            let percpu =
-                hadron_core::arch::x86_64::registers::model_specific::IA32_KERNEL_GS_BASE.read();
-            hadron_core::arch::x86_64::registers::model_specific::IA32_GS_BASE.write(percpu);
-        }
-        hadron_core::kinfo!("Process terminated due to page fault");
-
-        // Store fault sentinel and restore kernel context to return to process task.
-        crate::proc::set_process_exit_status(usize::MAX as u64);
-        let saved_rsp = crate::proc::saved_kernel_rsp();
-        unsafe {
-            hadron_core::arch::x86_64::userspace::restore_kernel_context(saved_rsp);
+            crate::proc::terminate_current_process_from_fault();
         }
     }
 
@@ -197,10 +243,16 @@ pub extern "x86-interrupt" fn page_fault(frame: InterruptStackFrame, error_code:
 }
 
 pub extern "x86-interrupt" fn x87_floating_point(frame: InterruptStackFrame) {
+    if is_user_mode(&frame) {
+        terminate_user_fault("#MF", &frame);
+    }
     panic!("EXCEPTION: x87 FLOATING-POINT\n{:#?}", frame);
 }
 
 pub extern "x86-interrupt" fn alignment_check(frame: InterruptStackFrame, error_code: u64) {
+    if is_user_mode(&frame) {
+        terminate_user_fault_with_error("#AC", &frame, error_code);
+    }
     panic!(
         "EXCEPTION: ALIGNMENT CHECK (error_code={:#x})\n{:#?}",
         error_code, frame
@@ -212,6 +264,9 @@ pub extern "x86-interrupt" fn machine_check(frame: InterruptStackFrame) -> ! {
 }
 
 pub extern "x86-interrupt" fn simd_floating_point(frame: InterruptStackFrame) {
+    if is_user_mode(&frame) {
+        terminate_user_fault("#XM", &frame);
+    }
     panic!("EXCEPTION: SIMD FLOATING-POINT\n{:#?}", frame);
 }
 

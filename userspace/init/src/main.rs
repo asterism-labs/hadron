@@ -1,11 +1,13 @@
 //! Hadron init process — interactive shell.
 //!
-//! Runs as PID 1 in userspace (ring 3). Provides a minimal echo shell with
-//! built-in commands: `help`, `echo`, `sysinfo`, `clear`, `exit`.
+//! Runs as PID 1 in userspace (ring 3). Provides a minimal shell with
+//! built-in commands: `help`, `echo`, `sysinfo`, `ls`, `cat`, `pid`,
+//! `clear`, `exit`.
 
 #![no_std]
 #![no_main]
 
+use hadron_syslib::hadron_syscall::{DirEntryInfo, INODE_TYPE_CHARDEV, INODE_TYPE_DIR};
 use hadron_syslib::io::{self, STDIN};
 use hadron_syslib::{print, println};
 
@@ -82,6 +84,9 @@ fn dispatch_command(line: &str) {
         "help" => cmd_help(),
         "echo" => cmd_echo(args),
         "sysinfo" => cmd_sysinfo(),
+        "ls" => cmd_ls(args),
+        "cat" => cmd_cat(args),
+        "pid" => cmd_pid(),
         "clear" => cmd_clear(),
         "exit" => cmd_exit(),
         _ => println!("unknown command: {}", cmd),
@@ -93,6 +98,9 @@ fn cmd_help() {
     println!("  help    - Show this help message");
     println!("  echo    - Print arguments to stdout");
     println!("  sysinfo - Display kernel version, memory, and uptime");
+    println!("  ls      - List directory contents (default: /)");
+    println!("  cat     - Print file contents");
+    println!("  pid     - Show current process ID");
     println!("  clear   - Clear the screen");
     println!("  exit    - Exit the shell");
 }
@@ -143,6 +151,84 @@ fn cmd_sysinfo() {
     } else {
         println!("Uptime:  (query failed)");
     }
+}
+
+fn cmd_ls(args: &str) {
+    let path = if args.is_empty() { "/" } else { args };
+
+    let fd = io::open(path, 0);
+    if fd < 0 {
+        println!("ls: cannot open '{}': no such file or directory", path);
+        return;
+    }
+    let fd = fd as usize;
+
+    // Stack buffer for up to 32 directory entries.
+    let mut entries = [DirEntryInfo {
+        inode_type: 0,
+        name_len: 0,
+        _pad: [0; 2],
+        name: [0; 60],
+    }; 32];
+
+    let count = io::readdir(fd, &mut entries);
+    if count < 0 {
+        println!("ls: cannot read directory '{}'", path);
+        io::close(fd);
+        return;
+    }
+
+    for entry in &entries[..count as usize] {
+        let name_len = entry.name_len as usize;
+        let name = core::str::from_utf8(&entry.name[..name_len]).unwrap_or("???");
+        let type_char = if entry.inode_type == INODE_TYPE_DIR {
+            'd'
+        } else if entry.inode_type == INODE_TYPE_CHARDEV {
+            'c'
+        } else {
+            '-'
+        };
+        println!("  {}  {}", type_char, name);
+    }
+
+    io::close(fd);
+}
+
+fn cmd_cat(args: &str) {
+    if args.is_empty() {
+        println!("cat: missing file path");
+        return;
+    }
+
+    let fd = io::open(args, 0);
+    if fd < 0 {
+        println!("cat: cannot open '{}': no such file or directory", args);
+        return;
+    }
+    let fd = fd as usize;
+
+    let mut buf = [0u8; 512];
+    loop {
+        let n = io::read(fd, &mut buf);
+        if n <= 0 {
+            break;
+        }
+        let n = n as usize;
+        // Print as UTF-8 if possible, otherwise show byte count.
+        if let Ok(s) = core::str::from_utf8(&buf[..n]) {
+            print!("{}", s);
+        } else {
+            println!("(binary data: {} bytes)", n);
+            break;
+        }
+    }
+
+    io::close(fd);
+}
+
+fn cmd_pid() {
+    let pid = hadron_syslib::sys::getpid();
+    println!("PID: {}", pid);
 }
 
 fn cmd_clear() {

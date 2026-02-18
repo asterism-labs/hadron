@@ -80,6 +80,32 @@ hadron_syscall_macros::define_syscalls! {
             /// Kernel name as a UTF-8 byte array, NUL-padded.
             name: [u8; 32],
         }
+
+        /// Stat information for a vnode.
+        #[derive(Debug, Clone, Copy)]
+        struct StatInfo {
+            /// Inode type: 0=file, 1=directory, 2=chardev.
+            inode_type: u8,
+            /// Padding for alignment.
+            _pad: [u8; 3],
+            /// File size in bytes (0 for directories and devices).
+            size: u64,
+            /// Permissions: bit 0=read, bit 1=write, bit 2=exec.
+            permissions: u32,
+        }
+
+        /// A single directory entry returned by `vnode_readdir`.
+        #[derive(Debug, Clone, Copy)]
+        struct DirEntryInfo {
+            /// Inode type: 0=file, 1=directory, 2=chardev.
+            inode_type: u8,
+            /// Length of the name (bytes used in `name` array).
+            name_len: u8,
+            /// Padding for alignment.
+            _pad: [u8; 2],
+            /// Entry name as UTF-8 bytes, not NUL-terminated.
+            name: [u8; 60],
+        }
     }
 
     constants {
@@ -91,6 +117,12 @@ hadron_syscall_macros::define_syscalls! {
         QUERY_KERNEL_VERSION: u64 = 2;
         /// Monotonic clock: nanoseconds since boot, never adjusted.
         CLOCK_MONOTONIC: usize = 0;
+        /// Inode type: regular file.
+        INODE_TYPE_FILE: u8 = 0;
+        /// Inode type: directory.
+        INODE_TYPE_DIR: u8 = 1;
+        /// Inode type: character device.
+        INODE_TYPE_CHARDEV: u8 = 2;
     }
 
     /// Task management.
@@ -120,8 +152,7 @@ hadron_syscall_macros::define_syscalls! {
 
     /// Handle operations.
     group handle(0x10..0x20) {
-        /// Close a handle.
-        #[reserved(phase = 11)]
+        /// Close a handle (file descriptor).
         fn handle_close(handle: usize) = 0x00;
 
         /// Duplicate a handle.
@@ -163,12 +194,10 @@ hadron_syscall_macros::define_syscalls! {
         /// Write to a vnode.
         fn vnode_write(fd: usize, buf_ptr: usize, buf_len: usize) = 0x02;
 
-        /// Stat a vnode.
-        #[reserved(phase = 10)]
-        fn vnode_stat(fd: usize) = 0x03;
+        /// Stat a vnode: write [`StatInfo`] to `(buf_ptr, buf_len)`.
+        fn vnode_stat(fd: usize, buf_ptr: usize, buf_len: usize) = 0x03;
 
-        /// Read directory entries.
-        #[reserved(phase = 10)]
+        /// Read directory entries as [`DirEntryInfo`] array into `(buf_ptr, buf_len)`.
         fn vnode_readdir(fd: usize, buf_ptr: usize, buf_len: usize) = 0x04;
 
         /// Unlink a vnode.

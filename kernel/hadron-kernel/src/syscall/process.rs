@@ -21,8 +21,9 @@ pub(super) fn sys_task_exit(status: usize) -> isize {
         IA32_KERNEL_GS_BASE.write(percpu);
     }
 
-    // Store exit status and jump back to the process task.
+    // Store exit status and trap reason, then jump back to the process task.
     crate::proc::set_process_exit_status(status as u64);
+    crate::proc::set_trap_reason(crate::proc::TRAP_EXIT);
     let saved_rsp = crate::proc::saved_kernel_rsp();
 
     unsafe {
@@ -30,9 +31,11 @@ pub(super) fn sys_task_exit(status: usize) -> isize {
     }
 }
 
-/// `sys_task_info` — returns the current task ID.
-///
-/// Returns 0 until a proper process model is in place.
+/// `sys_task_info` — returns the current process ID (PID).
+#[expect(
+    clippy::cast_possible_wrap,
+    reason = "PIDs are small u32 values, wrap is impossible"
+)]
 pub(super) fn sys_task_info() -> isize {
-    0
+    crate::proc::with_current_process(|process| process.pid as isize)
 }
