@@ -14,11 +14,25 @@ const ELFCLASS64: u8 = 2;
 /// ELF data encoding: little-endian.
 const ELFDATA2LSB: u8 = 1;
 
+/// ELF type: relocatable object.
+const ET_REL: u16 = 1;
+
 /// ELF type: executable.
 const ET_EXEC: u16 = 2;
 
 /// ELF type: shared object (PIE).
 const ET_DYN: u16 = 3;
+
+/// The high-level ELF file type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ElfType {
+    /// Relocatable object file (`ET_REL`).
+    Rel,
+    /// Executable file (`ET_EXEC`).
+    Exec,
+    /// Shared object / position-independent executable (`ET_DYN`).
+    Dyn,
+}
 
 /// ELF machine: x86-64.
 const EM_X86_64: u16 = 62;
@@ -54,6 +68,11 @@ pub(crate) fn le_u64(data: &[u8], off: usize) -> u64 {
     u64::from_le_bytes(*data[off..].first_chunk().unwrap())
 }
 
+/// Read a little-endian `i64` from `data` at byte offset `off`.
+pub(crate) fn le_i64(data: &[u8], off: usize) -> i64 {
+    i64::from_le_bytes(*data[off..].first_chunk().unwrap())
+}
+
 /// Errors that can occur when parsing an ELF file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ElfError {
@@ -65,7 +84,7 @@ pub enum ElfError {
     UnsupportedEncoding,
     /// The ELF machine type is not `EM_X86_64`.
     UnsupportedMachine,
-    /// The ELF type is not `ET_EXEC` or `ET_DYN`.
+    /// The ELF type is not `ET_REL`, `ET_EXEC`, or `ET_DYN`.
     UnsupportedType,
     /// The input data is too short for the declared structure.
     Truncated,
@@ -84,7 +103,9 @@ impl fmt::Display for ElfError {
             Self::UnsupportedMachine => {
                 write!(f, "unsupported machine type (expected EM_X86_64)")
             }
-            Self::UnsupportedType => write!(f, "unsupported ELF type (expected ET_EXEC or ET_DYN)"),
+            Self::UnsupportedType => {
+                write!(f, "unsupported ELF type (expected ET_REL, ET_EXEC, or ET_DYN)")
+            }
             Self::Truncated => write!(f, "input data truncated"),
             Self::InvalidOffset => write!(f, "invalid header offset or size"),
         }
@@ -94,7 +115,7 @@ impl fmt::Display for ElfError {
 /// Parsed ELF64 file header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Elf64Header {
-    /// ELF type (`ET_EXEC` or `ET_DYN`).
+    /// ELF type (`ET_REL`, `ET_EXEC`, or `ET_DYN`).
     pub e_type: u16,
     /// Target machine architecture.
     pub e_machine: u16,
@@ -148,7 +169,7 @@ impl Elf64Header {
 
         // Parse fields — offsets are safe because we checked len >= 64 above
         let e_type = le_u16(data, 16);
-        if e_type != ET_EXEC && e_type != ET_DYN {
+        if e_type != ET_REL && e_type != ET_EXEC && e_type != ET_DYN {
             return Err(ElfError::UnsupportedType);
         }
 
@@ -166,18 +187,21 @@ impl Elf64Header {
         let e_shnum = le_u16(data, 60);
         let e_shstrndx = le_u16(data, 62);
 
-        // Validate program header table bounds
-        let ph_end = e_phoff
-            .checked_add(u64::from(e_phnum) * u64::from(e_phentsize))
-            .ok_or(ElfError::InvalidOffset)?;
+        // ET_REL files typically have no program headers; skip phdr validation.
+        if e_type != ET_REL {
+            // Validate program header table bounds
+            let ph_end = e_phoff
+                .checked_add(u64::from(e_phnum) * u64::from(e_phentsize))
+                .ok_or(ElfError::InvalidOffset)?;
 
-        if ph_end > data.len() as u64 {
-            return Err(ElfError::InvalidOffset);
-        }
+            if ph_end > data.len() as u64 {
+                return Err(ElfError::InvalidOffset);
+            }
 
-        // Validate program header entry size
-        if e_phnum > 0 && (e_phentsize as usize) < ELF64_PHDR_SIZE {
-            return Err(ElfError::InvalidOffset);
+            // Validate program header entry size
+            if e_phnum > 0 && (e_phentsize as usize) < ELF64_PHDR_SIZE {
+                return Err(ElfError::InvalidOffset);
+            }
         }
 
         // Validate section header table bounds (if present)
@@ -205,6 +229,22 @@ impl Elf64Header {
             e_shnum,
             e_shstrndx,
         })
+    }
+
+    /// Returns the high-level ELF type.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `e_type` is not one of the three accepted types. This cannot
+    /// happen for headers produced by [`Self::parse`].
+    #[must_use]
+    pub fn elf_type(&self) -> ElfType {
+        match self.e_type {
+            ET_REL => ElfType::Rel,
+            ET_EXEC => ElfType::Exec,
+            ET_DYN => ElfType::Dyn,
+            _ => unreachable!("Elf64Header::parse rejects unsupported e_type values"),
+        }
     }
 }
 
@@ -367,8 +407,30 @@ pub(crate) mod tests {
     #[test]
     fn reject_unsupported_type() {
         let mut buf = make_elf_header();
-        buf[16..18].copy_from_slice(&1u16.to_le_bytes()); // ET_REL
+        buf[16..18].copy_from_slice(&4u16.to_le_bytes()); // ET_CORE — unsupported
         assert_eq!(Elf64Header::parse(&buf), Err(ElfError::UnsupportedType));
+    }
+
+    #[test]
+    fn parse_rel_type() {
+        let mut buf = make_elf_header();
+        buf[16..18].copy_from_slice(&1u16.to_le_bytes()); // ET_REL
+        // ET_REL typically has phnum=0; make_elf_header already sets phnum=0.
+        let hdr = Elf64Header::parse(&buf).expect("valid ET_REL header");
+        assert_eq!(hdr.e_type, 1);
+        assert_eq!(hdr.elf_type(), ElfType::Rel);
+    }
+
+    #[test]
+    fn elf_type_accessor() {
+        let buf = make_elf_header();
+        let hdr = Elf64Header::parse(&buf).expect("valid header");
+        assert_eq!(hdr.elf_type(), ElfType::Exec);
+
+        let mut dyn_buf = make_elf_header();
+        dyn_buf[16..18].copy_from_slice(&3u16.to_le_bytes());
+        let dyn_hdr = Elf64Header::parse(&dyn_buf).expect("valid ET_DYN header");
+        assert_eq!(dyn_hdr.elf_type(), ElfType::Dyn);
     }
 
     #[test]

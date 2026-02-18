@@ -41,7 +41,19 @@ fn dealloc_frame(frame: PhysFrame<Size4KiB>) {
 /// process, entry point, and user stack top.
 ///
 /// The caller is responsible for entering userspace via the executor.
+///
+/// # Errors
+///
+/// Returns [`BinaryError`] if format detection, parsing, or relocation fails.
+///
+/// # Panics
+///
+/// Panics if the user address space cannot be created or if physical memory
+/// is exhausted while mapping segments or stack.
 pub fn create_process_from_binary(data: &[u8]) -> Result<(Process, u64, u64), BinaryError> {
+    #[cfg(target_arch = "x86_64")]
+    type KernelMapper = hadron_core::arch::x86_64::paging::PageTableMapper;
+
     let image = binfmt::load_binary(data)?;
     let entry = image.entry_point;
     kinfo!("Loading process (entry={:#x})...", entry);
@@ -49,14 +61,10 @@ pub fn create_process_from_binary(data: &[u8]) -> Result<(Process, u64, u64), Bi
     // Get kernel state needed for address space creation.
     let kernel_cr3 = Cr3::read();
     let hhdm_offset = hadron_core::mm::hhdm::offset();
-
-    #[cfg(target_arch = "x86_64")]
-    type KernelMapper = hadron_core::arch::x86_64::paging::PageTableMapper;
-
     let mapper = KernelMapper::new(hhdm_offset);
 
     // Create address space and map segments + stack inside PMM lock scope.
-    let process = crate::mm::pmm::with_pmm(|pmm| {
+    let process = crate::mm::pmm::with_pmm(|pmm| -> Result<Process, BinaryError> {
         let mut alloc = BitmapFrameAllocRef(pmm);
 
         // Create a new user address space (copies kernel upper half).
@@ -73,12 +81,26 @@ pub fn create_process_from_binary(data: &[u8]) -> Result<(Process, u64, u64), Bi
             map_segment(&address_space, seg, hhdm_offset, &mut alloc);
         }
 
+        // Apply relocations for PIE binaries (ET_DYN).
+        if image.needs_relocation {
+            if let Some(elf_data) = image.elf_data {
+                let elf = hadron_elf::ElfFile::parse(elf_data)
+                    .expect("ELF already validated during load");
+                binfmt::reloc::apply_dyn_relocations(
+                    &address_space,
+                    &elf,
+                    image.base_addr,
+                    hhdm_offset,
+                )?;
+            }
+        }
+
         // Map user stack.
         map_user_stack(&address_space, &mut alloc);
 
         // Wrap in Process (takes ownership of address space).
-        Process::new(address_space)
-    });
+        Ok(Process::new(address_space))
+    })?;
 
     Ok((process, entry, USER_STACK_TOP))
 }

@@ -3,7 +3,7 @@
 //! Provides [`ElfFile`] as the main entry point for parsing an ELF64 binary,
 //! and [`LoadSegment`] for iterating over `PT_LOAD` segments.
 
-use crate::header::{ELF64_PHDR_SIZE, Elf64Header, Elf64ProgramHeader, ElfError, PT_LOAD};
+use crate::header::{ELF64_PHDR_SIZE, Elf64Header, Elf64ProgramHeader, ElfError, ElfType, PT_LOAD};
 
 /// A parsed ELF64 file, holding a reference to the raw data and the parsed header.
 #[derive(Debug, Clone, Copy)]
@@ -49,6 +49,12 @@ impl<'a> ElfFile<'a> {
     #[must_use]
     pub fn header(&self) -> &Elf64Header {
         &self.header
+    }
+
+    /// Returns the high-level ELF type (`Rel`, `Exec`, or `Dyn`).
+    #[must_use]
+    pub fn elf_type(&self) -> ElfType {
+        self.header.elf_type()
     }
 
     /// Returns an iterator over `PT_LOAD` segments.

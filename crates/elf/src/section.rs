@@ -11,6 +11,15 @@ pub const SHT_SYMTAB: u32 = 2;
 /// Section type: string table.
 pub const SHT_STRTAB: u32 = 3;
 
+/// Section type: relocation entries with addends.
+pub const SHT_RELA: u32 = 4;
+
+/// Section type: dynamic linking information.
+pub const SHT_DYNAMIC: u32 = 6;
+
+/// Section type: relocation entries without addends.
+pub const SHT_REL: u32 = 9;
+
 /// Section type: dynamic symbol table.
 pub const SHT_DYNSYM: u32 = 11;
 
@@ -22,6 +31,18 @@ pub const STB_GLOBAL: u8 = 1;
 
 /// Symbol binding: weak.
 pub const STB_WEAK: u8 = 2;
+
+/// Section flag: writable data.
+pub const SHF_WRITE: u64 = 0x1;
+
+/// Section flag: occupies memory during execution.
+pub const SHF_ALLOC: u64 = 0x2;
+
+/// Section flag: executable machine instructions.
+pub const SHF_EXECINSTR: u64 = 0x4;
+
+/// Section flag: `sh_info` contains a section header table index.
+pub const SHF_INFO_LINK: u64 = 0x40;
 
 /// Special section index: undefined.
 pub const SHN_UNDEF: u16 = 0;
@@ -38,12 +59,18 @@ pub struct Elf64SectionHeader {
     pub sh_type: u32,
     /// Section flags.
     pub sh_flags: u64,
+    /// Virtual address of the section in memory (0 for non-loaded sections).
+    pub sh_addr: u64,
     /// File offset of the section data.
     pub sh_offset: u64,
     /// Size of the section data in bytes.
     pub sh_size: u64,
     /// Associated section index (e.g., `.strtab` index for `.symtab`).
     pub sh_link: u32,
+    /// Extra info (interpretation depends on section type).
+    pub sh_info: u32,
+    /// Required alignment of the section (must be a power of two).
+    pub sh_addralign: u64,
     /// Size of each entry (for sections with fixed-size entries).
     pub sh_entsize: u64,
 }
@@ -58,12 +85,12 @@ impl Elf64SectionHeader {
             sh_name: le_u32(b, 0),
             sh_type: le_u32(b, 4),
             sh_flags: le_u64(b, 8),
-            // sh_addr at 16..24 — skipped
+            sh_addr: le_u64(b, 16),
             sh_offset: le_u64(b, 24),
             sh_size: le_u64(b, 32),
             sh_link: le_u32(b, 40),
-            // sh_info at 44..48 — skipped
-            // sh_addralign at 48..56 — skipped
+            sh_info: le_u32(b, 44),
+            sh_addralign: le_u64(b, 48),
             sh_entsize: le_u64(b, 56),
         }
     }
@@ -151,7 +178,7 @@ pub struct SectionIter<'a> {
     count: usize,
 }
 
-impl<'a> Iterator for SectionIter<'a> {
+impl Iterator for SectionIter<'_> {
     type Item = Elf64SectionHeader;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -180,7 +207,7 @@ pub struct SymbolIter<'a> {
     end: usize,
 }
 
-impl<'a> Iterator for SymbolIter<'a> {
+impl Iterator for SymbolIter<'_> {
     type Item = Elf64Symbol;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -202,12 +229,14 @@ impl<'a> Iterator for SymbolIter<'a> {
 // ElfFile section/symbol methods
 // ---------------------------------------------------------------------------
 
+use crate::reloc::RelaIter;
 use crate::segment::ElfFile;
 
 impl<'a> ElfFile<'a> {
     /// Returns an iterator over all section headers.
     ///
     /// Returns an empty iterator if the ELF has no sections (`e_shnum == 0`).
+    #[must_use]
     #[expect(
         clippy::cast_possible_truncation,
         reason = "ELF fields are u32/u64, truncation checked by format"
@@ -224,11 +253,13 @@ impl<'a> ElfFile<'a> {
     }
 
     /// Finds the first section header with the given type.
+    #[must_use]
     pub fn find_section_by_type(&self, sh_type: u32) -> Option<Elf64SectionHeader> {
         self.sections().find(|s| s.sh_type == sh_type)
     }
 
     /// Finds a section by name, looking up names in the section header string table.
+    #[must_use]
     pub fn find_section_by_name(&self, name: &str) -> Option<Elf64SectionHeader> {
         let shstrtab = self.section_header_strtab()?;
         self.sections()
@@ -238,6 +269,7 @@ impl<'a> ElfFile<'a> {
     /// Returns the raw data slice for a given section header.
     ///
     /// Returns `None` if the section data is out of bounds.
+    #[must_use]
     #[expect(
         clippy::cast_possible_truncation,
         reason = "ELF fields are u32/u64, truncation checked by format"
@@ -255,6 +287,7 @@ impl<'a> ElfFile<'a> {
     /// Returns an iterator over symbols in the given section (must be `SHT_SYMTAB` or `SHT_DYNSYM`).
     ///
     /// Returns `None` if the section data is out of bounds.
+    #[must_use]
     #[expect(
         clippy::cast_possible_truncation,
         reason = "ELF fields are u32/u64, truncation checked by format"
@@ -270,6 +303,7 @@ impl<'a> ElfFile<'a> {
     }
 
     /// Returns the string table associated with a symbol table section (via `sh_link`).
+    #[must_use]
     pub fn linked_strtab(&self, symtab: &Elf64SectionHeader) -> Option<StringTable<'a>> {
         let hdr = self.header();
         let link = symtab.sh_link as usize;
@@ -288,6 +322,58 @@ impl<'a> ElfFile<'a> {
         let strtab_shdr = Elf64SectionHeader::parse(data, offset);
         let strtab_data = self.section_data(&strtab_shdr)?;
         Some(StringTable::new(strtab_data))
+    }
+
+    /// Returns an iterator over `Rela` entries from a `SHT_RELA` section.
+    ///
+    /// Returns `None` if the section data is out of bounds.
+    #[must_use]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "ELF fields are u32/u64, truncation checked by format"
+    )]
+    pub fn rela_entries(&self, shdr: &Elf64SectionHeader) -> Option<RelaIter<'a>> {
+        let data = self.section_data(shdr)?;
+        let base = shdr.sh_offset as usize;
+        Some(RelaIter::new(self.raw_data(), base, base + data.len()))
+    }
+
+    /// Returns the section header at the given 0-based index.
+    ///
+    /// Returns `None` if the index is out of range or the section header
+    /// is out of bounds in the file.
+    #[must_use]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "ELF fields are u32/u64, truncation checked by format"
+    )]
+    pub fn section_by_index(&self, index: usize) -> Option<Elf64SectionHeader> {
+        let hdr = self.header();
+        if index >= hdr.e_shnum as usize {
+            return None;
+        }
+        let offset = hdr.e_shoff as usize + index * hdr.e_shentsize as usize;
+        let data = self.raw_data();
+        if offset + ELF64_SHDR_SIZE > data.len() {
+            return None;
+        }
+        Some(Elf64SectionHeader::parse(data, offset))
+    }
+
+    /// Returns an iterator over sections with the `SHF_ALLOC` flag set,
+    /// yielding `(section_index, header)` pairs.
+    ///
+    /// Useful for `ET_REL` loading where allocatable sections must be placed
+    /// in memory.
+    pub fn alloc_sections(&self) -> impl Iterator<Item = (usize, Elf64SectionHeader)> + 'a {
+        self.sections()
+            .enumerate()
+            .filter(|(_, s)| s.sh_flags & SHF_ALLOC != 0)
+    }
+
+    /// Returns an iterator over `SHT_RELA` section headers.
+    pub fn rela_sections(&self) -> impl Iterator<Item = Elf64SectionHeader> + 'a {
+        self.sections().filter(|s| s.sh_type == SHT_RELA)
     }
 
     /// Returns the section header string table (`.shstrtab`).
@@ -332,13 +418,17 @@ mod tests {
     const SYM_SIZE: usize = ELF64_SYM_SIZE;
 
     /// Append a section header to the ELF buffer and bump `e_shnum`.
-    fn append_section(
+    pub(crate) fn append_section(
         buf: &mut Vec<u8>,
         sh_name: u32,
         sh_type: u32,
+        sh_flags: u64,
+        sh_addr: u64,
         sh_offset: u64,
         sh_size: u64,
         sh_link: u32,
+        sh_info: u32,
+        sh_addralign: u64,
         sh_entsize: u64,
     ) {
         let start = buf.len();
@@ -347,13 +437,13 @@ mod tests {
 
         b[0..4].copy_from_slice(&sh_name.to_le_bytes());
         b[4..8].copy_from_slice(&sh_type.to_le_bytes());
-        // sh_flags at 8..16 — zero
-        // sh_addr at 16..24 — zero
+        b[8..16].copy_from_slice(&sh_flags.to_le_bytes());
+        b[16..24].copy_from_slice(&sh_addr.to_le_bytes());
         b[24..32].copy_from_slice(&sh_offset.to_le_bytes());
         b[32..40].copy_from_slice(&sh_size.to_le_bytes());
         b[40..44].copy_from_slice(&sh_link.to_le_bytes());
-        // sh_info at 44..48 — zero
-        // sh_addralign at 48..56 — zero
+        b[44..48].copy_from_slice(&sh_info.to_le_bytes());
+        b[48..56].copy_from_slice(&sh_addralign.to_le_bytes());
         b[56..64].copy_from_slice(&sh_entsize.to_le_bytes());
 
         // Update e_shnum
@@ -409,17 +499,21 @@ mod tests {
         buf[62..64].copy_from_slice(&3u16.to_le_bytes());
 
         // Section 0: NULL
-        append_section(&mut buf, 0, 0, 0, 0, 0, 0);
+        append_section(&mut buf, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 
         // Section 1: .strtab (SHT_STRTAB)
         append_section(
             &mut buf,
             1, // name offset in shstrtab: ".strtab"
             SHT_STRTAB,
+            0,             // sh_flags
+            0,             // sh_addr
             strtab_off,
             strtab_data.len() as u64,
-            0,
-            0,
+            0,             // sh_link
+            0,             // sh_info
+            1,             // sh_addralign
+            0,             // sh_entsize
         );
 
         // Section 2: .symtab (SHT_SYMTAB), sh_link=1 (points to .strtab)
@@ -427,9 +521,13 @@ mod tests {
             &mut buf,
             9, // name offset in shstrtab: ".symtab"
             SHT_SYMTAB,
+            0,             // sh_flags
+            0,             // sh_addr
             symtab_off,
             (SYM_SIZE * 2) as u64,
-            1, // sh_link -> .strtab
+            1,             // sh_link -> .strtab
+            0,             // sh_info
+            8,             // sh_addralign
             SYM_SIZE as u64,
         );
 
@@ -438,10 +536,14 @@ mod tests {
             &mut buf,
             17, // name offset in shstrtab: ".shstrtab"
             SHT_STRTAB,
+            0,             // sh_flags
+            0,             // sh_addr
             shstrtab_off,
             shstrtab_data.len() as u64,
-            0,
-            0,
+            0,             // sh_link
+            0,             // sh_info
+            1,             // sh_addralign
+            0,             // sh_entsize
         );
 
         // Append actual data
