@@ -37,7 +37,7 @@ pub trait LogSink: Send + Sync {
     /// Write a string fragment to this sink.
     fn write_str(&self, s: &str);
     /// Maximum log level accepted (messages with `level <= max_level` are written).
-    fn max_level(&self) -> u8;
+    fn max_level(&self) -> hadron_core::log::LogLevel;
     /// Human-readable name for diagnostics.
     fn name(&self) -> &str;
 }
@@ -49,12 +49,12 @@ pub trait LogSink: Send + Sync {
 /// A [`LogSink`] that writes to a 16550 UART serial port.
 pub struct SerialSink {
     uart: Uart16550,
-    max_level: u8,
+    max_level: hadron_core::log::LogLevel,
 }
 
 impl SerialSink {
     /// Creates a new serial sink.
-    pub fn new(uart: Uart16550, max_level: u8) -> Self {
+    pub fn new(uart: Uart16550, max_level: hadron_core::log::LogLevel) -> Self {
         Self { uart, max_level }
     }
 }
@@ -69,7 +69,7 @@ impl LogSink for SerialSink {
         }
     }
 
-    fn max_level(&self) -> u8 {
+    fn max_level(&self) -> hadron_core::log::LogLevel {
         self.max_level
     }
 
@@ -85,12 +85,12 @@ impl LogSink for SerialSink {
 /// A [`LogSink`] that writes to the early framebuffer console.
 pub struct FramebufferSink {
     fb: EarlyFramebuffer,
-    max_level: u8,
+    max_level: hadron_core::log::LogLevel,
 }
 
 impl FramebufferSink {
     /// Creates a new framebuffer sink.
-    pub fn new(fb: EarlyFramebuffer, max_level: u8) -> Self {
+    pub fn new(fb: EarlyFramebuffer, max_level: hadron_core::log::LogLevel) -> Self {
         Self { fb, max_level }
     }
 }
@@ -103,7 +103,7 @@ impl LogSink for FramebufferSink {
         }
     }
 
-    fn max_level(&self) -> u8 {
+    fn max_level(&self) -> hadron_core::log::LogLevel {
         self.max_level
     }
 
@@ -119,12 +119,12 @@ impl LogSink for FramebufferSink {
 /// A [`LogSink`] that writes to the Bochs VGA framebuffer via the driver's
 /// [`Framebuffer`] trait implementation.
 pub struct BochsVgaSink {
-    max_level: u8,
+    max_level: hadron_core::log::LogLevel,
 }
 
 impl BochsVgaSink {
     /// Creates a new Bochs VGA sink.
-    pub fn new(max_level: u8) -> Self {
+    pub fn new(max_level: hadron_core::log::LogLevel) -> Self {
         Self { max_level }
     }
 }
@@ -147,7 +147,7 @@ impl LogSink for BochsVgaSink {
         });
     }
 
-    fn max_level(&self) -> u8 {
+    fn max_level(&self) -> hadron_core::log::LogLevel {
         self.max_level
     }
 
@@ -278,12 +278,12 @@ fn early_serial_print(args: fmt::Arguments<'_>) {
 }
 
 /// Early log function: formats a leveled, timestamped message to COM1.
-fn early_serial_log(level: u8, args: fmt::Arguments<'_>) {
+fn early_serial_log(level: hadron_core::log::LogLevel, args: fmt::Arguments<'_>) {
     let nanos = crate::time::boot_nanos();
     let total_micros = nanos / 1_000;
     let secs = total_micros / 1_000_000;
     let micros = total_micros % 1_000_000;
-    let level_str = hadron_core::log::level_name(level);
+    let level_str = level.name();
 
     let mut w = SerialWriter(Uart16550::new(COM1));
     let _ = write!(w, "[{secs:>5}.{micros:06}] {level_str} {args}\n");
@@ -337,7 +337,7 @@ impl Logger {
             let mut guard = self.inner.lock();
             let serial_sink = Box::new(SerialSink::new(
                 Uart16550::new(COM1),
-                hadron_core::log::TRACE,
+                hadron_core::log::LogLevel::Trace,
             ));
             let mut sinks: Vec<Box<dyn LogSink>> = Vec::with_capacity(4);
             sinks.push(serial_sink);
@@ -389,12 +389,12 @@ impl Logger {
 
     /// Leveled write — formats a timestamped, level-tagged message and writes
     /// it only to sinks whose `max_level >= level`.
-    fn log(&self, level: u8, args: fmt::Arguments<'_>) {
+    fn log(&self, level: hadron_core::log::LogLevel, args: fmt::Arguments<'_>) {
         let nanos = crate::time::boot_nanos();
         let total_micros = nanos / 1_000;
         let secs = total_micros / 1_000_000;
         let micros = total_micros % 1_000_000;
-        let level_str = hadron_core::log::level_name(level);
+        let level_str = level.name();
 
         let guard = self.inner.lock();
         if let Some(inner) = guard.as_ref() {
@@ -431,7 +431,7 @@ fn logger_print(args: fmt::Arguments<'_>) {
 }
 
 /// Log function that forwards to the global logger (leveled, timestamped).
-fn logger_log(level: u8, args: fmt::Arguments<'_>) {
+fn logger_log(level: hadron_core::log::LogLevel, args: fmt::Arguments<'_>) {
     LOGGER.log(level, args);
 }
 

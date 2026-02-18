@@ -276,7 +276,10 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
         // covered by the HHDM. The slice remains valid for the kernel's lifetime
         // because the module memory region is marked KernelAndModules and is never
         // reclaimed.
-        #[allow(clippy::cast_possible_truncation)] // x86_64 kernel: u64 == usize
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "x86_64: u64 and usize are the same width"
+        )]
         let data =
             unsafe { core::slice::from_raw_parts(virt.as_u64() as *const u8, bt.size as usize) };
         crate::backtrace::init(data, boot_info.kernel_address().virtual_base.as_u64());
@@ -337,7 +340,7 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
         if let Some(early_fb) = crate::drivers::early_fb::EarlyFramebuffer::new(fb_info) {
             crate::log::add_sink(Box::new(crate::log::FramebufferSink::new(
                 early_fb,
-                hadron_core::log::INFO,
+                hadron_core::log::LogLevel::Info,
             )));
         }
     }
@@ -365,7 +368,9 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
             cursor.col = 0;
             cursor.row = 0;
         }
-        let bochs_sink = Box::new(crate::log::BochsVgaSink::new(hadron_core::log::INFO));
+        let bochs_sink = Box::new(crate::log::BochsVgaSink::new(
+            hadron_core::log::LogLevel::Info,
+        ));
         if crate::log::replace_sink_by_name("framebuffer", bochs_sink) {
             hadron_core::kinfo!("Switched display to Bochs VGA");
         }
@@ -393,7 +398,10 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
         // covered by the HHDM. The slice remains valid for the kernel's lifetime
         // because the initrd memory region is marked KernelAndModules and is never
         // reclaimed.
-        #[allow(clippy::cast_possible_truncation)] // x86_64 kernel: u64 == usize
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "x86_64: u64 and usize are the same width"
+        )]
         unsafe {
             core::slice::from_raw_parts(virt.as_u64() as *const u8, initrd_info.size as usize)
         }

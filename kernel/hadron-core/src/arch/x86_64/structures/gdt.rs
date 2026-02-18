@@ -2,6 +2,18 @@
 
 use core::mem::size_of;
 
+/// Bit positions and masks for x86_64 segment descriptors.
+mod segment_bits {
+    /// Shift to convert a GDT index to a selector value (skip TI and RPL bits).
+    pub const SELECTOR_INDEX_SHIFT: u16 = 3;
+    /// Mask for the 2-bit requested privilege level field.
+    pub const RPL_MASK: u16 = 0b11;
+    /// Bit position of the DPL field in a segment descriptor.
+    pub const DPL_SHIFT: u64 = 45;
+    /// Mask for the 2-bit DPL field (after shifting).
+    pub const DPL_MASK: u64 = 0b11;
+}
+
 /// A segment selector value for the GDT.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
@@ -14,7 +26,7 @@ impl SegmentSelector {
     /// privilege level (0-3).
     #[inline]
     pub const fn new(index: u16, rpl: u16) -> Self {
-        Self((index << 3) | (rpl & 0b11))
+        Self((index << segment_bits::SELECTOR_INDEX_SHIFT) | (rpl & segment_bits::RPL_MASK))
     }
 
     /// Creates a segment selector from a raw `u16` value.
@@ -32,13 +44,13 @@ impl SegmentSelector {
     /// Returns the GDT index (bits 3..15).
     #[inline]
     pub const fn index(self) -> u16 {
-        self.0 >> 3
+        self.0 >> segment_bits::SELECTOR_INDEX_SHIFT
     }
 
     /// Returns the requested privilege level (bits 0..1).
     #[inline]
     pub const fn rpl(self) -> u16 {
-        self.0 & 0b11
+        self.0 & segment_bits::RPL_MASK
     }
 }
 
@@ -90,6 +102,11 @@ impl Descriptor {
         Self::UserSegment(0x00CF_F200_0000_FFFF)
     }
 
+    /// TSS type: 64-bit TSS (available).
+    const TSS_TYPE_AVAILABLE_64: u64 = 0x9;
+    /// Bit position of the Present flag in a segment descriptor.
+    const TSS_PRESENT_BIT: u64 = 47;
+
     /// Creates a 128-bit TSS system segment descriptor from a static TSS reference.
     pub fn tss_segment(tss: &'static TaskStateSegment) -> Self {
         let tss_ptr = tss as *const _ as u64;
@@ -109,8 +126,8 @@ impl Descriptor {
         //  bits 56..63: base[24..31]
         let low = (limit & 0xFFFF)
             | ((tss_ptr & 0xFFFFFF) << 16)
-            | (0x9 << 40)      // type: 64-bit TSS (available)
-            | (1 << 47)        // present
+            | (Self::TSS_TYPE_AVAILABLE_64 << 40)
+            | (1 << Self::TSS_PRESENT_BIT)
             | ((limit & 0xF0000) << 32)
             | ((tss_ptr & 0xFF000000) << 32);
 
@@ -120,13 +137,13 @@ impl Descriptor {
         Self::SystemSegment(low, high)
     }
 
-    /// Returns the DPL of this descriptor (bits 45-46 of the low word).
-    fn dpl(&self) -> u16 {
+    /// Returns the privilege level (DPL) of this descriptor (bits 45-46 of the low word).
+    fn privilege_level(&self) -> u16 {
         let low = match self {
             Self::UserSegment(bits) => *bits,
             Self::SystemSegment(bits, _) => *bits,
         };
-        ((low >> 45) & 0b11) as u16
+        ((low >> segment_bits::DPL_SHIFT) & segment_bits::DPL_MASK) as u16
     }
 }
 
@@ -166,7 +183,7 @@ impl<const N: usize> GlobalDescriptorTable<N> {
     /// Panics if the table is full.
     pub fn append(&mut self, descriptor: Descriptor) -> SegmentSelector {
         let index = self.len;
-        let rpl = descriptor.dpl();
+        let rpl = descriptor.privilege_level();
 
         match descriptor {
             Descriptor::UserSegment(bits) => {

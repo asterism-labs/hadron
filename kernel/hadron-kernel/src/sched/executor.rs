@@ -32,7 +32,7 @@ type TaskFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 /// A stored task: its future plus metadata.
 struct TaskEntry {
     future: TaskFuture,
-    #[allow(dead_code)] // Phase 7+: used for task debugging, tracing, and affinity routing
+    #[allow(dead_code, reason = "reserved for Phase 7+ task debugging")]
     meta: TaskMeta,
 }
 

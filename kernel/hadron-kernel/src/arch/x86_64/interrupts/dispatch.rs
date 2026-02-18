@@ -122,7 +122,10 @@ macro_rules! make_stub {
 /// `STUBS[i]` handles vector `i + 32`.
 // Due to the lack of const generics over function addresses, we enumerate them
 // explicitly. Groups of 16 for readability.
-#[allow(clippy::declare_interior_mutable_const)]
+#[expect(
+    clippy::declare_interior_mutable_const,
+    reason = "array init pattern requires const repetition"
+)]
 pub static STUBS: [StubFn; NUM_VECTORS] = [
     // Vectors 32-47 (ISA IRQs)
     make_stub!(0),

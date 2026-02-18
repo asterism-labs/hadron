@@ -53,7 +53,7 @@ pub struct Process {
     pub user_cr3: PhysAddr,
     /// User address space (owns the PML4, freed on drop).
     /// Held for its `Drop` impl — not read directly.
-    #[allow(dead_code)] // Held for RAII cleanup in Drop
+    #[allow(dead_code, reason = "held for RAII cleanup in Drop")]
     address_space: AddressSpace<PageTableMapper>,
     /// Per-process file descriptor table.
     pub fd_table: SpinLock<FileDescriptorTable>,

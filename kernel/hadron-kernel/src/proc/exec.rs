@@ -84,7 +84,10 @@ pub fn create_process_from_binary(data: &[u8]) -> Result<(Process, u64, u64), Bi
 }
 
 /// Maps a single loadable segment into the user address space.
-#[allow(clippy::cast_possible_truncation)]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "x86_64: u64 and usize are the same width"
+)]
 fn map_segment<
     M: hadron_core::mm::mapper::PageMapper<Size4KiB> + hadron_core::mm::mapper::PageTranslator,
 >(

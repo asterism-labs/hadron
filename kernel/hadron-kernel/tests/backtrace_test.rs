@@ -5,7 +5,7 @@
 
 #![no_std]
 #![no_main]
-#![allow(missing_docs)]
+#![allow(missing_docs)] // integration test
 #![feature(custom_test_frameworks)]
 #![test_runner(hadron_test::test_runner)]
 #![reexport_test_harness_main = "test_main"]

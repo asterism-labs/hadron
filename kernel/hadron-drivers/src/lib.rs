@@ -5,38 +5,42 @@
 #[cfg(target_os = "none")]
 extern crate alloc;
 
+// ── Subsystem modules ───────────────────────────────────────────────────
+
 #[cfg(target_arch = "x86_64")]
 pub mod ahci;
 #[cfg(target_arch = "x86_64")]
-pub mod apic;
-#[cfg(target_arch = "x86_64")]
-pub mod bochs_vga;
-#[cfg(target_arch = "x86_64")]
 pub mod bus;
-#[cfg(target_arch = "x86_64")]
-pub mod hpet;
-pub mod i8042;
+pub mod display;
+pub mod input;
+pub mod interrupt;
 #[cfg(target_arch = "x86_64")]
 pub mod irq;
-#[cfg(target_arch = "x86_64")]
-pub mod keyboard_async;
-#[cfg(target_arch = "x86_64")]
-pub mod mouse_async;
 pub mod pci;
-#[cfg(target_arch = "x86_64")]
-pub mod pci_stub;
-#[cfg(target_arch = "x86_64")]
-pub mod pic;
-#[cfg(target_arch = "x86_64")]
-pub mod pit;
 #[cfg(target_os = "none")]
 pub mod registry;
+pub mod serial;
+pub mod timer;
+
+// ── Re-exports for backward compatibility ───────────────────────────────
+
 #[cfg(target_arch = "x86_64")]
-pub mod serial_async;
+pub use self::display::bochs_vga;
+pub use self::input::i8042;
 #[cfg(target_arch = "x86_64")]
-pub mod tsc;
+pub use self::input::keyboard_async;
 #[cfg(target_arch = "x86_64")]
-pub mod uart16550;
+pub use self::input::mouse_async;
+#[cfg(target_arch = "x86_64")]
+pub use self::interrupt::apic;
+#[cfg(target_arch = "x86_64")]
+pub use self::interrupt::pic;
+#[cfg(target_arch = "x86_64")]
+pub use self::serial::serial_async;
+#[cfg(target_arch = "x86_64")]
+pub use self::serial::uart16550;
+#[cfg(target_arch = "x86_64")]
+pub use self::timer::{hpet, pit, tsc};
 
 /// Anchor symbol referenced by the linker script's `EXTERN()` directive
 /// to force inclusion of this crate's driver registration entries.

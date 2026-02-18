@@ -19,7 +19,10 @@ const EARLY_SYSCALL_STACK_SIZE: usize = 16384;
 
 /// Aligned stack for early-boot syscall use.
 #[repr(align(16))]
-struct AlignedStack(#[allow(dead_code)] [u8; EARLY_SYSCALL_STACK_SIZE]); // used by assembly via addr_of
+struct AlignedStack(
+    #[allow(dead_code, reason = "backing storage accessed by assembly")]
+    [u8; EARLY_SYSCALL_STACK_SIZE],
+);
 
 /// Dedicated stack for the syscall entry path (early boot only).
 ///

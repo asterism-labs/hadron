@@ -40,7 +40,7 @@ impl fmt::Display for IoError {
 /// Drivers implementing this trait provide read/write access to block storage
 /// devices. All I/O operations are async to allow cooperative scheduling while
 /// waiting for hardware completion.
-#[allow(async_fn_in_trait)]
+#[expect(async_fn_in_trait, reason = "internal trait, no dyn dispatch needed")]
 pub trait BlockDevice: Send + Sync {
     /// Reads a single sector into `buf`.
     ///

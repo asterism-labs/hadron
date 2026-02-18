@@ -16,7 +16,7 @@ pub const DOUBLE_FAULT_IST_INDEX: u8 = 1;
 
 /// Dedicated stack for the double-fault handler.
 #[repr(align(16))]
-#[allow(dead_code)] // Used only for its address; the array itself backs the double-fault stack.
+#[allow(dead_code, reason = "backing storage for double-fault stack")]
 struct AlignedStack([u8; DOUBLE_FAULT_STACK_SIZE]);
 
 static DOUBLE_FAULT_STACK: AlignedStack = AlignedStack([0; DOUBLE_FAULT_STACK_SIZE]);

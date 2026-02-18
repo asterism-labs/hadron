@@ -36,10 +36,16 @@ mod reg {
     /// Line Status Register.
     pub const LSR: u16 = 5;
     /// Modem Status Register.
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "standard UART register, reserved for modem status reads"
+    )]
     pub const MSR: u16 = 6;
     /// Scratch Register.
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "standard UART register, reserved for diagnostic use"
+    )]
     pub const SCR: u16 = 7;
 }
 

@@ -14,7 +14,10 @@ use crate::fs::poll_immediate;
 /// - `flags`: open flags (bitwise OR of `OpenFlags` values)
 ///
 /// Returns a non-negative fd on success, or a negative errno on failure.
-#[allow(clippy::cast_possible_wrap)] // fd numbers are small, wrap is impossible
+#[expect(
+    clippy::cast_possible_wrap,
+    reason = "fd numbers are small, wrap is impossible"
+)]
 pub(super) fn sys_vnode_open(path_ptr: usize, path_len: usize, flags: usize) -> isize {
     let Ok(user_slice) = UserSlice::new(path_ptr, path_len) else {
         return -EFAULT;
@@ -26,7 +29,7 @@ pub(super) fn sys_vnode_open(path_ptr: usize, path_len: usize, flags: usize) -> 
         return -hadron_core::syscall::EINVAL;
     };
 
-    #[allow(clippy::cast_possible_truncation)] // flags fit in u32
+    #[expect(clippy::cast_possible_truncation, reason = "open flags fit in u32")]
     let open_flags = OpenFlags::from_bits_truncate(flags as u32);
 
     // Resolve path via VFS.
@@ -51,7 +54,10 @@ pub(super) fn sys_vnode_open(path_ptr: usize, path_len: usize, flags: usize) -> 
 /// - `buf_len`: maximum number of bytes to read
 ///
 /// Returns the number of bytes read on success, or a negative errno on failure.
-#[allow(clippy::cast_possible_wrap)] // read byte counts are small, wrap is impossible
+#[expect(
+    clippy::cast_possible_wrap,
+    reason = "byte counts are small, wrap is impossible"
+)]
 pub(super) fn sys_vnode_read(fd: usize, buf_ptr: usize, buf_len: usize) -> isize {
     let Ok(user_slice) = UserSlice::new(buf_ptr, buf_len) else {
         return -EFAULT;
@@ -97,7 +103,10 @@ pub(super) fn sys_vnode_read(fd: usize, buf_ptr: usize, buf_len: usize) -> isize
 /// - `buf_len`: number of bytes to write
 ///
 /// Returns the number of bytes written on success, or a negative errno on failure.
-#[allow(clippy::cast_possible_wrap)] // write byte counts are small, wrap is impossible
+#[expect(
+    clippy::cast_possible_wrap,
+    reason = "byte counts are small, wrap is impossible"
+)]
 pub(super) fn sys_vnode_write(fd: usize, buf_ptr: usize, buf_len: usize) -> isize {
     let Ok(user_slice) = UserSlice::new(buf_ptr, buf_len) else {
         return -EFAULT;

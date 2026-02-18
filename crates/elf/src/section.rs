@@ -208,7 +208,10 @@ impl<'a> ElfFile<'a> {
     /// Returns an iterator over all section headers.
     ///
     /// Returns an empty iterator if the ELF has no sections (`e_shnum == 0`).
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "ELF fields are u32/u64, truncation checked by format"
+    )]
     pub fn sections(&self) -> SectionIter<'a> {
         let hdr = self.header();
         SectionIter {
@@ -235,7 +238,10 @@ impl<'a> ElfFile<'a> {
     /// Returns the raw data slice for a given section header.
     ///
     /// Returns `None` if the section data is out of bounds.
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "ELF fields are u32/u64, truncation checked by format"
+    )]
     pub fn section_data(&self, shdr: &Elf64SectionHeader) -> Option<&'a [u8]> {
         let start = shdr.sh_offset as usize;
         let size = shdr.sh_size as usize;
@@ -249,7 +255,10 @@ impl<'a> ElfFile<'a> {
     /// Returns an iterator over symbols in the given section (must be `SHT_SYMTAB` or `SHT_DYNSYM`).
     ///
     /// Returns `None` if the section data is out of bounds.
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "ELF fields are u32/u64, truncation checked by format"
+    )]
     pub fn symbols(&self, shdr: &Elf64SectionHeader) -> Option<SymbolIter<'a>> {
         let data = self.section_data(shdr)?;
         let base = shdr.sh_offset as usize;
@@ -267,7 +276,10 @@ impl<'a> ElfFile<'a> {
         if link >= hdr.e_shnum as usize {
             return None;
         }
-        #[allow(clippy::cast_possible_truncation)]
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "ELF fields are u32/u64, truncation checked by format"
+        )]
         let offset = hdr.e_shoff as usize + link * hdr.e_shentsize as usize;
         let data = self.raw_data();
         if offset + ELF64_SHDR_SIZE > data.len() {
@@ -284,7 +296,10 @@ impl<'a> ElfFile<'a> {
         if hdr.e_shstrndx == 0 || hdr.e_shstrndx >= hdr.e_shnum {
             return None;
         }
-        #[allow(clippy::cast_possible_truncation)]
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "ELF fields are u32/u64, truncation checked by format"
+        )]
         let offset = hdr.e_shoff as usize + hdr.e_shstrndx as usize * hdr.e_shentsize as usize;
         let data = self.raw_data();
         if offset + ELF64_SHDR_SIZE > data.len() {

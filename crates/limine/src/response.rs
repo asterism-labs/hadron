@@ -195,7 +195,10 @@ impl FramebufferResponse {
     /// Returns an iterator over the available framebuffers.
     #[must_use]
     pub fn framebuffers(&self) -> FramebufferIter<'_> {
-        #[allow(clippy::cast_possible_truncation)]
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "Limine protocol fields fit in target width"
+        )]
         FramebufferIter::new(
             self.revision,
             self.framebuffer_count as usize,
@@ -241,7 +244,10 @@ impl MpResponse {
     pub fn cpus(&self) -> impl Iterator<Item = &'static MpInfo> {
         // SAFETY: The bootloader provides a valid pointer to an array of `cpu_count`
         // NonNull<MpInfo> pointers, all pointing to valid MpInfo structures.
-        #[allow(clippy::cast_possible_truncation)]
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "Limine protocol fields fit in target width"
+        )]
         let cpus_slice =
             unsafe { core::slice::from_raw_parts(self.cpus.as_ptr(), self.cpu_count as usize) };
         // SAFETY: Each NonNull<MpInfo> in the slice points to a valid, static MpInfo structure
@@ -277,7 +283,10 @@ impl MemMapResponse {
     /// Returns an iterator over the memory map entries.
     #[must_use]
     pub fn entries(&self) -> MemMapIter<'_> {
-        #[allow(clippy::cast_possible_truncation)]
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "Limine protocol fields fit in target width"
+        )]
         MemMapIter::new(self.entry_count as usize, self.entries)
     }
 }
@@ -312,7 +321,10 @@ impl ModuleResponse {
     /// Returns an iterator over the module files.
     #[must_use]
     pub fn modules(&self) -> FileIter<'_> {
-        #[allow(clippy::cast_possible_truncation)]
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "Limine protocol fields fit in target width"
+        )]
         FileIter::new(self.modules, self.module_count as usize)
     }
 }

@@ -9,7 +9,7 @@
 ///
 /// Stored when entering the kernel via SYSCALL or interrupt, and restored
 /// when returning to user mode.
-#[allow(dead_code)] // Phase 9: preemption
+#[allow(dead_code, reason = "reserved for Phase 9 preemption")]
 #[derive(Debug, Clone, Default)]
 #[repr(C)]
 pub struct UserRegisters {

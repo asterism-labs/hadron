@@ -511,7 +511,7 @@ enum FormValue {
     Uint(u64),
     /// An offset into an external string section (`.debug_str` or `.debug_line_str`).
     /// We can't resolve these without the external section, so treat as empty.
-    #[allow(dead_code)] // Phase 7: resolving external string offsets
+    #[allow(dead_code, reason = "reserved for Phase 7 external string resolution")]
     ExternalStrOffset(u64),
 }
 

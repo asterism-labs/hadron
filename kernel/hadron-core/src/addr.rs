@@ -24,6 +24,12 @@ pub struct PhysAddr(u64);
 /// Physical address space mask: bits 0..51.
 const PHYS_ADDR_MASK: u64 = 0x000F_FFFF_FFFF_FFFF;
 
+/// Mask for the 12-bit page offset (bits 0..11).
+const PAGE_OFFSET_MASK: u64 = 0xFFF;
+
+/// Mask for a 9-bit page table index (used by all paging levels).
+const PAGE_TABLE_INDEX_MASK: usize = 0x1FF;
+
 impl VirtAddr {
     /// Creates a new `VirtAddr`, sign-extending from bit 47 to enforce
     /// canonical form. Panics in debug mode if the address is not canonical.
@@ -110,7 +116,7 @@ impl VirtAddr {
     /// Returns the page offset (bits 0..11).
     #[inline]
     pub const fn page_offset(self) -> u64 {
-        self.0 & 0xFFF
+        self.0 & PAGE_OFFSET_MASK
     }
 }
 
@@ -119,25 +125,25 @@ impl VirtAddr {
     /// Returns the PML4 table index (bits 39..47).
     #[inline]
     pub const fn pml4_index(self) -> usize {
-        ((self.0 >> 39) & 0x1FF) as usize
+        ((self.0 >> 39) as usize) & PAGE_TABLE_INDEX_MASK
     }
 
     /// Returns the Page Directory Pointer Table index (bits 30..38).
     #[inline]
     pub const fn pdpt_index(self) -> usize {
-        ((self.0 >> 30) & 0x1FF) as usize
+        ((self.0 >> 30) as usize) & PAGE_TABLE_INDEX_MASK
     }
 
     /// Returns the Page Directory index (bits 21..29).
     #[inline]
     pub const fn pd_index(self) -> usize {
-        ((self.0 >> 21) & 0x1FF) as usize
+        ((self.0 >> 21) as usize) & PAGE_TABLE_INDEX_MASK
     }
 
     /// Returns the Page Table index (bits 12..20).
     #[inline]
     pub const fn pt_index(self) -> usize {
-        ((self.0 >> 12) & 0x1FF) as usize
+        ((self.0 >> 12) as usize) & PAGE_TABLE_INDEX_MASK
     }
 }
 
@@ -146,19 +152,19 @@ impl VirtAddr {
     /// Returns the L1 table index (bits 30..38) for 4 KiB granule.
     #[inline]
     pub const fn l1_index(self) -> usize {
-        ((self.0 >> 30) & 0x1FF) as usize
+        ((self.0 >> 30) as usize) & PAGE_TABLE_INDEX_MASK
     }
 
     /// Returns the L2 table index (bits 21..29) for 4 KiB granule.
     #[inline]
     pub const fn l2_index(self) -> usize {
-        ((self.0 >> 21) & 0x1FF) as usize
+        ((self.0 >> 21) as usize) & PAGE_TABLE_INDEX_MASK
     }
 
     /// Returns the L3 table index (bits 12..20) for 4 KiB granule.
     #[inline]
     pub const fn l3_index(self) -> usize {
-        ((self.0 >> 12) & 0x1FF) as usize
+        ((self.0 >> 12) as usize) & PAGE_TABLE_INDEX_MASK
     }
 }
 

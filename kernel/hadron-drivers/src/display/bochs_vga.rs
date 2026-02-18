@@ -35,21 +35,21 @@ const DISPI_INDEX_XRES: u16 = 0x01;
 const DISPI_INDEX_YRES: u16 = 0x02;
 const DISPI_INDEX_BPP: u16 = 0x03;
 const DISPI_INDEX_ENABLE: u16 = 0x04;
-#[allow(dead_code)] // Phase 10: used for bank switching modes
+#[allow(dead_code, reason = "reserved for Phase 10 mode switching")]
 const DISPI_INDEX_BANK: u16 = 0x05;
-#[allow(dead_code)] // Phase 10: used for virtual display modes
+#[allow(dead_code, reason = "reserved for Phase 10 mode switching")]
 const DISPI_INDEX_VIRT_WIDTH: u16 = 0x06;
-#[allow(dead_code)] // Phase 10: used for virtual display modes
+#[allow(dead_code, reason = "reserved for Phase 10 mode switching")]
 const DISPI_INDEX_VIRT_HEIGHT: u16 = 0x07;
-#[allow(dead_code)] // Phase 10: used for hardware panning
+#[allow(dead_code, reason = "reserved for Phase 10 mode switching")]
 const DISPI_INDEX_X_OFFSET: u16 = 0x08;
-#[allow(dead_code)] // Phase 10: used for hardware panning
+#[allow(dead_code, reason = "reserved for Phase 10 mode switching")]
 const DISPI_INDEX_Y_OFFSET: u16 = 0x09;
 
 /// DISPI enable register flags.
 const DISPI_ENABLED: u16 = 0x01;
 const DISPI_LFB_ENABLED: u16 = 0x40;
-#[allow(dead_code)] // Phase 10: used to preserve framebuffer contents on mode change
+#[allow(dead_code, reason = "reserved for Phase 10 mode switching")]
 const DISPI_NOCLEARMEM: u16 = 0x80;
 
 /// Minimum expected BGA version (0xB0C0).
@@ -115,7 +115,7 @@ pub struct BochsVga {
     /// MMIO region for the linear framebuffer (BAR0).
     fb_region: MmioRegion,
     /// VBE DISPI I/O ports.
-    #[allow(dead_code)] // Phase 10: used for runtime mode switching
+    #[allow(dead_code, reason = "reserved for Phase 10 mode switching")]
     dispi: DispiPorts,
     /// Current framebuffer metadata.
     info: FramebufferInfo,

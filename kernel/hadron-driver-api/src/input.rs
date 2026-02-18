@@ -212,7 +212,7 @@ pub struct MouseEvent {
 /// Interface trait for keyboard input devices.
 ///
 /// Provides key event reading via interrupt-driven async I/O.
-#[allow(async_fn_in_trait)] // Used only internally; no dyn dispatch needed.
+#[expect(async_fn_in_trait, reason = "internal trait, no dyn dispatch needed")]
 pub trait KeyboardDevice {
     /// Reads the next key event, waiting if necessary.
     ///
@@ -228,7 +228,7 @@ pub trait KeyboardDevice {
 /// Interface trait for mouse input devices.
 ///
 /// Provides mouse event reading via interrupt-driven async I/O.
-#[allow(async_fn_in_trait)] // Used only internally; no dyn dispatch needed.
+#[expect(async_fn_in_trait, reason = "internal trait, no dyn dispatch needed")]
 pub trait MouseDevice {
     /// Reads the next mouse event, waiting if necessary.
     ///

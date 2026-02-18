@@ -176,7 +176,10 @@ impl RawFramebuffer {
                     let mut framebuffer = fb.as_ref().v1.inner.to_framebuffer();
                     // SAFETY: For revision 1, the bootloader provides a valid pointer
                     // to `mode_count` video mode references.
-                    #[allow(clippy::cast_possible_truncation)]
+                    #[expect(
+                        clippy::cast_possible_truncation,
+                        reason = "pixel format fields fit in usize"
+                    )]
                     let modes = core::slice::from_raw_parts(
                         fb.as_ref().v1.modes.as_ptr(),
                         fb.as_ref().v1.mode_count as usize,

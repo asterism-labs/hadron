@@ -263,7 +263,10 @@ impl Iterator for MadtEntryIter {
             }
 
             // length is guaranteed <= 255 because it was read from a u8 field.
-            #[allow(clippy::cast_possible_truncation)]
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "MADT entry length fits in u8"
+            )]
             _ => MadtEntry::Unknown {
                 entry_type,
                 length: length as u8,

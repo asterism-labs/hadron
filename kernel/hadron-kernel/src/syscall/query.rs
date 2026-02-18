@@ -33,7 +33,7 @@ const KERNEL_NAME: &[u8; 6] = b"Hadron";
 /// * `out_buf` — user-space pointer to the output buffer.
 /// * `out_len` — size of the output buffer in bytes.
 pub(super) fn sys_query(topic: usize, _sub_id: usize, out_buf: usize, out_len: usize) -> isize {
-    #[allow(clippy::cast_possible_truncation)] // query topics fit in u64
+    #[expect(clippy::cast_possible_truncation, reason = "query topics fit in u64")]
     let topic = topic as u64;
 
     match topic {
@@ -72,7 +72,10 @@ fn write_response<T>(out_buf: usize, out_len: usize, value: &T) -> isize {
     }
 
     // Response structs are small fixed-size types; their size always fits in isize.
-    #[allow(clippy::cast_possible_wrap)]
+    #[expect(
+        clippy::cast_possible_wrap,
+        reason = "query result size is small, wrap is impossible"
+    )]
     let written = needed as isize;
     written
 }

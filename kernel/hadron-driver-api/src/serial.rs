@@ -11,7 +11,7 @@ use crate::error::DriverError;
 /// `read_byte` and `write_byte` are async to support interrupt-driven I/O.
 /// `data_available` and `can_write` stay sync as they are non-blocking
 /// register checks.
-#[allow(async_fn_in_trait)] // Used only internally; no dyn dispatch needed.
+#[expect(async_fn_in_trait, reason = "internal trait, no dyn dispatch needed")]
 pub trait SerialPort {
     /// Writes a single byte to the serial port.
     ///

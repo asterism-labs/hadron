@@ -10,7 +10,7 @@ use crate::error::DriverError;
 ///
 /// The `Sized` bound enables returning `Self` from `probe()` without boxing.
 /// Resources are consumed (moved) to enforce exclusive ownership at the type level.
-#[allow(async_fn_in_trait)] // Used only internally; no dyn dispatch needed.
+#[expect(async_fn_in_trait, reason = "internal trait, no dyn dispatch needed")]
 pub trait PlatformDriver: Driver + Sized {
     /// The resource bundle this driver needs to probe (e.g., I/O port ranges, MMIO regions).
     type Resources;

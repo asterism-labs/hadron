@@ -12,29 +12,35 @@ use core::sync::atomic::{AtomicPtr, Ordering};
 // Log levels — lower = more severe
 // ---------------------------------------------------------------------------
 
-/// Fatal: unrecoverable error, system will halt.
-pub const FATAL: u8 = 0;
-/// Error: something failed but the system may continue.
-pub const ERROR: u8 = 1;
-/// Warning: unexpected condition, not necessarily an error.
-pub const WARN: u8 = 2;
-/// Informational: high-level progress messages.
-pub const INFO: u8 = 3;
-/// Debug: detailed diagnostic information.
-pub const DEBUG: u8 = 4;
-/// Trace: very verbose, low-level tracing.
-pub const TRACE: u8 = 5;
+/// Kernel log severity level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u8)]
+pub enum LogLevel {
+    /// Fatal: unrecoverable error, system will halt.
+    Fatal = 0,
+    /// Error: something failed but the system may continue.
+    Error = 1,
+    /// Warning: unexpected condition, not necessarily an error.
+    Warn = 2,
+    /// Informational: high-level progress messages.
+    Info = 3,
+    /// Debug: detailed diagnostic information.
+    Debug = 4,
+    /// Trace: very verbose, low-level tracing.
+    Trace = 5,
+}
 
-/// Returns the human-readable name for a log level constant.
-pub const fn level_name(level: u8) -> &'static str {
-    match level {
-        FATAL => "FATAL",
-        ERROR => "ERROR",
-        WARN => "WARN ",
-        INFO => "INFO ",
-        DEBUG => "DEBUG",
-        TRACE => "TRACE",
-        _ => "???  ",
+impl LogLevel {
+    /// Returns the human-readable name (fixed-width for aligned output).
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Fatal => "FATAL",
+            Self::Error => "ERROR",
+            Self::Warn => "WARN ",
+            Self::Info => "INFO ",
+            Self::Debug => "DEBUG",
+            Self::Trace => "TRACE",
+        }
     }
 }
 
@@ -97,9 +103,9 @@ macro_rules! kprintln {
 // ---------------------------------------------------------------------------
 
 /// The signature of the global leveled log function.
-pub type LogFn = fn(u8, fmt::Arguments<'_>);
+pub type LogFn = fn(LogLevel, fmt::Arguments<'_>);
 
-fn null_log(_level: u8, _args: fmt::Arguments<'_>) {}
+fn null_log(_level: LogLevel, _args: fmt::Arguments<'_>) {}
 
 static LOG_FN: AtomicPtr<()> = AtomicPtr::new(null_log as *mut ());
 
@@ -128,11 +134,11 @@ fn load_log_fn() -> LogFn {
 
 /// Implementation detail for [`klog!`]. Not public API.
 #[doc(hidden)]
-pub fn _log(level: u8, args: fmt::Arguments<'_>) {
+pub fn _log(level: LogLevel, args: fmt::Arguments<'_>) {
     load_log_fn()(level, args);
 }
 
-/// Logs a message at the given numeric level.
+/// Logs a message at the given level.
 #[macro_export]
 macro_rules! klog {
     ($level:expr, $($arg:tt)*) => {
@@ -143,35 +149,35 @@ macro_rules! klog {
 /// Logs a fatal-level message (level 0).
 #[macro_export]
 macro_rules! kfatal {
-    ($($arg:tt)*) => { $crate::klog!($crate::log::FATAL, $($arg)*) };
+    ($($arg:tt)*) => { $crate::klog!($crate::log::LogLevel::Fatal, $($arg)*) };
 }
 
 /// Logs an error-level message (level 1).
 #[macro_export]
 macro_rules! kerr {
-    ($($arg:tt)*) => { $crate::klog!($crate::log::ERROR, $($arg)*) };
+    ($($arg:tt)*) => { $crate::klog!($crate::log::LogLevel::Error, $($arg)*) };
 }
 
 /// Logs a warning-level message (level 2).
 #[macro_export]
 macro_rules! kwarn {
-    ($($arg:tt)*) => { $crate::klog!($crate::log::WARN, $($arg)*) };
+    ($($arg:tt)*) => { $crate::klog!($crate::log::LogLevel::Warn, $($arg)*) };
 }
 
 /// Logs an info-level message (level 3).
 #[macro_export]
 macro_rules! kinfo {
-    ($($arg:tt)*) => { $crate::klog!($crate::log::INFO, $($arg)*) };
+    ($($arg:tt)*) => { $crate::klog!($crate::log::LogLevel::Info, $($arg)*) };
 }
 
 /// Logs a debug-level message (level 4).
 #[macro_export]
 macro_rules! kdebug {
-    ($($arg:tt)*) => { $crate::klog!($crate::log::DEBUG, $($arg)*) };
+    ($($arg:tt)*) => { $crate::klog!($crate::log::LogLevel::Debug, $($arg)*) };
 }
 
 /// Logs a trace-level message (level 5).
 #[macro_export]
 macro_rules! ktrace {
-    ($($arg:tt)*) => { $crate::klog!($crate::log::TRACE, $($arg)*) };
+    ($($arg:tt)*) => { $crate::klog!($crate::log::LogLevel::Trace, $($arg)*) };
 }

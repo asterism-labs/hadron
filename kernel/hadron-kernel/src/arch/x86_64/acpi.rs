@@ -300,21 +300,30 @@ fn setup_isa_irqs(ioapic: &IoApic, madt_data: &hadron_acpi::madt::Madt, bsp_apic
         let mut polarity = Polarity::ActiveHigh;
         let mut trigger = TriggerMode::Edge;
 
+        /// MADT Interrupt Source Override flag bit masks.
+        const ISO_POLARITY_MASK: u16 = 0x03;
+        const ISO_TRIGGER_SHIFT: u16 = 2;
+        const ISO_TRIGGER_MASK: u16 = 0x03;
+        const ISO_ACTIVE_HIGH: u16 = 0b10;
+        const ISO_ACTIVE_LOW: u16 = 0b11;
+        const ISO_EDGE_TRIGGERED: u16 = 0b10;
+        const ISO_LEVEL_TRIGGERED: u16 = 0b11;
+
         // Check for interrupt source overrides.
         for entry in madt_data.entries() {
             if let madt::MadtEntry::InterruptSourceOverride(iso) = entry {
                 if iso.source == irq {
                     gsi = iso.gsi;
                     // Bits 0-1: polarity
-                    match iso.flags & 0x03 {
-                        0b10 => polarity = Polarity::ActiveHigh,
-                        0b11 => polarity = Polarity::ActiveLow,
+                    match iso.flags & ISO_POLARITY_MASK {
+                        ISO_ACTIVE_HIGH => polarity = Polarity::ActiveHigh,
+                        ISO_ACTIVE_LOW => polarity = Polarity::ActiveLow,
                         _ => {} // Conforming or reserved — keep default
                     }
                     // Bits 2-3: trigger mode
-                    match (iso.flags >> 2) & 0x03 {
-                        0b10 => trigger = TriggerMode::Edge,
-                        0b11 => trigger = TriggerMode::Level,
+                    match (iso.flags >> ISO_TRIGGER_SHIFT) & ISO_TRIGGER_MASK {
+                        ISO_EDGE_TRIGGERED => trigger = TriggerMode::Edge,
+                        ISO_LEVEL_TRIGGERED => trigger = TriggerMode::Level,
                         _ => {} // Conforming or reserved — keep default
                     }
                     break;
@@ -335,7 +344,10 @@ fn setup_isa_irqs(ioapic: &IoApic, madt_data: &hadron_acpi::madt::Madt, bsp_apic
 
         // Only set entries within this I/O APIC's range.
         if gsi < u32::from(ioapic.max_redirection_entry()) + 1 {
-            #[allow(clippy::cast_possible_truncation)]
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "GSI fits in u8 for ISA range"
+            )]
             ioapic.set_entry(gsi as u8, entry);
         }
     }
@@ -374,7 +386,10 @@ fn calibrate_and_start_timer(lapic: &LocalApic, hpet: Option<&Hpet>) {
     );
 
     // Start periodic timer at ~1000 Hz (1ms interval).
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "calibrated tick count fits in u32"
+    )]
     let initial_count = ticks_per_ms as u32;
     if initial_count > 0 {
         lapic.start_timer_periodic(vectors::TIMER, initial_count, divide);

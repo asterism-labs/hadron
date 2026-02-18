@@ -118,7 +118,7 @@ pub struct Elf64Header {
 
 impl Elf64Header {
     /// Parse an ELF64 file header from raw bytes.
-    #[allow(clippy::similar_names)] // ELF spec: e_phoff/e_shoff, e_phentsize/e_shentsize
+    #[expect(clippy::similar_names, reason = "ELF spec naming convention")]
     ///
     /// Validates the magic, class, encoding, machine type, ELF type,
     /// and that the program header table fits within `data`.

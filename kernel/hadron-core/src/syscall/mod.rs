@@ -9,16 +9,16 @@ pub mod userptr;
 /// Terminate the current task.
 pub const SYS_TASK_EXIT: usize = 0x00;
 /// Spawn a new task (Phase 9+).
-#[allow(dead_code)] // Phase 9+
+#[allow(dead_code, reason = "reserved for Phase 9+")]
 pub const SYS_TASK_SPAWN: usize = 0x01;
 /// Wait for a task to exit (Phase 11).
-#[allow(dead_code)] // Phase 11
+#[allow(dead_code, reason = "reserved for Phase 11")]
 pub const SYS_TASK_WAIT: usize = 0x02;
 /// Kill a task (Phase 11).
-#[allow(dead_code)] // Phase 11
+#[allow(dead_code, reason = "reserved for Phase 11")]
 pub const SYS_TASK_KILL: usize = 0x03;
 /// Detach a task (Phase 11).
-#[allow(dead_code)] // Phase 11
+#[allow(dead_code, reason = "reserved for Phase 11")]
 pub const SYS_TASK_DETACH: usize = 0x04;
 /// Query task information (returns task ID for now).
 pub const SYS_TASK_INFO: usize = 0x05;
@@ -26,28 +26,28 @@ pub const SYS_TASK_INFO: usize = 0x05;
 // ── Handle operations (0x10–0x1F) ────────────────────────────────────
 
 /// Close a handle (Phase 11).
-#[allow(dead_code)] // Phase 11
+#[allow(dead_code, reason = "reserved for Phase 11")]
 pub const SYS_HANDLE_CLOSE: usize = 0x10;
 /// Duplicate a handle (Phase 11).
-#[allow(dead_code)] // Phase 11
+#[allow(dead_code, reason = "reserved for Phase 11")]
 pub const SYS_HANDLE_DUP: usize = 0x11;
 /// Query handle info (Phase 11).
-#[allow(dead_code)] // Phase 11
+#[allow(dead_code, reason = "reserved for Phase 11")]
 pub const SYS_HANDLE_INFO: usize = 0x12;
 
 // ── Channels (0x20–0x2F) ─────────────────────────────────────────────
 
 /// Create a channel pair (Phase 11).
-#[allow(dead_code)] // Phase 11
+#[allow(dead_code, reason = "reserved for Phase 11")]
 pub const SYS_CHANNEL_CREATE: usize = 0x20;
 /// Send a message on a channel (Phase 11).
-#[allow(dead_code)] // Phase 11
+#[allow(dead_code, reason = "reserved for Phase 11")]
 pub const SYS_CHANNEL_SEND: usize = 0x21;
 /// Receive a message from a channel (Phase 11).
-#[allow(dead_code)] // Phase 11
+#[allow(dead_code, reason = "reserved for Phase 11")]
 pub const SYS_CHANNEL_RECV: usize = 0x22;
 /// Synchronous call on a channel (Phase 11).
-#[allow(dead_code)] // Phase 11
+#[allow(dead_code, reason = "reserved for Phase 11")]
 pub const SYS_CHANNEL_CALL: usize = 0x23;
 
 // ── Filesystem / vnodes (0x30–0x3F) ──────────────────────────────────
@@ -59,13 +59,13 @@ pub const SYS_VNODE_READ: usize = 0x31;
 /// Write to a vnode.
 pub const SYS_VNODE_WRITE: usize = 0x32;
 /// Stat a vnode (Phase 10+).
-#[allow(dead_code)] // Phase 10+
+#[allow(dead_code, reason = "reserved for Phase 10+")]
 pub const SYS_VNODE_STAT: usize = 0x33;
 /// Read directory entries (Phase 10+).
-#[allow(dead_code)] // Phase 10+
+#[allow(dead_code, reason = "reserved for Phase 10+")]
 pub const SYS_VNODE_READDIR: usize = 0x34;
 /// Unlink a vnode (Phase 10+).
-#[allow(dead_code)] // Phase 10+
+#[allow(dead_code, reason = "reserved for Phase 10+")]
 pub const SYS_VNODE_UNLINK: usize = 0x35;
 
 // ── Memory (0x40–0x4F) ───────────────────────────────────────────────
@@ -75,33 +75,33 @@ pub const SYS_MEM_MAP: usize = 0x40;
 /// Unmap memory from the address space.
 pub const SYS_MEM_UNMAP: usize = 0x41;
 /// Change memory protection flags.
-#[allow(dead_code)] // Phase 9+
+#[allow(dead_code, reason = "reserved for Phase 9+")]
 pub const SYS_MEM_PROTECT: usize = 0x42;
 /// Create a shared memory object (Phase 11).
-#[allow(dead_code)] // Phase 11
+#[allow(dead_code, reason = "reserved for Phase 11")]
 pub const SYS_MEM_CREATE_SHARED: usize = 0x43;
 /// Map a shared memory object (Phase 11).
-#[allow(dead_code)] // Phase 11
+#[allow(dead_code, reason = "reserved for Phase 11")]
 pub const SYS_MEM_MAP_SHARED: usize = 0x44;
 
 // ── Events and time (0x50–0x5F) ──────────────────────────────────────
 
 /// Create an event object (Phase 11).
-#[allow(dead_code)] // Phase 11
+#[allow(dead_code, reason = "reserved for Phase 11")]
 pub const SYS_EVENT_CREATE: usize = 0x50;
 /// Signal an event (Phase 11).
-#[allow(dead_code)] // Phase 11
+#[allow(dead_code, reason = "reserved for Phase 11")]
 pub const SYS_EVENT_SIGNAL: usize = 0x51;
 /// Wait for an event (Phase 11).
-#[allow(dead_code)] // Phase 11
+#[allow(dead_code, reason = "reserved for Phase 11")]
 pub const SYS_EVENT_WAIT: usize = 0x52;
 /// Wait for multiple events (Phase 11).
-#[allow(dead_code)] // Phase 11
+#[allow(dead_code, reason = "reserved for Phase 11")]
 pub const SYS_EVENT_WAIT_MANY: usize = 0x53;
 /// Get current time.
 pub const SYS_CLOCK_GETTIME: usize = 0x54;
 /// Create a timer (Phase 11).
-#[allow(dead_code)] // Phase 11
+#[allow(dead_code, reason = "reserved for Phase 11")]
 pub const SYS_TIMER_CREATE: usize = 0x55;
 
 // ── System (0xF0–0xFF) ───────────────────────────────────────────────

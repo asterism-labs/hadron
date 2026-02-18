@@ -59,7 +59,10 @@ impl<'a> ElfFile<'a> {
     /// The header is already validated to ensure program header offsets fit in the
     /// file data, so truncation from `u64` to `usize` is safe on 64-bit targets
     /// (and would have been caught by `InvalidOffset` on 32-bit).
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "ELF segment fields fit in target width"
+    )]
     pub fn load_segments(&self) -> impl Iterator<Item = LoadSegment<'a>> {
         let data = self.data;
         let phoff = self.header.e_phoff as usize;

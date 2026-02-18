@@ -3,7 +3,7 @@
 #![feature(custom_test_frameworks)]
 #![test_runner(hadron_test::test_runner)]
 #![reexport_test_harness_main = "test_main"]
-#![allow(missing_docs)]
+#![allow(missing_docs)] // integration test
 
 use core::fmt::Write;
 

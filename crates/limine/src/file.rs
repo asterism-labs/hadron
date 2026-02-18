@@ -101,7 +101,10 @@ impl core::fmt::Debug for NonZeroUuid {
 impl NonZeroUuid {
     /// Converts this `NonZeroUuid` to a [`Uuid`].
     #[must_use]
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "file size fits in usize on 64-bit"
+    )]
     pub fn get(&self) -> Uuid {
         let value = self.0.get();
         Uuid {

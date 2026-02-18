@@ -1,8 +1,8 @@
-//! PCI bus access for x86_64.
+//! Timer and clock source drivers.
 
 #[cfg(target_arch = "x86_64")]
-pub mod cam;
+pub mod hpet;
 #[cfg(target_arch = "x86_64")]
-pub mod enumerate;
+pub mod pit;
 #[cfg(target_arch = "x86_64")]
-pub mod stub;
+pub mod tsc;

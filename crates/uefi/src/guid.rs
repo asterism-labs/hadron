@@ -23,7 +23,10 @@ pub struct EfiGuid {
     pub data4: [u8; 8],
 }
 
-#[allow(clippy::unreadable_literal)]
+#[expect(
+    clippy::unreadable_literal,
+    reason = "GUID bytes are inherently opaque"
+)]
 impl EfiGuid {
     /// Creates a new GUID from its component parts.
     #[must_use]

@@ -6,7 +6,7 @@ use crate::paging::{Page, PhysFrame, Size4KiB};
 
 /// AArch64 page table mapper (stub).
 pub struct AArch64PageMapper {
-    #[allow(dead_code)] // Phase: aarch64 bring-up
+    #[allow(dead_code, reason = "aarch64 bring-up incomplete")]
     hhdm_offset: u64,
 }
 

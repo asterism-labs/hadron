@@ -20,7 +20,7 @@ const ID_MASK: u64 = 0x00FF_FFFF_FFFF_FFFF;
 const CPU_SHIFT: u32 = 56;
 
 /// Mask for the 6-bit CPU ID field (bits 61-56), after shifting.
-#[allow(dead_code)] // Phase 12: used for cross-CPU wakeup routing
+#[allow(dead_code, reason = "reserved for Phase 12 cross-CPU wakeup")]
 const CPU_MASK: u64 = 0x3F;
 
 static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop_waker);
