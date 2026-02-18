@@ -1,7 +1,7 @@
 use core::marker::PhantomData;
 
-use crate::protocol::gop::{GraphicsOutputModeInformation, GraphicsOutputProtocol};
 use crate::EfiStatus;
+use crate::protocol::gop::{GraphicsOutputModeInformation, GraphicsOutputProtocol};
 
 /// Safe wrapper around the UEFI Graphics Output Protocol.
 pub struct Gop<'st> {
@@ -43,12 +43,14 @@ impl<'st> Gop<'st> {
     }
 
     /// Query information about a specific mode number.
-    pub fn query_mode(&self, mode_number: u32) -> Result<&GraphicsOutputModeInformation, EfiStatus> {
+    pub fn query_mode(
+        &self,
+        mode_number: u32,
+    ) -> Result<&GraphicsOutputModeInformation, EfiStatus> {
         let mut size: usize = 0;
         let mut info: *mut GraphicsOutputModeInformation = core::ptr::null_mut();
-        let status = unsafe {
-            ((*self.raw).query_mode)(self.raw, mode_number, &mut size, &mut info)
-        };
+        let status =
+            unsafe { ((*self.raw).query_mode)(self.raw, mode_number, &mut size, &mut info) };
         status.to_result()?;
         Ok(unsafe { &*info })
     }

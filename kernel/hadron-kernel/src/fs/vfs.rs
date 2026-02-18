@@ -52,11 +52,9 @@ impl Vfs {
             return Err(FsError::InvalidArgument);
         }
 
-        let mount_path = path::longest_prefix_match(
-            abs_path,
-            self.mounts.keys().map(String::as_str),
-        )
-        .ok_or(FsError::NotFound)?;
+        let mount_path =
+            path::longest_prefix_match(abs_path, self.mounts.keys().map(String::as_str))
+                .ok_or(FsError::NotFound)?;
 
         let fs = self.mounts.get(mount_path).ok_or(FsError::NotFound)?;
         let root = fs.root();

@@ -38,12 +38,27 @@ mod tests {
 
     #[test]
     fn display_all_variants() {
-        assert_eq!(format!("{}", DriverError::DeviceNotFound), "device not found");
-        assert_eq!(format!("{}", DriverError::InitFailed), "driver initialization failed");
-        assert_eq!(format!("{}", DriverError::Timeout), "hardware operation timed out");
-        assert_eq!(format!("{}", DriverError::Unsupported), "operation not supported");
+        assert_eq!(
+            format!("{}", DriverError::DeviceNotFound),
+            "device not found"
+        );
+        assert_eq!(
+            format!("{}", DriverError::InitFailed),
+            "driver initialization failed"
+        );
+        assert_eq!(
+            format!("{}", DriverError::Timeout),
+            "hardware operation timed out"
+        );
+        assert_eq!(
+            format!("{}", DriverError::Unsupported),
+            "operation not supported"
+        );
         assert_eq!(format!("{}", DriverError::IoError), "I/O error");
-        assert_eq!(format!("{}", DriverError::InvalidState), "invalid driver state");
+        assert_eq!(
+            format!("{}", DriverError::InvalidState),
+            "invalid driver state"
+        );
     }
 
     #[test]

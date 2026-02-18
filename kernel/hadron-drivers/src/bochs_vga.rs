@@ -253,7 +253,11 @@ impl Framebuffer for BochsVga {
         let base = self.fb_region.virt_base().as_u64() as *mut u8;
         // SAFETY: Caller guarantees offsets and count are within FB bounds.
         unsafe {
-            ptr::copy(base.add(src_offset as usize), base.add(dst_offset as usize), count);
+            ptr::copy(
+                base.add(src_offset as usize),
+                base.add(dst_offset as usize),
+                count,
+            );
         }
     }
 

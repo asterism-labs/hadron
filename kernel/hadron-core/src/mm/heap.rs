@@ -408,7 +408,10 @@ mod tests {
             // Now allocate something that requires A+B space combined.
             let layout_ab = Layout::from_size_align(96, 16).unwrap();
             let ab = unsafe { alloc.alloc(layout_ab) };
-            assert!(!ab.is_null(), "coalesced region should satisfy larger alloc");
+            assert!(
+                !ab.is_null(),
+                "coalesced region should satisfy larger alloc"
+            );
 
             unsafe {
                 alloc.dealloc(ab, layout_ab);
@@ -434,7 +437,10 @@ mod tests {
             // Full heap should be available again.
             let big_layout = Layout::from_size_align(4000, 16).unwrap();
             let big = unsafe { alloc.alloc(big_layout) };
-            assert!(!big.is_null(), "full region should be available after coalescing");
+            assert!(
+                !big.is_null(),
+                "full region should be available after coalescing"
+            );
             unsafe { alloc.dealloc(big, big_layout) };
         });
     }
@@ -495,7 +501,10 @@ mod tests {
             // This should trigger the grow callback since heap is exhausted.
             let p2 = unsafe { alloc.alloc(layout) };
             // p2 will be null since grow returns None, but grow should have been called.
-            assert!(GROW_CALLED.load(Ordering::SeqCst), "grow callback should have been invoked");
+            assert!(
+                GROW_CALLED.load(Ordering::SeqCst),
+                "grow callback should have been invoked"
+            );
 
             unsafe { alloc.dealloc(p1, layout) };
             if !p2.is_null() {

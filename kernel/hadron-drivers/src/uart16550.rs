@@ -260,9 +260,8 @@ impl Uart16550 {
             self.port(reg::LCR).write(Lcr::EIGHT_N_ONE.bits());
 
             // 4. Enable + clear FIFOs, 14-byte trigger.
-            self.port(reg::FCR).write(
-                (Fcr::ENABLE | Fcr::CLEAR_RX | Fcr::CLEAR_TX | Fcr::TRIGGER_14).bits(),
-            );
+            self.port(reg::FCR)
+                .write((Fcr::ENABLE | Fcr::CLEAR_RX | Fcr::CLEAR_TX | Fcr::TRIGGER_14).bits());
 
             // 5. DTR + RTS + OUT2.
             self.port(reg::MCR)
@@ -341,8 +340,7 @@ impl Uart16550 {
     pub fn disable_rx_interrupt(&self) {
         unsafe {
             let ier = self.port(reg::IER).read();
-            self.port(reg::IER)
-                .write(ier & !Ier::DATA_AVAILABLE.bits());
+            self.port(reg::IER).write(ier & !Ier::DATA_AVAILABLE.bits());
         }
     }
 

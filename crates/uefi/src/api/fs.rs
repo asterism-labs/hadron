@@ -1,6 +1,8 @@
 use core::marker::PhantomData;
 
-use crate::protocol::file::{FileAttributes, FileInfo, FileMode, FileProtocol, SimpleFileSystemProtocol};
+use crate::protocol::file::{
+    FileAttributes, FileInfo, FileMode, FileProtocol, SimpleFileSystemProtocol,
+};
 use crate::{EfiGuid, EfiStatus};
 
 use super::utf8_to_ucs2;

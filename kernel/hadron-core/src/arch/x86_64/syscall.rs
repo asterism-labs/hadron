@@ -46,8 +46,7 @@ pub unsafe fn init() {
 
 // Declared in hadron-kernel, linked via `extern "C"`.
 unsafe extern "C" {
-    fn syscall_dispatch(nr: usize, a0: usize, a1: usize, a2: usize, a3: usize, a4: usize)
-        -> isize;
+    fn syscall_dispatch(nr: usize, a0: usize, a1: usize, a2: usize, a3: usize, a4: usize) -> isize;
 }
 
 /// SYSCALL entry point (naked function).

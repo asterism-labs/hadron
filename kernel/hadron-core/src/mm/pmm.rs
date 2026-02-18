@@ -50,10 +50,7 @@ impl BitmapAllocator {
     /// - `hhdm_offset` must be the correct HHDM offset.
     /// - `regions` must accurately describe physical memory.
     /// - This must be called exactly once during boot.
-    pub unsafe fn new(
-        regions: &[PhysMemoryRegion],
-        hhdm_offset: u64,
-    ) -> Result<Self, PmmError> {
+    pub unsafe fn new(regions: &[PhysMemoryRegion], hhdm_offset: u64) -> Result<Self, PmmError> {
         // 1. Find highest usable physical address to determine bitmap size.
         // We only need to track frames up to the end of the last usable region,
         // since we never allocate from non-usable regions.
@@ -213,7 +210,8 @@ impl BitmapAllocator {
 
             if word == 0 {
                 // Entire word free, extend run by up to 64 frames.
-                let extend = core::cmp::min(BITS_PER_WORD, inner.total_frames - word_idx * BITS_PER_WORD);
+                let extend =
+                    core::cmp::min(BITS_PER_WORD, inner.total_frames - word_idx * BITS_PER_WORD);
                 if run_len == 0 {
                     run_start = word_idx * BITS_PER_WORD;
                 }
@@ -279,10 +277,7 @@ impl BitmapAllocator {
     ///
     /// The frame must have been previously allocated by this allocator and
     /// must not be in use.
-    pub unsafe fn deallocate_frame(
-        &self,
-        frame: PhysFrame<Size4KiB>,
-    ) -> Result<(), PmmError> {
+    pub unsafe fn deallocate_frame(&self, frame: PhysFrame<Size4KiB>) -> Result<(), PmmError> {
         let mut inner = self.inner.lock();
         let frame_idx = (frame.start_address().as_u64() / FRAME_SIZE) as usize;
 

@@ -82,9 +82,7 @@ impl<'buf> Iterator for MemoryMapIter<'buf> {
     type Item = &'buf EfiMemoryDescriptor;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.descriptor_size == 0
-            || self.offset + self.descriptor_size > self.buffer.len()
-        {
+        if self.descriptor_size == 0 || self.offset + self.descriptor_size > self.buffer.len() {
             return None;
         }
         let ptr = self.buffer[self.offset..].as_ptr() as *const EfiMemoryDescriptor;

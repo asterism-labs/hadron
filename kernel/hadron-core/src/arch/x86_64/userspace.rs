@@ -138,11 +138,7 @@ pub unsafe extern "C" fn jump_to_userspace(entry: u64, user_rsp: u64) -> ! {
 /// - CR3 must already be loaded with the user address space.
 /// - Interrupts must be disabled.
 #[unsafe(naked)]
-pub unsafe extern "C" fn enter_userspace_save(
-    entry: u64,
-    user_rsp: u64,
-    saved_rsp_ptr: *mut u64,
-) {
+pub unsafe extern "C" fn enter_userspace_save(entry: u64, user_rsp: u64, saved_rsp_ptr: *mut u64) {
     core::arch::naked_asm!(
         // Save callee-saved registers so restore_kernel_context can pop them.
         "push rbp",
@@ -204,7 +200,6 @@ pub unsafe extern "C" fn restore_kernel_context(saved_rsp: u64) -> ! {
     core::arch::naked_asm!(
         // Switch to the saved kernel stack.
         "mov rsp, rdi",
-
         // Pop callee-saved registers (reverse order of enter_userspace_save).
         "pop r15",
         "pop r14",
@@ -212,7 +207,6 @@ pub unsafe extern "C" fn restore_kernel_context(saved_rsp: u64) -> ! {
         "pop r12",
         "pop rbx",
         "pop rbp",
-
         // Return to the caller of enter_userspace_save.
         "ret",
     );

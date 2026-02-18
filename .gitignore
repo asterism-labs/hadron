@@ -9,3 +9,5 @@ Cargo.lock
 .worktrees/
 
 /docs/book
+*.DS_Store
+*.orig

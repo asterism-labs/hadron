@@ -6,15 +6,15 @@
 
 use hadron_core::addr::VirtAddr;
 use hadron_core::arch::x86_64::registers::control::Cr3;
+use hadron_core::mm::PAGE_SIZE;
 use hadron_core::mm::address_space::AddressSpace;
 use hadron_core::mm::mapper::MapFlags;
 use hadron_core::mm::pmm::BitmapFrameAllocRef;
-use hadron_core::mm::PAGE_SIZE;
 use hadron_core::paging::{Page, PhysFrame, Size4KiB};
 use hadron_core::{kdebug, kinfo};
 
-use super::binfmt::{self, BinaryError, ExecSegment};
 use super::Process;
+use super::binfmt::{self, BinaryError, ExecSegment};
 
 /// User stack top address. Placed just below the non-canonical hole.
 /// Stack grows downward from here.
@@ -41,9 +41,7 @@ fn dealloc_frame(frame: PhysFrame<Size4KiB>) {
 /// process, entry point, and user stack top.
 ///
 /// The caller is responsible for entering userspace via the executor.
-pub fn create_process_from_binary(
-    data: &[u8],
-) -> Result<(Process, u64, u64), BinaryError> {
+pub fn create_process_from_binary(data: &[u8]) -> Result<(Process, u64, u64), BinaryError> {
     let image = binfmt::load_binary(data)?;
     let entry = image.entry_point;
     kinfo!("Loading process (entry={:#x})...", entry);
@@ -87,7 +85,9 @@ pub fn create_process_from_binary(
 
 /// Maps a single loadable segment into the user address space.
 #[allow(clippy::cast_possible_truncation)]
-fn map_segment<M: hadron_core::mm::mapper::PageMapper<Size4KiB> + hadron_core::mm::mapper::PageTranslator>(
+fn map_segment<
+    M: hadron_core::mm::mapper::PageMapper<Size4KiB> + hadron_core::mm::mapper::PageTranslator,
+>(
     address_space: &AddressSpace<M>,
     seg: &ExecSegment<'_>,
     hhdm_offset: u64,
@@ -116,7 +116,10 @@ fn map_segment<M: hadron_core::mm::mapper::PageMapper<Size4KiB> + hadron_core::m
 
     for i in 0..page_count {
         let page_vaddr = seg_start + i * PAGE_SIZE as u64;
-        let frame = alloc.0.allocate_frame().expect("PMM: out of memory mapping segment");
+        let frame = alloc
+            .0
+            .allocate_frame()
+            .expect("PMM: out of memory mapping segment");
 
         let page = Page::containing_address(VirtAddr::new(page_vaddr));
 
@@ -148,14 +151,20 @@ fn map_segment<M: hadron_core::mm::mapper::PageMapper<Size4KiB> + hadron_core::m
                 0
             };
             unsafe {
-                core::ptr::copy_nonoverlapping(data.as_ptr(), frame_ptr.add(dest_offset), data.len());
+                core::ptr::copy_nonoverlapping(
+                    data.as_ptr(),
+                    frame_ptr.add(dest_offset),
+                    data.len(),
+                );
             }
         }
     }
 }
 
 /// Maps a user stack (guard page + usable pages) and returns the stack top.
-fn map_user_stack<M: hadron_core::mm::mapper::PageMapper<Size4KiB> + hadron_core::mm::mapper::PageTranslator>(
+fn map_user_stack<
+    M: hadron_core::mm::mapper::PageMapper<Size4KiB> + hadron_core::mm::mapper::PageTranslator,
+>(
     address_space: &AddressSpace<M>,
     alloc: &mut BitmapFrameAllocRef<'_>,
 ) {
@@ -173,7 +182,10 @@ fn map_user_stack<M: hadron_core::mm::mapper::PageMapper<Size4KiB> + hadron_core
 
     for i in 0..page_count {
         let page_vaddr = stack_bottom + i * PAGE_SIZE as u64;
-        let frame = alloc.0.allocate_frame().expect("PMM: out of memory mapping user stack");
+        let frame = alloc
+            .0
+            .allocate_frame()
+            .expect("PMM: out of memory mapping user stack");
 
         let page = Page::containing_address(VirtAddr::new(page_vaddr));
 

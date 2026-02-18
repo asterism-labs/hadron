@@ -50,11 +50,7 @@ unsafe impl mapper::PageMapper<Size4KiB> for AArch64PageMapper {
 
 // SAFETY: stub — `todo!()`.
 unsafe impl mapper::PageTranslator for AArch64PageMapper {
-    unsafe fn translate_addr(
-        &self,
-        _root: PhysAddr,
-        _virt: VirtAddr,
-    ) -> Option<PhysAddr> {
+    unsafe fn translate_addr(&self, _root: PhysAddr, _virt: VirtAddr) -> Option<PhysAddr> {
         todo!("aarch64 translate_addr")
     }
 }

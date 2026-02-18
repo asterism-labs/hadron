@@ -13,12 +13,12 @@ mod requests;
 use requests::REQUESTS;
 
 use hadron_core::addr::{PhysAddr, VirtAddr};
-use hadron_core::paging::{PhysFrame, Size4KiB};
 use hadron_core::arch::x86_64::structures::paging::{PageTable, PageTableEntry, PageTableFlags};
+use hadron_core::paging::{PhysFrame, Size4KiB};
 use hadron_kernel::arch::x86_64::paging::PageTableMapper;
 use hadron_kernel::boot::{
-    BacktraceInfo, BootInfoData, FramebufferInfo, InitrdInfo, KernelAddressInfo,
-    MAX_FRAMEBUFFERS, MAX_MEMORY_REGIONS, MemoryRegion, MemoryRegionKind, PagingMode, PixelFormat,
+    BacktraceInfo, BootInfoData, FramebufferInfo, InitrdInfo, KernelAddressInfo, MAX_FRAMEBUFFERS,
+    MAX_MEMORY_REGIONS, MemoryRegion, MemoryRegionKind, PagingMode, PixelFormat,
 };
 use noalloc::vec::ArrayVec;
 
@@ -391,13 +391,9 @@ fn map_kernel_range(
     while virt < end_val {
         let phys = PhysAddr::new((virt - kernel_virt_base.as_u64()) + kernel_phys_base.as_u64());
         unsafe {
-            mapper.map_4k(
-                pml4_phys,
-                VirtAddr::new(virt),
-                phys,
-                flags,
-                &mut || alloc.alloc_frame(),
-            );
+            mapper.map_4k(pml4_phys, VirtAddr::new(virt), phys, flags, &mut || {
+                alloc.alloc_frame()
+            });
         }
         virt += 0x1000;
     }

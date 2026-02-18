@@ -23,7 +23,6 @@ pub struct LoadedImageProtocol {
     pub system_table: *mut SystemTable,
 
     // ── Source location ──────────────────────────────────────────
-
     /// The device handle from which the image was loaded.
     pub device_handle: EfiHandle,
     /// Pointer to the device path of the file from which the image was loaded.
@@ -32,14 +31,12 @@ pub struct LoadedImageProtocol {
     pub reserved: *mut c_void,
 
     // ── Load options ─────────────────────────────────────────────
-
     /// The size in bytes of `load_options`.
     pub load_options_size: u32,
     /// Pointer to the image's load options (typically a UCS-2 command line string).
     pub load_options: *mut c_void,
 
     // ── Location of the image in memory ──────────────────────────
-
     /// Pointer to the base address of the loaded image in memory.
     pub image_base: *mut c_void,
     /// The size in bytes of the loaded image.

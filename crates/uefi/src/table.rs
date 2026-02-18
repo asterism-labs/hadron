@@ -254,14 +254,12 @@ pub struct BootServices {
     pub header: TableHeader,
 
     // ── Task Priority Services ───────────────────────────────────
-
     /// Raises a task's priority level.
     pub raise_tpl: unsafe extern "efiapi" fn(new_tpl: EfiTpl) -> EfiTpl,
     /// Restores a task's priority level.
     pub restore_tpl: unsafe extern "efiapi" fn(old_tpl: EfiTpl),
 
     // ── Memory Services ──────────────────────────────────────────
-
     /// Allocates memory pages.
     pub allocate_pages: unsafe extern "efiapi" fn(
         alloc_type: EfiAllocateType,
@@ -290,7 +288,6 @@ pub struct BootServices {
     pub free_pool: unsafe extern "efiapi" fn(buffer: *mut c_void) -> EfiStatus,
 
     // ── Event & Timer Services ───────────────────────────────────
-
     /// Creates an event.
     pub create_event: unsafe extern "efiapi" fn(
         event_type: u32,
@@ -319,7 +316,6 @@ pub struct BootServices {
     pub check_event: unsafe extern "efiapi" fn(event: EfiEvent) -> EfiStatus,
 
     // ── Protocol Handler Services ────────────────────────────────
-
     /// Installs a protocol interface on a device handle.
     pub install_protocol_interface: unsafe extern "efiapi" fn(
         handle: *mut EfiHandle,
@@ -374,7 +370,6 @@ pub struct BootServices {
         unsafe extern "efiapi" fn(guid: *const EfiGuid, table: *mut c_void) -> EfiStatus,
 
     // ── Image Services ───────────────────────────────────────────
-
     /// Loads an EFI image into memory.
     pub load_image: unsafe extern "efiapi" fn(
         boot_policy: bool,
@@ -404,7 +399,6 @@ pub struct BootServices {
         unsafe extern "efiapi" fn(image_handle: EfiHandle, map_key: usize) -> EfiStatus,
 
     // ── Miscellaneous Services ───────────────────────────────────
-
     /// Returns a monotonically increasing count for the platform.
     pub get_next_monotonic_count: unsafe extern "efiapi" fn(count: *mut u64) -> EfiStatus,
     /// Induces a fine-grained stall.
@@ -418,7 +412,6 @@ pub struct BootServices {
     ) -> EfiStatus,
 
     // ── Driver Support Services ──────────────────────────────────
-
     /// Connects one or more drivers to a controller.
     pub connect_controller: unsafe extern "efiapi" fn(
         controller_handle: EfiHandle,
@@ -434,7 +427,6 @@ pub struct BootServices {
     ) -> EfiStatus,
 
     // ── Open and Close Protocol Services ─────────────────────────
-
     /// Opens a protocol interface on a handle.
     pub open_protocol: unsafe extern "efiapi" fn(
         handle: EfiHandle,
@@ -460,7 +452,6 @@ pub struct BootServices {
     ) -> EfiStatus,
 
     // ── Library Services ─────────────────────────────────────────
-
     /// Retrieves the list of protocol interface GUIDs installed on a handle.
     pub protocols_per_handle: unsafe extern "efiapi" fn(
         handle: EfiHandle,
@@ -489,14 +480,14 @@ pub struct BootServices {
         unsafe extern "efiapi" fn(handle: EfiHandle, ...) -> EfiStatus,
 
     // ── 32-bit CRC Service ───────────────────────────────────────
-
     /// Computes and returns a 32-bit CRC for a data buffer.
-    pub calculate_crc32:
-        unsafe extern "efiapi" fn(data: *const c_void, data_size: usize, crc32: *mut u32)
-            -> EfiStatus,
+    pub calculate_crc32: unsafe extern "efiapi" fn(
+        data: *const c_void,
+        data_size: usize,
+        crc32: *mut u32,
+    ) -> EfiStatus,
 
     // ── Memory Utility Services ──────────────────────────────────
-
     /// Copies the contents of one buffer to another buffer.
     pub copy_mem:
         unsafe extern "efiapi" fn(destination: *mut c_void, source: *const c_void, length: usize),
@@ -504,7 +495,6 @@ pub struct BootServices {
     pub set_mem: unsafe extern "efiapi" fn(buffer: *mut c_void, size: usize, value: u8),
 
     // ── CreateEventEx ────────────────────────────────────────────
-
     /// Creates an event in a group.
     pub create_event_ex: unsafe extern "efiapi" fn(
         event_type: u32,
@@ -534,9 +524,8 @@ impl BootServices {
         pages: usize,
     ) -> Result<EfiPhysicalAddress, EfiStatus> {
         let mut address: EfiPhysicalAddress = 0;
-        let status = unsafe {
-            (self.allocate_pages)(alloc_type, memory_type, pages, &raw mut address)
-        };
+        let status =
+            unsafe { (self.allocate_pages)(alloc_type, memory_type, pages, &raw mut address) };
         status.to_result().map(|()| address)
     }
 
@@ -569,14 +558,10 @@ impl BootServices {
     ///
     /// The caller must ensure boot services are still active and that the
     /// returned pointer is used according to the protocol's specification.
-    pub unsafe fn locate_protocol(
-        &self,
-        protocol: &EfiGuid,
-    ) -> Result<*mut c_void, EfiStatus> {
+    pub unsafe fn locate_protocol(&self, protocol: &EfiGuid) -> Result<*mut c_void, EfiStatus> {
         let mut interface: *mut c_void = core::ptr::null_mut();
-        let status = unsafe {
-            (self.locate_protocol)(protocol, core::ptr::null_mut(), &raw mut interface)
-        };
+        let status =
+            unsafe { (self.locate_protocol)(protocol, core::ptr::null_mut(), &raw mut interface) };
         status.to_result().map(|()| interface)
     }
 
@@ -608,7 +593,6 @@ pub struct RuntimeServices {
     pub header: TableHeader,
 
     // ── Time Services ────────────────────────────────────────────
-
     /// Returns the current time and date, and the time-keeping capabilities
     /// of the hardware platform.
     pub get_time: unsafe extern "efiapi" fn(
@@ -624,11 +608,9 @@ pub struct RuntimeServices {
         time: *mut EfiTime,
     ) -> EfiStatus,
     /// Sets the system wakeup alarm clock time.
-    pub set_wakeup_time:
-        unsafe extern "efiapi" fn(enable: bool, time: *const EfiTime) -> EfiStatus,
+    pub set_wakeup_time: unsafe extern "efiapi" fn(enable: bool, time: *const EfiTime) -> EfiStatus,
 
     // ── Virtual Memory Services ──────────────────────────────────
-
     /// Changes the runtime addressing mode of EFI firmware from physical to virtual.
     pub set_virtual_address_map: unsafe extern "efiapi" fn(
         memory_map_size: usize,
@@ -642,7 +624,6 @@ pub struct RuntimeServices {
         unsafe extern "efiapi" fn(debug_disposition: usize, address: *mut *mut c_void) -> EfiStatus,
 
     // ── Variable Services ────────────────────────────────────────
-
     /// Returns the value of a variable.
     pub get_variable: unsafe extern "efiapi" fn(
         variable_name: *const u16,
@@ -667,7 +648,6 @@ pub struct RuntimeServices {
     ) -> EfiStatus,
 
     // ── Miscellaneous Services ───────────────────────────────────
-
     /// Returns the next high 32 bits of the platform's monotonic counter.
     pub get_next_high_monotonic_count: unsafe extern "efiapi" fn(high_count: *mut u32) -> EfiStatus,
     /// Resets the entire platform.
@@ -679,7 +659,6 @@ pub struct RuntimeServices {
     ) -> !,
 
     // ── Capsule Services ─────────────────────────────────────────
-
     /// Passes capsules to the firmware with both virtual and physical mapping.
     pub update_capsule: unsafe extern "efiapi" fn(
         capsule_header_array: *mut *mut CapsuleHeader,
@@ -695,7 +674,6 @@ pub struct RuntimeServices {
     ) -> EfiStatus,
 
     // ── Variable Information ─────────────────────────────────────
-
     /// Returns information about the UEFI variable store.
     pub query_variable_info: unsafe extern "efiapi" fn(
         attributes: u32,

@@ -11,7 +11,9 @@ use hadron_core::addr::VirtAddr;
 use hadron_driver_api::block::IoError;
 use hadron_driver_api::services::KernelServices;
 
-use super::command::{CommandHeader, FisRegH2d, PrdtEntry, CMD_FIS_LEN_DWORDS, CMD_FIS_OFFSET, PRDT_OFFSET};
+use super::command::{
+    CMD_FIS_LEN_DWORDS, CMD_FIS_OFFSET, CommandHeader, FisRegH2d, PRDT_OFFSET, PrdtEntry,
+};
 use super::hba::AhciHba;
 use super::regs::{self, FIS_TYPE_REG_H2D, PortCmd, PortIe, PortIs};
 use super::regs::{ATA_CMD_IDENTIFY, ATA_CMD_READ_DMA_EX, SSTS_DET_PRESENT, SSTS_IPM_ACTIVE};
@@ -126,8 +128,9 @@ impl AhciPort {
             cmd_table_virt[slot] = ct_virt;
 
             // Set CTBA/CTBAU in the command header.
-            let header_ptr =
-                (clb_fb_virt + (slot as u64) * (core::mem::size_of::<CommandHeader>() as u64)) as *mut CommandHeader;
+            let header_ptr = (clb_fb_virt
+                + (slot as u64) * (core::mem::size_of::<CommandHeader>() as u64))
+                as *mut CommandHeader;
             // SAFETY: Writing to our own DMA buffer within the CLB page.
             unsafe {
                 let mut hdr = ptr::read_volatile(header_ptr);
@@ -204,17 +207,30 @@ impl AhciPort {
     }
 
     /// Runs IDENTIFY DEVICE on this port (blocking poll).
-    fn identify_device(&mut self, services: &'static dyn KernelServices) -> Result<DeviceIdentity, IoError> {
+    fn identify_device(
+        &mut self,
+        services: &'static dyn KernelServices,
+    ) -> Result<DeviceIdentity, IoError> {
         let slot = self.alloc_slot()?;
 
         // Allocate a DMA buffer for the 512-byte IDENTIFY response.
-        let buf_phys = services.alloc_dma_frames(1).map_err(|_| IoError::DmaError)?;
+        let buf_phys = services
+            .alloc_dma_frames(1)
+            .map_err(|_| IoError::DmaError)?;
         let buf_virt = services.phys_to_virt(buf_phys);
         // SAFETY: Freshly allocated page.
         unsafe { ptr::write_bytes(buf_virt as *mut u8, 0, PAGE_SIZE as usize) };
 
         // Build command FIS.
-        self.setup_command(slot, ATA_CMD_IDENTIFY, 0, 1, buf_phys, ATA_SECTOR_SIZE, false);
+        self.setup_command(
+            slot,
+            ATA_CMD_IDENTIFY,
+            0,
+            1,
+            buf_phys,
+            ATA_SECTOR_SIZE,
+            false,
+        );
 
         // Issue command and poll for completion.
         self.issue_command_poll(slot)?;
@@ -357,8 +373,23 @@ impl AhciPort {
     }
 
     /// Reads a sector via DMA into the provided physical buffer.
-    pub fn setup_read_dma(&self, slot: u8, sector: u64, count: u16, dma_phys: u64, byte_count: usize) {
-        self.setup_command(slot, ATA_CMD_READ_DMA_EX, sector, count, dma_phys, byte_count, false);
+    pub fn setup_read_dma(
+        &self,
+        slot: u8,
+        sector: u64,
+        count: u16,
+        dma_phys: u64,
+        byte_count: usize,
+    ) {
+        self.setup_command(
+            slot,
+            ATA_CMD_READ_DMA_EX,
+            sector,
+            count,
+            dma_phys,
+            byte_count,
+            false,
+        );
     }
 
     /// Returns port number.

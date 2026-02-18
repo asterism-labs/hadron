@@ -3,7 +3,7 @@
 //! Provides [`ElfFile`] as the main entry point for parsing an ELF64 binary,
 //! and [`LoadSegment`] for iterating over `PT_LOAD` segments.
 
-use crate::header::{Elf64Header, Elf64ProgramHeader, ElfError, ELF64_PHDR_SIZE, PT_LOAD};
+use crate::header::{ELF64_PHDR_SIZE, Elf64Header, Elf64ProgramHeader, ElfError, PT_LOAD};
 
 /// A parsed ELF64 file, holding a reference to the raw data and the parsed header.
 #[derive(Debug, Clone, Copy)]

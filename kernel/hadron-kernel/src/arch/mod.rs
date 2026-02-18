@@ -1,9 +1,9 @@
 //! Architecture-specific modules and uniform facade.
 
-#[cfg(target_arch = "x86_64")]
-pub mod x86_64;
 #[cfg(target_arch = "aarch64")]
 pub mod aarch64;
+#[cfg(target_arch = "x86_64")]
+pub mod x86_64;
 
 // --- Arch facade: uniform API re-exported from the active arch ---
 
@@ -66,66 +66,72 @@ pub fn spawn_platform_tasks() {
     #[cfg(target_arch = "x86_64")]
     {
         // Serial echo task — reads from COM1 and echoes back.
-        crate::sched::spawn_with(async {
-            use hadron_driver_api::serial::SerialPort;
-            use hadron_drivers::uart16550::{Uart16550, COM1};
+        crate::sched::spawn_with(
+            async {
+                use hadron_driver_api::serial::SerialPort;
+                use hadron_drivers::uart16550::{COM1, Uart16550};
 
-            let uart = Uart16550::new(COM1);
-            let serial = match hadron_drivers::serial_async::AsyncSerial::new(
-                uart,
-                4,
-                &crate::services::KERNEL_SERVICES,
-            ) {
-                Ok(s) => s,
-                Err(e) => {
-                    hadron_core::kerr!("[serial-echo] Failed to init: {}", e);
-                    return;
-                }
-            };
+                let uart = Uart16550::new(COM1);
+                let serial = match hadron_drivers::serial_async::AsyncSerial::new(
+                    uart,
+                    4,
+                    &crate::services::KERNEL_SERVICES,
+                ) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        hadron_core::kerr!("[serial-echo] Failed to init: {}", e);
+                        return;
+                    }
+                };
 
-            hadron_core::kdebug!("[serial-echo] Listening on COM1...");
-            loop {
-                match serial.read_byte().await {
-                    Ok(byte) => {
-                        if byte == b'\r' {
-                            let _ = serial.write_byte(b'\r').await;
-                            let _ = serial.write_byte(b'\n').await;
-                        } else {
-                            let _ = serial.write_byte(byte).await;
+                hadron_core::kdebug!("[serial-echo] Listening on COM1...");
+                loop {
+                    match serial.read_byte().await {
+                        Ok(byte) => {
+                            if byte == b'\r' {
+                                let _ = serial.write_byte(b'\r').await;
+                                let _ = serial.write_byte(b'\n').await;
+                            } else {
+                                let _ = serial.write_byte(byte).await;
+                            }
+                        }
+                        Err(e) => {
+                            hadron_core::kerr!("[serial-echo] Read error: {}", e);
                         }
                     }
-                    Err(e) => {
-                        hadron_core::kerr!("[serial-echo] Read error: {}", e);
-                    }
                 }
-            }
-        }, crate::sched::TaskMeta::new("serial-echo"));
+            },
+            crate::sched::TaskMeta::new("serial-echo"),
+        );
 
         // Keyboard echo task — reads PS/2 key events and logs them.
-        crate::sched::spawn_with(async {
-            use hadron_driver_api::input::KeyboardDevice;
+        crate::sched::spawn_with(
+            async {
+                use hadron_driver_api::input::KeyboardDevice;
 
-            let kbd = match hadron_drivers::keyboard_async::AsyncKeyboard::new(
-                &crate::services::KERNEL_SERVICES,
-            ) {
-                Ok(k) => k,
-                Err(e) => {
-                    hadron_core::kerr!("[kbd] Failed: {}", e);
-                    return;
-                }
-            };
-            hadron_core::kdebug!("[kbd] Listening for key events...");
-            loop {
-                match kbd.read_event().await {
-                    Ok(event) => {
-                        if event.pressed {
-                            hadron_core::kdebug!("[kbd] Key {:?} pressed", event.key);
-                        }
+                let kbd = match hadron_drivers::keyboard_async::AsyncKeyboard::new(
+                    &crate::services::KERNEL_SERVICES,
+                ) {
+                    Ok(k) => k,
+                    Err(e) => {
+                        hadron_core::kerr!("[kbd] Failed: {}", e);
+                        return;
                     }
-                    Err(e) => hadron_core::kerr!("[kbd] Error: {}", e),
+                };
+                hadron_core::kdebug!("[kbd] Listening for key events...");
+                loop {
+                    match kbd.read_event().await {
+                        Ok(event) => {
+                            if event.pressed {
+                                hadron_core::kdebug!("[kbd] Key {:?} pressed", event.key);
+                            }
+                        }
+                        Err(e) => hadron_core::kerr!("[kbd] Error: {}", e),
+                    }
                 }
-            }
-        }, crate::sched::TaskMeta::new("kbd-echo"));
+            },
+            crate::sched::TaskMeta::new("kbd-echo"),
+        );
     }
     #[cfg(target_arch = "aarch64")]
     {
@@ -135,8 +141,8 @@ pub fn spawn_platform_tasks() {
 
 /// Arch-uniform interrupt facade.
 pub mod interrupts {
-    #[cfg(target_arch = "x86_64")]
-    pub use super::x86_64::interrupts::*;
     #[cfg(target_arch = "aarch64")]
     pub use super::aarch64::interrupts::*;
+    #[cfg(target_arch = "x86_64")]
+    pub use super::x86_64::interrupts::*;
 }

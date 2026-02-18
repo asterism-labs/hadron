@@ -25,9 +25,7 @@ pub fn executor() -> &'static Executor {
 }
 
 /// Spawns an async kernel task with default (Normal) priority.
-pub fn spawn(
-    future: impl core::future::Future<Output = ()> + Send + 'static,
-) -> TaskId {
+pub fn spawn(future: impl core::future::Future<Output = ()> + Send + 'static) -> TaskId {
     executor().spawn(future)
 }
 

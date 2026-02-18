@@ -4,8 +4,8 @@
 //! initialization from boot info.
 
 use hadron_core::addr::PhysAddr;
-use hadron_core::mm::pmm::BitmapAllocator;
 use hadron_core::mm::PhysMemoryRegion;
+use hadron_core::mm::pmm::BitmapAllocator;
 use hadron_core::sync::SpinLock;
 
 use crate::boot::{BootInfo, MemoryRegionKind};
@@ -43,8 +43,7 @@ pub fn init(boot_info: &impl BootInfo) {
     }
 
     let allocator = unsafe {
-        BitmapAllocator::new(&regions[..count], hhdm_offset)
-            .expect("failed to initialize PMM")
+        BitmapAllocator::new(&regions[..count], hhdm_offset).expect("failed to initialize PMM")
     };
 
     let mut pmm = PMM.lock();

@@ -1,7 +1,7 @@
 //! I/O syscall handlers: debug_log.
 
-use hadron_core::syscall::userptr::UserSlice;
 use hadron_core::syscall::EFAULT;
+use hadron_core::syscall::userptr::UserSlice;
 
 /// `sys_debug_log` — writes a message to the kernel serial console.
 ///

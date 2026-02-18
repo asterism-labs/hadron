@@ -16,8 +16,7 @@ pub type HandlerFuncWithErrCode = extern "x86-interrupt" fn(InterruptStackFrame,
 pub type DivergingHandlerFunc = extern "x86-interrupt" fn(InterruptStackFrame) -> !;
 
 /// Diverging handler function for interrupts with an error code (e.g., double fault).
-pub type DivergingHandlerFuncWithErrCode =
-    extern "x86-interrupt" fn(InterruptStackFrame, u64) -> !;
+pub type DivergingHandlerFuncWithErrCode = extern "x86-interrupt" fn(InterruptStackFrame, u64) -> !;
 
 /// The stack frame pushed by the CPU when an interrupt occurs.
 #[derive(Debug, Clone, Copy)]

@@ -59,9 +59,7 @@ impl AhciHba {
     /// Returns the virtual base address of a port's register block.
     #[must_use]
     pub fn port_base(&self, port: u8) -> VirtAddr {
-        VirtAddr::new(
-            self.base.as_u64() + regs::PORT_BASE + u64::from(port) * regs::PORT_REG_SIZE,
-        )
+        VirtAddr::new(self.base.as_u64() + regs::PORT_BASE + u64::from(port) * regs::PORT_REG_SIZE)
     }
 
     /// Reads a 32-bit MMIO register at the given offset from the HBA base.

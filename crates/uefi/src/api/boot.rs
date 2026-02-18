@@ -4,8 +4,8 @@ use crate::memory::{EfiAllocateType, EfiMemoryType};
 use crate::table;
 use crate::{EfiGuid, EfiHandle, EfiPhysicalAddress, EfiStatus};
 
-use super::memory::MemoryMap;
 use super::Protocol;
+use super::memory::MemoryMap;
 
 /// Safe wrapper around UEFI Boot Services.
 pub struct BootServices<'st> {
@@ -22,7 +22,11 @@ impl<'st> BootServices<'st> {
     pub fn locate_protocol<P: Protocol>(&self) -> Result<&'st mut P::Raw, EfiStatus> {
         let mut interface: *mut c_void = core::ptr::null_mut();
         let status = unsafe {
-            (self.raw.locate_protocol)(&P::GUID as *const EfiGuid, core::ptr::null_mut(), &mut interface)
+            (self.raw.locate_protocol)(
+                &P::GUID as *const EfiGuid,
+                core::ptr::null_mut(),
+                &mut interface,
+            )
         };
         status.to_result()?;
         if interface.is_null() {
@@ -39,19 +43,14 @@ impl<'st> BootServices<'st> {
         pages: usize,
     ) -> Result<EfiPhysicalAddress, EfiStatus> {
         let mut address: EfiPhysicalAddress = 0;
-        let status = unsafe {
-            (self.raw.allocate_pages)(alloc_type, memory_type, pages, &mut address)
-        };
+        let status =
+            unsafe { (self.raw.allocate_pages)(alloc_type, memory_type, pages, &mut address) };
         status.to_result()?;
         Ok(address)
     }
 
     /// Free previously allocated pages.
-    pub fn free_pages(
-        &self,
-        address: EfiPhysicalAddress,
-        pages: usize,
-    ) -> Result<(), EfiStatus> {
+    pub fn free_pages(&self, address: EfiPhysicalAddress, pages: usize) -> Result<(), EfiStatus> {
         let status = unsafe { (self.raw.free_pages)(address, pages) };
         status.to_result()
     }
@@ -60,10 +59,7 @@ impl<'st> BootServices<'st> {
     ///
     /// The caller provides a buffer that will be filled with memory descriptors.
     /// The buffer should be aligned to `EfiMemoryDescriptor` alignment.
-    pub fn get_memory_map<'buf>(
-        &self,
-        buf: &'buf mut [u8],
-    ) -> Result<MemoryMap<'buf>, EfiStatus> {
+    pub fn get_memory_map<'buf>(&self, buf: &'buf mut [u8]) -> Result<MemoryMap<'buf>, EfiStatus> {
         let mut map_size = buf.len();
         let mut map_key: usize = 0;
         let mut desc_size: usize = 0;
@@ -80,7 +76,12 @@ impl<'st> BootServices<'st> {
         };
         status.to_result()?;
 
-        Ok(MemoryMap::new(&buf[..map_size], map_key, desc_size, desc_version))
+        Ok(MemoryMap::new(
+            &buf[..map_size],
+            map_key,
+            desc_size,
+            desc_version,
+        ))
     }
 
     /// Stall (busy-wait) for the given number of microseconds.
@@ -90,14 +91,9 @@ impl<'st> BootServices<'st> {
     }
 
     /// Set the system watchdog timer.
-    pub fn set_watchdog_timer(
-        &self,
-        timeout: usize,
-        watchdog_code: u64,
-    ) -> Result<(), EfiStatus> {
-        let status = unsafe {
-            (self.raw.set_watchdog_timer)(timeout, watchdog_code, 0, core::ptr::null())
-        };
+    pub fn set_watchdog_timer(&self, timeout: usize, watchdog_code: u64) -> Result<(), EfiStatus> {
+        let status =
+            unsafe { (self.raw.set_watchdog_timer)(timeout, watchdog_code, 0, core::ptr::null()) };
         status.to_result()
     }
 

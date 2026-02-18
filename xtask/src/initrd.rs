@@ -16,10 +16,7 @@ use hadris_cpio::write::{CpioWriteOptions, CpioWriter};
 pub fn build_initrd(workspace_root: &Path) -> Result<PathBuf> {
     let init_binary = workspace_root.join("userspace/test_init.elf");
     if !init_binary.exists() {
-        anyhow::bail!(
-            "Init binary not found at: {}",
-            init_binary.display()
-        );
+        anyhow::bail!("Init binary not found at: {}", init_binary.display());
     }
 
     let init_data = std::fs::read(&init_binary)

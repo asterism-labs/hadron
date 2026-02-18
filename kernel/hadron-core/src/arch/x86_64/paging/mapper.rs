@@ -128,8 +128,7 @@ impl PageTableMapper {
         let pd_phys = unsafe { self.ensure_table(pdpt_phys, pdpt_idx, intermediate, alloc) };
 
         let pd = unsafe { self.table_at(pd_phys) };
-        pd.entries[pd_idx] =
-            PageTableEntry::new(phys_addr, flags | PageTableFlags::HUGE_PAGE);
+        pd.entries[pd_idx] = PageTableEntry::new(phys_addr, flags | PageTableFlags::HUGE_PAGE);
     }
 
     /// Maps a 1 GiB huge page.
@@ -159,8 +158,7 @@ impl PageTableMapper {
 
         // SAFETY: pdpt_phys was just ensured to be a valid PDPT table.
         let pdpt = unsafe { self.table_at(pdpt_phys) };
-        pdpt.entries[pdpt_idx] =
-            PageTableEntry::new(phys_addr, flags | PageTableFlags::HUGE_PAGE);
+        pdpt.entries[pdpt_idx] = PageTableEntry::new(phys_addr, flags | PageTableFlags::HUGE_PAGE);
     }
 
     /// Maps a 4 KiB page.
@@ -249,11 +247,7 @@ impl PageTableMapper {
     ///
     /// # Safety
     /// `pml4_phys` must point to a valid PML4 table.
-    pub unsafe fn translate(
-        &self,
-        pml4_phys: PhysAddr,
-        virt_addr: VirtAddr,
-    ) -> TranslateResult {
+    pub unsafe fn translate(&self, pml4_phys: PhysAddr, virt_addr: VirtAddr) -> TranslateResult {
         let pml4_idx = virt_addr.pml4_index();
         let pdpt_idx = virt_addr.pdpt_index();
         let pd_idx = virt_addr.pd_index();
@@ -620,10 +614,11 @@ unsafe impl mapper::PageMapper<Size4KiB> for PageTableMapper {
         let native = Self::map_flags_to_native(flags);
         // SAFETY: Caller guarantees root is valid.
         unsafe {
-            self.update_flags_4k(root, virt, native).map_err(|e| match e {
-                UnmapError::NotMapped => mapper::UnmapError::NotMapped,
-                UnmapError::HugePage => mapper::UnmapError::SizeMismatch,
-            })?;
+            self.update_flags_4k(root, virt, native)
+                .map_err(|e| match e {
+                    UnmapError::NotMapped => mapper::UnmapError::NotMapped,
+                    UnmapError::HugePage => mapper::UnmapError::SizeMismatch,
+                })?;
         }
         Ok(MapFlush::new(virt))
     }
@@ -673,10 +668,11 @@ unsafe impl mapper::PageMapper<Size2MiB> for PageTableMapper {
         let native = Self::map_flags_to_native(flags);
         // SAFETY: Caller guarantees root is valid.
         unsafe {
-            self.update_flags_2mib(root, virt, native).map_err(|e| match e {
-                UnmapError::NotMapped => mapper::UnmapError::NotMapped,
-                UnmapError::HugePage => mapper::UnmapError::SizeMismatch,
-            })?;
+            self.update_flags_2mib(root, virt, native)
+                .map_err(|e| match e {
+                    UnmapError::NotMapped => mapper::UnmapError::NotMapped,
+                    UnmapError::HugePage => mapper::UnmapError::SizeMismatch,
+                })?;
         }
         Ok(MapFlush::new(virt))
     }
@@ -726,10 +722,11 @@ unsafe impl mapper::PageMapper<Size1GiB> for PageTableMapper {
         let native = Self::map_flags_to_native(flags);
         // SAFETY: Caller guarantees root is valid.
         unsafe {
-            self.update_flags_1gib(root, virt, native).map_err(|e| match e {
-                UnmapError::NotMapped => mapper::UnmapError::NotMapped,
-                UnmapError::HugePage => mapper::UnmapError::SizeMismatch,
-            })?;
+            self.update_flags_1gib(root, virt, native)
+                .map_err(|e| match e {
+                    UnmapError::NotMapped => mapper::UnmapError::NotMapped,
+                    UnmapError::HugePage => mapper::UnmapError::SizeMismatch,
+                })?;
         }
         Ok(MapFlush::new(virt))
     }
@@ -738,11 +735,7 @@ unsafe impl mapper::PageMapper<Size1GiB> for PageTableMapper {
 // SAFETY: `PageTableMapper` correctly walks x86_64 4-level page tables
 // for address translation via the HHDM.
 unsafe impl mapper::PageTranslator for PageTableMapper {
-    unsafe fn translate_addr(
-        &self,
-        root: PhysAddr,
-        virt: VirtAddr,
-    ) -> Option<PhysAddr> {
+    unsafe fn translate_addr(&self, root: PhysAddr, virt: VirtAddr) -> Option<PhysAddr> {
         // SAFETY: Caller guarantees root is valid.
         unsafe { self.translate_addr(root, virt) }
     }

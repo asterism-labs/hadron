@@ -11,8 +11,8 @@ publish = true
 description = "A crate providing stack allocated counterparts for types in alloc"
 
 [features]
-default = ["std"]
-std = []
+default = [ "std" ]
+std = [  ]
 
 [dependencies]
 

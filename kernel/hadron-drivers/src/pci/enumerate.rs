@@ -6,7 +6,7 @@
 use alloc::vec::Vec;
 use hadron_driver_api::pci::{PciAddress, PciBar, PciDeviceInfo};
 
-use crate::pci::cam::{regs, PciCam};
+use crate::pci::cam::{PciCam, regs};
 
 /// Enumerates all PCI devices across all host-controller buses.
 ///
@@ -71,8 +71,7 @@ fn enumerate_device(bus: u8, device: u8, devices: &mut Vec<PciDeviceInfo>) {
             let func_info = read_device_info(bus, device, func);
 
             if func_info.class == 0x06 && func_info.subclass == 0x04 {
-                let secondary =
-                    unsafe { PciCam::read_u8(bus, device, func, regs::SECONDARY_BUS) };
+                let secondary = unsafe { PciCam::read_u8(bus, device, func, regs::SECONDARY_BUS) };
                 if secondary != 0 {
                     enumerate_bus(secondary, devices);
                 }
@@ -180,10 +179,8 @@ fn decode_bars(bus: u8, dev: u8, func: u8, header_type: u8) -> [PciBar; 6] {
                 let sizing_high = unsafe { PciCam::read_u32(bus, dev, func, next_offset) };
                 unsafe { PciCam::write_u32(bus, dev, func, next_offset, original_high) };
 
-                let base =
-                    (u64::from(original_high) << 32) | u64::from(original & !0x0F);
-                let mask64 =
-                    (u64::from(sizing_high) << 32) | u64::from(sizing & !0x0F);
+                let base = (u64::from(original_high) << 32) | u64::from(original & !0x0F);
+                let mask64 = (u64::from(sizing_high) << 32) | u64::from(sizing & !0x0F);
                 let size = (!mask64).wrapping_add(1);
 
                 bars[i] = PciBar::Memory {

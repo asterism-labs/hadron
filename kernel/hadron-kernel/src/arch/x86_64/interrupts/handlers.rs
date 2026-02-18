@@ -124,8 +124,7 @@ pub extern "x86-interrupt" fn page_fault(frame: InterruptStackFrame, error_code:
             hadron_core::arch::x86_64::registers::control::Cr3::write(kernel_cr3);
             let percpu =
                 hadron_core::arch::x86_64::registers::model_specific::IA32_KERNEL_GS_BASE.read();
-            hadron_core::arch::x86_64::registers::model_specific::IA32_GS_BASE
-                .write(percpu);
+            hadron_core::arch::x86_64::registers::model_specific::IA32_GS_BASE.write(percpu);
         }
         hadron_core::kinfo!("Process terminated due to page fault");
 

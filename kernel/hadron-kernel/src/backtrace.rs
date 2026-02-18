@@ -53,7 +53,10 @@ static KERNEL_VIRT_BASE: AtomicU64 = AtomicU64::new(0);
 pub fn init(hbtf_data: &'static [u8], kernel_virt_base: u64) {
     // Validate the HBTF header
     if hbtf_data.len() < HBTF_HEADER_SIZE {
-        hadron_core::kwarn!("HBTF: data too short ({} bytes), backtraces disabled", hbtf_data.len());
+        hadron_core::kwarn!(
+            "HBTF: data too short ({} bytes), backtraces disabled",
+            hbtf_data.len()
+        );
         return;
     }
 
@@ -230,12 +233,9 @@ fn print_frame_symbolicated(
 ///
 /// Returns `(name, offset_within_function)` if found.
 fn lookup_symbol<'a>(hbtf: &'a [u8], offset: u64) -> Option<(&'a str, u64)> {
-    let sym_count =
-        u32::from_le_bytes([hbtf[8], hbtf[9], hbtf[10], hbtf[11]]) as usize;
-    let sym_offset =
-        u32::from_le_bytes([hbtf[12], hbtf[13], hbtf[14], hbtf[15]]) as usize;
-    let strings_offset =
-        u32::from_le_bytes([hbtf[24], hbtf[25], hbtf[26], hbtf[27]]) as usize;
+    let sym_count = u32::from_le_bytes([hbtf[8], hbtf[9], hbtf[10], hbtf[11]]) as usize;
+    let sym_offset = u32::from_le_bytes([hbtf[12], hbtf[13], hbtf[14], hbtf[15]]) as usize;
+    let strings_offset = u32::from_le_bytes([hbtf[24], hbtf[25], hbtf[26], hbtf[27]]) as usize;
 
     if sym_count == 0 {
         return None;
@@ -318,12 +318,9 @@ fn lookup_symbol<'a>(hbtf: &'a [u8], offset: u64) -> Option<(&'a str, u64)> {
 ///
 /// Returns `(file, line)` if found.
 fn lookup_line<'a>(hbtf: &'a [u8], offset: u64) -> Option<(&'a str, u32)> {
-    let line_count =
-        u32::from_le_bytes([hbtf[16], hbtf[17], hbtf[18], hbtf[19]]) as usize;
-    let line_offset =
-        u32::from_le_bytes([hbtf[20], hbtf[21], hbtf[22], hbtf[23]]) as usize;
-    let strings_offset =
-        u32::from_le_bytes([hbtf[24], hbtf[25], hbtf[26], hbtf[27]]) as usize;
+    let line_count = u32::from_le_bytes([hbtf[16], hbtf[17], hbtf[18], hbtf[19]]) as usize;
+    let line_offset = u32::from_le_bytes([hbtf[20], hbtf[21], hbtf[22], hbtf[23]]) as usize;
+    let strings_offset = u32::from_le_bytes([hbtf[24], hbtf[25], hbtf[26], hbtf[27]]) as usize;
 
     if line_count == 0 {
         return None;

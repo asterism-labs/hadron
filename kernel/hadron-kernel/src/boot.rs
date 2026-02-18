@@ -277,9 +277,8 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
         // because the module memory region is marked KernelAndModules and is never
         // reclaimed.
         #[allow(clippy::cast_possible_truncation)] // x86_64 kernel: u64 == usize
-        let data = unsafe {
-            core::slice::from_raw_parts(virt.as_u64() as *const u8, bt.size as usize)
-        };
+        let data =
+            unsafe { core::slice::from_raw_parts(virt.as_u64() as *const u8, bt.size as usize) };
         crate::backtrace::init(data, boot_info.kernel_address().virtual_base.as_u64());
     }
 
@@ -387,9 +386,7 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
     });
 
     // 10. Extract initrd data via HHDM.
-    let initrd_info = boot_info
-        .initrd()
-        .expect("no initrd loaded by bootloader");
+    let initrd_info = boot_info.initrd().expect("no initrd loaded by bootloader");
     let initrd_data = {
         let virt = hadron_core::mm::hhdm::phys_to_virt(initrd_info.phys_addr);
         // SAFETY: The bootloader loaded the initrd into contiguous physical memory
@@ -397,14 +394,20 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
         // because the initrd memory region is marked KernelAndModules and is never
         // reclaimed.
         #[allow(clippy::cast_possible_truncation)] // x86_64 kernel: u64 == usize
-        unsafe { core::slice::from_raw_parts(virt.as_u64() as *const u8, initrd_info.size as usize) }
+        unsafe {
+            core::slice::from_raw_parts(virt.as_u64() as *const u8, initrd_info.size as usize)
+        }
     };
-    hadron_core::kinfo!("Initrd loaded: {} bytes at {}", initrd_info.size, initrd_info.phys_addr);
+    hadron_core::kinfo!(
+        "Initrd loaded: {} bytes at {}",
+        initrd_info.size,
+        initrd_info.phys_addr
+    );
 
     // 10b. Initialize VFS and mount filesystems.
     {
-        use alloc::sync::Arc;
         use crate::fs::{self, FileSystem};
+        use alloc::sync::Arc;
 
         fs::vfs::init();
 

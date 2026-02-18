@@ -14,7 +14,7 @@ doctest = false
 
 [dependencies]
 bitflags = { workspace = true }
-hadris-cpio = { workspace = true, features = ["read", "alloc"] }
+hadris-cpio = { workspace = true, features = [ "read", "alloc" ] }
 hadris-io = { workspace = true }
 hadron-acpi = { workspace = true }
 hadron-core = { workspace = true }
@@ -25,7 +25,7 @@ noalloc = { workspace = true }
 
 [dev-dependencies]
 hadron-core = { workspace = true }
-hadron-test = { workspace = true, features = ["limine"] }
+hadron-test = { workspace = true, features = [ "limine" ] }
 limine = { workspace = true }
 noalloc = { workspace = true }
 

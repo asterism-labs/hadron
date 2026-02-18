@@ -74,7 +74,10 @@ impl Process {
 
 impl Drop for Process {
     fn drop(&mut self) {
-        kdebug!("Process {}: dropping (address space will be freed)", self.pid);
+        kdebug!(
+            "Process {}: dropping (address space will be freed)",
+            self.pid
+        );
         // AddressSpace::Drop fires automatically, freeing the PML4 frame
         // via the dealloc_fn stored at construction time.
     }
@@ -220,17 +223,14 @@ pub fn spawn_init() {
 fn read_init_from_vfs() -> &'static [u8] {
     use crate::fs::{poll_immediate, vfs};
 
-    let inode = vfs::with_vfs(|vfs| {
-        vfs.resolve("/init")
-            .expect("VFS does not contain /init")
-    });
+    let inode = vfs::with_vfs(|vfs| vfs.resolve("/init").expect("VFS does not contain /init"));
 
     let file_size = inode.size();
     kinfo!("Found /init in VFS: {} bytes", file_size);
 
     let mut buf = alloc::vec![0u8; file_size];
-    let bytes_read = poll_immediate(inode.read(0, &mut buf))
-        .expect("failed to read /init from VFS");
+    let bytes_read =
+        poll_immediate(inode.read(0, &mut buf)).expect("failed to read /init from VFS");
     assert_eq!(bytes_read, file_size, "short read of /init");
 
     // Leak the Vec to get a 'static slice — we only load one init

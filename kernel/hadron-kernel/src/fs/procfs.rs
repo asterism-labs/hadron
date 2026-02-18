@@ -143,9 +143,8 @@ impl Inode for ProcMeminfo {
         buf: &'a mut [u8],
     ) -> Pin<Box<dyn Future<Output = Result<usize, FsError>> + Send + 'a>> {
         Box::pin(async move {
-            let (total, free) = crate::mm::pmm::with_pmm(|pmm| {
-                (pmm.total_frames(), pmm.free_frames())
-            });
+            let (total, free) =
+                crate::mm::pmm::with_pmm(|pmm| (pmm.total_frames(), pmm.free_frames()));
 
             let total_kb = total * PAGE_SIZE / 1024;
             let free_kb = free * PAGE_SIZE / 1024;

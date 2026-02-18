@@ -115,17 +115,11 @@ impl BlockDevice for AhciDisk {
     }
 
     fn sector_size(&self) -> usize {
-        self.port
-            .identity
-            .as_ref()
-            .map_or(512, |id| id.sector_size)
+        self.port.identity.as_ref().map_or(512, |id| id.sector_size)
     }
 
     fn sector_count(&self) -> u64 {
-        self.port
-            .identity
-            .as_ref()
-            .map_or(0, |id| id.sector_count)
+        self.port.identity.as_ref().map_or(0, |id| id.sector_count)
     }
 }
 
@@ -139,10 +133,7 @@ static AHCI_DISKS: SpinLock<Option<Vec<AhciDisk>>> = SpinLock::new(None);
 /// Returns the number of registered AHCI disks.
 #[must_use]
 pub fn disk_count() -> usize {
-    AHCI_DISKS
-        .lock()
-        .as_ref()
-        .map_or(0, Vec::len)
+    AHCI_DISKS.lock().as_ref().map_or(0, Vec::len)
 }
 
 /// Executes a closure with a reference to the disk at `index`.
@@ -195,11 +186,7 @@ fn ahci_probe(
     };
 
     // Enable bus mastering + memory space.
-    services.enable_bus_mastering(
-        info.address.bus,
-        info.address.device,
-        info.address.function,
-    );
+    services.enable_bus_mastering(info.address.bus, info.address.device, info.address.function);
 
     // Map ABAR.
     let mmio = services.map_mmio(abar_phys, abar_size)?;
@@ -242,7 +229,9 @@ fn ahci_probe(
                     .unwrap_or_else(|_| {
                         // If we can't bind a second time (already registered), reuse
                         // by creating a new IrqLine that references the same vector.
-                        crate::irq::IrqLine::from_vector(services.isa_irq_vector(info.interrupt_line))
+                        crate::irq::IrqLine::from_vector(
+                            services.isa_irq_vector(info.interrupt_line),
+                        )
                     });
 
                 disks.push(AhciDisk {

@@ -235,6 +235,9 @@ mod tests {
 
         // Drop the guard — should call wake_one and increment our counter.
         drop(guard);
-        assert!(count.load(Ordering::SeqCst) > 0, "waker should have been called");
+        assert!(
+            count.load(Ordering::SeqCst) > 0,
+            "waker should have been called"
+        );
     }
 }

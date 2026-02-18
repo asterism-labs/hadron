@@ -168,12 +168,7 @@ impl fmt::Display for MachineState {
         writeln!(f)?;
 
         // CR0
-        writeln!(
-            f,
-            "  CR0: {:#018x}  {:?}",
-            self.cr0.bits(),
-            self.cr0
-        )?;
+        writeln!(f, "  CR0: {:#018x}  {:?}", self.cr0.bits(), self.cr0)?;
 
         // CR2
         writeln!(f, "  CR2: {:#018x}", self.cr2)?;
@@ -182,12 +177,7 @@ impl fmt::Display for MachineState {
         writeln!(f, "  CR3: {:#018x}", self.cr3.as_u64())?;
 
         // CR4
-        writeln!(
-            f,
-            "  CR4: {:#018x}  {:?}",
-            self.cr4.bits(),
-            self.cr4
-        )?;
+        writeln!(f, "  CR4: {:#018x}  {:?}", self.cr4.bits(), self.cr4)?;
 
         // RFLAGS
         writeln!(
@@ -198,11 +188,6 @@ impl fmt::Display for MachineState {
         )?;
 
         // EFER
-        write!(
-            f,
-            "  EFER:   {:#018x}  {:?}",
-            self.efer.bits(),
-            self.efer
-        )
+        write!(f, "  EFER:   {:#018x}  {:?}", self.efer.bits(), self.efer)
     }
 }

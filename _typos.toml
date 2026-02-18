@@ -1,0 +1,39 @@
+[default]
+extend-ignore-re = [
+    "\\b[0-9a-fA-F]{8,}\\b", # hex literals
+]
+
+[default.extend-words]
+# domain-specific terms that are not typos
+hhdm = "hhdm"     # Higher-Half Direct Map
+mmio = "mmio"     # Memory-Mapped I/O
+iobase = "iobase"
+rsdp = "rsdp"     # Root System Description Pointer
+rsdt = "rsdt"     # Root System Description Table
+fadt = "fadt"     # Fixed ACPI Description Table
+mcfg = "mcfg"     # PCI MMIO Configuration
+madt = "madt"     # Multiple APIC Description Table
+hpet = "hpet"     # High Precision Event Timer
+apic = "apic"     # Advanced Programmable Interrupt Controller
+xsdt = "xsdt"     # Extended System Description Table
+ioapic = "ioapic"
+lapic = "lapic"
+ahci = "ahci"     # Advanced Host Controller Interface
+leb128 = "leb128" # Little Endian Base 128
+rflags = "rflags"
+uefi = "uefi"
+hbtf = "hbtf"
+binfmt = "binfmt"
+ramfs = "ramfs"
+devfs = "devfs"
+procfs = "procfs"
+initrd = "initrd"
+ist = "ist"       # Interrupt Stack Table (x86_64 TSS)
+hpe = "hpe"       # abbrev in HPET context
+thr = "thr"       # Transmitter Holding Register (UART)
+fre = "fre"       # FIS Receive Enable (AHCI)
+rela = "rela"     # ELF relocation section (.rela.dyn)
+ba = "ba"         # as in BAR (Base Address Register)
+
+[files]
+extend-exclude = [ "*.elf", "*.o", "*.iso", "*.img", "targets/*.json", "docs/book/" ]

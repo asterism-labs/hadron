@@ -132,7 +132,8 @@ impl TestLifecycle for DefaultLifecycle {
         } else {
             serial_println!(
                 "\ntest result: FAILED. {} passed; {} failed",
-                passed, failed
+                passed,
+                failed
             );
         }
     }
@@ -536,8 +537,7 @@ macro_rules! uefi_test_entry_point {
         static SYSTEM_TABLE: AtomicPtr<::uefi::table::SystemTable> =
             AtomicPtr::new(core::ptr::null_mut());
 
-        static IMAGE_HANDLE: AtomicPtr<core::ffi::c_void> =
-            AtomicPtr::new(core::ptr::null_mut());
+        static IMAGE_HANDLE: AtomicPtr<core::ffi::c_void> = AtomicPtr::new(core::ptr::null_mut());
 
         /// Retrieve the raw UEFI System Table stored at entry.
         ///

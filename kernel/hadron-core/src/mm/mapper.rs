@@ -124,10 +124,7 @@ mod tests {
         for (i, a) in all.iter().enumerate() {
             for (j, b) in all.iter().enumerate() {
                 if i != j {
-                    assert!(
-                        (*a & *b).is_empty(),
-                        "{a:?} and {b:?} share bits"
-                    );
+                    assert!((*a & *b).is_empty(), "{a:?} and {b:?} share bits");
                 }
             }
         }
@@ -222,9 +219,5 @@ pub unsafe trait PageTranslator {
     /// # Safety
     ///
     /// `root` must point to a valid root page table.
-    unsafe fn translate_addr(
-        &self,
-        root: PhysAddr,
-        virt: VirtAddr,
-    ) -> Option<PhysAddr>;
+    unsafe fn translate_addr(&self, root: PhysAddr, virt: VirtAddr) -> Option<PhysAddr>;
 }

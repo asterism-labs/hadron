@@ -1,8 +1,8 @@
 use core::fmt;
 use core::marker::PhantomData;
 
-use crate::protocol::simple_text::{self, SimpleTextOutputMode, SimpleTextOutputProtocol};
 use crate::EfiStatus;
+use crate::protocol::simple_text::{self, SimpleTextOutputMode, SimpleTextOutputProtocol};
 
 /// Safe wrapper around a UEFI Simple Text Output Protocol (console).
 ///
@@ -34,8 +34,7 @@ impl<'st> Console<'st> {
                 // Need space for \r + \n (2 chars) plus null terminator
                 if i + 2 >= CHUNK {
                     buf[i] = 0;
-                    let status =
-                        unsafe { ((*self.raw).output_string)(self.raw, buf.as_ptr()) };
+                    let status = unsafe { ((*self.raw).output_string)(self.raw, buf.as_ptr()) };
                     status.to_result()?;
                     i = 0;
                 }
@@ -52,8 +51,7 @@ impl<'st> Console<'st> {
                 // Need space for 1 char plus null terminator
                 if i + 1 >= CHUNK {
                     buf[i] = 0;
-                    let status =
-                        unsafe { ((*self.raw).output_string)(self.raw, buf.as_ptr()) };
+                    let status = unsafe { ((*self.raw).output_string)(self.raw, buf.as_ptr()) };
                     status.to_result()?;
                     i = 0;
                 }

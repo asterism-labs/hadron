@@ -584,8 +584,7 @@ fn read_form_value(
             Ok((FormValue::Uint(u64::from(v)), offset + 2))
         }
         DW_FORM_UDATA => {
-            let (v, consumed) =
-                decode_uleb128(&data[offset..]).ok_or(DwarfError::Truncated)?;
+            let (v, consumed) = decode_uleb128(&data[offset..]).ok_or(DwarfError::Truncated)?;
             Ok((FormValue::Uint(v), offset + consumed))
         }
         _ => {
@@ -658,8 +657,7 @@ mod tests {
 
         // Fix header_length
         let header_length = (header_end - header_start) as u32;
-        buf[header_length_pos..header_length_pos + 4]
-            .copy_from_slice(&header_length.to_le_bytes());
+        buf[header_length_pos..header_length_pos + 4].copy_from_slice(&header_length.to_le_bytes());
 
         // Add a minimal line program (just DW_LNE_end_sequence)
         // Extended opcode: 0x00, length=1, opcode=1 (end_sequence)

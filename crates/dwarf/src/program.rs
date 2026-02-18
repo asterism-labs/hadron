@@ -101,10 +101,7 @@ impl<'a> LineProgramIter<'a> {
         if self.cursor + 2 > self.bytecode.len() {
             return None;
         }
-        let v = u16::from_le_bytes([
-            self.bytecode[self.cursor],
-            self.bytecode[self.cursor + 1],
-        ]);
+        let v = u16::from_le_bytes([self.bytecode[self.cursor], self.bytecode[self.cursor + 1]]);
         self.cursor += 2;
         Some(v)
     }
@@ -238,7 +235,8 @@ impl<'a> Iterator for LineProgramIter<'a> {
                         self.address += u64::from(advance);
                     }
                     DW_LNS_CONST_ADD_PC => {
-                        let adjusted = u64::from(255 - self.opcode_base) / u64::from(self.line_range);
+                        let adjusted =
+                            u64::from(255 - self.opcode_base) / u64::from(self.line_range);
                         self.address += self.advance_address(adjusted);
                     }
                     _ => {
@@ -258,8 +256,7 @@ impl<'a> Iterator for LineProgramIter<'a> {
                 // Special opcode
                 let adjusted = opcode - self.opcode_base;
                 let op_advance = u64::from(adjusted) / u64::from(self.line_range);
-                let line_inc = i64::from(self.line_base)
-                    + i64::from(adjusted % self.line_range);
+                let line_inc = i64::from(self.line_base) + i64::from(adjusted % self.line_range);
 
                 self.address += self.advance_address(op_advance);
                 self.line = self.line.wrapping_add(line_inc);
@@ -314,8 +311,7 @@ mod tests {
 
         let header_end = buf.len();
         let header_length = (header_end - header_start) as u32;
-        buf[header_length_pos..header_length_pos + 4]
-            .copy_from_slice(&header_length.to_le_bytes());
+        buf[header_length_pos..header_length_pos + 4].copy_from_slice(&header_length.to_le_bytes());
 
         // Append the bytecode
         buf.extend_from_slice(bytecode);

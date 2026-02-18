@@ -70,9 +70,13 @@ pub fn with_clock_source<R>(f: impl FnOnce(&dyn hadron_driver_api::ClockSource) 
 /// On other architectures, derives ticks from `boot_nanos()`.
 pub fn timer_ticks() -> u64 {
     #[cfg(target_arch = "x86_64")]
-    { crate::arch::x86_64::acpi::timer_ticks() }
+    {
+        crate::arch::x86_64::acpi::timer_ticks()
+    }
     #[cfg(not(target_arch = "x86_64"))]
-    { boot_nanos() / 1_000_000 }
+    {
+        boot_nanos() / 1_000_000
+    }
 }
 
 /// Reads the HPET main counter register at offset 0xF0.

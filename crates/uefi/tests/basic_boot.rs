@@ -149,7 +149,11 @@ fn memory_map_iteration() {
     let mut count = 0;
     for desc in &map {
         // Each descriptor should have a valid memory type (0..=15)
-        assert!(desc.memory_type <= 15, "unexpected memory type: {}", desc.memory_type);
+        assert!(
+            desc.memory_type <= 15,
+            "unexpected memory type: {}",
+            desc.memory_type
+        );
         count += 1;
     }
     assert_eq!(count, map.len());

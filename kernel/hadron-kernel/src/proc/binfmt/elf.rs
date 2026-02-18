@@ -36,9 +36,7 @@ impl BinaryFormat for ElfHandler {
                 BinaryError::ParseError("unsupported ELF type")
             }
             hadron_elf::ElfError::Truncated => BinaryError::ParseError("truncated ELF"),
-            hadron_elf::ElfError::InvalidOffset => {
-                BinaryError::ParseError("invalid ELF offset")
-            }
+            hadron_elf::ElfError::InvalidOffset => BinaryError::ParseError("invalid ELF offset"),
         })?;
 
         let mut segments = ArrayVec::new();

@@ -17,10 +17,8 @@ pub struct GraphicsOutputProtocol {
         info: *mut *mut GraphicsOutputModeInformation,
     ) -> EfiStatus,
     /// Sets the video device into a specified mode.
-    pub set_mode: unsafe extern "efiapi" fn(
-        this: *mut GraphicsOutputProtocol,
-        mode_number: u32,
-    ) -> EfiStatus,
+    pub set_mode:
+        unsafe extern "efiapi" fn(this: *mut GraphicsOutputProtocol, mode_number: u32) -> EfiStatus,
     /// Performs a block transfer (Blt) operation.
     pub blt: unsafe extern "efiapi" fn(
         this: *mut GraphicsOutputProtocol,

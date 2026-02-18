@@ -13,11 +13,7 @@ pub struct PciAddress {
 
 impl core::fmt::Display for PciAddress {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(
-            f,
-            "{:02x}:{:02x}.{}",
-            self.bus, self.device, self.function
-        )
+        write!(f, "{:02x}:{:02x}.{}", self.bus, self.device, self.function)
     }
 }
 
@@ -97,9 +93,8 @@ impl PciDeviceId {
             return false;
         }
         if self.class_mask != 0 {
-            let dev_class = ((info.class as u32) << 16)
-                | ((info.subclass as u32) << 8)
-                | (info.prog_if as u32);
+            let dev_class =
+                ((info.class as u32) << 16) | ((info.subclass as u32) << 8) | (info.prog_if as u32);
             if (dev_class & self.class_mask) != (self.class & self.class_mask) {
                 return false;
             }

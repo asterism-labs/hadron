@@ -101,7 +101,7 @@ static GDT: LazyLock<(GlobalDescriptorTable, Selectors)> = LazyLock::new(|| {
 /// Must be called exactly once during early kernel initialization.
 pub unsafe fn init() {
     use hadron_core::arch::x86_64::instructions::segmentation::{
-        set_cs, load_ds, load_es, load_fs, load_gs, load_ss, load_tss,
+        load_ds, load_es, load_fs, load_gs, load_ss, load_tss, set_cs,
     };
 
     let (gdt, selectors) = &*GDT;

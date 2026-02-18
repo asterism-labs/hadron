@@ -62,7 +62,6 @@ pub struct BlockIoMedia {
     pub last_block: u64,
 
     // ── UEFI 2.2+ fields (revision 2+) ──────────────────────────
-
     /// The first LBA that is aligned on a physical block boundary.
     /// Only valid if `logical_partition` is `true`.
     pub lowest_aligned_lba: u64,
@@ -70,7 +69,6 @@ pub struct BlockIoMedia {
     pub logical_blocks_per_physical_block: u32,
 
     // ── UEFI 2.3.1+ fields (revision 3+) ────────────────────────
-
     /// The optimal transfer length granularity in logical blocks.
     pub optimal_transfer_length_granularity: u32,
 }

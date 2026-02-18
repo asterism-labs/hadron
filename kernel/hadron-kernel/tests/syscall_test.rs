@@ -60,13 +60,20 @@ fn test_syscall_debug_log() {
             options(nostack),
         );
     }
-    assert_eq!(result, msg.len() as isize, "sys_debug_log should return len");
+    assert_eq!(
+        result,
+        msg.len() as isize,
+        "sys_debug_log should return len"
+    );
 }
 
 #[test_case]
 fn test_syscall_clock_gettime() {
     // Use sentinel values to confirm the syscall overwrites the struct.
-    let mut ts = hadron_core::syscall::Timespec { tv_sec: u64::MAX, tv_nsec: u64::MAX };
+    let mut ts = hadron_core::syscall::Timespec {
+        tv_sec: u64::MAX,
+        tv_nsec: u64::MAX,
+    };
     let result: isize;
     unsafe {
         core::arch::asm!(
@@ -89,7 +96,10 @@ fn test_syscall_clock_gettime() {
 
 #[test_case]
 fn test_syscall_clock_gettime_invalid_clock() {
-    let mut ts = hadron_core::syscall::Timespec { tv_sec: 0, tv_nsec: 0 };
+    let mut ts = hadron_core::syscall::Timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
     let result: isize;
     unsafe {
         core::arch::asm!(

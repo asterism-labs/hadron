@@ -86,8 +86,7 @@ impl HpetTable {
 
         // Read the HPET-specific fields after the SDT header.
         // SAFETY: the table is large enough for the header + HPET fields.
-        let raw: HpetRaw =
-            unsafe { ptr::read_unaligned(table_ptr.add(SdtHeader::SIZE).cast()) };
+        let raw: HpetRaw = unsafe { ptr::read_unaligned(table_ptr.add(SdtHeader::SIZE).cast()) };
 
         Ok(Self {
             event_timer_block_id: raw.event_timer_block_id,

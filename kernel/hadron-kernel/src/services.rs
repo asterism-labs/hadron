@@ -29,8 +29,7 @@ impl KernelServices for HadronKernelServices {
     }
 
     fn alloc_vector(&self) -> Result<u8, DriverError> {
-        crate::arch::interrupts::alloc_vector()
-            .map_err(interrupt_error_to_driver_error)
+        crate::arch::interrupts::alloc_vector().map_err(interrupt_error_to_driver_error)
     }
 
     fn unmask_irq(&self, _isa_irq: u8) -> Result<(), DriverError> {
@@ -64,9 +63,13 @@ impl KernelServices for HadronKernelServices {
 
     fn timer_ticks(&self) -> u64 {
         #[cfg(target_arch = "x86_64")]
-        { crate::arch::x86_64::acpi::timer_ticks() }
+        {
+            crate::arch::x86_64::acpi::timer_ticks()
+        }
         #[cfg(not(target_arch = "x86_64"))]
-        { 0 }
+        {
+            0
+        }
     }
 
     fn map_mmio(&self, phys_base: u64, size: u64) -> Result<MmioRegion, DriverError> {

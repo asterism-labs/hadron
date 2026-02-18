@@ -14,9 +14,9 @@ bench = false
 doctest = false
 
 [features]
-default = ["limine"]
-limine = ["dep:limine"]
-uefi = ["dep:uefi"]
+default = [ "limine" ]
+limine = [ "dep:limine" ]
+uefi = [ "dep:uefi" ]
 
 [dependencies]
 limine = { workspace = true, optional = true }

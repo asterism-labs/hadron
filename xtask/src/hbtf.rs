@@ -77,8 +77,8 @@ pub fn generate_hbtf(kernel_elf: &Path, output: &Path, include_lines: bool) -> R
     let elf_data =
         std::fs::read(kernel_elf).with_context(|| format!("reading {}", kernel_elf.display()))?;
 
-    let elf = hadron_elf::ElfFile::parse(&elf_data)
-        .map_err(|e| anyhow::anyhow!("parsing ELF: {e}"))?;
+    let elf =
+        hadron_elf::ElfFile::parse(&elf_data).map_err(|e| anyhow::anyhow!("parsing ELF: {e}"))?;
 
     // Extract function symbols
     let mut symbols = extract_symbols(&elf);
@@ -141,8 +141,7 @@ pub fn generate_hbtf(kernel_elf: &Path, output: &Path, include_lines: bool) -> R
 
     assert_eq!(buf.len(), total_size);
 
-    std::fs::write(output, &buf)
-        .with_context(|| format!("writing {}", output.display()))?;
+    std::fs::write(output, &buf).with_context(|| format!("writing {}", output.display()))?;
 
     println!(
         "HBTF: {} symbols, {} lines, {} bytes -> {}",
@@ -228,9 +227,7 @@ fn extract_lines(elf: &hadron_elf::ElfFile<'_>) -> Vec<LineInfo> {
             // Build file path
             let file_path = match header.file(row.file_index) {
                 Some(file) => {
-                    let dir = header
-                        .directory(file.directory_index)
-                        .unwrap_or("");
+                    let dir = header.directory(file.directory_index).unwrap_or("");
                     if dir.is_empty() {
                         file.name.to_string()
                     } else {
@@ -305,13 +302,14 @@ mod tests {
             ("fn_gamma", 0x5000, 0x80),
         ];
 
-        let lines: &[(&str, u64, u32)] = &[
-            ("boot.rs", 0x1042, 10),
-            ("main.rs", 0x2010, 55),
-        ];
+        let lines: &[(&str, u64, u32)] = &[("boot.rs", 0x1042, 10), ("main.rs", 0x2010, 55)];
 
-        let sym_name_offsets: Vec<u32> = symbols.iter().map(|(name, _, _)| pool.insert(name)).collect();
-        let line_file_offsets: Vec<u32> = lines.iter().map(|(file, _, _)| pool.insert(file)).collect();
+        let sym_name_offsets: Vec<u32> = symbols
+            .iter()
+            .map(|(name, _, _)| pool.insert(name))
+            .collect();
+        let line_file_offsets: Vec<u32> =
+            lines.iter().map(|(file, _, _)| pool.insert(file)).collect();
 
         let sym_offset = HEADER_SIZE;
         let sym_table_size = (symbols.len() * SYM_ENTRY_SIZE) as u32;
@@ -366,12 +364,9 @@ mod tests {
     }
 
     fn test_lookup_symbol(hbtf: &[u8], offset: u64) -> Option<(String, u64)> {
-        let sym_count =
-            u32::from_le_bytes(hbtf[8..12].try_into().unwrap()) as usize;
-        let sym_offset =
-            u32::from_le_bytes(hbtf[12..16].try_into().unwrap()) as usize;
-        let strings_offset =
-            u32::from_le_bytes(hbtf[24..28].try_into().unwrap()) as usize;
+        let sym_count = u32::from_le_bytes(hbtf[8..12].try_into().unwrap()) as usize;
+        let sym_offset = u32::from_le_bytes(hbtf[12..16].try_into().unwrap()) as usize;
+        let strings_offset = u32::from_le_bytes(hbtf[24..28].try_into().unwrap()) as usize;
 
         if sym_count == 0 {
             return None;
@@ -383,8 +378,7 @@ mod tests {
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
             let entry_off = sym_offset + mid * SYM_ENTRY_SIZE;
-            let sym_addr =
-                u64::from_le_bytes(hbtf[entry_off..entry_off + 8].try_into().unwrap());
+            let sym_addr = u64::from_le_bytes(hbtf[entry_off..entry_off + 8].try_into().unwrap());
             if sym_addr <= offset {
                 lo = mid + 1;
             } else {
@@ -398,10 +392,8 @@ mod tests {
 
         let idx = lo - 1;
         let entry_off = sym_offset + idx * SYM_ENTRY_SIZE;
-        let sym_addr =
-            u64::from_le_bytes(hbtf[entry_off..entry_off + 8].try_into().unwrap());
-        let sym_size =
-            u32::from_le_bytes(hbtf[entry_off + 8..entry_off + 12].try_into().unwrap());
+        let sym_addr = u64::from_le_bytes(hbtf[entry_off..entry_off + 8].try_into().unwrap());
+        let sym_size = u32::from_le_bytes(hbtf[entry_off + 8..entry_off + 12].try_into().unwrap());
         let name_off =
             u32::from_le_bytes(hbtf[entry_off + 12..entry_off + 16].try_into().unwrap()) as usize;
 
@@ -417,12 +409,9 @@ mod tests {
     }
 
     fn test_lookup_line(hbtf: &[u8], offset: u64) -> Option<(String, u32)> {
-        let line_count =
-            u32::from_le_bytes(hbtf[16..20].try_into().unwrap()) as usize;
-        let line_offset =
-            u32::from_le_bytes(hbtf[20..24].try_into().unwrap()) as usize;
-        let strings_offset =
-            u32::from_le_bytes(hbtf[24..28].try_into().unwrap()) as usize;
+        let line_count = u32::from_le_bytes(hbtf[16..20].try_into().unwrap()) as usize;
+        let line_offset = u32::from_le_bytes(hbtf[20..24].try_into().unwrap()) as usize;
+        let strings_offset = u32::from_le_bytes(hbtf[24..28].try_into().unwrap()) as usize;
 
         if line_count == 0 {
             return None;
@@ -434,8 +423,7 @@ mod tests {
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
             let entry_off = line_offset + mid * LINE_ENTRY_SIZE;
-            let line_addr =
-                u64::from_le_bytes(hbtf[entry_off..entry_off + 8].try_into().unwrap());
+            let line_addr = u64::from_le_bytes(hbtf[entry_off..entry_off + 8].try_into().unwrap());
             if line_addr <= offset {
                 lo = mid + 1;
             } else {
@@ -451,8 +439,7 @@ mod tests {
         let entry_off = line_offset + idx * LINE_ENTRY_SIZE;
         let file_off =
             u32::from_le_bytes(hbtf[entry_off + 8..entry_off + 12].try_into().unwrap()) as usize;
-        let line_num =
-            u32::from_le_bytes(hbtf[entry_off + 12..entry_off + 16].try_into().unwrap());
+        let line_num = u32::from_le_bytes(hbtf[entry_off + 12..entry_off + 16].try_into().unwrap());
 
         let file_start = strings_offset + file_off;
         let file = test_read_nul_str(hbtf, file_start)?;

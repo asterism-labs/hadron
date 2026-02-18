@@ -8,11 +8,11 @@ extern crate alloc;
 use alloc::sync::Arc;
 use alloc::vec;
 
-use hadris_cpio::mode::FileType;
 use hadris_cpio::CpioReader;
+use hadris_cpio::mode::FileType;
 use hadris_io::Cursor;
 
-use super::{poll_immediate, FsError, Inode, InodeType, Permissions};
+use super::{FsError, Inode, InodeType, Permissions, poll_immediate};
 
 /// Unpack a CPIO newc archive into the given root inode.
 ///
@@ -84,8 +84,7 @@ pub fn unpack_cpio(initrd: &[u8], root: &Arc<dyn Inode>) -> usize {
                     reader
                         .read_entry_data(&entry, &mut buf)
                         .expect("failed to read CPIO file data");
-                    let written =
-                        poll_immediate(file_inode.write(0, &buf));
+                    let written = poll_immediate(file_inode.write(0, &buf));
                     assert_eq!(
                         written.expect("initramfs: write failed"),
                         file_size,
@@ -125,10 +124,7 @@ fn ensure_directory(root: &Arc<dyn Inode>, path: &str) {
                         component, e
                     )
                 }),
-            Err(e) => panic!(
-                "initramfs: lookup failed for '{}': {:?}",
-                component, e
-            ),
+            Err(e) => panic!("initramfs: lookup failed for '{}': {:?}", component, e),
         };
     }
 }

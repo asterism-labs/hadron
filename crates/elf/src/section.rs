@@ -3,7 +3,7 @@
 //! Provides zero-copy, zero-allocation parsing of ELF64 section headers,
 //! symbol tables (`.symtab`), and string tables (`.strtab`) from raw byte slices.
 
-use crate::header::{le_u16, le_u32, le_u64, ELF64_SHDR_SIZE};
+use crate::header::{ELF64_SHDR_SIZE, le_u16, le_u32, le_u64};
 
 /// Section type: symbol table.
 pub const SHT_SYMTAB: u32 = 2;
@@ -228,7 +228,8 @@ impl<'a> ElfFile<'a> {
     /// Finds a section by name, looking up names in the section header string table.
     pub fn find_section_by_name(&self, name: &str) -> Option<Elf64SectionHeader> {
         let shstrtab = self.section_header_strtab()?;
-        self.sections().find(|s| shstrtab.get(s.sh_name) == Some(name))
+        self.sections()
+            .find(|s| shstrtab.get(s.sh_name) == Some(name))
     }
 
     /// Returns the raw data slice for a given section header.

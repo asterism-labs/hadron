@@ -25,9 +25,9 @@ pub mod syscall;
 pub mod time;
 
 pub use boot::kernel_init;
-pub use hadron_core::{kprint, kprintln};
-pub use hadron_core::{kdebug, kerr, kfatal, kinfo, klog, ktrace, kwarn};
 pub use hadron_core::log::{DEBUG, ERROR, FATAL, INFO, TRACE, WARN};
+pub use hadron_core::{kdebug, kerr, kfatal, kinfo, klog, ktrace, kwarn};
+pub use hadron_core::{kprint, kprintln};
 
 /// Lightweight kernel initialization for integration tests.
 ///

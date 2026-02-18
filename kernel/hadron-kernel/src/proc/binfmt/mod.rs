@@ -92,10 +92,7 @@ pub trait BinaryFormat: Sync {
 }
 
 /// Registered binary format handlers, tried in order.
-static BINARY_FORMATS: &[&dyn BinaryFormat] = &[
-    &elf::ElfHandler,
-    &script::ScriptHandler,
-];
+static BINARY_FORMATS: &[&dyn BinaryFormat] = &[&elf::ElfHandler, &script::ScriptHandler];
 
 /// Probes `data` against all registered formats and loads the first match.
 pub fn load_binary(data: &[u8]) -> Result<ExecImage<'_>, BinaryError> {

@@ -141,7 +141,11 @@ mod tests {
 
         wq.wake_one();
         assert!(c1.load(Ordering::SeqCst) > 0, "first waker should be woken");
-        assert_eq!(c2.load(Ordering::SeqCst), 0, "second waker should not be woken");
+        assert_eq!(
+            c2.load(Ordering::SeqCst),
+            0,
+            "second waker should not be woken"
+        );
     }
 
     #[test]

@@ -4,5 +4,5 @@ pub mod dispatch;
 pub mod handlers;
 
 pub use dispatch::{
-    alloc_vector, register_handler, unregister_handler, vectors, InterruptError, InterruptHandler,
+    InterruptError, InterruptHandler, alloc_vector, register_handler, unregister_handler, vectors,
 };

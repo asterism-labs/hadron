@@ -44,8 +44,7 @@ pub struct SimpleTextOutputProtocol {
         attribute: usize,
     ) -> EfiStatus,
     /// Clears the output device display to the currently selected background color.
-    pub clear_screen:
-        unsafe extern "efiapi" fn(this: *mut SimpleTextOutputProtocol) -> EfiStatus,
+    pub clear_screen: unsafe extern "efiapi" fn(this: *mut SimpleTextOutputProtocol) -> EfiStatus,
     /// Sets the current coordinates of the cursor position.
     pub set_cursor_position: unsafe extern "efiapi" fn(
         this: *mut SimpleTextOutputProtocol,
@@ -53,10 +52,8 @@ pub struct SimpleTextOutputProtocol {
         row: usize,
     ) -> EfiStatus,
     /// Makes the cursor visible or invisible.
-    pub enable_cursor: unsafe extern "efiapi" fn(
-        this: *mut SimpleTextOutputProtocol,
-        visible: bool,
-    ) -> EfiStatus,
+    pub enable_cursor:
+        unsafe extern "efiapi" fn(this: *mut SimpleTextOutputProtocol, visible: bool) -> EfiStatus,
     /// Pointer to the current mode data.
     pub mode: *mut SimpleTextOutputMode,
 }

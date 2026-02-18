@@ -563,8 +563,8 @@ mod tests {
 
     #[test]
     fn is_release_flag() {
-        assert!(!is_release(0x1E));     // A press
-        assert!(is_release(0x9E));      // A release
+        assert!(!is_release(0x1E)); // A press
+        assert!(is_release(0x9E)); // A release
         assert!(is_release(0x80));
         assert!(!is_release(0x00));
     }
@@ -574,7 +574,10 @@ mod tests {
         assert_eq!(extended_scancode_to_keycode(0x48), Some(KeyCode::ArrowUp));
         assert_eq!(extended_scancode_to_keycode(0x50), Some(KeyCode::ArrowDown));
         assert_eq!(extended_scancode_to_keycode(0x4B), Some(KeyCode::ArrowLeft));
-        assert_eq!(extended_scancode_to_keycode(0x4D), Some(KeyCode::ArrowRight));
+        assert_eq!(
+            extended_scancode_to_keycode(0x4D),
+            Some(KeyCode::ArrowRight)
+        );
     }
 
     #[test]

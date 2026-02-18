@@ -7,10 +7,10 @@
 //! table manipulation.
 
 use crate::addr::{PhysAddr, VirtAddr};
-use crate::mm::layout::{MemoryLayout, INITIAL_HEAP_SIZE};
+use crate::mm::layout::{INITIAL_HEAP_SIZE, MemoryLayout};
 use crate::mm::mapper::{MapFlags, MapFlush, PageMapper, PageTranslator, UnmapError};
 use crate::mm::region::{FreeRegionAllocator, RegionAllocator};
-use crate::mm::{FrameAllocator, VmmError, PAGE_SIZE};
+use crate::mm::{FrameAllocator, PAGE_SIZE, VmmError};
 use crate::paging::{Page, PhysFrame, Size4KiB};
 
 /// Default kernel stack size: 64 KiB (16 pages).
@@ -185,13 +185,12 @@ impl<M: PageMapper<Size4KiB> + PageTranslator> Vmm<M> {
             // region with a valid frame is correct. The frame allocator closure
             // provides page table frames as needed.
             let flush = unsafe {
-                self.mapper.map(
-                    self.root_phys,
-                    page,
-                    frame,
-                    flags,
-                    &mut || alloc.allocate_frame().expect("PMM: out of memory during heap grow"),
-                )
+                self.mapper
+                    .map(self.root_phys, page, frame, flags, &mut || {
+                        alloc
+                            .allocate_frame()
+                            .expect("PMM: out of memory during heap grow")
+                    })
             };
             // Fresh mapping, never in TLB.
             flush.ignore();
@@ -234,13 +233,12 @@ impl<M: PageMapper<Size4KiB> + PageTranslator> Vmm<M> {
             let frame = alloc.allocate_frame().ok_or(VmmError::OutOfMemory)?;
             // SAFETY: Same as grow_heap — mapping within an allocated region.
             let flush = unsafe {
-                self.mapper.map(
-                    self.root_phys,
-                    page,
-                    frame,
-                    flags,
-                    &mut || alloc.allocate_frame().expect("PMM: out of memory during stack alloc"),
-                )
+                self.mapper
+                    .map(self.root_phys, page, frame, flags, &mut || {
+                        alloc
+                            .allocate_frame()
+                            .expect("PMM: out of memory during stack alloc")
+                    })
             };
             // Fresh mapping, never in TLB.
             flush.ignore();
@@ -288,13 +286,12 @@ impl<M: PageMapper<Size4KiB> + PageTranslator> Vmm<M> {
             // Mapping it into the MMIO region with cache-disable flags is correct
             // for device register access.
             let flush = unsafe {
-                self.mapper.map(
-                    self.root_phys,
-                    page,
-                    phys_page,
-                    flags,
-                    &mut || alloc.allocate_frame().expect("PMM: out of memory during MMIO map"),
-                )
+                self.mapper
+                    .map(self.root_phys, page, phys_page, flags, &mut || {
+                        alloc
+                            .allocate_frame()
+                            .expect("PMM: out of memory during MMIO map")
+                    })
             };
             // Fresh mapping, never in TLB.
             flush.ignore();
@@ -321,13 +318,12 @@ impl<M: PageMapper<Size4KiB> + PageTranslator> Vmm<M> {
         // SAFETY: The Vmm owns the root page table and the caller provides
         // a valid physical frame and allocator.
         let flush = unsafe {
-            self.mapper.map(
-                self.root_phys,
-                page,
-                frame,
-                flags,
-                &mut || alloc.allocate_frame().expect("PMM: out of memory during map_page"),
-            )
+            self.mapper
+                .map(self.root_phys, page, frame, flags, &mut || {
+                    alloc
+                        .allocate_frame()
+                        .expect("PMM: out of memory during map_page")
+                })
         };
         Ok(flush)
     }
@@ -351,9 +347,7 @@ impl<M: PageMapper<Size4KiB> + PageTranslator> Vmm<M> {
     /// Translates a virtual address to a physical address.
     pub fn translate(&self, virt: VirtAddr) -> Option<PhysAddr> {
         // SAFETY: The Vmm owns root_phys; a read-only page table walk is safe.
-        unsafe {
-            <M as PageTranslator>::translate_addr(&self.mapper, self.root_phys, virt)
-        }
+        unsafe { <M as PageTranslator>::translate_addr(&self.mapper, self.root_phys, virt) }
     }
 
     /// Returns a previously allocated stack region to the stacks allocator.

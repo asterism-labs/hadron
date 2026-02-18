@@ -354,20 +354,14 @@ pub(crate) mod tests {
     fn reject_big_endian() {
         let mut buf = make_elf_header();
         buf[5] = 2; // ELFDATA2MSB
-        assert_eq!(
-            Elf64Header::parse(&buf),
-            Err(ElfError::UnsupportedEncoding)
-        );
+        assert_eq!(Elf64Header::parse(&buf), Err(ElfError::UnsupportedEncoding));
     }
 
     #[test]
     fn reject_wrong_machine() {
         let mut buf = make_elf_header();
         buf[18..20].copy_from_slice(&0x03u16.to_le_bytes()); // EM_386
-        assert_eq!(
-            Elf64Header::parse(&buf),
-            Err(ElfError::UnsupportedMachine)
-        );
+        assert_eq!(Elf64Header::parse(&buf), Err(ElfError::UnsupportedMachine));
     }
 
     #[test]

@@ -71,10 +71,7 @@ impl DeviceTree {
         };
 
         // Group PCI devices by bus number.
-        let mut bus_numbers: Vec<u8> = pci_devices
-            .iter()
-            .map(|d| d.address.bus)
-            .collect();
+        let mut bus_numbers: Vec<u8> = pci_devices.iter().map(|d| d.address.bus).collect();
         bus_numbers.sort_unstable();
         bus_numbers.dedup();
 

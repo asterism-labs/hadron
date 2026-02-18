@@ -1,6 +1,6 @@
 [book]
 title = "Hadron Kernel Development Plan"
-authors = ["hxyulin"]
+authors = [ "hxyulin" ]
 language = "en"
 src = "src"
 

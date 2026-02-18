@@ -190,8 +190,7 @@ fn main() -> Result<()> {
             let target = target.unwrap_or_else(|| config.default_target.clone());
             if !host_only {
                 initrd::build_initrd(&config.workspace_root)?;
-                let result =
-                    build::build(&config, &target, Some("hadron-boot-limine"), release)?;
+                let result = build::build(&config, &target, Some("hadron-boot-limine"), release)?;
                 hbtf::generate_hbtf(
                     &result.kernel_binary,
                     &config.target_dir.join("backtrace.hbtf"),

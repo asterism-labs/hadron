@@ -34,8 +34,7 @@ pub fn platform_driver_entries() -> &'static [PlatformDriverEntry] {
     unsafe {
         let start =
             core::ptr::addr_of!(__hadron_platform_drivers_start).cast::<PlatformDriverEntry>();
-        let end =
-            core::ptr::addr_of!(__hadron_platform_drivers_end).cast::<PlatformDriverEntry>();
+        let end = core::ptr::addr_of!(__hadron_platform_drivers_end).cast::<PlatformDriverEntry>();
         let count = end.offset_from(start) as usize;
         if count == 0 {
             return &[];
@@ -82,29 +81,18 @@ pub fn match_pci_drivers(devices: &[PciDeviceInfo], services: &'static dyn Kerne
 ///
 /// Compares each platform device's compatible string against driver entries.
 /// Calls `init` on the first match.
-pub fn match_platform_drivers(
-    devices: &[(&str, &str)],
-    services: &'static dyn KernelServices,
-) {
+pub fn match_platform_drivers(devices: &[(&str, &str)], services: &'static dyn KernelServices) {
     let entries = platform_driver_entries();
     for &(name, compatible) in devices {
         for entry in entries {
             if entry.compatible == compatible {
-                hadron_core::kprintln!(
-                    "Platform: matched '{}' -> driver '{}'",
-                    name,
-                    entry.name,
-                );
+                hadron_core::kprintln!("Platform: matched '{}' -> driver '{}'", name, entry.name,);
                 match (entry.init)(services) {
                     Ok(()) => {
                         hadron_core::kprintln!("Platform: driver '{}' init OK", entry.name);
                     }
                     Err(e) => {
-                        hadron_core::kprintln!(
-                            "Platform: driver '{}' init failed: {}",
-                            name,
-                            e,
-                        );
+                        hadron_core::kprintln!("Platform: driver '{}' init failed: {}", name, e,);
                     }
                 }
                 break;

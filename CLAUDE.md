@@ -33,6 +33,18 @@ All build commands use the xtask pattern (`cargo xtask <command>`):
 
 The build uses `-Zbuild-std=core,compiler_builtins,alloc` and a custom target JSON spec at `targets/x86_64-unknown-hadron.json`.
 
+## Formatting & Linting
+
+Development recipes are in the `justfile` (requires [`just`](https://github.com/casey/just)):
+
+- `just fmt` — Format all source files (cargo fmt + taplo fmt)
+- `just fmt-check` — Check formatting without modifying files
+- `just lint` — Run all lints (clippy + taplo check + typos)
+- `just check` — Format then lint (one-stop command)
+- `just build` / `just run` / `just test` — Delegates to `cargo xtask`
+
+Tool dependencies: `rustfmt` and `clippy` are installed via `rust-toolchain.toml`. External tools: `just`, `taplo`, `typos-cli` (install with `brew install just taplo typos-cli`).
+
 ## Architecture
 
 ### Boot Flow

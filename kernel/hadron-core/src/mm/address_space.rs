@@ -95,13 +95,12 @@ impl<M: PageMapper<Size4KiB> + PageTranslator> AddressSpace<M> {
         // SAFETY: The AddressSpace owns its PML4 (root_phys). The caller
         // provides a valid physical frame and allocator for page table pages.
         let flush = unsafe {
-            self.mapper.map(
-                self.root_phys,
-                page,
-                frame,
-                flags,
-                &mut || alloc.allocate_frame().expect("PMM: out of memory during user map"),
-            )
+            self.mapper
+                .map(self.root_phys, page, frame, flags, &mut || {
+                    alloc
+                        .allocate_frame()
+                        .expect("PMM: out of memory during user map")
+                })
         };
         Ok(flush)
     }
@@ -131,9 +130,7 @@ impl<M: PageMapper<Size4KiB> + PageTranslator> AddressSpace<M> {
 
     /// Translates a virtual address within this address space.
     pub fn translate(&self, virt: VirtAddr) -> Option<PhysAddr> {
-        unsafe {
-            <M as PageTranslator>::translate_addr(&self.mapper, self.root_phys, virt)
-        }
+        unsafe { <M as PageTranslator>::translate_addr(&self.mapper, self.root_phys, virt) }
     }
 }
 

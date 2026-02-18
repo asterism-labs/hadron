@@ -81,7 +81,10 @@ pub fn with_vmm<R>(f: impl FnOnce(&mut KernelVmm) -> R) -> R {
 ///
 /// Convenience wrapper that acquires both VMM and PMM locks internally.
 /// Returns the virtual base address of the mapping.
-pub fn map_mmio_region(phys: hadron_core::addr::PhysAddr, size: u64) -> hadron_core::addr::VirtAddr {
+pub fn map_mmio_region(
+    phys: hadron_core::addr::PhysAddr,
+    size: u64,
+) -> hadron_core::addr::VirtAddr {
     with_vmm(|vmm| {
         super::pmm::with_pmm(|pmm| {
             let mut alloc = BitmapFrameAllocRef(pmm);

@@ -11,8 +11,8 @@ pub mod vmm;
 
 use core::fmt;
 
-use crate::paging::{PageSize, PhysFrame};
 use crate::addr::PhysAddr;
+use crate::paging::{PageSize, PhysFrame};
 
 /// Standard 4 KiB page size.
 pub const PAGE_SIZE: usize = 4096;

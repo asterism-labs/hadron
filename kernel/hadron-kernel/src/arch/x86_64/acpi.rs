@@ -8,13 +8,13 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use hadron_acpi::{AcpiHandler, AcpiTables, madt};
 use hadron_core::addr::{PhysAddr, VirtAddr};
+use hadron_core::mm::hhdm;
 use hadron_core::sync::IrqSpinLock;
 use hadron_drivers::apic::io_apic::{
     DeliveryMode, DestinationMode, IoApic, Polarity, RedirectionEntry, TriggerMode,
 };
 use hadron_drivers::apic::local_apic::LocalApic;
 use hadron_drivers::hpet::Hpet;
-use hadron_core::mm::hhdm;
 
 use crate::arch::x86_64::interrupts::dispatch::vectors;
 
@@ -159,11 +159,7 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
         Ok(h) => {
             let hpet_addr = h.base_address.address;
             let min_tick = h.minimum_tick;
-            hadron_core::kdebug!(
-                "ACPI: HPET at {:#x}, minimum tick {}",
-                hpet_addr,
-                min_tick
-            );
+            hadron_core::kdebug!("ACPI: HPET at {:#x}, minimum tick {}", hpet_addr, min_tick);
             Some(h)
         }
         Err(_) => {
@@ -210,7 +206,11 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
     let apic_id = lapic.id();
     hadron_core::percpu::current_cpu().init(0, apic_id);
 
-    hadron_core::kinfo!("LAPIC: Enabled, ID={}, spurious vector={}", apic_id, vectors::SPURIOUS);
+    hadron_core::kinfo!(
+        "LAPIC: Enabled, ID={}, spurious vector={}",
+        apic_id,
+        vectors::SPURIOUS
+    );
 
     // --- 4. Map and configure I/O APIC ---
     let mut io_apic_virt = VirtAddr::new(0);
@@ -220,7 +220,8 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
         if let madt::MadtEntry::IoApic(ioapic_entry) = entry {
             let ioapic_phys = PhysAddr::new(u64::from(ioapic_entry.io_apic_address));
 
-            let ioapic_virt = crate::mm::vmm::map_mmio_region(ioapic_phys, hadron_core::mm::PAGE_SIZE as u64);
+            let ioapic_virt =
+                crate::mm::vmm::map_mmio_region(ioapic_phys, hadron_core::mm::PAGE_SIZE as u64);
 
             // SAFETY: ioapic_virt was just mapped to the I/O APIC MMIO region.
             let ioapic = unsafe { IoApic::new(ioapic_virt, ioapic_entry.gsi_base) };
@@ -260,7 +261,8 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
     // --- 5. Initialize HPET ---
     let hpet = hpet_info.and_then(|info| {
         let hpet_phys = PhysAddr::new(info.base_address.address);
-        let hpet_virt = crate::mm::vmm::map_mmio_region(hpet_phys, hadron_core::mm::PAGE_SIZE as u64);
+        let hpet_virt =
+            crate::mm::vmm::map_mmio_region(hpet_phys, hadron_core::mm::PAGE_SIZE as u64);
 
         let hpet = unsafe { Hpet::new(hpet_virt) };
         hpet.enable();
@@ -342,11 +344,8 @@ fn setup_isa_irqs(ioapic: &IoApic, madt_data: &hadron_acpi::madt::Madt, bsp_apic
 /// Calibrates the LAPIC timer and starts it in periodic mode.
 fn calibrate_and_start_timer(lapic: &LocalApic, hpet: Option<&Hpet>) {
     // Register the timer handler.
-    crate::arch::x86_64::interrupts::dispatch::register_handler(
-        vectors::TIMER,
-        timer_handler,
-    )
-    .expect("Failed to register timer handler");
+    crate::arch::x86_64::interrupts::dispatch::register_handler(vectors::TIMER, timer_handler)
+        .expect("Failed to register timer handler");
 
     // Calibration: measure how many LAPIC timer ticks occur in 10ms.
     let divide = 16u8;

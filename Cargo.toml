@@ -14,7 +14,7 @@ members = [
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-authors = ["hxyulin"]
+authors = [ "hxyulin" ]
 repository = "https://github.com/hxyulin/hadron"
 license = "GPL-3.0-only"
 readme = "README.md"
@@ -23,14 +23,14 @@ publish = false
 [workspace.dependencies]
 # Internal crates
 hadron-acpi = { path = "crates/acpi" }
+hadron-core = { path = "kernel/hadron-core" }
 hadron-driver-api = { path = "kernel/hadron-driver-api" }
 hadron-drivers = { path = "kernel/hadron-drivers" }
-hadron-core = { path = "kernel/hadron-core" }
+hadron-dwarf = { path = "crates/dwarf" }
+hadron-elf = { path = "crates/elf" }
 hadron-kernel = { path = "kernel/hadron-kernel" }
 hadron-test = { path = "crates/hadron-test", default-features = false }
 limine = { path = "crates/limine" }
-hadron-dwarf = { path = "crates/dwarf" }
-hadron-elf = { path = "crates/elf" }
 noalloc = { path = "crates/noalloc" }
 uefi = { path = "crates/uefi" }
 
@@ -82,7 +82,7 @@ kind = "qemu"
 [workspace.metadata.image-runner.runner.qemu]
 machine = "q35"
 memory = 256
-extra-args = ["-serial", "stdio"]
+extra-args = [ "-serial", "stdio" ]
 
 [workspace.metadata.image-runner.test]
 success-exit-code = 33
@@ -102,14 +102,14 @@ gui = true
 [workspace.metadata.image-runner.profiles.stress.runner.qemu]
 memory = 1024
 cores = 4
-extra-args = ["-serial", "stdio"]
+extra-args = [ "-serial", "stdio" ]
 [workspace.metadata.image-runner.profiles.stress.test]
 timeout = 120
 
 [workspace.metadata.image-runner.profiles.debug]
 [workspace.metadata.image-runner.profiles.debug.runner.qemu]
 memory = 512
-extra-args = ["-serial", "stdio", "-s", "-S"]
+extra-args = [ "-serial", "stdio", "-s", "-S" ]
 [workspace.metadata.image-runner.profiles.debug.test]
 timeout = 3600
 
@@ -117,4 +117,4 @@ timeout = 3600
 [workspace.metadata.image-runner.profiles.minimal.runner.qemu]
 memory = 64
 cores = 1
-extra-args = ["-serial", "stdio"]
+extra-args = [ "-serial", "stdio" ]

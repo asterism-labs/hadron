@@ -7,8 +7,8 @@
 
 use core::ptr;
 
-use crate::sdt::SdtHeader;
 use crate::AcpiHandler;
+use crate::sdt::SdtHeader;
 
 /// Size in bytes of a single table-pointer entry in the RSDT (32-bit).
 const RSDT_ENTRY_SIZE: usize = 4;
@@ -129,8 +129,7 @@ pub fn find_table_in_rsdt(
     for entry_phys in iter {
         // Map just the header of the candidate table.
         // SAFETY: entry_phys is a physical address from the RSDT/XSDT.
-        let candidate_ptr =
-            unsafe { handler.map_physical_region(entry_phys, SdtHeader::SIZE) };
+        let candidate_ptr = unsafe { handler.map_physical_region(entry_phys, SdtHeader::SIZE) };
         // SAFETY: candidate_ptr is valid for SdtHeader::SIZE bytes.
         let candidate = unsafe { SdtHeader::read_from(candidate_ptr) };
         if &candidate.signature() == signature {

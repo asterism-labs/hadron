@@ -3,8 +3,8 @@
 //! Provides [`noop_waker`] and [`counting_waker`] for polling futures
 //! in host-side tests without a real executor.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{RawWaker, RawWakerVTable, Waker};
 
 /// Creates a [`Waker`] that does nothing when woken.

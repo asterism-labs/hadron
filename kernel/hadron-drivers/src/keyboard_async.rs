@@ -66,8 +66,7 @@ impl AsyncKeyboard {
             i8042::extended_scancode_to_keycode(scancode)
                 .unwrap_or(KeyCode::Unknown(scancode & 0x7F))
         } else {
-            i8042::scancode_to_keycode(scancode)
-                .unwrap_or(KeyCode::Unknown(scancode & 0x7F))
+            i8042::scancode_to_keycode(scancode).unwrap_or(KeyCode::Unknown(scancode & 0x7F))
         };
 
         Some(KeyEvent { key, pressed })

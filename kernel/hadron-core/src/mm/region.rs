@@ -254,7 +254,13 @@ impl<const N: usize> FreeRegionAllocator<N> {
                 if self.free_list.is_full() {
                     return Err(RegionAllocError::FreeListFull);
                 }
-                self.free_list.insert(idx, FreeRange { base, size: aligned_size });
+                self.free_list.insert(
+                    idx,
+                    FreeRange {
+                        base,
+                        size: aligned_size,
+                    },
+                );
             }
         }
 

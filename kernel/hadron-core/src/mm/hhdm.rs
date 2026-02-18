@@ -22,12 +22,8 @@ static HHDM_OFFSET: AtomicU64 = AtomicU64::new(HHDM_UNINIT);
 ///
 /// Panics if called more than once.
 pub fn init(offset: u64) {
-    let prev = HHDM_OFFSET.compare_exchange(
-        HHDM_UNINIT,
-        offset,
-        Ordering::Release,
-        Ordering::Relaxed,
-    );
+    let prev =
+        HHDM_OFFSET.compare_exchange(HHDM_UNINIT, offset, Ordering::Release, Ordering::Relaxed);
     assert!(
         prev.is_ok(),
         "HHDM: already initialized (double init detected)"

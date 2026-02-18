@@ -19,7 +19,7 @@ use alloc::vec::Vec;
 use core::fmt::{self, Write as _};
 
 #[cfg(target_arch = "x86_64")]
-use hadron_drivers::uart16550::{Uart16550, COM1};
+use hadron_drivers::uart16550::{COM1, Uart16550};
 
 use crate::drivers::early_fb::EarlyFramebuffer;
 use crate::sync::SpinLock;
@@ -131,7 +131,7 @@ impl BochsVgaSink {
 
 impl LogSink for BochsVgaSink {
     fn write_str(&self, s: &str) {
-        use crate::drivers::early_fb::{CURSOR, VGA_FONT_8X16_REF, GLYPH_WIDTH, GLYPH_HEIGHT};
+        use crate::drivers::early_fb::{CURSOR, GLYPH_HEIGHT, GLYPH_WIDTH, VGA_FONT_8X16_REF};
         use hadron_driver_api::Framebuffer;
 
         hadron_drivers::bochs_vga::with_bochs_vga(|vga| {
@@ -217,7 +217,7 @@ fn draw_glyph_fb(
     fg: u32,
     bg: u32,
 ) {
-    use crate::drivers::early_fb::{GLYPH_WIDTH, GLYPH_HEIGHT};
+    use crate::drivers::early_fb::{GLYPH_HEIGHT, GLYPH_WIDTH};
     let glyph = &font[(ch as usize) * (GLYPH_HEIGHT as usize)..][..(GLYPH_HEIGHT as usize)];
     let x0 = col * GLYPH_WIDTH;
     let y0 = row * GLYPH_HEIGHT;

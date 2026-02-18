@@ -77,10 +77,7 @@ impl<'a> Iterator for DebugLine<'a> {
             Err(_) => return self.next(), // skip malformed units
         };
 
-        Some(LineProgramUnit {
-            header,
-            unit_data,
-        })
+        Some(LineProgramUnit { header, unit_data })
     }
 }
 

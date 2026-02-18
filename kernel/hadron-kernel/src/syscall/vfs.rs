@@ -1,7 +1,7 @@
 //! VFS syscall handlers: open, read, write.
 
-use hadron_core::syscall::userptr::UserSlice;
 use hadron_core::syscall::EFAULT;
+use hadron_core::syscall::userptr::UserSlice;
 
 use crate::fs::file::OpenFlags;
 use crate::fs::poll_immediate;

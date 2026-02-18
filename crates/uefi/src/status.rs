@@ -146,11 +146,7 @@ impl EfiStatus {
     /// Returns `Err(EfiStatus)` if the status code indicates an error (high bit set).
     #[inline]
     pub const fn to_result(self) -> Result<(), Self> {
-        if self.is_error() {
-            Err(self)
-        } else {
-            Ok(())
-        }
+        if self.is_error() { Err(self) } else { Ok(()) }
     }
 
     /// Returns a human-readable name for the status code, if known.

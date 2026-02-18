@@ -5,7 +5,7 @@
 //! static instance for the BSP; designed to be replaced with GS-base
 //! indexing when APs are booted.
 
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 
 /// Syscall stack size for early boot (16 KiB).
 ///
@@ -118,8 +118,7 @@ pub unsafe fn init_gs_base() {
     use crate::arch::x86_64::registers::model_specific::{IA32_GS_BASE, IA32_KERNEL_GS_BASE};
 
     let percpu_addr = core::ptr::addr_of!(BSP_PERCPU) as u64;
-    let stack_top =
-        core::ptr::addr_of!(SYSCALL_STACK) as u64 + EARLY_SYSCALL_STACK_SIZE as u64;
+    let stack_top = core::ptr::addr_of!(SYSCALL_STACK) as u64 + EARLY_SYSCALL_STACK_SIZE as u64;
 
     // SAFETY: BSP_PERCPU is a module-level static; addr_of_mut! is valid.
     // Writing kernel_rsp before any syscall can fire is the caller's

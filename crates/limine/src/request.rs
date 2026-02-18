@@ -44,7 +44,12 @@ use crate::{
 /// identifier.
 macro_rules! limine_id {
     ($part1:expr, $part2: expr) => {
-        [0xc7b1_dd30_df4c_8b88u64, 0x0a82_e883_a194_f07bu64, $part1, $part2]
+        [
+            0xc7b1_dd30_df4c_8b88u64,
+            0x0a82_e883_a194_f07bu64,
+            $part1,
+            $part2,
+        ]
     };
 }
 
@@ -493,7 +498,10 @@ impl PagingModeRequest {
         min_mode: PagingMode,
         max_mode: PagingMode,
     ) -> Self {
-        assert!(revision <= 1, "Only revision 0 and 1 are currently defined.");
+        assert!(
+            revision <= 1,
+            "Only revision 0 and 1 are currently defined."
+        );
         Self {
             id: Self::ID,
             revision,
