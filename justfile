@@ -1,10 +1,10 @@
 # Hadron kernel development recipes
 
-hb := "./tools/hadron-build/target/release/hadron-build"
+hb := "./tools/gluon/target/release/gluon"
 
 # Build the build tool itself
 bootstrap:
-    cargo build --manifest-path tools/hadron-build/Cargo.toml --release --quiet
+    cargo build --manifest-path tools/gluon/Cargo.toml --release --quiet
 
 # Resolve config + generate rust-project.json
 configure *args: bootstrap

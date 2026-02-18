@@ -63,7 +63,7 @@ pub fn cmd_fmt(args: &FmtArgs) -> Result<()> {
 
     if !status.success() {
         if args.check {
-            bail!("formatting check failed — run `hadron-build fmt` to fix");
+            bail!("formatting check failed — run `gluon fmt` to fix");
         } else {
             bail!("rustfmt exited with {status}");
         }

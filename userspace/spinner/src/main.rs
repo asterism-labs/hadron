@@ -7,7 +7,7 @@
 #![no_std]
 #![no_main]
 
-use hadron_syslib::{println, sys};
+use lepton_syslib::{println, sys};
 
 /// Iterations per print.
 const SPIN_COUNT: u64 = 1_000_000;

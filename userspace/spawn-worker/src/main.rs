@@ -1,12 +1,12 @@
 //! Short-lived worker child for spawn stress testing.
 //!
 //! Does light work (busy-spin ~100K iterations), queries uptime, prints
-//! PID + uptime, and exits. Used as a child process by `hadron-spawn-stress`.
+//! PID + uptime, and exits. Used as a child process by `lepton-spawn-stress`.
 
 #![no_std]
 #![no_main]
 
-use hadron_syslib::{println, sys};
+use lepton_syslib::{println, sys};
 
 /// Light work iterations.
 const WORK_COUNT: u64 = 100_000;

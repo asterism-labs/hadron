@@ -4,7 +4,7 @@
 *.iso
 *.img
 
-# Vendored dependencies (fetched by hadron-build vendor)
+# Vendored dependencies (fetched by gluon vendor)
 /vendor/
 
 # Generated files

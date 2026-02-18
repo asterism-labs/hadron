@@ -1,10 +1,10 @@
-//! Command-line interface definitions for hadron-build.
+//! Command-line interface definitions for gluon.
 
 use clap::{Parser, Subcommand};
 
 /// Hadron kernel build system.
 #[derive(Parser)]
-#[command(name = "hadron-build", version, about)]
+#[command(name = "gluon", version, about)]
 pub struct Cli {
     /// Subcommand to execute.
     #[command(subcommand)]

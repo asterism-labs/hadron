@@ -8,8 +8,8 @@
 #![no_std]
 #![no_main]
 
-use hadron_syslib::io::{self, STDIN};
-use hadron_syslib::{println, sys};
+use lepton_syslib::io::{self, STDIN};
+use lepton_syslib::{println, sys};
 
 #[unsafe(no_mangle)]
 pub extern "C" fn main() -> i32 {

@@ -3,7 +3,7 @@
 //! A standalone build tool that invokes `rustc` directly, builds a custom
 //! sysroot, and provides a Rhai-scripted configuration system.
 //!
-//! Pipeline: evaluate build.rhai → validate model → resolve config →
+//! Pipeline: evaluate gluon.rhai → validate model → resolve config →
 //!           schedule stages → compile crates → generate artifacts.
 
 mod analyzer;
@@ -54,9 +54,9 @@ fn main() -> Result<()> {
 // Model loading
 // ===========================================================================
 
-/// Load and validate the build model from `build.rhai`.
+/// Load and validate the build model from `gluon.rhai`.
 fn load_model(root: &PathBuf) -> Result<model::BuildModel> {
-    println!("Loading build.rhai...");
+    println!("Loading gluon.rhai...");
     let model = engine::evaluate_script(root)?;
     validate::validate_model(&model)?;
     Ok(model)

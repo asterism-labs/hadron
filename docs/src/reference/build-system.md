@@ -1,11 +1,11 @@
 # Build System
 
-Hadron uses a custom build tool (`hadron-build`) that invokes `rustc` directly instead of using Cargo for kernel compilation. This gives full control over sysroot construction, target configuration, and cross-compilation without relying on nightly-only Cargo flags.
+Hadron uses a custom build tool (`gluon`) that invokes `rustc` directly instead of using Cargo for kernel compilation. This gives full control over sysroot construction, target configuration, and cross-compilation without relying on nightly-only Cargo flags.
 
 ## Quick Start
 
 ```sh
-# Bootstrap the build tool (once, or after changing hadron-build source)
+# Bootstrap the build tool (once, or after changing gluon source)
 just bootstrap
 
 # Common commands
@@ -165,7 +165,7 @@ path = "userspace/my-program"
 type = "bin"
 context = "userspace"
 root = "src/main.rs"
-deps = { hadron_syslib = "hadron-syslib" }
+deps = { lepton_syslib = "lepton-syslib" }
 ```
 
 The binary will be automatically included in the initrd.

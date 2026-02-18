@@ -6,7 +6,7 @@
 #![no_std]
 #![no_main]
 
-use hadron_syslib::{println, sys};
+use lepton_syslib::{println, sys};
 
 /// Number of workers to spawn.
 const WORKER_COUNT: usize = 8;

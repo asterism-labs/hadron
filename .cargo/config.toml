@@ -8,5 +8,5 @@ runner = "cargo-image-runner"
 [target.x86_64-unknown-uefi]
 runner = "cargo-image-runner"
 
-# Note: build-std is passed via hadron-build, not in this config,
-# to avoid affecting native builds (like hadron-build itself).
+# Note: build-std is passed via gluon, not in this config,
+# to avoid affecting native builds (like gluon itself).

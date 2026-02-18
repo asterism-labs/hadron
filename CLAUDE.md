@@ -2,6 +2,13 @@
 
 Hadron is an x86_64 kernel written in Rust following the **framekernel** architecture. The kernel is split into two layers: an unsafe **frame** (`hadron-core`) that directly interacts with hardware and exports safe abstractions, and safe **services** (`hadron-kernel`) that implement high-level functionality using only safe Rust. Both layers run in ring 0 with zero IPC overhead.
 
+## Naming Convention
+
+The project uses a particle physics naming theme:
+- **Hadron** (kernel) — kernel crates keep the `hadron-` prefix
+- **Gluon** (build system) — the build tool at `tools/gluon/`; gluons bind quarks into hadrons
+- **Lepton** (userspace) — userspace crates use the `lepton-` prefix; leptons are a separate particle family
+
 ## Project Structure
 
 ```
@@ -18,45 +25,51 @@ hadron/
 │   ├── hadron-test/        # Test framework (QEMU isa-debug-exit)
 │   └── uefi/               # UEFI bindings (Phase 2)
 ├── userspace/
-│   ├── init/               # Init process (first userspace binary)
-│   └── hadron-syslib/      # Userspace syscall library
+│   ├── init/               # Init process (first userspace binary, lepton-init)
+│   ├── lepton-syslib/      # Userspace syscall library
+│   ├── shell/              # Interactive shell (lepton-shell)
+│   ├── spinner/            # CPU-bound preemption demo (lepton-spinner)
+│   ├── spawn-worker/       # Worker child for stress tests (lepton-spawn-worker)
+│   ├── spawn-stress/       # Spawn stress test (lepton-spawn-stress)
+│   ├── pipe-consumer/      # Pipe consumer child (lepton-pipe-consumer)
+│   └── pipe-test/          # Pipe test orchestrator (lepton-pipe-test)
 ├── tools/
-│   └── hadron-build/       # Custom build system (invokes rustc directly)
+│   └── gluon/              # Custom build system (invokes rustc directly)
 ├── targets/                # Custom target specs (x86_64-unknown-hadron.json)
 ├── vendor/                 # Vendored external dependencies
-├── build.rhai              # Build configuration script (targets, crates, profiles, pipeline)
+├── gluon.rhai              # Build configuration script (targets, crates, profiles, pipeline)
 ├── docs/                   # mdbook documentation
 └── limine.conf             # Limine bootloader config
 ```
 
 ## Build Commands
 
-The project uses `hadron-build`, a custom build tool at `tools/hadron-build/` that invokes `rustc` directly. It builds a custom sysroot, compiles all crates in dependency order, and provides Kconfig-like configuration via `build.rhai` (Rhai scripting).
+The project uses `gluon`, a custom build tool at `tools/gluon/` that invokes `rustc` directly. It builds a custom sysroot, compiles all crates in dependency order, and provides Kconfig-like configuration via `gluon.rhai` (Rhai scripting).
 
 First, build the tool itself:
 ```sh
-cargo build --manifest-path tools/hadron-build/Cargo.toml
+cargo build --manifest-path tools/gluon/Cargo.toml
 ```
 
 Then use it (from the project root):
 ```sh
-hadron-build configure        # Resolve config + generate rust-project.json
-hadron-build build            # Build sysroot + all crates + kernel + HBTF + initrd
-hadron-build run [-- args]    # Build + run in QEMU via cargo-image-runner
-hadron-build test             # Run all tests (host + kernel)
-hadron-build test --host-only # Run host-side unit tests only
-hadron-build check            # Type-check kernel crates without linking
-hadron-build clippy           # Run clippy lints on project crates
-hadron-build fmt              # Format project source files
-hadron-build fmt --check      # Check formatting without modifying
-hadron-build clean            # Remove build artifacts
+gluon configure        # Resolve config + generate rust-project.json
+gluon build            # Build sysroot + all crates + kernel + HBTF + initrd
+gluon run [-- args]    # Build + run in QEMU via cargo-image-runner
+gluon test             # Run all tests (host + kernel)
+gluon test --host-only # Run host-side unit tests only
+gluon check            # Type-check kernel crates without linking
+gluon clippy           # Run clippy lints on project crates
+gluon fmt              # Format project source files
+gluon fmt --check      # Check formatting without modifying
+gluon clean            # Remove build artifacts
 ```
 
-Global flags: `--profile <name>` (`-P`) selects a build profile from `build.rhai`, `--target <triple>` overrides the target.
+Global flags: `--profile <name>` (`-P`) selects a build profile from `gluon.rhai`, `--target <triple>` overrides the target.
 
 ### Configuration
 
-Build configuration lives in `build.rhai` at the project root, using the Rhai scripting language. The script defines:
+Build configuration lives in `gluon.rhai` at the project root, using the Rhai scripting language. The script defines:
 - **Project metadata**: name and version
 - **Targets**: custom target specs and linker scripts
 - **Config options**: typed kernel options (bool, u32, u64, str) with dependencies, selects, ranges, and choices
@@ -66,7 +79,7 @@ Build configuration lives in `build.rhai` at the project root, using the Rhai sc
 - **Pipeline**: ordered build stages with barriers and rule execution
 - **QEMU settings**: machine type, memory, extra args, test exit codes
 
-The build system evaluates `build.rhai` to produce a `BuildModel`, validates it, resolves configuration, then schedules and executes compilation stages.
+The build system evaluates `gluon.rhai` to produce a `BuildModel`, validates it, resolves configuration, then schedules and executes compilation stages.
 
 ## Architecture
 
@@ -96,7 +109,7 @@ The kernel uses a custom target `x86_64-unknown-hadron` (not `x86_64-unknown-non
 
 ## Lint Configuration
 
-Clippy lints are applied by `hadron-build clippy` to project crates (kernel/, crates/, userspace/) using `-W clippy::all -W clippy::pedantic`. Vendored crates are type-checked but not linted.
+Clippy lints are applied by `gluon clippy` to project crates (kernel/, crates/, userspace/) using `-W clippy::all -W clippy::pedantic`. Vendored crates are type-checked but not linted.
 
 ### Dead Code Annotation Policy
 
@@ -178,13 +191,13 @@ Clippy lints are applied by `hadron-build clippy` to project crates (kernel/, cr
 
 ## Testing
 
-- `hadron-build test --host-only` — Run host unit tests for crates listed in `build.rhai` `tests().host_testable()`
-- `hadron-build test --kernel-only` — Build kernel + run integration tests in QEMU
-- `hadron-build test` — Run both host and kernel tests
+- `gluon test --host-only` — Run host unit tests for crates listed in `gluon.rhai` `tests().host_testable()`
+- `gluon test --kernel-only` — Build kernel + run integration tests in QEMU
+- `gluon test` — Run both host and kernel tests
 
 Integration tests run in QEMU using `hadron-test` crate:
 - Tests use `isa-debug-exit` device (iobase=0xf4) to signal pass/fail
-- Exit code 33 = success (configured in `build.rhai` `qemu()` section)
+- Exit code 33 = success (configured in `gluon.rhai` `qemu()` section)
 - Timeout: 30 seconds per test
 
 ## Development Phases

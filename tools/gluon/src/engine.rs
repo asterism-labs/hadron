@@ -1,7 +1,7 @@
 //! Rhai scripting engine for build configuration.
 //!
 //! Sets up a Rhai engine with builder types and registration functions,
-//! evaluates `build.rhai`, and produces a [`BuildModel`].
+//! evaluates `gluon.rhai`, and produces a [`BuildModel`].
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -19,7 +19,7 @@ use crate::model::{
 /// Shared model state passed to all builder types.
 type SharedModel = Arc<Mutex<BuildModel>>;
 
-/// Evaluate `build.rhai` from the project root and return the populated model.
+/// Evaluate `gluon.rhai` from the project root and return the populated model.
 pub fn evaluate_script(root: &Path) -> Result<BuildModel> {
     let model = Arc::new(Mutex::new(BuildModel::default()));
     let mut engine = Engine::new();
@@ -51,13 +51,13 @@ pub fn evaluate_script(root: &Path) -> Result<BuildModel> {
 
     // Set up include() mechanism with circular-include detection.
     let visited_includes = Arc::new(Mutex::new(HashSet::<PathBuf>::new()));
-    let script_path = root.join("build.rhai");
+    let script_path = root.join("gluon.rhai");
     if let Ok(canonical) = std::fs::canonicalize(&script_path) {
         visited_includes.lock().unwrap().insert(canonical);
     }
     register_include_api(&mut engine, &root_path, visited_includes);
 
-    // Evaluate build.rhai with the scope containing constants.
+    // Evaluate gluon.rhai with the scope containing constants.
     let ast = engine
         .compile_file(script_path.clone().into())
         .map_err(|e| anyhow::anyhow!("error compiling {}: {e}", script_path.display()))?;

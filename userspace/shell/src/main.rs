@@ -6,9 +6,9 @@
 #![no_std]
 #![no_main]
 
-use hadron_syslib::hadron_syscall::{DirEntryInfo, INODE_TYPE_CHARDEV, INODE_TYPE_DIR};
-use hadron_syslib::io::{self, STDIN};
-use hadron_syslib::{print, println};
+use lepton_syslib::hadron_syscall::{DirEntryInfo, INODE_TYPE_CHARDEV, INODE_TYPE_DIR};
+use lepton_syslib::io::{self, STDIN};
+use lepton_syslib::{print, println};
 
 /// Read buffer size for stdin reads.
 const READ_BUF_SIZE: usize = 256;
@@ -107,7 +107,7 @@ fn cmd_echo(args: &str) {
 }
 
 fn cmd_sysinfo() {
-    if let Some(ver) = hadron_syslib::sys::query_kernel_version() {
+    if let Some(ver) = lepton_syslib::sys::query_kernel_version() {
         let name_len = ver
             .name
             .iter()
@@ -125,7 +125,7 @@ fn cmd_sysinfo() {
         println!("Kernel:  (query failed)");
     }
 
-    if let Some(mem) = hadron_syslib::sys::query_memory() {
+    if let Some(mem) = lepton_syslib::sys::query_memory() {
         let total_kb = mem.total_bytes / 1024;
         let free_kb = mem.free_bytes / 1024;
         let used_kb = mem.used_bytes / 1024;
@@ -137,7 +137,7 @@ fn cmd_sysinfo() {
         println!("Memory:  (query failed)");
     }
 
-    if let Some(uptime) = hadron_syslib::sys::query_uptime() {
+    if let Some(uptime) = lepton_syslib::sys::query_uptime() {
         let secs = uptime.uptime_ns / 1_000_000_000;
         let ms = (uptime.uptime_ns % 1_000_000_000) / 1_000_000;
         println!("Uptime:  {}.{:03}s", secs, ms);
@@ -223,7 +223,7 @@ fn cmd_spawn(args: &str) {
         return;
     }
 
-    let ret = hadron_syslib::sys::spawn(args);
+    let ret = lepton_syslib::sys::spawn(args);
     if ret < 0 {
         println!("spawn: failed to spawn '{}' (error {})", args, ret);
         return;
@@ -233,7 +233,7 @@ fn cmd_spawn(args: &str) {
     println!("spawned child PID {}", child_pid);
 
     let mut status: u64 = 0;
-    let wait_ret = hadron_syslib::sys::waitpid(child_pid, Some(&mut status));
+    let wait_ret = lepton_syslib::sys::waitpid(child_pid, Some(&mut status));
     if wait_ret < 0 {
         println!("waitpid: error {}", wait_ret);
     } else {
@@ -242,7 +242,7 @@ fn cmd_spawn(args: &str) {
 }
 
 fn cmd_pid() {
-    let pid = hadron_syslib::sys::getpid();
+    let pid = lepton_syslib::sys::getpid();
     println!("PID: {}", pid);
 }
 
@@ -254,5 +254,5 @@ fn cmd_clear() {
 
 fn cmd_exit() {
     println!("Goodbye!");
-    hadron_syslib::sys::exit(0);
+    lepton_syslib::sys::exit(0);
 }

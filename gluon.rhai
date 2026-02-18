@@ -1,6 +1,6 @@
 // Hadron kernel build configuration.
 //
-// This script is evaluated by hadron-build to produce the build model.
+// This script is evaluated by gluon to produce the build model.
 // It replaces the old hadron.toml + crates.toml configuration files.
 
 // ===========================================================================
@@ -251,37 +251,37 @@ userspace.add("hadron-syscall-user", "crates/hadron-syscall")
     .features(["userspace"])
     .deps(#{ hadron_syscall_macros: #{ "crate": "hadron-syscall-macros", proc_macro: true } });
 
-userspace.add("hadron-syslib", "userspace/hadron-syslib")
+userspace.add("lepton-syslib", "userspace/lepton-syslib")
     .deps(#{ hadron_syscall: "hadron-syscall-user" });
 
-userspace.add("hadron-init", "userspace/init")
+userspace.add("lepton-init", "userspace/init")
     .crate_type(BIN)
     .root("src/main.rs")
-    .deps(#{ hadron_syslib: "hadron-syslib" });
+    .deps(#{ lepton_syslib: "lepton-syslib" });
 
-userspace.add("hadron-shell", "userspace/shell")
+userspace.add("lepton-shell", "userspace/shell")
     .crate_type(BIN).root("src/main.rs")
-    .deps(#{ hadron_syslib: "hadron-syslib" });
+    .deps(#{ lepton_syslib: "lepton-syslib" });
 
-userspace.add("hadron-spinner", "userspace/spinner")
+userspace.add("lepton-spinner", "userspace/spinner")
     .crate_type(BIN).root("src/main.rs")
-    .deps(#{ hadron_syslib: "hadron-syslib" });
+    .deps(#{ lepton_syslib: "lepton-syslib" });
 
-userspace.add("hadron-spawn-worker", "userspace/spawn-worker")
+userspace.add("lepton-spawn-worker", "userspace/spawn-worker")
     .crate_type(BIN).root("src/main.rs")
-    .deps(#{ hadron_syslib: "hadron-syslib" });
+    .deps(#{ lepton_syslib: "lepton-syslib" });
 
-userspace.add("hadron-spawn-stress", "userspace/spawn-stress")
+userspace.add("lepton-spawn-stress", "userspace/spawn-stress")
     .crate_type(BIN).root("src/main.rs")
-    .deps(#{ hadron_syslib: "hadron-syslib" });
+    .deps(#{ lepton_syslib: "lepton-syslib" });
 
-userspace.add("hadron-pipe-consumer", "userspace/pipe-consumer")
+userspace.add("lepton-pipe-consumer", "userspace/pipe-consumer")
     .crate_type(BIN).root("src/main.rs")
-    .deps(#{ hadron_syslib: "hadron-syslib" });
+    .deps(#{ lepton_syslib: "lepton-syslib" });
 
-userspace.add("hadron-pipe-test", "userspace/pipe-test")
+userspace.add("lepton-pipe-test", "userspace/pipe-test")
     .crate_type(BIN).root("src/main.rs")
-    .deps(#{ hadron_syslib: "hadron-syslib" });
+    .deps(#{ lepton_syslib: "lepton-syslib" });
 
 // ===========================================================================
 // Rules (custom artifact generation)
@@ -293,9 +293,9 @@ rule("hbtf")
     .handler("hbtf");
 
 rule("initrd")
-    .inputs(["hadron-init", "hadron-shell", "hadron-spinner",
-             "hadron-spawn-stress", "hadron-spawn-worker",
-             "hadron-pipe-test", "hadron-pipe-consumer"])
+    .inputs(["lepton-init", "lepton-shell", "lepton-spinner",
+             "lepton-spawn-stress", "lepton-spawn-worker",
+             "lepton-pipe-test", "lepton-pipe-consumer"])
     .output("build/initrd.cpio")
     .handler("initrd");
 

@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-/// The complete build model produced by evaluating `build.rhai`.
+/// The complete build model produced by evaluating `gluon.rhai`.
 ///
 /// Contains all declarations: targets, crates, groups, rules, pipeline,
 /// configuration options, profiles, and auxiliary settings.
