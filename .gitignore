@@ -11,3 +11,5 @@ Cargo.lock
 /docs/book
 *.DS_Store
 *.orig
+/build/
+/vendor/

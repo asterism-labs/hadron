@@ -1,0 +1,19 @@
+[package]
+name = "hadron-build"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+hadris-cpio = { path = "../../vendor/hadris-cpio", default-features = false, features = ["std", "write"] }
+hadron-dwarf = { path = "../../crates/dwarf" }
+hadron-elf = { path = "../../crates/elf" }
+rustc-demangle = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+walkdir = "2"

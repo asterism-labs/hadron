@@ -1,0 +1,143 @@
+[project]
+name = "hadron"
+version = "0.1.0"
+
+[targets.x86_64-unknown-hadron]
+spec = "targets/x86_64-unknown-hadron.json"
+linker-script = "targets/x86_64-unknown-hadron.ld"
+
+[targets.aarch64-unknown-hadron]
+spec = "targets/aarch64-unknown-hadron.json"
+linker-script = "targets/aarch64-unknown-hadron.ld"
+
+[targets.x86_64-unknown-hadron-user]
+spec = "targets/x86_64-unknown-hadron-user.json"
+
+# ---------------------------------------------------------------------------
+# Kconfig-style options
+# ---------------------------------------------------------------------------
+
+[config.options.serial_log]
+type = "bool"
+default = true
+help = "Enable serial port logging"
+
+[config.options.smp]
+type = "bool"
+default = false
+depends-on = ["acpi"]
+select = ["apic"]
+help = "Enable symmetric multiprocessing"
+
+[config.options.acpi]
+type = "bool"
+default = true
+help = "Enable ACPI table parsing"
+
+[config.options.apic]
+type = "bool"
+default = false
+help = "Enable APIC interrupt controller"
+
+[config.options.MAX_CPUS]
+type = "u32"
+default = 1
+range = [1, 256]
+depends-on = ["smp"]
+help = "Maximum number of CPUs supported"
+
+[config.options.LOG_LEVEL]
+type = "str"
+default = "debug"
+choices = ["error", "warn", "info", "debug", "trace"]
+help = "Kernel log level"
+
+[config.options.KERNEL_HEAP_SIZE]
+type = "u64"
+default = "0x10_0000"
+help = "Kernel heap size in bytes"
+
+# ---------------------------------------------------------------------------
+# Build profiles
+# ---------------------------------------------------------------------------
+
+[profiles.default]
+target = "x86_64-unknown-hadron"
+opt-level = 0
+debug-info = true
+boot-binary = "hadron-boot-limine"
+
+[profiles.release]
+target = "x86_64-unknown-hadron"
+opt-level = 2
+lto = "thin"
+boot-binary = "hadron-boot-limine"
+
+[profiles.stress]
+inherits = "default"
+config = { smp = true, MAX_CPUS = 4 }
+
+[profiles.stress.qemu]
+memory = 1024
+cores = 4
+
+[profiles.stress.test]
+timeout = 120
+
+[profiles.debug-gdb]
+inherits = "default"
+
+[profiles.debug-gdb.qemu]
+memory = 512
+extra-args = ["-s", "-S"]
+
+[profiles.debug-gdb.test]
+timeout = 3600
+
+# ---------------------------------------------------------------------------
+# QEMU defaults
+# ---------------------------------------------------------------------------
+
+[qemu]
+machine = "q35"
+memory = 256
+extra-args = ["-serial", "stdio"]
+
+[qemu.test]
+success-exit-code = 33
+timeout = 30
+extra-args = [
+    "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
+    "-display", "none",
+    "-no-reboot",
+]
+
+# ---------------------------------------------------------------------------
+# Bootloader
+# ---------------------------------------------------------------------------
+
+[bootloader]
+kind = "limine"
+config-file = "limine.conf"
+
+# ---------------------------------------------------------------------------
+# Image
+# ---------------------------------------------------------------------------
+
+[image]
+extra-files = { "boot/initrd.cpio" = "build/initrd.cpio", "boot/backtrace.hbtf" = "build/backtrace.hbtf" }
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+[tests]
+host-testable = [
+    "hadron-dwarf",
+    "hadron-elf",
+    "noalloc",
+    "hadron-core",
+    "hadron-driver-api",
+    "hadron-drivers",
+]
+kernel-tests-dir = "kernel/hadron-kernel/tests"

@@ -34,6 +34,7 @@
 
 # Reference
 
+- [Build System](reference/build-system.md)
 - [Target File Tree](reference/file-tree.md)
 - [Phase Dependencies](reference/phase-dependencies.md)
 - [Estimated Scope](reference/estimated-scope.md)

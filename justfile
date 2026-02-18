@@ -1,35 +1,39 @@
 # Hadron kernel development recipes
 
-# Format all source files
-fmt:
-    cargo fmt --all
-    taplo fmt
-    @echo "Formatted all files."
+hb := "./tools/hadron-build/target/release/hadron-build"
 
-# Check formatting without modifying files
-fmt-check:
-    cargo fmt --all -- --check
-    taplo fmt --check
-    @echo "All formatting checks passed."
+# Build the build tool itself
+bootstrap:
+    cargo build --manifest-path tools/hadron-build/Cargo.toml --release --quiet
 
-# Run all lints
-lint:
-    cargo xtask clippy
-    taplo check
-    typos
-    @echo "All lint checks passed."
-
-# Format then lint
-check: fmt lint
+# Resolve config + generate rust-project.json
+configure *args: bootstrap
+    {{hb}} configure {{args}}
 
 # Build the kernel
-build:
-    cargo xtask build
+build *args: bootstrap
+    {{hb}} build {{args}}
 
 # Build and run in QEMU
-run:
-    cargo xtask run
+run *args: bootstrap
+    {{hb}} run {{args}}
 
-# Build and run tests in QEMU
-test:
-    cargo xtask test
+# Run tests
+test *args: bootstrap
+    {{hb}} test {{args}}
+
+# Type-check without linking
+check: bootstrap
+    {{hb}} check
+
+# Run clippy lints
+clippy: bootstrap
+    {{hb}} clippy
+
+# Format source files
+fmt *args: bootstrap
+    {{hb}} fmt {{args}}
+
+# Remove build artifacts
+clean:
+    {{hb}} clean
