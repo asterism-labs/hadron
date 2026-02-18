@@ -2,6 +2,7 @@
 
 use crate::addr::{PhysAddr, VirtAddr};
 use crate::arch::x86_64::structures::paging::{PageTable, PageTableEntry, PageTableFlags};
+use crate::mm::PAGE_SIZE;
 use crate::mm::mapper::{self, MapFlags, MapFlush};
 use crate::paging::{Page, PhysFrame, Size1GiB, Size2MiB, Size4KiB};
 
@@ -84,8 +85,11 @@ impl PageTableMapper {
     /// with `USER` added for user-accessible mappings). If the entry already
     /// exists, any missing flags from `intermediate_flags` are OR'd in.
     ///
+    /// Newly allocated frames are zeroed before use so that no stale data is
+    /// misinterpreted as present page table entries.
+    ///
     /// # Safety
-    /// The caller must ensure `table_phys` is valid and `alloc` returns zeroed frames.
+    /// The caller must ensure `table_phys` is valid and accessible through the HHDM.
     unsafe fn ensure_table(
         &self,
         table_phys: PhysAddr,
@@ -104,6 +108,11 @@ impl PageTableMapper {
             entry.address()
         } else {
             let new_frame = alloc().start_address();
+            // SAFETY: The frame was just allocated and is accessible through the HHDM.
+            // Zeroing ensures no stale PTEs are misinterpreted as present entries.
+            unsafe {
+                core::ptr::write_bytes(self.phys_to_virt(new_frame), 0, PAGE_SIZE);
+            }
             table.entries[index] = PageTableEntry::new(new_frame, intermediate_flags);
             new_frame
         }
@@ -115,7 +124,6 @@ impl PageTableMapper {
     ///
     /// # Safety
     /// - `pml4_phys` must point to a valid PML4 table.
-    /// - `alloc` must return zeroed 4 KiB physical frames.
     /// - The caller must ensure the mapping does not conflict with existing mappings.
     pub unsafe fn map_2mib(
         &self,
@@ -145,7 +153,6 @@ impl PageTableMapper {
     ///
     /// # Safety
     /// - `pml4_phys` must point to a valid PML4 table.
-    /// - `alloc` must return zeroed 4 KiB physical frames.
     /// - `phys_addr` must be 1 GiB aligned.
     /// - The caller must ensure the mapping does not conflict with existing mappings.
     pub unsafe fn map_1gib(
@@ -160,7 +167,7 @@ impl PageTableMapper {
         let pdpt_idx = virt_addr.pdpt_index();
 
         let intermediate = Self::intermediate_flags_for(flags);
-        // SAFETY: Caller guarantees pml4_phys is valid and alloc returns zeroed frames.
+        // SAFETY: Caller guarantees pml4_phys is valid.
         let pdpt_phys = unsafe { self.ensure_table(pml4_phys, pml4_idx, intermediate, alloc) };
 
         // SAFETY: pdpt_phys was just ensured to be a valid PDPT table.
@@ -174,7 +181,6 @@ impl PageTableMapper {
     ///
     /// # Safety
     /// - `pml4_phys` must point to a valid PML4 table.
-    /// - `alloc` must return zeroed 4 KiB physical frames.
     /// - The caller must ensure the mapping does not conflict with existing mappings.
     pub unsafe fn map_4k(
         &self,
@@ -590,7 +596,7 @@ unsafe impl mapper::PageMapper<Size4KiB> for PageTableMapper {
     ) -> MapFlush {
         let native = Self::map_flags_to_native(flags);
         let virt = page.start_address();
-        // SAFETY: Caller guarantees root is valid and alloc returns zeroed frames.
+        // SAFETY: Caller guarantees root is valid.
         unsafe { self.map_4k(root, virt, frame.start_address(), native, alloc) }
         MapFlush::new(virt)
     }
@@ -644,7 +650,7 @@ unsafe impl mapper::PageMapper<Size2MiB> for PageTableMapper {
     ) -> MapFlush {
         let native = Self::map_flags_to_native(flags);
         let virt = page.start_address();
-        // SAFETY: Caller guarantees root is valid and alloc returns zeroed frames.
+        // SAFETY: Caller guarantees root is valid.
         unsafe { self.map_2mib(root, virt, frame.start_address(), native, alloc) }
         MapFlush::new(virt)
     }
@@ -698,7 +704,7 @@ unsafe impl mapper::PageMapper<Size1GiB> for PageTableMapper {
     ) -> MapFlush {
         let native = Self::map_flags_to_native(flags);
         let virt = page.start_address();
-        // SAFETY: Caller guarantees root is valid and alloc returns zeroed frames.
+        // SAFETY: Caller guarantees root is valid.
         unsafe { self.map_1gib(root, virt, frame.start_address(), native, alloc) }
         MapFlush::new(virt)
     }
