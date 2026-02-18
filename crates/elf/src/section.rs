@@ -506,14 +506,14 @@ mod tests {
             &mut buf,
             1, // name offset in shstrtab: ".strtab"
             SHT_STRTAB,
-            0,             // sh_flags
-            0,             // sh_addr
+            0, // sh_flags
+            0, // sh_addr
             strtab_off,
             strtab_data.len() as u64,
-            0,             // sh_link
-            0,             // sh_info
-            1,             // sh_addralign
-            0,             // sh_entsize
+            0, // sh_link
+            0, // sh_info
+            1, // sh_addralign
+            0, // sh_entsize
         );
 
         // Section 2: .symtab (SHT_SYMTAB), sh_link=1 (points to .strtab)
@@ -521,13 +521,13 @@ mod tests {
             &mut buf,
             9, // name offset in shstrtab: ".symtab"
             SHT_SYMTAB,
-            0,             // sh_flags
-            0,             // sh_addr
+            0, // sh_flags
+            0, // sh_addr
             symtab_off,
             (SYM_SIZE * 2) as u64,
-            1,             // sh_link -> .strtab
-            0,             // sh_info
-            8,             // sh_addralign
+            1, // sh_link -> .strtab
+            0, // sh_info
+            8, // sh_addralign
             SYM_SIZE as u64,
         );
 
@@ -536,14 +536,14 @@ mod tests {
             &mut buf,
             17, // name offset in shstrtab: ".shstrtab"
             SHT_STRTAB,
-            0,             // sh_flags
-            0,             // sh_addr
+            0, // sh_flags
+            0, // sh_addr
             shstrtab_off,
             shstrtab_data.len() as u64,
-            0,             // sh_link
-            0,             // sh_info
-            1,             // sh_addralign
-            0,             // sh_entsize
+            0, // sh_link
+            0, // sh_info
+            1, // sh_addralign
+            0, // sh_entsize
         );
 
         // Append actual data

@@ -71,8 +71,8 @@ impl Elf64Rela {
         let r_addend = le_i64(b, 16);
         Self {
             r_offset,
-            r_type: r_info as u32,          // lower 32 bits
-            r_sym: (r_info >> 32) as u32,   // upper 32 bits
+            r_type: r_info as u32,        // lower 32 bits
+            r_sym: (r_info >> 32) as u32, // upper 32 bits
             r_addend,
         }
     }
@@ -202,9 +202,7 @@ pub fn compute_x86_64_reloc(
 
         // S + A - P (32-bit, sign-extended)
         R_X86_64_PC32 | R_X86_64_PLT32 => {
-            let result = (s as i64)
-                .wrapping_add(a)
-                .wrapping_sub(p as i64);
+            let result = (s as i64).wrapping_add(a).wrapping_sub(p as i64);
             // Must fit in i32
             let truncated = result as i32;
             if i64::from(truncated) != result {
@@ -320,7 +318,12 @@ mod tests {
 
     #[test]
     fn reloc_none() {
-        let rela = Elf64Rela { r_offset: 0x100, r_type: R_X86_64_NONE, r_sym: 0, r_addend: 0 };
+        let rela = Elf64Rela {
+            r_offset: 0x100,
+            r_type: R_X86_64_NONE,
+            r_sym: 0,
+            r_addend: 0,
+        };
         let (off, val) = compute_x86_64_reloc(&rela, 0, 0, 0).unwrap();
         assert_eq!(off, 0x100);
         assert_eq!(val, RelocValue::U64(0));
@@ -329,7 +332,12 @@ mod tests {
     #[test]
     fn reloc_64() {
         // S + A = 0x1000 + 0x10 = 0x1010
-        let rela = Elf64Rela { r_offset: 0x200, r_type: R_X86_64_64, r_sym: 1, r_addend: 0x10 };
+        let rela = Elf64Rela {
+            r_offset: 0x200,
+            r_type: R_X86_64_64,
+            r_sym: 1,
+            r_addend: 0x10,
+        };
         let (_, val) = compute_x86_64_reloc(&rela, 0x1000, 0, 0).unwrap();
         assert_eq!(val, RelocValue::U64(0x1010));
     }
@@ -337,7 +345,12 @@ mod tests {
     #[test]
     fn reloc_64_negative_addend() {
         // S + A = 0x1000 + (-8) = 0xFF8
-        let rela = Elf64Rela { r_offset: 0, r_type: R_X86_64_64, r_sym: 1, r_addend: -8 };
+        let rela = Elf64Rela {
+            r_offset: 0,
+            r_type: R_X86_64_64,
+            r_sym: 1,
+            r_addend: -8,
+        };
         let (_, val) = compute_x86_64_reloc(&rela, 0x1000, 0, 0).unwrap();
         assert_eq!(val, RelocValue::U64(0xFF8));
     }
@@ -345,7 +358,12 @@ mod tests {
     #[test]
     fn reloc_pc32() {
         // S + A - P = 0x2000 + (-4) - 0x1000 = 0xFFC
-        let rela = Elf64Rela { r_offset: 0x1000, r_type: R_X86_64_PC32, r_sym: 1, r_addend: -4 };
+        let rela = Elf64Rela {
+            r_offset: 0x1000,
+            r_type: R_X86_64_PC32,
+            r_sym: 1,
+            r_addend: -4,
+        };
         let (_, val) = compute_x86_64_reloc(&rela, 0x2000, 0, 0x1000).unwrap();
         assert_eq!(val, RelocValue::U32(0xFFC));
     }
@@ -353,7 +371,12 @@ mod tests {
     #[test]
     fn reloc_pc32_negative_result() {
         // S + A - P = 0x1000 + (-4) - 0x2000 = -0x1004 (fits in i32)
-        let rela = Elf64Rela { r_offset: 0x2000, r_type: R_X86_64_PC32, r_sym: 1, r_addend: -4 };
+        let rela = Elf64Rela {
+            r_offset: 0x2000,
+            r_type: R_X86_64_PC32,
+            r_sym: 1,
+            r_addend: -4,
+        };
         let (_, val) = compute_x86_64_reloc(&rela, 0x1000, 0, 0x2000).unwrap();
         assert_eq!(val, RelocValue::U32((-0x1004_i32) as u32));
     }
@@ -361,7 +384,12 @@ mod tests {
     #[test]
     fn reloc_pc32_overflow() {
         // Huge distance that doesn't fit in i32
-        let rela = Elf64Rela { r_offset: 0, r_type: R_X86_64_PC32, r_sym: 1, r_addend: 0 };
+        let rela = Elf64Rela {
+            r_offset: 0,
+            r_type: R_X86_64_PC32,
+            r_sym: 1,
+            r_addend: 0,
+        };
         let result = compute_x86_64_reloc(&rela, 0x1_0000_0000, 0, 0);
         assert_eq!(result, Err(RelocError::Overflow));
     }
@@ -369,7 +397,12 @@ mod tests {
     #[test]
     fn reloc_plt32() {
         // Same formula as PC32: S + A - P
-        let rela = Elf64Rela { r_offset: 0x100, r_type: R_X86_64_PLT32, r_sym: 1, r_addend: -4 };
+        let rela = Elf64Rela {
+            r_offset: 0x100,
+            r_type: R_X86_64_PLT32,
+            r_sym: 1,
+            r_addend: -4,
+        };
         let (_, val) = compute_x86_64_reloc(&rela, 0x2000, 0, 0x100).unwrap();
         assert_eq!(val, RelocValue::U32(0x1EFC));
     }
@@ -377,7 +410,12 @@ mod tests {
     #[test]
     fn reloc_glob_dat() {
         // S = 0x3000
-        let rela = Elf64Rela { r_offset: 0x400, r_type: R_X86_64_GLOB_DAT, r_sym: 1, r_addend: 0 };
+        let rela = Elf64Rela {
+            r_offset: 0x400,
+            r_type: R_X86_64_GLOB_DAT,
+            r_sym: 1,
+            r_addend: 0,
+        };
         let (_, val) = compute_x86_64_reloc(&rela, 0x3000, 0, 0).unwrap();
         assert_eq!(val, RelocValue::U64(0x3000));
     }
@@ -385,7 +423,12 @@ mod tests {
     #[test]
     fn reloc_relative() {
         // B + A = 0x40_0000 + 0x1234 = 0x40_1234
-        let rela = Elf64Rela { r_offset: 0x500, r_type: R_X86_64_RELATIVE, r_sym: 0, r_addend: 0x1234 };
+        let rela = Elf64Rela {
+            r_offset: 0x500,
+            r_type: R_X86_64_RELATIVE,
+            r_sym: 0,
+            r_addend: 0x1234,
+        };
         let (_, val) = compute_x86_64_reloc(&rela, 0, 0x40_0000, 0).unwrap();
         assert_eq!(val, RelocValue::U64(0x40_1234));
     }
@@ -393,7 +436,12 @@ mod tests {
     #[test]
     fn reloc_relative_negative_addend() {
         // B + A = 0x40_0000 + (-0x100) = 0x3F_FF00
-        let rela = Elf64Rela { r_offset: 0, r_type: R_X86_64_RELATIVE, r_sym: 0, r_addend: -0x100 };
+        let rela = Elf64Rela {
+            r_offset: 0,
+            r_type: R_X86_64_RELATIVE,
+            r_sym: 0,
+            r_addend: -0x100,
+        };
         let (_, val) = compute_x86_64_reloc(&rela, 0, 0x40_0000, 0).unwrap();
         assert_eq!(val, RelocValue::U64(0x3F_FF00));
     }
@@ -401,7 +449,12 @@ mod tests {
     #[test]
     fn reloc_32_zero_ext() {
         // S + A = 0x1000 + 0x10 = 0x1010, fits in u32
-        let rela = Elf64Rela { r_offset: 0, r_type: R_X86_64_32, r_sym: 1, r_addend: 0x10 };
+        let rela = Elf64Rela {
+            r_offset: 0,
+            r_type: R_X86_64_32,
+            r_sym: 1,
+            r_addend: 0x10,
+        };
         let (_, val) = compute_x86_64_reloc(&rela, 0x1000, 0, 0).unwrap();
         assert_eq!(val, RelocValue::U32(0x1010));
     }
@@ -409,7 +462,12 @@ mod tests {
     #[test]
     fn reloc_32_overflow() {
         // S + A > u32::MAX
-        let rela = Elf64Rela { r_offset: 0, r_type: R_X86_64_32, r_sym: 1, r_addend: 0 };
+        let rela = Elf64Rela {
+            r_offset: 0,
+            r_type: R_X86_64_32,
+            r_sym: 1,
+            r_addend: 0,
+        };
         let result = compute_x86_64_reloc(&rela, 0x1_0000_0000, 0, 0);
         assert_eq!(result, Err(RelocError::Overflow));
     }
@@ -417,7 +475,12 @@ mod tests {
     #[test]
     fn reloc_32s_sign_ext() {
         // S + A = 0x1000 + (-8) = 0xFF8, fits in i32
-        let rela = Elf64Rela { r_offset: 0, r_type: R_X86_64_32S, r_sym: 1, r_addend: -8 };
+        let rela = Elf64Rela {
+            r_offset: 0,
+            r_type: R_X86_64_32S,
+            r_sym: 1,
+            r_addend: -8,
+        };
         let (_, val) = compute_x86_64_reloc(&rela, 0x1000, 0, 0).unwrap();
         assert_eq!(val, RelocValue::U32(0xFF8));
     }
@@ -425,7 +488,12 @@ mod tests {
     #[test]
     fn reloc_32s_negative_fits() {
         // S + A = 0 + (-1) = -1, fits in i32
-        let rela = Elf64Rela { r_offset: 0, r_type: R_X86_64_32S, r_sym: 0, r_addend: -1 };
+        let rela = Elf64Rela {
+            r_offset: 0,
+            r_type: R_X86_64_32S,
+            r_sym: 0,
+            r_addend: -1,
+        };
         let (_, val) = compute_x86_64_reloc(&rela, 0, 0, 0).unwrap();
         assert_eq!(val, RelocValue::U32((-1_i32) as u32));
     }
@@ -433,14 +501,24 @@ mod tests {
     #[test]
     fn reloc_32s_overflow() {
         // S + A > i32::MAX
-        let rela = Elf64Rela { r_offset: 0, r_type: R_X86_64_32S, r_sym: 1, r_addend: 0 };
+        let rela = Elf64Rela {
+            r_offset: 0,
+            r_type: R_X86_64_32S,
+            r_sym: 1,
+            r_addend: 0,
+        };
         let result = compute_x86_64_reloc(&rela, 0x1_0000_0000, 0, 0);
         assert_eq!(result, Err(RelocError::Overflow));
     }
 
     #[test]
     fn reloc_unsupported_type() {
-        let rela = Elf64Rela { r_offset: 0, r_type: 99, r_sym: 0, r_addend: 0 };
+        let rela = Elf64Rela {
+            r_offset: 0,
+            r_type: 99,
+            r_sym: 0,
+            r_addend: 0,
+        };
         let result = compute_x86_64_reloc(&rela, 0, 0, 0);
         assert_eq!(result, Err(RelocError::UnsupportedType(99)));
     }

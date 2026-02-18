@@ -27,9 +27,9 @@ pub mod segment;
 
 pub use header::{Elf64Header, ElfError, ElfType};
 pub use reloc::{
-    Elf64Rela, RelaIter, RelocError, RelocValue, compute_x86_64_reloc, R_X86_64_32,
-    R_X86_64_32S, R_X86_64_64, R_X86_64_GLOB_DAT, R_X86_64_NONE, R_X86_64_PC32,
-    R_X86_64_PLT32, R_X86_64_RELATIVE,
+    Elf64Rela, R_X86_64_32, R_X86_64_32S, R_X86_64_64, R_X86_64_GLOB_DAT, R_X86_64_NONE,
+    R_X86_64_PC32, R_X86_64_PLT32, R_X86_64_RELATIVE, RelaIter, RelocError, RelocValue,
+    compute_x86_64_reloc,
 };
 pub use section::{
     Elf64SectionHeader, Elf64Symbol, SHF_ALLOC, SHF_EXECINSTR, SHF_WRITE, SHN_UNDEF, SHT_DYNSYM,

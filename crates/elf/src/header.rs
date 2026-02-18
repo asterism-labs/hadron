@@ -104,7 +104,10 @@ impl fmt::Display for ElfError {
                 write!(f, "unsupported machine type (expected EM_X86_64)")
             }
             Self::UnsupportedType => {
-                write!(f, "unsupported ELF type (expected ET_REL, ET_EXEC, or ET_DYN)")
+                write!(
+                    f,
+                    "unsupported ELF type (expected ET_REL, ET_EXEC, or ET_DYN)"
+                )
             }
             Self::Truncated => write!(f, "input data truncated"),
             Self::InvalidOffset => write!(f, "invalid header offset or size"),

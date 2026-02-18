@@ -77,13 +77,16 @@ fn resolve_symbol(
         return Ok(0);
     }
 
-    let symtab_shdr = symtab
-        .ok_or(BinaryError::ParseError("relocation references symbol but no symbol table"))?;
+    let symtab_shdr = symtab.ok_or(BinaryError::ParseError(
+        "relocation references symbol but no symbol table",
+    ))?;
 
     let sym = elf
         .symbols(symtab_shdr)
         .and_then(|mut iter| iter.nth(sym_index as usize))
-        .ok_or(BinaryError::ParseError("relocation symbol index out of range"))?;
+        .ok_or(BinaryError::ParseError(
+            "relocation symbol index out of range",
+        ))?;
 
     if sym.st_shndx == SHN_UNDEF {
         // Undefined symbol — for static-PIE this shouldn't happen; the binary
@@ -109,7 +112,9 @@ fn write_reloc_value<M: PageMapper<Size4KiB> + PageTranslator>(
 ) -> Result<(), BinaryError> {
     let phys = address_space
         .translate(VirtAddr::new(vaddr))
-        .ok_or(BinaryError::ParseError("relocation target address not mapped"))?;
+        .ok_or(BinaryError::ParseError(
+            "relocation target address not mapped",
+        ))?;
 
     let hhdm_ptr = (hhdm_offset + phys.as_u64()) as *mut u8;
 

@@ -24,18 +24,14 @@ pub struct ElfHandler;
 fn map_elf_error(e: hadron_elf::ElfError) -> BinaryError {
     match e {
         hadron_elf::ElfError::BadMagic => BinaryError::ParseError("bad ELF magic"),
-        hadron_elf::ElfError::UnsupportedClass => {
-            BinaryError::ParseError("unsupported ELF class")
-        }
+        hadron_elf::ElfError::UnsupportedClass => BinaryError::ParseError("unsupported ELF class"),
         hadron_elf::ElfError::UnsupportedEncoding => {
             BinaryError::ParseError("unsupported ELF encoding")
         }
         hadron_elf::ElfError::UnsupportedMachine => {
             BinaryError::ParseError("unsupported ELF machine")
         }
-        hadron_elf::ElfError::UnsupportedType => {
-            BinaryError::ParseError("unsupported ELF type")
-        }
+        hadron_elf::ElfError::UnsupportedType => BinaryError::ParseError("unsupported ELF type"),
         hadron_elf::ElfError::Truncated => BinaryError::ParseError("truncated ELF"),
         hadron_elf::ElfError::InvalidOffset => BinaryError::ParseError("invalid ELF offset"),
     }
@@ -108,9 +104,9 @@ impl BinaryFormat for ElfHandler {
         match elf.elf_type() {
             ElfType::Exec => load_exec(&elf),
             ElfType::Dyn => load_dyn(&elf, data),
-            ElfType::Rel => {
-                Err(BinaryError::Unimplemented("ET_REL via BinaryFormat; use ModuleLoader"))
-            }
+            ElfType::Rel => Err(BinaryError::Unimplemented(
+                "ET_REL via BinaryFormat; use ModuleLoader",
+            )),
         }
     }
 }
