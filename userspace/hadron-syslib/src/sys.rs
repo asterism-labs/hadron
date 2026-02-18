@@ -1,10 +1,10 @@
-//! System calls: exit, getpid, query, clock.
+//! System calls: exit, getpid, spawn, waitpid, pipe, query, clock.
 
 use hadron_syscall::raw::{syscall0, syscall1, syscall2, syscall4};
 use hadron_syscall::{
     CLOCK_MONOTONIC, KernelVersionInfo, MemoryInfo, QUERY_KERNEL_VERSION, QUERY_MEMORY,
-    QUERY_UPTIME, SYS_CLOCK_GETTIME, SYS_QUERY, SYS_TASK_EXIT, SYS_TASK_INFO, Timespec,
-    UptimeInfo,
+    QUERY_UPTIME, SYS_CLOCK_GETTIME, SYS_HANDLE_PIPE, SYS_QUERY, SYS_TASK_EXIT, SYS_TASK_INFO,
+    SYS_TASK_SPAWN, SYS_TASK_WAIT, Timespec, UptimeInfo,
 };
 
 // ── Functions ─────────────────────────────────────────────────────────
@@ -27,6 +27,36 @@ pub fn exit(status: usize) -> ! {
 )]
 pub fn getpid() -> u32 {
     syscall0(SYS_TASK_INFO) as u32
+}
+
+/// Spawn a new process from an ELF binary at the given path.
+///
+/// Returns the child PID on success, or a negative errno on failure.
+pub fn spawn(path: &str) -> isize {
+    syscall2(SYS_TASK_SPAWN, path.as_ptr() as usize, path.len())
+}
+
+/// Wait for a child process to exit.
+///
+/// If `pid` is 0, waits for any child. Returns the child PID on success.
+/// If `status_out` is `Some`, the child's exit status is written there.
+pub fn waitpid(pid: u32, status_out: Option<&mut u64>) -> isize {
+    let status_ptr = match status_out {
+        Some(s) => s as *mut u64 as usize,
+        None => 0,
+    };
+    syscall2(SYS_TASK_WAIT, pid as usize, status_ptr)
+}
+
+/// Create a pipe. Returns `(read_fd, write_fd)` on success.
+pub fn pipe() -> Result<(usize, usize), isize> {
+    let mut fds: [usize; 2] = [0; 2];
+    let ret = syscall1(SYS_HANDLE_PIPE, fds.as_mut_ptr() as usize);
+    if ret < 0 {
+        Err(ret)
+    } else {
+        Ok((fds[0], fds[1]))
+    }
 }
 
 /// Query physical memory statistics.

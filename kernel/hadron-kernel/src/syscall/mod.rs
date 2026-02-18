@@ -22,12 +22,24 @@ impl SyscallHandler for HadronDispatch {
         process::sys_task_exit(status)
     }
 
+    fn sys_task_spawn(&self, path_ptr: usize, path_len: usize) -> isize {
+        process::sys_task_spawn(path_ptr, path_len)
+    }
+
+    fn sys_task_wait(&self, pid: usize, status_ptr: usize) -> isize {
+        process::sys_task_wait(pid, status_ptr)
+    }
+
     fn sys_task_info(&self) -> isize {
         process::sys_task_info()
     }
 
     fn sys_handle_close(&self, handle: usize) -> isize {
         vfs::sys_handle_close(handle)
+    }
+
+    fn sys_handle_pipe(&self, fds_ptr: usize) -> isize {
+        vfs::sys_handle_pipe(fds_ptr)
     }
 
     fn sys_vnode_open(&self, path_ptr: usize, path_len: usize, flags: usize) -> isize {

@@ -222,6 +222,40 @@ pub(super) fn sys_vnode_stat(fd: usize, buf_ptr: usize, buf_len: usize) -> isize
     })
 }
 
+/// `sys_handle_pipe` — create a pipe and return [read_fd, write_fd].
+///
+/// Arguments:
+/// - `fds_ptr`: user-space pointer to write two `usize` values (read_fd, write_fd)
+///
+/// Returns 0 on success, or a negative errno on failure.
+#[expect(
+    clippy::cast_possible_wrap,
+    reason = "fd numbers are small, wrap is impossible"
+)]
+pub(super) fn sys_handle_pipe(fds_ptr: usize) -> isize {
+    let Ok(user_slice) = UserSlice::new(fds_ptr, 2 * core::mem::size_of::<usize>()) else {
+        return -EFAULT;
+    };
+
+    let (reader, writer) = crate::ipc::pipe::pipe();
+
+    let (read_fd, write_fd) = crate::proc::with_current_process(|process| {
+        let mut fd_table = process.fd_table.lock();
+        let rfd = fd_table.open(reader, OpenFlags::READ);
+        let wfd = fd_table.open(writer, OpenFlags::WRITE);
+        (rfd, wfd)
+    });
+
+    // SAFETY: UserSlice validated the pointer range is in user space.
+    unsafe {
+        let dst = user_slice.addr() as *mut usize;
+        core::ptr::write(dst, read_fd);
+        core::ptr::write(dst.add(1), write_fd);
+    }
+
+    0
+}
+
 /// `sys_vnode_readdir` — read directory entries.
 ///
 /// Arguments:

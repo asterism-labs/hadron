@@ -130,13 +130,11 @@ hadron_syscall_macros::define_syscalls! {
         /// Terminate the current task.
         fn task_exit(status: usize) = 0x00;
 
-        /// Spawn a new task.
-        #[reserved(phase = 9)]
-        fn task_spawn() = 0x01;
+        /// Spawn a new task from an ELF binary at the given path.
+        fn task_spawn(path_ptr: usize, path_len: usize) = 0x01;
 
-        /// Wait for a task to exit.
-        #[reserved(phase = 11)]
-        fn task_wait() = 0x02;
+        /// Wait for a child task to exit. Returns child PID on success.
+        fn task_wait(pid: usize, status_ptr: usize) = 0x02;
 
         /// Kill a task.
         #[reserved(phase = 11)]
@@ -162,6 +160,9 @@ hadron_syscall_macros::define_syscalls! {
         /// Query handle info.
         #[reserved(phase = 11)]
         fn handle_info(handle: usize) = 0x02;
+
+        /// Create a pipe. Writes [read_fd, write_fd] to `fds_ptr`.
+        fn handle_pipe(fds_ptr: usize) = 0x03;
     }
 
     /// Channel IPC.

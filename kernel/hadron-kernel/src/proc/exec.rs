@@ -5,13 +5,16 @@
 //! returns a [`Process`] ready to run.
 
 use hadron_core::addr::VirtAddr;
-use hadron_core::arch::x86_64::registers::control::Cr3;
 use hadron_core::mm::PAGE_SIZE;
 use hadron_core::mm::address_space::AddressSpace;
 use hadron_core::mm::mapper::MapFlags;
 use hadron_core::mm::pmm::BitmapFrameAllocRef;
 use hadron_core::paging::{Page, PhysFrame, Size4KiB};
 use hadron_core::{kdebug, kinfo};
+
+extern crate alloc;
+
+use alloc::sync::Arc;
 
 use super::Process;
 use super::binfmt::{self, BinaryError, ExecSegment};
@@ -50,7 +53,10 @@ fn dealloc_frame(frame: PhysFrame<Size4KiB>) {
 ///
 /// Panics if the user address space cannot be created or if physical memory
 /// is exhausted while mapping segments or stack.
-pub fn create_process_from_binary(data: &[u8]) -> Result<(Process, u64, u64), BinaryError> {
+pub fn create_process_from_binary(
+    data: &[u8],
+    parent_pid: Option<u32>,
+) -> Result<(Process, u64, u64), BinaryError> {
     #[cfg(target_arch = "x86_64")]
     type KernelMapper = hadron_core::arch::x86_64::paging::PageTableMapper;
 
@@ -58,8 +64,10 @@ pub fn create_process_from_binary(data: &[u8]) -> Result<(Process, u64, u64), Bi
     let entry = image.entry_point;
     kinfo!("Loading process (entry={:#x})...", entry);
 
-    // Get kernel state needed for address space creation.
-    let kernel_cr3 = Cr3::read();
+    // Use the saved kernel CR3 — not Cr3::read() — because this function may
+    // be called from a syscall handler where CR3 is the calling process's
+    // user page table, not the kernel's.
+    let kernel_cr3 = super::kernel_cr3();
     let hhdm_offset = hadron_core::mm::hhdm::offset();
     let mapper = KernelMapper::new(hhdm_offset);
 
@@ -99,7 +107,7 @@ pub fn create_process_from_binary(data: &[u8]) -> Result<(Process, u64, u64), Bi
         map_user_stack(&address_space, &mut alloc);
 
         // Wrap in Process (takes ownership of address space).
-        Ok(Process::new(address_space))
+        Ok(Process::new(address_space, parent_pid))
     })?;
 
     Ok((process, entry, USER_STACK_TOP))
@@ -227,4 +235,59 @@ fn map_user_stack<
             core::ptr::write_bytes(frame_ptr, 0, PAGE_SIZE);
         }
     }
+}
+
+/// Spawns a new process from an ELF binary at the given VFS path.
+///
+/// Reads the binary from the VFS, creates a process with inherited fd 0/1/2
+/// from the parent, registers it in the global process table, and spawns
+/// its async task on the executor.
+///
+/// Returns the child process `Arc` on success.
+///
+/// # Errors
+///
+/// Returns [`BinaryError`] if the path cannot be resolved, the file cannot
+/// be read, or the binary cannot be loaded.
+pub fn spawn_process(path: &str, parent_pid: u32) -> Result<Arc<Process>, BinaryError> {
+    use crate::fs::file::OpenFlags;
+    use crate::fs::{poll_immediate, vfs};
+
+    let inode = vfs::with_vfs(|vfs| vfs.resolve(path))
+        .map_err(|_| BinaryError::ParseError("path not found"))?;
+
+    let file_size = inode.size();
+    let mut buf = alloc::vec![0u8; file_size];
+    let bytes_read = poll_immediate(inode.read(0, &mut buf))
+        .map_err(|_| BinaryError::ParseError("failed to read binary"))?;
+    assert_eq!(bytes_read, file_size, "short read of binary");
+
+    let (process, entry, stack_top) = create_process_from_binary(&buf, Some(parent_pid))?;
+
+    // Inherit fd 0/1/2 from parent, or fall back to /dev/console.
+    {
+        let console = vfs::with_vfs(|vfs| {
+            vfs.resolve("/dev/console")
+                .expect("spawn_process: /dev/console not found")
+        });
+        let mut fd_table = process.fd_table.lock();
+        fd_table.insert_at(0, console.clone(), OpenFlags::READ);
+        fd_table.insert_at(1, console.clone(), OpenFlags::WRITE);
+        fd_table.insert_at(2, console, OpenFlags::WRITE);
+    }
+
+    let process = Arc::new(process);
+    super::register_process(&process);
+
+    kinfo!(
+        "Process {}: spawning child of {} (entry={:#x}, stack={:#x})",
+        process.pid,
+        parent_pid,
+        entry,
+        stack_top
+    );
+
+    crate::sched::spawn(super::process_task(process.clone(), entry, stack_top));
+
+    Ok(process)
 }

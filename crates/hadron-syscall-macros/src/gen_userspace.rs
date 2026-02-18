@@ -26,7 +26,9 @@ fn gen_raw_stubs() -> TokenStream {
         ///
         /// Hadron syscall ABI: `RAX` = syscall number, arguments in
         /// `RDI`, `RSI`, `RDX`, `R10`, `R8`, `R9`. Return value in `RAX`.
-        /// `RCX` and `R11` are clobbered by `syscall`.
+        /// `RCX` and `R11` are clobbered by the `syscall` instruction.
+        /// All other caller-saved registers (`RDI`, `RSI`, `RDX`, `R8`,
+        /// `R9`, `R10`) may be clobbered by the kernel and must be declared.
         pub mod raw {
             /// Issue a syscall with 0 arguments.
             #[inline(always)]
@@ -40,6 +42,12 @@ fn gen_raw_stubs() -> TokenStream {
                         inlateout("rax") nr as isize => ret,
                         lateout("rcx") _,
                         lateout("r11") _,
+                        lateout("rdi") _,
+                        lateout("rsi") _,
+                        lateout("rdx") _,
+                        lateout("r8") _,
+                        lateout("r9") _,
+                        lateout("r10") _,
                         options(nostack),
                     );
                 }
@@ -58,6 +66,11 @@ fn gen_raw_stubs() -> TokenStream {
                         in("rdi") a0,
                         lateout("rcx") _,
                         lateout("r11") _,
+                        lateout("rsi") _,
+                        lateout("rdx") _,
+                        lateout("r8") _,
+                        lateout("r9") _,
+                        lateout("r10") _,
                         options(nostack),
                     );
                 }
@@ -77,6 +90,10 @@ fn gen_raw_stubs() -> TokenStream {
                         in("rsi") a1,
                         lateout("rcx") _,
                         lateout("r11") _,
+                        lateout("rdx") _,
+                        lateout("r8") _,
+                        lateout("r9") _,
+                        lateout("r10") _,
                         options(nostack),
                     );
                 }
@@ -97,6 +114,9 @@ fn gen_raw_stubs() -> TokenStream {
                         in("rdx") a2,
                         lateout("rcx") _,
                         lateout("r11") _,
+                        lateout("r8") _,
+                        lateout("r9") _,
+                        lateout("r10") _,
                         options(nostack),
                     );
                 }
@@ -118,6 +138,8 @@ fn gen_raw_stubs() -> TokenStream {
                         in("r10") a3,
                         lateout("rcx") _,
                         lateout("r11") _,
+                        lateout("r8") _,
+                        lateout("r9") _,
                         options(nostack),
                     );
                 }
@@ -140,6 +162,7 @@ fn gen_raw_stubs() -> TokenStream {
                         in("r8") a4,
                         lateout("rcx") _,
                         lateout("r11") _,
+                        lateout("r9") _,
                         options(nostack),
                     );
                 }

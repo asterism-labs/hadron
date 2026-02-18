@@ -87,6 +87,7 @@ fn dispatch_command(line: &str) {
         "ls" => cmd_ls(args),
         "cat" => cmd_cat(args),
         "pid" => cmd_pid(),
+        "spawn" => cmd_spawn(args),
         "clear" => cmd_clear(),
         "exit" => cmd_exit(),
         _ => println!("unknown command: {}", cmd),
@@ -101,6 +102,7 @@ fn cmd_help() {
     println!("  ls      - List directory contents (default: /)");
     println!("  cat     - Print file contents");
     println!("  pid     - Show current process ID");
+    println!("  spawn   - Spawn a child process (e.g. 'spawn /init')");
     println!("  clear   - Clear the screen");
     println!("  exit    - Exit the shell");
 }
@@ -224,6 +226,31 @@ fn cmd_cat(args: &str) {
     }
 
     io::close(fd);
+}
+
+fn cmd_spawn(args: &str) {
+    if args.is_empty() {
+        println!("spawn: missing path (e.g. 'spawn /init')");
+        return;
+    }
+
+    let ret = hadron_syslib::sys::spawn(args);
+    if ret < 0 {
+        println!("spawn: failed to spawn '{}' (error {})", args, ret);
+        return;
+    }
+
+    let child_pid = ret as u32;
+    println!("spawned child PID {}", child_pid);
+
+    // Wait for the child to exit.
+    let mut status: u64 = 0;
+    let wait_ret = hadron_syslib::sys::waitpid(child_pid, Some(&mut status));
+    if wait_ret < 0 {
+        println!("waitpid: error {}", wait_ret);
+    } else {
+        println!("child {} exited with status {}", wait_ret, status);
+    }
 }
 
 fn cmd_pid() {

@@ -12,7 +12,9 @@ pub mod exec;
 
 extern crate alloc;
 
+use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 
@@ -24,10 +26,12 @@ use hadron_core::arch::x86_64::userspace::{
     UserRegisters, enter_userspace_resume, enter_userspace_save, restore_kernel_context,
 };
 use hadron_core::mm::address_space::AddressSpace;
+use hadron_core::percpu::{CpuLocal, MAX_CPUS};
 use hadron_core::sync::SpinLock;
 use hadron_core::{kdebug, kinfo};
 
 use crate::fs::file::{FileDescriptorTable, OpenFlags};
+use crate::sync::HeapWaitQueue;
 
 // ── Trap reason constants ────────────────────────────────────────────
 
@@ -37,6 +41,8 @@ pub const TRAP_EXIT: u8 = 0;
 pub const TRAP_PREEMPTED: u8 = 1;
 /// Userspace was killed by a fault.
 pub const TRAP_FAULT: u8 = 2;
+/// Syscall requested blocking wait (sys_task_wait).
+pub const TRAP_WAIT: u8 = 3;
 
 // ── Global statics ──────────────────────────────────────────────────
 
@@ -47,19 +53,23 @@ pub(crate) static KERNEL_CR3: AtomicU64 = AtomicU64::new(0);
 /// Next PID to assign.
 static NEXT_PID: AtomicU32 = AtomicU32::new(1);
 
-/// Saved kernel RSP for `restore_kernel_context`.
+/// Per-CPU saved kernel RSP for `restore_kernel_context`.
 /// `pub(crate)` for access from the timer preemption stub.
-/// Global for BSP-only; Phase 12 makes this per-CPU.
-pub(crate) static SAVED_KERNEL_RSP: AtomicU64 = AtomicU64::new(0);
+pub(crate) static SAVED_KERNEL_RSP: CpuLocal<AtomicU64> = CpuLocal::new(
+    [const { AtomicU64::new(0) }; MAX_CPUS],
+);
 
-/// Exit status written by `sys_task_exit` / fault handler before restoring context.
+/// Per-CPU exit status written by `sys_task_exit` / fault handler before restoring context.
 /// `usize::MAX` is a sentinel meaning "killed by fault".
-static PROCESS_EXIT_STATUS: AtomicU64 = AtomicU64::new(0);
+static PROCESS_EXIT_STATUS: CpuLocal<AtomicU64> = CpuLocal::new(
+    [const { AtomicU64::new(0) }; MAX_CPUS],
+);
 
-/// The currently running user-mode process.
+/// Per-CPU currently running user-mode process.
 /// Set before entering userspace, cleared after returning.
-/// BSP-only; Phase 12 makes this per-CPU.
-static CURRENT_PROCESS: SpinLock<Option<Arc<Process>>> = SpinLock::new(None);
+static CURRENT_PROCESS: CpuLocal<SpinLock<Option<Arc<Process>>>> = CpuLocal::new(
+    [const { SpinLock::new(None) }; MAX_CPUS],
+);
 
 /// Wrapper to make `UnsafeCell<UserRegisters>` usable in a `static`.
 ///
@@ -98,20 +108,68 @@ impl SyncUserContext {
         }))
     }
 
-    fn get(&self) -> *mut UserRegisters {
+    pub(crate) fn get(&self) -> *mut UserRegisters {
         self.0.get()
     }
 }
 
-/// Saved user register state. Written by the preemption stub when
+/// Per-CPU saved user register state. Written by the preemption stub when
 /// preempting from ring 3. Read by `enter_userspace_resume` when
-/// re-entering. BSP-only; Phase 12 makes this per-CPU.
-pub(crate) static USER_CONTEXT: SyncUserContext = SyncUserContext::new();
+/// re-entering.
+pub(crate) static USER_CONTEXT: CpuLocal<SyncUserContext> = CpuLocal::new(
+    [const { SyncUserContext::new() }; MAX_CPUS],
+);
 
-/// Why userspace execution stopped. Set before `restore_kernel_context`.
+/// Per-CPU trap reason. Set before `restore_kernel_context`.
 /// `pub(crate)` for access from the timer preemption stub.
-/// BSP-only; Phase 12 makes this per-CPU.
-pub(crate) static TRAP_REASON: AtomicU8 = AtomicU8::new(TRAP_EXIT);
+pub(crate) static TRAP_REASON: CpuLocal<AtomicU8> = CpuLocal::new(
+    [const { AtomicU8::new(TRAP_EXIT) }; MAX_CPUS],
+);
+
+/// Per-CPU target PID for `sys_task_wait`. Set by syscall handler, read by `process_task`.
+static WAIT_TARGET_PID: CpuLocal<AtomicU32> = CpuLocal::new(
+    [const { AtomicU32::new(0) }; MAX_CPUS],
+);
+
+/// Per-CPU user-space pointer where `sys_task_wait` should write the exit status.
+static WAIT_STATUS_PTR: CpuLocal<AtomicU64> = CpuLocal::new(
+    [const { AtomicU64::new(0) }; MAX_CPUS],
+);
+
+// ── Global process table ────────────────────────────────────────────
+
+/// Global process table mapping PID → `Arc<Process>`.
+///
+/// Processes are inserted on spawn and removed after exit + reaping.
+static PROCESS_TABLE: SpinLock<BTreeMap<u32, Arc<Process>>> = SpinLock::new(BTreeMap::new());
+
+/// Registers a process in the global table.
+pub fn register_process(process: &Arc<Process>) {
+    let mut table = PROCESS_TABLE.lock();
+    table.insert(process.pid, process.clone());
+}
+
+/// Looks up a process by PID.
+pub fn lookup_process(pid: u32) -> Option<Arc<Process>> {
+    let table = PROCESS_TABLE.lock();
+    table.get(&pid).cloned()
+}
+
+/// Removes a process from the global table.
+pub fn unregister_process(pid: u32) {
+    let mut table = PROCESS_TABLE.lock();
+    table.remove(&pid);
+}
+
+/// Returns the PIDs of all children of the given parent.
+pub fn children_of(parent_pid: u32) -> Vec<u32> {
+    let table = PROCESS_TABLE.lock();
+    table
+        .values()
+        .filter(|p| p.parent_pid == Some(parent_pid))
+        .map(|p| p.pid)
+        .collect()
+}
 
 // ── Process struct ──────────────────────────────────────────────────
 
@@ -122,6 +180,8 @@ pub(crate) static TRAP_REASON: AtomicU8 = AtomicU8::new(TRAP_EXIT);
 pub struct Process {
     /// Process ID.
     pub pid: u32,
+    /// Parent process ID (`None` for init).
+    pub parent_pid: Option<u32>,
     /// Physical address of the user PML4 (cached for fast CR3 switch).
     pub user_cr3: PhysAddr,
     /// User address space (owns the PML4, freed on drop).
@@ -130,17 +190,24 @@ pub struct Process {
     address_space: AddressSpace<PageTableMapper>,
     /// Per-process file descriptor table.
     pub fd_table: SpinLock<FileDescriptorTable>,
+    /// Exit status, set when the process terminates.
+    pub exit_status: SpinLock<Option<u64>>,
+    /// Wait queue notified when this process exits.
+    pub exit_notify: HeapWaitQueue,
 }
 
 impl Process {
-    /// Creates a new process with the given address space.
-    pub fn new(address_space: AddressSpace<PageTableMapper>) -> Self {
+    /// Creates a new process with the given address space and parent PID.
+    pub fn new(address_space: AddressSpace<PageTableMapper>, parent_pid: Option<u32>) -> Self {
         let user_cr3 = address_space.root_phys();
         Self {
             pid: NEXT_PID.fetch_add(1, Ordering::Relaxed),
+            parent_pid,
             user_cr3,
             address_space,
             fd_table: SpinLock::new(FileDescriptorTable::new()),
+            exit_status: SpinLock::new(None),
+            exit_notify: HeapWaitQueue::new(),
         }
     }
 }
@@ -163,14 +230,14 @@ pub fn kernel_cr3() -> PhysAddr {
     PhysAddr::new(KERNEL_CR3.load(Ordering::Acquire))
 }
 
-/// Returns the saved kernel RSP for `restore_kernel_context`.
+/// Returns the saved kernel RSP for `restore_kernel_context` (current CPU).
 pub fn saved_kernel_rsp() -> u64 {
-    SAVED_KERNEL_RSP.load(Ordering::Acquire)
+    SAVED_KERNEL_RSP.get().load(Ordering::Acquire)
 }
 
-/// Stores the exit status so `process_task` can read it after context restore.
+/// Stores the exit status so `process_task` can read it after context restore (current CPU).
 pub fn set_process_exit_status(status: u64) {
-    PROCESS_EXIT_STATUS.store(status, Ordering::Release);
+    PROCESS_EXIT_STATUS.get().store(status, Ordering::Release);
 }
 
 /// Saves the current CR3 as the kernel CR3.
@@ -178,12 +245,12 @@ pub fn save_kernel_cr3() {
     KERNEL_CR3.store(Cr3::read().as_u64(), Ordering::Release);
 }
 
-/// Sets the trap reason before calling `restore_kernel_context`.
+/// Sets the trap reason before calling `restore_kernel_context` (current CPU).
 pub fn set_trap_reason(reason: u8) {
-    TRAP_REASON.store(reason, Ordering::Release);
+    TRAP_REASON.get().store(reason, Ordering::Release);
 }
 
-/// Returns a raw pointer to the `USER_CONTEXT` static.
+/// Returns a raw pointer to the current CPU's `USER_CONTEXT`.
 ///
 /// Used by the timer preemption stub to save user registers.
 ///
@@ -192,10 +259,10 @@ pub fn set_trap_reason(reason: u8) {
 /// The caller must ensure exclusive access (interrupts disabled or
 /// single-threaded context).
 pub fn user_context_ptr() -> *mut UserRegisters {
-    USER_CONTEXT.get()
+    USER_CONTEXT.get().get()
 }
 
-/// Returns a raw pointer to the `SAVED_KERNEL_RSP` static.
+/// Returns a raw pointer to the current CPU's `SAVED_KERNEL_RSP`.
 ///
 /// Used by assembly stubs to read the saved RSP value.
 ///
@@ -205,10 +272,17 @@ pub fn user_context_ptr() -> *mut UserRegisters {
 /// is valid (after `enter_userspace_save` has stored a value).
 pub fn saved_kernel_rsp_ptr() -> *const u64 {
     // AtomicU64 has the same layout as u64.
-    core::ptr::addr_of!(SAVED_KERNEL_RSP) as *const u64
+    SAVED_KERNEL_RSP.get() as *const AtomicU64 as *const u64
 }
 
-/// Returns a raw pointer to the `KERNEL_CR3` static.
+/// Returns a raw pointer to the current CPU's `TRAP_REASON`.
+///
+/// Used by the timer preemption stub to set the trap reason.
+pub fn trap_reason_ptr() -> *const u8 {
+    TRAP_REASON.get() as *const AtomicU8 as *const u8
+}
+
+/// Returns a raw pointer to the `KERNEL_CR3` static (global, not per-CPU).
 ///
 /// Used by the timer preemption stub to restore kernel CR3.
 pub fn kernel_cr3_ptr() -> *const u64 {
@@ -239,12 +313,12 @@ pub unsafe fn terminate_current_process_from_fault() -> ! {
         let percpu = IA32_KERNEL_GS_BASE.read();
         IA32_GS_BASE.write(percpu);
     }
-    set_process_exit_status(usize::MAX as u64);
-    set_trap_reason(TRAP_FAULT);
+    PROCESS_EXIT_STATUS.get().store(usize::MAX as u64, Ordering::Release);
+    TRAP_REASON.get().store(TRAP_FAULT, Ordering::Release);
     // SAFETY: saved_kernel_rsp() returns the RSP saved by enter_userspace_save,
     // which is still valid on the executor stack.
     unsafe {
-        restore_kernel_context(saved_kernel_rsp());
+        restore_kernel_context(SAVED_KERNEL_RSP.get().load(Ordering::Acquire));
     }
 }
 
@@ -257,9 +331,18 @@ pub unsafe fn terminate_current_process_from_fault() -> ! {
 ///
 /// Panics if no process is currently running.
 pub fn with_current_process<R>(f: impl FnOnce(&Arc<Process>) -> R) -> R {
-    let guard = CURRENT_PROCESS.lock();
+    let guard = CURRENT_PROCESS.get().lock();
     let process = guard.as_ref().expect("no current process");
     f(process)
+}
+
+/// Try to execute a closure with a reference to the current process.
+///
+/// Returns `None` if no process is currently running (e.g. in the test
+/// harness or during early boot).
+pub fn try_current_process<R>(f: impl FnOnce(&Arc<Process>) -> R) -> Option<R> {
+    let guard = CURRENT_PROCESS.get().lock();
+    guard.as_ref().map(f)
 }
 
 // ── Userspace entry helpers ─────────────────────────────────────────
@@ -269,6 +352,10 @@ pub fn with_current_process<R>(f: impl FnOnce(&Arc<Process>) -> R) -> R {
 /// Disables interrupts, sets up GS bases for user/kernel transition,
 /// switches CR3, and calls `enter_userspace_save`.
 fn enter_userspace_first(process: &Process, entry: u64, stack_top: u64) {
+    // Compute per-CPU pointer BEFORE clearing GS base (CpuLocal::get()
+    // needs current_cpu() which reads GS:[0]).
+    let saved_rsp_ptr = SAVED_KERNEL_RSP.get() as *const AtomicU64 as *mut u64;
+
     // SAFETY: CLI has no side effects beyond masking interrupts. We need
     // interrupts off to atomically switch CR3 and GS bases.
     unsafe {
@@ -290,9 +377,6 @@ fn enter_userspace_first(process: &Process, entry: u64, stack_top: u64) {
         // Switch to user address space.
         Cr3::write(process.user_cr3);
 
-        // Pass a pointer directly into the SAVED_KERNEL_RSP static.
-        // AtomicU64 has the same layout as u64, so this cast is sound.
-        let saved_rsp_ptr = core::ptr::addr_of!(SAVED_KERNEL_RSP) as *mut u64;
         enter_userspace_save(entry, stack_top, saved_rsp_ptr);
     }
     // Returns here when restore_kernel_context is called.
@@ -303,6 +387,11 @@ fn enter_userspace_first(process: &Process, entry: u64, stack_top: u64) {
 /// Disables interrupts, sets up GS bases, switches CR3, and calls
 /// `enter_userspace_resume` with the saved `USER_CONTEXT`.
 fn enter_userspace_resume_wrapper(process: &Process) {
+    // Compute per-CPU pointers BEFORE clearing GS base (CpuLocal::get()
+    // needs current_cpu() which reads GS:[0]).
+    let saved_rsp_ptr = SAVED_KERNEL_RSP.get() as *const AtomicU64 as *mut u64;
+    let ctx = USER_CONTEXT.get().get();
+
     // SAFETY: CLI to mask interrupts during CR3/GS manipulation.
     unsafe {
         core::arch::asm!("cli", options(nomem, nostack));
@@ -314,11 +403,9 @@ fn enter_userspace_resume_wrapper(process: &Process) {
         IA32_GS_BASE.write(0);
         Cr3::write(process.user_cr3);
 
-        let saved_rsp_ptr = core::ptr::addr_of!(SAVED_KERNEL_RSP) as *mut u64;
         // SAFETY: USER_CONTEXT was written by the timer preemption stub
         // and contains the user's register state at the point of preemption.
         // No one else accesses it between the timer stub and here.
-        let ctx = USER_CONTEXT.get();
         enter_userspace_resume(ctx, saved_rsp_ptr);
     }
     // Returns here when restore_kernel_context is called.
@@ -339,7 +426,7 @@ pub fn spawn_init() {
     let init_elf = read_init_from_vfs();
 
     let (process, entry, stack_top) =
-        exec::create_process_from_binary(init_elf).expect("failed to load init binary");
+        exec::create_process_from_binary(init_elf, None).expect("failed to load init binary");
 
     // Set up stdin/stdout/stderr pointing to /dev/console.
     {
@@ -354,6 +441,7 @@ pub fn spawn_init() {
     }
 
     let process = Arc::new(process);
+    register_process(&process);
 
     kinfo!(
         "Process {}: spawning init task (entry={:#x}, stack={:#x})",
@@ -386,18 +474,24 @@ fn read_init_from_vfs() -> &'static [u8] {
     buf.leak()
 }
 
+/// Sets the target PID and status pointer for a `TRAP_WAIT` syscall.
+pub fn set_wait_params(target_pid: u32, status_ptr: u64) {
+    WAIT_TARGET_PID.get().store(target_pid, Ordering::Release);
+    WAIT_STATUS_PTR.get().store(status_ptr, Ordering::Release);
+}
+
 /// The async task that represents a running process.
 ///
 /// Enters userspace and re-enters after preemption in a loop.
 /// Exits when the process calls `sys_task_exit` or is killed by a fault.
-async fn process_task(process: Arc<Process>, entry: u64, stack_top: u64) {
+pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u64) {
     let pid = process.pid;
     let mut first_entry = true;
 
     loop {
         // Set the current process so syscall handlers can access it.
         {
-            let mut current = CURRENT_PROCESS.lock();
+            let mut current = CURRENT_PROCESS.get().lock();
             *current = Some(process.clone());
         }
 
@@ -411,35 +505,184 @@ async fn process_task(process: Arc<Process>, entry: u64, stack_top: u64) {
         // We're back from userspace. CR3 and GS were already restored
         // by the syscall/fault/preemption handler.
         {
-            let mut current = CURRENT_PROCESS.lock();
+            let mut current = CURRENT_PROCESS.get().lock();
             *current = None;
         }
 
-        match TRAP_REASON.load(Ordering::Acquire) {
+        match TRAP_REASON.get().load(Ordering::Acquire) {
             TRAP_EXIT => {
-                let status = PROCESS_EXIT_STATUS.load(Ordering::Acquire);
+                let status = PROCESS_EXIT_STATUS.get().load(Ordering::Acquire);
                 if status == usize::MAX as u64 {
                     kinfo!("Process {} killed by fault", pid);
                 } else {
                     kinfo!("Process {} exited with status {}", pid, status);
                 }
+                // Store exit status and notify waiters.
+                *process.exit_status.lock() = Some(status);
+                process.exit_notify.wake_all();
                 break;
             }
             TRAP_PREEMPTED => {
                 // User state was saved in USER_CONTEXT by the timer stub.
-                // Yield to the executor so other tasks can run, then
-                // re-enter userspace on next poll.
+                // Snapshot it before yielding — USER_CONTEXT is per-CPU but
+                // will be overwritten if another process is preempted on
+                // this CPU while we are suspended in .await.
+                // SAFETY: USER_CONTEXT is only written by the timer stub
+                // with interrupts disabled while userspace was running.
+                // No concurrent access from here.
+                let saved_ctx = unsafe { (*USER_CONTEXT.get().get()).clone() };
+
+                // Yield to the executor so other tasks can run.
                 crate::sched::primitives::yield_now().await;
+
+                // Restore our saved context back before re-entering
+                // userspace. Another process may have overwritten it
+                // during our yield.
+                // SAFETY: No other task accesses USER_CONTEXT between
+                // here and enter_userspace_resume_wrapper (no .await).
+                unsafe {
+                    *USER_CONTEXT.get().get() = saved_ctx;
+                }
                 continue;
             }
             TRAP_FAULT => {
                 kinfo!("Process {} killed by fault", pid);
+                // Faults report as exit status usize::MAX.
+                *process.exit_status.lock() = Some(usize::MAX as u64);
+                process.exit_notify.wake_all();
                 break;
+            }
+            TRAP_WAIT => {
+                // The syscall handler set WAIT_TARGET_PID and WAIT_STATUS_PTR.
+                // We await the child's exit here (async context).
+                let target = WAIT_TARGET_PID.get().load(Ordering::Acquire);
+                let status_ptr = WAIT_STATUS_PTR.get().load(Ordering::Acquire);
+
+                // Snapshot the saved user registers and RSP BEFORE yielding.
+                // SYSCALL_SAVED_REGS and percpu.user_rsp are global statics
+                // that will be overwritten by the child process's syscalls
+                // while we are suspended in .await.
+                // SAFETY: SYSCALL_SAVED_REGS is only written by syscall entry
+                // assembly with interrupts masked, and we haven't yielded yet.
+                let (saved_rip, saved_rflags, saved_rbx, saved_rbp, saved_r12, saved_r13, saved_r14, saved_r15, saved_user_rsp) = unsafe {
+                    let saved =
+                        &*hadron_core::arch::x86_64::syscall::SYSCALL_SAVED_REGS.get().get();
+                    (
+                        saved.user_rip,
+                        saved.user_rflags,
+                        saved.rbx,
+                        saved.rbp,
+                        saved.r12,
+                        saved.r13,
+                        saved.r14,
+                        saved.r15,
+                        hadron_core::percpu::current_cpu().user_rsp,
+                    )
+                };
+
+                let (result, exit_code) = handle_wait(pid, target).await;
+
+                // Write exit status to user memory under user CR3.
+                if status_ptr != 0 && result >= 0 {
+                    // SAFETY: Switching to user CR3 is safe because the kernel
+                    // upper half is identity-mapped in both address spaces.
+                    unsafe {
+                        Cr3::write(process.user_cr3);
+                    }
+                    let uslice = hadron_core::syscall::userptr::UserSlice::new(
+                        status_ptr as usize,
+                        core::mem::size_of::<u64>(),
+                    );
+                    if let Ok(slice) = uslice {
+                        // SAFETY: The pointer was validated by UserSlice and the
+                        // user address space is mapped (we switched CR3).
+                        unsafe {
+                            core::ptr::write(slice.addr() as *mut u64, exit_code);
+                        }
+                    }
+                    // SAFETY: Restore kernel CR3.
+                    unsafe {
+                        Cr3::write(kernel_cr3());
+                    }
+                }
+
+                // Populate USER_CONTEXT from the snapshotted registers.
+                // SAFETY: USER_CONTEXT is per-CPU, only accessed from this
+                // task and the preemption stub (mutually exclusive).
+                unsafe {
+                    let ctx = &mut *USER_CONTEXT.get().get();
+                    ctx.rip = saved_rip;
+                    ctx.rflags = saved_rflags;
+                    ctx.rsp = saved_user_rsp;
+                    ctx.rbx = saved_rbx;
+                    ctx.rbp = saved_rbp;
+                    ctx.r12 = saved_r12;
+                    ctx.r13 = saved_r13;
+                    ctx.r14 = saved_r14;
+                    ctx.r15 = saved_r15;
+                    ctx.rax = result as u64;
+                    // Caller-saved registers are clobbered by the syscall ABI.
+                    ctx.rcx = 0;
+                    ctx.rdx = 0;
+                    ctx.rsi = 0;
+                    ctx.rdi = 0;
+                    ctx.r8 = 0;
+                    ctx.r9 = 0;
+                    ctx.r10 = 0;
+                    ctx.r11 = 0;
+                }
+                continue;
             }
             _ => unreachable!("invalid trap reason"),
         }
     }
 
-    // Process drops here — address space is freed.
+    // Unregister from process table and drop.
+    unregister_process(pid);
     drop(process);
+}
+
+/// Handles a `TRAP_WAIT` by awaiting the target child's exit.
+///
+/// Returns `(child_pid, exit_code)` on success, or `(-errno, 0)` on failure.
+/// The caller is responsible for writing the exit status to user memory
+/// (requires switching to user CR3).
+#[expect(
+    clippy::cast_possible_wrap,
+    reason = "returning negated errno as isize"
+)]
+async fn handle_wait(parent_pid: u32, target_pid: u32) -> (isize, u64) {
+    // Find the child process.
+    let child = if target_pid == 0 {
+        // Wait for any child — pick the first one.
+        let children = children_of(parent_pid);
+        if children.is_empty() {
+            return (-(hadron_core::syscall::EINVAL), 0);
+        }
+        lookup_process(children[0])
+    } else {
+        lookup_process(target_pid)
+    };
+
+    let child = match child {
+        Some(c) => c,
+        None => return (-(hadron_core::syscall::EINVAL), 0),
+    };
+
+    // Verify it's actually our child.
+    if child.parent_pid != Some(parent_pid) {
+        return (-(hadron_core::syscall::EINVAL), 0);
+    }
+
+    // Wait for the child to exit (may already be done).
+    loop {
+        {
+            let status = child.exit_status.lock();
+            if let Some(exit_code) = *status {
+                return (child.pid as isize, exit_code);
+            }
+        }
+        // Not exited yet — wait for notification.
+        child.exit_notify.wait().await;
+    }
 }

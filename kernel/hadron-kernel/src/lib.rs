@@ -15,6 +15,7 @@ pub mod backtrace;
 pub mod boot;
 pub mod drivers;
 pub mod fs;
+pub mod ipc;
 pub mod log;
 pub mod mm;
 pub mod proc;
