@@ -10,7 +10,7 @@
 //! [`USER_CONTEXT`]: crate::proc::USER_CONTEXT
 
 use crate::arch::x86_64::acpi::timer_tick_and_eoi;
-use crate::proc::{KERNEL_CR3, SAVED_KERNEL_RSP, TRAP_PREEMPTED, TRAP_REASON, USER_CONTEXT};
+use crate::proc::{KERNEL_CR3, TRAP_PREEMPTED};
 
 /// MSR address for `IA32_GS_BASE`.
 const IA32_GS_BASE_MSR: u32 = 0xC000_0101;
@@ -86,10 +86,9 @@ pub(crate) unsafe extern "C" fn timer_preempt_stub() {
         // Save user rax so we can use it as a scratch register.
         "push rax",
 
-        // Load the address of USER_CONTEXT (SyncUserContext wrapping
-        // UnsafeCell<UserRegisters>; same layout as UserRegisters).
-        // RIP-relative addressing is required for PIE compatibility.
-        "lea rax, [rip + {user_ctx}]",
+        // Load this CPU's USER_CONTEXT pointer from PerCpu.user_context_ptr
+        // (GS:[32]). This is a per-CPU pointer set during init.
+        "mov rax, gs:[32]",
 
         // Save all user GPRs into USER_CONTEXT.
         // UserRegisters layout (repr(C), each field 8 bytes):
@@ -136,7 +135,7 @@ pub(crate) unsafe extern "C" fn timer_preempt_stub() {
         "call {dispatch}",
         "add rsp, 8",
 
-        // Restore kernel CR3 from the KERNEL_CR3 static.
+        // Restore kernel CR3 from the KERNEL_CR3 static (global, not per-CPU).
         "lea rax, [rip + {kernel_cr3}]",
         "mov rax, [rax]",
         "mov cr3, rax",
@@ -148,14 +147,15 @@ pub(crate) unsafe extern "C" fn timer_preempt_stub() {
         "mov ecx, {kgs_base_msr}",
         "wrmsr",                    // KERNEL_GS_BASE = percpu
 
-        // Set TRAP_REASON = TRAP_PREEMPTED.
-        "lea rax, [rip + {trap_reason}]",
+        // Set TRAP_REASON = TRAP_PREEMPTED via per-CPU pointer (GS:[48]).
+        "mov rax, gs:[48]",
         "mov byte ptr [rax], {preempted}",
 
         // Inline restore_kernel_context: load the saved kernel RSP
-        // and pop callee-saved registers (matching enter_userspace_save
-        // layout), then ret back into process_task.
-        "lea rax, [rip + {saved_rsp}]",
+        // from per-CPU pointer (GS:[40]) and pop callee-saved registers
+        // (matching enter_userspace_save layout), then ret back into
+        // process_task.
+        "mov rax, gs:[40]",
         "mov rsp, [rax]",
         "pop r15",
         "pop r14",
@@ -166,10 +166,7 @@ pub(crate) unsafe extern "C" fn timer_preempt_stub() {
         "ret",
 
         dispatch      = sym timer_tick_and_eoi,
-        user_ctx      = sym USER_CONTEXT,
         kernel_cr3    = sym KERNEL_CR3,
-        trap_reason   = sym TRAP_REASON,
-        saved_rsp     = sym SAVED_KERNEL_RSP,
         gs_base_msr   = const IA32_GS_BASE_MSR,
         kgs_base_msr  = const IA32_KERNEL_GS_BASE_MSR,
         preempted     = const TRAP_PREEMPTED,

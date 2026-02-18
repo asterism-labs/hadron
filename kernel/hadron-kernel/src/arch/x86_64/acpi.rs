@@ -4,7 +4,7 @@
 //! and stores parsed ACPI information (MADT, HPET, MCFG) for use by the
 //! interrupt controller and timer subsystems.
 
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 
 use hadron_acpi::{AcpiHandler, AcpiTables, madt};
 use hadron_core::addr::{PhysAddr, VirtAddr};
@@ -45,6 +45,13 @@ static PLATFORM: IrqSpinLock<Option<AcpiPlatformState>> = IrqSpinLock::new(None)
 /// Kept separate from `PLATFORM` because it is on the hot path (every ISR).
 static TIMER_TICKS: AtomicU64 = AtomicU64::new(0);
 
+/// LAPIC timer initial count (ticks per interval), stored after BSP calibration
+/// so APs can start their timers with the same configuration.
+static LAPIC_TIMER_INITIAL_COUNT: AtomicU32 = AtomicU32::new(0);
+
+/// LAPIC timer divide value, stored after BSP calibration for AP reuse.
+static LAPIC_TIMER_DIVIDE: AtomicU8 = AtomicU8::new(0);
+
 /// Sends LAPIC EOI if the LAPIC has been initialized.
 ///
 /// Called by the interrupt dispatch subsystem after every hardware interrupt.
@@ -63,6 +70,26 @@ pub fn send_lapic_eoi() {
 /// Returns the current timer tick count.
 pub fn timer_ticks() -> u64 {
     TIMER_TICKS.load(Ordering::Relaxed)
+}
+
+/// Returns the LAPIC timer configuration (initial_count, divide) from BSP calibration.
+///
+/// APs use this to start their periodic timers with the same interval.
+/// Returns `(0, 0)` if the timer has not been calibrated yet.
+pub fn lapic_timer_config() -> (u32, u8) {
+    (
+        LAPIC_TIMER_INITIAL_COUNT.load(Ordering::Acquire),
+        LAPIC_TIMER_DIVIDE.load(Ordering::Acquire),
+    )
+}
+
+/// Returns the LAPIC virtual base address, if initialized.
+///
+/// All CPUs share the same virtual address for LAPIC MMIO; the hardware
+/// routes each access to the requesting CPU's local APIC.
+pub fn lapic_virt() -> Option<VirtAddr> {
+    let lock = PLATFORM.lock();
+    lock.as_ref().map(|state| state.lapic_base)
 }
 
 /// Runs a closure with a reference to the I/O APIC, if initialized.
@@ -215,6 +242,7 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
     // Initialize per-CPU state
     let apic_id = lapic.id();
     hadron_core::percpu::current_cpu().init(0, apic_id);
+    crate::sched::smp::register_cpu_apic_id(0, apic_id);
 
     hadron_core::kinfo!(
         "LAPIC: Enabled, ID={}, spurious vector={}",
@@ -296,10 +324,10 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
         crate::time::register_hpet(hpet);
     }
 
-    // --- 7. Enable interrupts ---
-    // SAFETY: IDT is configured, LAPIC is enabled, I/O APIC is set up.
-    unsafe { hadron_core::arch::x86_64::instructions::interrupts::enable() };
-    hadron_core::kinfo!("Interrupts enabled");
+    // Note: Interrupts are NOT enabled here. The caller (kernel_init) enables
+    // them after AP bootstrap completes, right before entering the executor.
+    // Starting the LAPIC timer with interrupts disabled is fine — interrupts
+    // are simply held pending until STI.
 }
 
 /// Sets up ISA IRQ routing through the I/O APIC, respecting MADT overrides.
@@ -402,6 +430,10 @@ fn calibrate_and_start_timer(lapic: &LocalApic, hpet: Option<&Hpet>) {
     )]
     let initial_count = ticks_per_ms as u32;
     if initial_count > 0 {
+        // Store calibration for AP reuse before starting timer.
+        LAPIC_TIMER_INITIAL_COUNT.store(initial_count, Ordering::Release);
+        LAPIC_TIMER_DIVIDE.store(divide, Ordering::Release);
+
         lapic.start_timer_periodic(vectors::TIMER, initial_count, divide);
         hadron_core::kinfo!("Timer: LAPIC periodic timer started (1ms interval)");
     } else {

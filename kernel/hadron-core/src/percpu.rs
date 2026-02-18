@@ -1,11 +1,11 @@
 //! Per-CPU state foundation (SMP-ready).
 //!
-//! Provides a minimal per-CPU data structure that holds CPU-local state
-//! such as the APIC ID and LAPIC reference. Currently uses a single
-//! static instance for the BSP; designed to be replaced with GS-base
-//! indexing when APs are booted.
+//! Provides a per-CPU data structure that holds CPU-local state such as
+//! the kernel RSP, APIC ID, and CPU ID. Each CPU accesses its own instance
+//! via `GS:[0]` self-pointer. The BSP uses a static instance; APs allocate
+//! theirs on the heap during bootstrap.
 
-use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 
 /// Syscall stack size for early boot (16 KiB).
 ///
@@ -38,16 +38,30 @@ static mut SYSCALL_STACK: AlignedStack = AlignedStack([0; EARLY_SYSCALL_STACK_SI
 ///
 /// Holds CPU-local state. `#[repr(C)]` ensures deterministic field offsets
 /// for inline assembly access via GS-base:
-/// - offset 0: `kernel_rsp`
-/// - offset 8: `user_rsp`
+/// - offset  0: `self_ptr` (for `GS:[0]` self-pointer pattern)
+/// - offset  8: `kernel_rsp`
+/// - offset 16: `user_rsp`
+/// - offset 24: `cpu_id` (4 bytes)
+/// - offset 28: `apic_id` (1 byte)
+/// - offset 29: `initialized` (1 byte)
+/// - offset 30: 2 bytes padding
+/// - offset 32: `user_context_ptr`
+/// - offset 40: `saved_kernel_rsp_ptr`
+/// - offset 48: `trap_reason_ptr`
+/// - offset 56: `saved_regs_ptr`
 ///
-/// For now, a single static instance is used for the BSP. In future phases,
-/// each AP will have its own instance accessed via GS-base.
+/// Each CPU's GS base points to its own `PerCpu` instance. `current_cpu()`
+/// reads `GS:[0]` to get the self-pointer, avoiding global statics.
 #[repr(C)]
 pub struct PerCpu {
-    /// Saved kernel RSP for syscall stack switching (offset 0).
+    /// Self-pointer for `GS:[0]` access pattern (offset 0).
+    ///
+    /// Set during init to point to this struct's own address.
+    /// Allows `current_cpu()` to read `GS:[0]` instead of using a global.
+    pub self_ptr: u64,
+    /// Saved kernel RSP for syscall stack switching (offset 8).
     pub kernel_rsp: u64,
-    /// Saved user RSP during syscall handling (offset 8).
+    /// Saved user RSP during syscall handling (offset 16).
     pub user_rsp: u64,
     /// Logical CPU ID (0 for BSP).
     pub cpu_id: AtomicU32,
@@ -55,17 +69,42 @@ pub struct PerCpu {
     pub apic_id: AtomicU8,
     /// Whether this per-CPU instance has been initialized.
     initialized: AtomicBool,
+    /// Pointer to this CPU's `USER_CONTEXT` (offset 32).
+    ///
+    /// Set by `init_percpu_process_ptrs` in hadron-kernel. Used by the
+    /// timer preemption stub to save user registers via `GS:[32]`.
+    pub user_context_ptr: u64,
+    /// Pointer to this CPU's `SAVED_KERNEL_RSP` (offset 40).
+    ///
+    /// Used by the timer preemption stub via `GS:[40]` to longjmp back
+    /// to `process_task` after preempting userspace.
+    pub saved_kernel_rsp_ptr: u64,
+    /// Pointer to this CPU's `TRAP_REASON` (offset 48).
+    ///
+    /// Used by the timer preemption stub via `GS:[48]` to set the trap
+    /// reason before longjmping back to `process_task`.
+    pub trap_reason_ptr: u64,
+    /// Pointer to this CPU's `SYSCALL_SAVED_REGS` (offset 56).
+    ///
+    /// Used by the syscall entry stub via `GS:[56]` to save callee-saved
+    /// registers for blocking syscall resume.
+    pub saved_regs_ptr: u64,
 }
 
 impl PerCpu {
     /// Creates a new uninitialized `PerCpu`.
-    const fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
+            self_ptr: 0,
             kernel_rsp: 0,
             user_rsp: 0,
             cpu_id: AtomicU32::new(0),
             apic_id: AtomicU8::new(0),
             initialized: AtomicBool::new(false),
+            user_context_ptr: 0,
+            saved_kernel_rsp_ptr: 0,
+            trap_reason_ptr: 0,
+            saved_regs_ptr: 0,
         }
     }
 
@@ -92,24 +131,41 @@ impl PerCpu {
     }
 }
 
-/// BSP per-CPU data (single static instance for now).
+/// BSP per-CPU data (single static instance for BSP).
 static mut BSP_PERCPU: PerCpu = PerCpu::new();
+
+/// Number of online CPUs.
+static CPU_COUNT: AtomicU32 = AtomicU32::new(1);
+
+/// Returns the number of online CPUs.
+pub fn cpu_count() -> u32 {
+    CPU_COUNT.load(Ordering::Acquire)
+}
+
+/// Sets the number of online CPUs.
+pub fn set_cpu_count(count: u32) {
+    CPU_COUNT.store(count, Ordering::Release);
+}
 
 /// Returns a reference to the current CPU's per-CPU data.
 ///
-/// Currently always returns the BSP instance. When SMP is implemented,
-/// this will use GS-base to index per-CPU storage.
+/// Reads the self-pointer from `GS:[0]`, which was set during CPU init.
+#[cfg(target_arch = "x86_64")]
 pub fn current_cpu() -> &'static PerCpu {
-    // SAFETY: BSP_PERCPU is only mutated during early init (single-threaded),
-    // and all subsequent accesses are read-only or via atomic fields.
-    unsafe { &*core::ptr::addr_of!(BSP_PERCPU) }
+    unsafe {
+        let ptr: u64;
+        // SAFETY: GS:[0] contains the self_ptr field, which points to the
+        // PerCpu struct itself. This was set during init_gs_base (BSP) or
+        // AP bootstrap. The read is lock-free and always valid after init.
+        core::arch::asm!("mov {}, gs:[0]", out(reg) ptr, options(readonly, nostack));
+        &*(ptr as *const PerCpu)
+    }
 }
 
 /// Initializes GS-base MSRs to point to the BSP per-CPU data.
 ///
 /// Sets both `IA32_GS_BASE` and `IA32_KERNEL_GS_BASE` to `&BSP_PERCPU`.
-/// This means `swapgs` in the syscall path is a safe no-op when called
-/// from ring 0 (both MSRs point to the same address).
+/// Also sets the `self_ptr` field so `current_cpu()` works via `GS:[0]`.
 ///
 /// Also initializes `kernel_rsp` to the top of the dedicated syscall stack.
 ///
@@ -124,13 +180,21 @@ pub unsafe fn init_gs_base() {
     let stack_top = core::ptr::addr_of!(SYSCALL_STACK) as u64 + EARLY_SYSCALL_STACK_SIZE as u64;
 
     // SAFETY: BSP_PERCPU is a module-level static; addr_of_mut! is valid.
-    // Writing kernel_rsp before any syscall can fire is the caller's
-    // requirement (guaranteed by the # Safety contract). Writing both
-    // GS_BASE and KERNEL_GS_BASE to the same address means swapgs is a
-    // no-op from ring 0, which is correct before any user process exists.
+    // Writing self_ptr and kernel_rsp before any syscall can fire is the
+    // caller's requirement (guaranteed by the # Safety contract). Writing
+    // both GS_BASE and KERNEL_GS_BASE to the same address means swapgs is
+    // a no-op from ring 0, which is correct before any user process exists.
     unsafe {
         let percpu_ptr = core::ptr::addr_of_mut!(BSP_PERCPU);
+        (*percpu_ptr).self_ptr = percpu_addr;
         (*percpu_ptr).kernel_rsp = stack_top;
+
+        // Initialize the SYSCALL_SAVED_REGS pointer for the BSP so that
+        // the SYSCALL entry stub (GS:[56]) doesn't dereference a null
+        // pointer. This is needed both in the full kernel boot path and
+        // in the test harness (which calls cpu_init but not kernel_init).
+        (*percpu_ptr).saved_regs_ptr =
+            crate::arch::x86_64::syscall::SYSCALL_SAVED_REGS.get_for(0).get() as u64;
 
         IA32_GS_BASE.write(percpu_addr);
         IA32_KERNEL_GS_BASE.write(percpu_addr);
@@ -143,13 +207,12 @@ pub unsafe fn init_gs_base() {
     );
 }
 
-/// Maximum supported CPUs. BSP-only for now.
-pub const MAX_CPUS: usize = 1;
+/// Maximum supported CPUs.
+pub const MAX_CPUS: usize = 256;
 
 /// CPU-local storage. Wraps `[T; MAX_CPUS]`, indexed by current CPU ID.
 ///
-/// When SMP is enabled (Phase 14), increase `MAX_CPUS` and each AP
-/// gets its own instance.
+/// Each AP gets its own instance via the CPU ID index.
 pub struct CpuLocal<T> {
     data: [T; MAX_CPUS],
 }
@@ -161,8 +224,20 @@ impl<T> CpuLocal<T> {
     }
 
     /// Returns a reference to the current CPU's instance.
+    #[cfg(target_arch = "x86_64")]
     pub fn get(&self) -> &T {
         &self.data[current_cpu().get_cpu_id() as usize]
+    }
+
+    /// Host-only fallback: always returns CPU 0's instance.
+    #[cfg(not(target_arch = "x86_64"))]
+    pub fn get(&self) -> &T {
+        &self.data[0]
+    }
+
+    /// Returns a reference to a specific CPU's instance.
+    pub fn get_for(&self, cpu_id: u32) -> &T {
+        &self.data[cpu_id as usize]
     }
 }
 

@@ -25,7 +25,7 @@ config_bool("serial_log", true)
     .menu("General")
     .help("Enable serial port logging");
 
-config_bool("smp", false)
+config_bool("smp", true)
     .menu("SMP")
     .depends_on(["acpi"])
     .selects(["apic"])
@@ -39,7 +39,7 @@ config_bool("apic", false)
     .menu("Hardware")
     .help("Enable APIC interrupt controller");
 
-config_u32("MAX_CPUS", 1)
+config_u32("MAX_CPUS", 256)
     .menu("SMP")
     .range(1, 256)
     .depends_on(["smp"])
@@ -61,6 +61,7 @@ profile("default")
     .target("x86_64-unknown-hadron")
     .opt_level(0)
     .debug_info(true)
+    .qemu_cores(4)
     .boot_binary("hadron-boot-limine");
 
 profile("release")

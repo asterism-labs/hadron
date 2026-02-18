@@ -146,3 +146,76 @@ pub unsafe fn set_tss_rsp0(rsp: u64) {
 pub fn selectors() -> &'static Selectors {
     &GDT.1
 }
+
+/// Initializes a per-CPU GDT and TSS for an Application Processor.
+///
+/// Allocates a new TSS (with double-fault IST stack) and GDT on the heap,
+/// leaks both (they must live forever), loads the GDT, reloads segment
+/// registers, and loads the TSS.
+///
+/// Returns the kernel stack top address (for `PerCpu.kernel_rsp`).
+///
+/// # Safety
+///
+/// Must be called exactly once per AP, after the heap is available and
+/// VMM is initialized. The caller must ensure no interrupts are processed
+/// before the GDT and TSS are fully loaded.
+pub unsafe fn init_ap(cpu_id: u32) -> u64 {
+    extern crate alloc;
+    use alloc::boxed::Box;
+
+    use hadron_core::arch::x86_64::instructions::segmentation::{
+        load_ds, load_es, load_fs, load_gs, load_ss, load_tss, set_cs,
+    };
+    use hadron_core::mm::pmm::BitmapFrameAllocRef;
+
+    // Allocate and set up a new TSS.
+    let mut tss = TaskStateSegment::new();
+
+    // Allocate double-fault IST stack and kernel stack via VMM.
+    let (df_stack_top, kernel_stack_top) = crate::mm::pmm::with_pmm(|pmm| {
+        let mut alloc = BitmapFrameAllocRef(pmm);
+        crate::mm::vmm::with_vmm(|vmm| {
+            let df_stack = vmm
+                .alloc_kernel_stack(&mut alloc, None)
+                .expect("init_ap: failed to allocate double-fault stack");
+            let kern_stack = vmm
+                .alloc_kernel_stack(&mut alloc, None)
+                .expect("init_ap: failed to allocate kernel stack");
+            (df_stack.top().as_u64(), kern_stack.top().as_u64())
+        })
+    });
+    tss.interrupt_stack_table[(DOUBLE_FAULT_IST_INDEX - 1) as usize] = df_stack_top;
+    tss.privilege_stack_table[0] = kernel_stack_top;
+
+    // Leak the TSS so it lives forever.
+    let tss_ref: &'static TaskStateSegment = Box::leak(Box::new(tss));
+
+    // Build a new GDT with the same segment layout as BSP.
+    let mut gdt = GlobalDescriptorTable::new();
+    let kernel_code = gdt.append(Descriptor::kernel_code_segment());
+    let kernel_data = gdt.append(Descriptor::kernel_data_segment());
+    let _user_data = gdt.append(Descriptor::user_data_segment());
+    let _user_code = gdt.append(Descriptor::user_code_segment());
+    let tss_sel = gdt.append(Descriptor::tss_segment(tss_ref));
+
+    // Leak the GDT so it lives forever.
+    let gdt_ref: &'static GlobalDescriptorTable = Box::leak(Box::new(gdt));
+
+    // SAFETY: The GDT and TSS are fully initialized and leaked (static lifetime).
+    // Segment selectors match the BSP layout.
+    unsafe {
+        gdt_ref.load();
+        set_cs(kernel_code);
+        load_ds(kernel_data);
+        load_ss(kernel_data);
+        load_es(SegmentSelector::new(0, 0));
+        load_fs(SegmentSelector::new(0, 0));
+        load_gs(SegmentSelector::new(0, 0));
+        load_tss(tss_sel);
+    }
+
+    hadron_core::kdebug!("AP {} GDT/TSS initialized", cpu_id);
+
+    kernel_stack_top
+}

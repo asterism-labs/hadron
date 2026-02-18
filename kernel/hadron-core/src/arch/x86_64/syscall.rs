@@ -3,10 +3,81 @@
 //! Programs the STAR, LSTAR, and SFMASK MSRs and provides the naked
 //! assembly entry point that the CPU jumps to on `syscall`.
 
+use core::cell::UnsafeCell;
+
 use super::registers::model_specific::{EferFlags, IA32_EFER, MSR_LSTAR, MSR_SFMASK, MSR_STAR};
 
 /// RFLAGS bits to mask on SYSCALL entry: IF (bit 9) + DF (bit 10).
 const SFMASK_VALUE: u64 = 0x600;
+
+/// User registers saved at every SYSCALL entry.
+///
+/// Used by blocking syscalls (e.g. `sys_task_wait`) that longjmp via
+/// `restore_kernel_context` — they need to reconstruct the user state
+/// for `enter_userspace_resume`. The syscall ABI only requires callee-saved
+/// registers (RBX, RBP, R12-R15), RIP, and RFLAGS to be preserved; caller-saved
+/// registers may be zeroed on resume.
+///
+/// BSP-only; Phase 12 makes this per-CPU.
+#[repr(C)]
+pub struct SyscallSavedRegs {
+    /// User return RIP (from CPU RCX). Offset 0.
+    pub user_rip: u64,
+    /// User RFLAGS (from CPU R11). Offset 8.
+    pub user_rflags: u64,
+    /// User RBX. Offset 16.
+    pub rbx: u64,
+    /// User RBP. Offset 24.
+    pub rbp: u64,
+    /// User R12. Offset 32.
+    pub r12: u64,
+    /// User R13. Offset 40.
+    pub r13: u64,
+    /// User R14. Offset 48.
+    pub r14: u64,
+    /// User R15. Offset 56.
+    pub r15: u64,
+}
+
+/// Wrapper to make `UnsafeCell<SyscallSavedRegs>` usable in a `static`.
+///
+/// # Safety
+///
+/// Only written by SYSCALL entry assembly with interrupts masked (SFMASK
+/// clears IF). Read by `process_task` between userspace entries. No
+/// concurrent access on BSP. Phase 12 makes this per-CPU.
+#[repr(transparent)]
+pub struct SyncSavedRegs(UnsafeCell<SyscallSavedRegs>);
+
+// SAFETY: See `SyncSavedRegs` doc comment — no concurrent access.
+unsafe impl Sync for SyncSavedRegs {}
+
+impl SyncSavedRegs {
+    const fn new() -> Self {
+        Self(UnsafeCell::new(SyscallSavedRegs {
+            user_rip: 0,
+            user_rflags: 0,
+            rbx: 0,
+            rbp: 0,
+            r12: 0,
+            r13: 0,
+            r14: 0,
+            r15: 0,
+        }))
+    }
+
+    /// Returns a raw pointer to the inner `SyscallSavedRegs`.
+    pub fn get(&self) -> *const SyscallSavedRegs {
+        self.0.get()
+    }
+}
+
+/// Per-CPU user registers saved at every SYSCALL entry for blocking
+/// syscall resume. Indexed by CPU ID. The syscall entry stub accesses
+/// the correct element via `GS:[56]` (PerCpu.saved_regs_ptr).
+pub static SYSCALL_SAVED_REGS: crate::percpu::CpuLocal<SyncSavedRegs> = crate::percpu::CpuLocal::new(
+    [const { SyncSavedRegs::new() }; crate::percpu::MAX_CPUS],
+);
 
 /// Initializes the SYSCALL/SYSRET mechanism.
 ///
@@ -56,6 +127,10 @@ unsafe extern "C" {
 /// - Loads CS/SS from STAR
 /// - Does NOT switch RSP — we must do that manually
 ///
+/// PerCpu field offsets (with self_ptr at offset 0):
+/// - `GS:[8]`  = `kernel_rsp`
+/// - `GS:[16]` = `user_rsp`
+///
 /// Linux syscall convention:
 /// - Syscall number in RAX
 /// - Args: RDI, RSI, RDX, R10, R8, R9
@@ -78,8 +153,8 @@ unsafe extern "C" fn syscall_entry() {
     core::arch::naked_asm!(
         // Switch to kernel GS and stack
         "swapgs",
-        "mov gs:[8], rsp",          // save caller RSP to percpu.user_rsp
-        "mov rsp, gs:[0]",          // load kernel RSP from percpu.kernel_rsp
+        "mov gs:[16], rsp",         // save caller RSP to percpu.user_rsp (offset 16)
+        "mov rsp, gs:[8]",          // load kernel RSP from percpu.kernel_rsp (offset 8)
 
         // Save caller return state and callee-saved registers
         "push rcx",                 // return RIP (saved by CPU into RCX)
@@ -90,6 +165,27 @@ unsafe extern "C" fn syscall_entry() {
         "push r13",
         "push r14",
         "push r15",
+
+        // Save user callee-saved registers + RIP/RFLAGS to the per-CPU
+        // SYSCALL_SAVED_REGS for blocking syscall resume (TRAP_WAIT).
+        // If the syscall longjmps via restore_kernel_context, these pushed
+        // values on the kernel syscall stack are lost; the static preserves them.
+        // Borrow R15 as scratch (original value is at [rsp]).
+        // GS:[56] = PerCpu.saved_regs_ptr → per-CPU SyncSavedRegs.
+        "mov r15, gs:[56]",
+        "mov [r15], rcx",           // offset 0: user_rip
+        "mov [r15 + 8], r11",       // offset 8: user_rflags
+        "mov [r15 + 16], rbx",      // offset 16: rbx
+        "mov [r15 + 24], rbp",      // offset 24: rbp
+        "mov [r15 + 32], r12",      // offset 32: r12
+        "mov [r15 + 40], r13",      // offset 40: r13
+        "mov [r15 + 48], r14",      // offset 48: r14 (still intact)
+        // Load original r15 from stack and save it.
+        "mov r14, [rsp]",           // r14 = original user r15 (at stack top)
+        "mov [r15 + 56], r14",      // offset 56: r15
+        // Restore clobbered registers from the stack.
+        "mov r14, [rsp + 8]",       // restore r14 from its stack slot
+        "mov r15, [rsp]",           // restore r15 from its stack slot
 
         // Remap syscall registers to SysV C calling convention.
         // Incoming:  RAX=nr, RDI=a0, RSI=a1, RDX=a2, R10=a3, R8=a4, R9=a5
@@ -122,14 +218,14 @@ unsafe extern "C" fn syscall_entry() {
         "js 2f",
 
         // --- User return path (sysretq) ---
-        "mov rsp, gs:[8]",          // restore caller RSP
+        "mov rsp, gs:[16]",         // restore caller RSP from percpu.user_rsp (offset 16)
         "swapgs",
         "sysretq",
 
         // --- Kernel return path (iretq) ---
         // R10 is caller-clobbered in the syscall ABI, safe to use as temp.
         "2:",
-        "mov r10, gs:[8]",          // original RSP
+        "mov r10, gs:[16]",         // original RSP from percpu.user_rsp (offset 16)
         "swapgs",
         // Build iretq frame: SS, RSP, RFLAGS, CS, RIP
         "push 0x10",                // SS = kernel data selector

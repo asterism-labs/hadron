@@ -1,11 +1,13 @@
 //! Kernel task scheduler.
 //!
-//! Provides an async executor that runs kernel tasks as cooperative futures.
-//! Tasks yield at `.await` points; a budget-based preemption flag ensures
-//! fairness even if a task polls for a long time between awaits.
+//! Provides per-CPU async executors that run kernel tasks as cooperative
+//! futures. Tasks yield at `.await` points; a per-CPU budget-based
+//! preemption flag ensures fairness even if a task polls for a long time
+//! between awaits.
 
 pub mod executor;
 pub mod primitives;
+pub mod smp;
 pub mod timer;
 mod waker;
 
@@ -14,12 +16,15 @@ pub use hadron_core::task::{Priority, TaskMeta};
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
+use hadron_core::percpu::{CpuLocal, MAX_CPUS};
 use hadron_core::task::TaskId;
 
-/// Per-CPU preemption flag (global for now, BSP-only).
-static PREEMPT_PENDING: AtomicBool = AtomicBool::new(false);
+/// Per-CPU preemption flag.
+static PREEMPT_PENDING: CpuLocal<AtomicBool> = CpuLocal::new(
+    [const { AtomicBool::new(false) }; MAX_CPUS],
+);
 
-/// Returns a reference to the global executor.
+/// Returns a reference to the current CPU's executor.
 pub fn executor() -> &'static Executor {
     executor::global()
 }
@@ -59,17 +64,17 @@ pub fn spawn_background(
     )
 }
 
-/// Sets the preemption-pending flag (called from timer interrupt).
+/// Sets the preemption-pending flag on the current CPU (called from timer interrupt).
 pub fn set_preempt_pending() {
-    PREEMPT_PENDING.store(true, Ordering::Release);
+    PREEMPT_PENDING.get().store(true, Ordering::Release);
 }
 
-/// Returns `true` if preemption is pending and clears the flag.
+/// Returns `true` if preemption is pending on the current CPU.
 pub(crate) fn preempt_pending() -> bool {
-    PREEMPT_PENDING.load(Ordering::Acquire)
+    PREEMPT_PENDING.get().load(Ordering::Acquire)
 }
 
-/// Clears the preemption-pending flag.
+/// Clears the preemption-pending flag on the current CPU.
 pub(crate) fn clear_preempt_pending() {
-    PREEMPT_PENDING.store(false, Ordering::Release);
+    PREEMPT_PENDING.get().store(false, Ordering::Release);
 }

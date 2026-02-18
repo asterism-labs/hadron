@@ -85,6 +85,7 @@ kind = "qemu"
 [workspace.metadata.image-runner.runner.qemu]
 machine = "q35"
 memory = 256
+cores = 4
 extra-args = [ "-serial", "stdio" ]
 
 [workspace.metadata.image-runner.test]

@@ -217,6 +217,10 @@ pub struct PagingModeResponse {
 }
 
 /// The response structure for the Multiprocessor Information Request.
+///
+/// Note: The `flags` field is `u32` per the Limine protocol spec, not `u64`.
+/// On x86_64, `bsp_lapic_id` (u32) follows immediately after flags with no
+/// padding, making the struct naturally packed to offset 16 for `cpu_count`.
 #[repr(C)]
 pub struct MpResponse {
     /// The revision of this response structure.
@@ -224,7 +228,7 @@ pub struct MpResponse {
     /// Bitflags indicating CPU features and capabilities.
     ///
     /// Bit0: x2APIC has been enabled (x86 only)
-    pub flags: u64,
+    pub flags: u32,
     /// The Local APIC ID of the bootstrap processor (`x86_64` only).
     #[cfg(target_arch = "x86_64")]
     pub bsp_lapic_id: u32,

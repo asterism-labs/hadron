@@ -134,6 +134,54 @@ pub const MAX_MEMORY_REGIONS: usize = 256;
 /// Maximum number of framebuffers the kernel can store.
 pub const MAX_FRAMEBUFFERS: usize = 4;
 
+/// Maximum number of SMP CPUs the boot info can describe.
+///
+/// Kept small to avoid stack overflow when `BootInfoData` is constructed
+/// on the stack during early boot or in test harnesses.
+pub const MAX_SMP_CPUS: usize = 32;
+
+/// Information about a single CPU for SMP bootstrap.
+///
+/// The `goto_address_ptr` and `extra_argument_ptr` fields point to
+/// bootloader-owned memory. Writing the entry function address to
+/// `goto_address_ptr` (after writing `extra_argument_ptr`) atomically
+/// starts the AP.
+#[derive(Debug, Clone, Copy)]
+pub struct SmpCpuEntry {
+    /// Bootloader-assigned processor ID.
+    pub processor_id: u32,
+    /// Local APIC ID.
+    pub lapic_id: u32,
+    /// Pointer to the goto_address field in bootloader-owned memory.
+    pub goto_address_ptr: *mut u64,
+    /// Pointer to the extra_argument field in bootloader-owned memory.
+    pub extra_argument_ptr: *mut u64,
+}
+
+// SAFETY: The pointers reference bootloader-owned memory that is accessible
+// from any CPU via the HHDM mapping.
+unsafe impl Send for SmpCpuEntry {}
+unsafe impl Sync for SmpCpuEntry {}
+
+impl SmpCpuEntry {
+    /// Starts this AP by writing the extra argument and then the entry address.
+    ///
+    /// # Safety
+    ///
+    /// - `entry` must be the address of a valid `extern "C" fn(u64, u64) -> !`.
+    /// - `extra` is passed in RSI to the entry function.
+    /// - The pointed-to bootloader memory must still be valid and mapped.
+    pub unsafe fn start(&self, entry: usize, extra: u64) {
+        use core::sync::atomic::{fence, Ordering};
+        // SAFETY: Caller guarantees the pointers are still valid.
+        unsafe {
+            core::ptr::write_volatile(self.extra_argument_ptr, extra);
+            fence(Ordering::Release);
+            core::ptr::write_volatile(self.goto_address_ptr, entry as u64);
+        }
+    }
+}
+
 /// Bootloader-agnostic boot information.
 ///
 /// Each bootloader stub (Limine, UEFI, etc.) implements this trait by converting
@@ -175,6 +223,12 @@ pub trait BootInfo {
 
     /// Backtrace data (HBTF format), if loaded by the bootloader.
     fn backtrace(&self) -> Option<BacktraceInfo>;
+
+    /// SMP CPU entries for AP bootstrap. Empty if single-processor.
+    fn smp_cpus(&self) -> &[SmpCpuEntry];
+
+    /// BSP Local APIC ID (x86_64).
+    fn bsp_lapic_id(&self) -> u32;
 }
 
 /// A concrete container for boot information, populated by a bootloader stub.
@@ -205,6 +259,10 @@ pub struct BootInfoData {
     pub initrd: Option<InitrdInfo>,
     /// Backtrace data (HBTF format), if loaded by the bootloader.
     pub backtrace: Option<BacktraceInfo>,
+    /// SMP CPU entries for AP bootstrap.
+    pub smp_cpus: ArrayVec<SmpCpuEntry, MAX_SMP_CPUS>,
+    /// BSP Local APIC ID.
+    pub bsp_lapic_id: u32,
 }
 
 impl BootInfo for BootInfoData {
@@ -254,6 +312,14 @@ impl BootInfo for BootInfoData {
 
     fn backtrace(&self) -> Option<BacktraceInfo> {
         self.backtrace
+    }
+
+    fn smp_cpus(&self) -> &[SmpCpuEntry] {
+        self.smp_cpus.as_slice()
+    }
+
+    fn bsp_lapic_id(&self) -> u32 {
+        self.bsp_lapic_id
     }
 }
 
@@ -378,6 +444,11 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
 
     hadron_core::kinfo!("Hadron kernel initialized successfully.");
 
+    // 8b. Initialize cross-CPU wakeup IPI, then boot Application Processors.
+    crate::sched::smp::init();
+    #[cfg(target_arch = "x86_64")]
+    crate::arch::x86_64::smp::boot_aps(boot_info);
+
     // 9. Spawn platform tasks + heartbeat.
     crate::arch::spawn_platform_tasks();
 
@@ -433,13 +504,33 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
         fs::vfs::with_vfs_mut(|vfs| vfs.mount("/dev", devfs));
     }
 
-    // TODO: re-enable init process once userspace is stable.
-    // crate::proc::save_kernel_cr3();
-    // crate::proc::spawn_init();
-    // crate::sched::executor().run();
+    crate::proc::save_kernel_cr3();
 
-    hadron_core::kinfo!("Kernel boot complete — halting.");
-    loop {
-        core::hint::spin_loop();
+    // Populate BSP per-CPU pointers for assembly stubs (timer, syscall).
+    // These pointers let the naked ASM access per-CPU CpuLocal elements
+    // via GS:[offset] instead of RIP-relative addressing.
+    {
+        let percpu = hadron_core::percpu::current_cpu();
+        // SAFETY: We have exclusive BSP access during init. The pointers
+        // are to static CpuLocal elements that live forever.
+        unsafe {
+            let percpu_mut = percpu as *const hadron_core::percpu::PerCpu
+                as *mut hadron_core::percpu::PerCpu;
+            (*percpu_mut).user_context_ptr = crate::proc::user_context_ptr() as u64;
+            (*percpu_mut).saved_kernel_rsp_ptr = crate::proc::saved_kernel_rsp_ptr() as u64;
+            (*percpu_mut).trap_reason_ptr = crate::proc::trap_reason_ptr() as u64;
+            (*percpu_mut).saved_regs_ptr =
+                hadron_core::arch::x86_64::syscall::SYSCALL_SAVED_REGS.get().get() as u64;
+        }
     }
+
+    crate::proc::spawn_init();
+
+    // 11. Enable BSP interrupts now that all init is done and APs are online.
+    // SAFETY: IDT, LAPIC, I/O APIC, per-CPU state, and SMP are all initialized.
+    unsafe { hadron_core::arch::x86_64::instructions::interrupts::enable() };
+    hadron_core::kinfo!("BSP interrupts enabled");
+
+    // 12. Run the executor — drives ALL kernel tasks including the process task.
+    crate::sched::executor().run();
 }

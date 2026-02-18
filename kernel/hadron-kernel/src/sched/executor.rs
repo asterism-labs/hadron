@@ -2,7 +2,9 @@
 //!
 //! Provides a cooperative executor that polls `Future<Output = ()>` tasks.
 //! Each task is a heap-allocated, pinned, dynamically-dispatched future.
-//! The executor runs one per CPU (currently BSP only) and never returns.
+//! Each CPU runs its own executor instance (accessed via [`global`] /
+//! [`for_cpu`]). Tasks stay on their spawning CPU unless migrated by work
+//! stealing (Phase 12.6).
 //!
 //! Tasks are organized into three strict priority tiers: Critical, Normal,
 //! and Background. The executor always drains higher-priority tiers first.
@@ -15,22 +17,32 @@ use core::pin::Pin;
 use core::sync::atomic::{AtomicU64, Ordering};
 use core::task::{Context, Poll};
 
+use hadron_core::percpu::{CpuLocal, MAX_CPUS};
 use hadron_core::sync::{IrqSpinLock, LazyLock};
 use hadron_core::task::{Priority, TaskId, TaskMeta};
 
-/// Global executor instance, initialized on first access.
-static EXECUTOR: LazyLock<Executor> = LazyLock::new(Executor::new);
+/// Per-CPU executor instances, initialized on first access.
+static EXECUTORS: CpuLocal<LazyLock<Executor>> = CpuLocal::new(
+    [const { LazyLock::new(Executor::new as fn() -> Executor) }; MAX_CPUS],
+);
 
-/// Returns a reference to the global executor.
+/// Returns a reference to the current CPU's executor.
 pub fn global() -> &'static Executor {
-    &EXECUTOR
+    EXECUTORS.get()
+}
+
+/// Returns a reference to a specific CPU's executor.
+///
+/// Used by the waker to push tasks back to their originating CPU's queue.
+pub fn for_cpu(cpu_id: u32) -> &'static Executor {
+    EXECUTORS.get_for(cpu_id)
 }
 
 /// A pinned, heap-allocated, dynamically dispatched future.
 type TaskFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 
 /// A stored task: its future plus metadata.
-struct TaskEntry {
+pub(crate) struct TaskEntry {
     future: TaskFuture,
     #[allow(dead_code, reason = "reserved for Phase 7+ task debugging")]
     meta: TaskMeta,
@@ -104,6 +116,22 @@ impl ReadyQueues {
             .pop_front()
             .map(|id| (Priority::Background, id))
     }
+
+    /// Steals one task from the back of the queue for work stealing.
+    ///
+    /// Returns a Normal or Background task (never Critical). Steals from
+    /// the back to preserve locality — the victim keeps its hot (front)
+    /// tasks while the thief gets the coldest (most recently enqueued) one.
+    pub(crate) fn steal_one(&mut self) -> Option<(Priority, TaskId)> {
+        // Prefer stealing Normal over Background.
+        if let Some(id) = self.queues[Priority::Normal as usize].pop_back() {
+            return Some((Priority::Normal, id));
+        }
+        if let Some(id) = self.queues[Priority::Background as usize].pop_back() {
+            return Some((Priority::Background, id));
+        }
+        None
+    }
 }
 
 /// The kernel's async task executor.
@@ -111,6 +139,9 @@ impl ReadyQueues {
 /// Tasks are spawned as `Future<Output = ()> + Send + 'static` and polled
 /// cooperatively. A waker-based ready queue ensures only runnable tasks
 /// are polled. Tasks are organized into priority tiers.
+///
+/// Each CPU has its own executor instance. Tasks are spawned on the current
+/// CPU's executor and stay there unless migrated by work stealing.
 pub struct Executor {
     /// Task storage: maps TaskId -> task entry (future + metadata).
     tasks: IrqSpinLock<BTreeMap<TaskId, TaskEntry>>,
@@ -127,6 +158,33 @@ impl Executor {
             tasks: IrqSpinLock::new(BTreeMap::new()),
             ready_queues: IrqSpinLock::new(ReadyQueues::new()),
             next_id: AtomicU64::new(0),
+        }
+    }
+
+    /// Attempts to steal one task from this executor for work stealing.
+    ///
+    /// Steals from the back of the ready queue (to preserve locality for
+    /// the victim's hot tasks) and removes the corresponding `TaskEntry`
+    /// from the task map. Uses `try_lock` to avoid blocking the victim.
+    ///
+    /// Returns `None` if:
+    /// - The ready queues or task map can't be locked (contention)
+    /// - No stealable tasks exist (Critical tasks are never stolen)
+    /// - The task is currently being polled (entry not in task map)
+    pub(crate) fn steal_task(&self) -> Option<(TaskId, Priority, TaskEntry)> {
+        let mut rq = self.ready_queues.try_lock()?;
+        let (priority, id) = rq.steal_one()?;
+        // Hold ready_queues lock while checking tasks to prevent the
+        // stolen task ID from being lost. try_lock avoids deadlock with
+        // spawn (which takes tasks then ready_queues — opposite order).
+        let entry = self.tasks.try_lock().and_then(|mut tasks| tasks.remove(&id));
+        match entry {
+            Some(entry) => Some((id, priority, entry)),
+            None => {
+                // Task is being polled or tasks lock contended — put it back.
+                rq.push(priority, id);
+                None
+            }
         }
     }
 
@@ -158,6 +216,17 @@ impl Executor {
     pub fn run(&self) -> ! {
         loop {
             self.poll_ready_tasks();
+
+            // Try to steal work from another CPU before halting.
+            if let Some((id, priority, entry)) = super::smp::try_steal() {
+                // Insert the stolen task into our local task map and
+                // ready queue. When polled, the new waker will encode
+                // this CPU's ID, effectively migrating the task.
+                self.tasks.lock().insert(id, entry);
+                self.ready_queues.lock().push(priority, id);
+                continue;
+            }
+
             // Nothing ready — halt until next interrupt wakes us.
             #[cfg(target_arch = "x86_64")]
             {

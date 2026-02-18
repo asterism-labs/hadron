@@ -18,7 +18,8 @@ use hadron_core::paging::{PhysFrame, Size4KiB};
 use hadron_kernel::arch::x86_64::paging::PageTableMapper;
 use hadron_kernel::boot::{
     BacktraceInfo, BootInfoData, FramebufferInfo, InitrdInfo, KernelAddressInfo, MAX_FRAMEBUFFERS,
-    MAX_MEMORY_REGIONS, MemoryRegion, MemoryRegionKind, PagingMode, PixelFormat,
+    MAX_MEMORY_REGIONS, MAX_SMP_CPUS, MemoryRegion, MemoryRegionKind, PagingMode, PixelFormat,
+    SmpCpuEntry,
 };
 use noalloc::vec::ArrayVec;
 
@@ -177,6 +178,15 @@ extern "C" fn _start() -> ! {
         }
     }
 
+    // 10b. Build SMP CPU entry list from Limine MP response.
+    let (smp_cpus, bsp_lapic_id) = build_smp_cpus();
+
+    // 10c. Park APs on kernel page tables immediately.
+    // Limine starts APs in a spin loop using shared page tables (base revision 0).
+    // The BSP's kernel init can corrupt the AP's execution environment, so we
+    // must park them on the kernel page tables before proceeding.
+    hadron_kernel::arch::x86_64::smp::park_aps(smp_cpus.as_slice(), pml4_phys.as_u64());
+
     // 11. Build BootInfoData (after CR3 switch, using new page tables).
     let boot_info = build_boot_info(
         hhdm_offset,
@@ -189,6 +199,8 @@ extern "C" fn _start() -> ! {
         frames_used,
         initrd,
         backtrace,
+        smp_cpus,
+        bsp_lapic_id,
     );
 
     // 11. Log detailed boot info to all sinks.
@@ -461,6 +473,8 @@ fn build_boot_info(
     frames_used: u64,
     initrd: Option<InitrdInfo>,
     backtrace: Option<BacktraceInfo>,
+    smp_cpus: ArrayVec<SmpCpuEntry, MAX_SMP_CPUS>,
+    bsp_lapic_id: u32,
 ) -> BootInfoData {
     let memory_map = build_memory_map(alloc_region_start, alloc_region_size, frames_used);
 
@@ -519,6 +533,8 @@ fn build_boot_info(
         page_table_root,
         initrd,
         backtrace,
+        smp_cpus,
+        bsp_lapic_id,
     }
 }
 
@@ -582,6 +598,59 @@ fn convert_paging_mode(mode: limine::paging::PagingMode) -> PagingMode {
         LiminePaging::Paging5Level => PagingMode::Level5,
         _ => panic!("unsupported paging mode"),
     }
+}
+
+/// Builds the SMP CPU entry list from the Limine MP response.
+///
+/// Returns `(cpu_entries, bsp_lapic_id)`. The entries include only non-BSP
+/// CPUs (APs) since the BSP does not need to be started.
+fn build_smp_cpus() -> (ArrayVec<SmpCpuEntry, MAX_SMP_CPUS>, u32) {
+    let Some(mp_response) = REQUESTS.mp.response() else {
+        return (ArrayVec::new(), 0);
+    };
+
+    // Debug: print raw response fields to diagnose potential layout issues.
+    hadron_kernel::kdebug!(
+        "MP response: revision={}, flags={:#x}, bsp_lapic_id={}, cpu_count={}",
+        mp_response.revision,
+        mp_response.flags,
+        mp_response.bsp_lapic_id,
+        mp_response.cpu_count,
+    );
+
+    let bsp_lapic_id = mp_response.bsp_lapic_id;
+    let mut cpus = ArrayVec::new();
+
+    for cpu_info in mp_response.cpus() {
+        // Skip the BSP — it's already running.
+        if cpu_info.lapic_id == bsp_lapic_id {
+            continue;
+        }
+
+        // Compute pointers to the goto_address and extra_argument fields.
+        let info_ptr = cpu_info as *const limine::mp::MpInfo;
+        // SAFETY: MpInfo is #[repr(C)]. goto_address is at offset 16 (after
+        // processor_id: u32 + lapic_id: u32 + _reserved: u64 = 16 bytes).
+        // extra_argument is at offset 24 (goto_address is 8 bytes).
+        let goto_ptr = unsafe { (info_ptr as *mut u8).add(16) as *mut u64 };
+        let extra_ptr = unsafe { (info_ptr as *mut u8).add(24) as *mut u64 };
+
+        cpus.push(SmpCpuEntry {
+            processor_id: cpu_info.processor_id,
+            lapic_id: cpu_info.lapic_id,
+            goto_address_ptr: goto_ptr,
+            extra_argument_ptr: extra_ptr,
+        });
+    }
+
+    hadron_kernel::kinfo!(
+        "MP: {} CPUs detected (BSP LAPIC ID={}), {} APs to boot",
+        mp_response.cpu_count,
+        bsp_lapic_id,
+        cpus.len()
+    );
+
+    (cpus, bsp_lapic_id)
 }
 
 fn build_framebuffers() -> ArrayVec<FramebufferInfo, MAX_FRAMEBUFFERS> {

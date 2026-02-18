@@ -488,6 +488,8 @@ macro_rules! test_entry_point_with_init {
                 ),
                 initrd: None,
                 backtrace: None,
+                smp_cpus: ::noalloc::vec::ArrayVec::new(),
+                bsp_lapic_id: 0,
             };
 
             ::hadron_kernel::test_init(&boot_info);

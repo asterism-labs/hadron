@@ -1,8 +1,8 @@
 use limine::{
     BaseRevision, BootloaderInfoRequest, BootloaderPerformanceRequest, DateAtBootRequest,
     DeviceTreeBlobRequest, ExecutableAddressRequest, ExecutableCmdlineRequest, FirmwareTypeRequest,
-    FramebufferRequest, HhdmRequest, MemMapRequest, ModuleRequest, PagingModeRequest,
-    RequestsEndMarker, RequestsStartMarker, RsdpRequest, SmbiosRequest,
+    FramebufferRequest, HhdmRequest, MemMapRequest, ModuleRequest, MpRequest,
+    PagingModeRequest, RequestsEndMarker, RequestsStartMarker, RsdpRequest, SmbiosRequest,
 };
 
 #[repr(C, align(8))]
@@ -23,6 +23,7 @@ pub struct LimineRequests {
     pub date_at_boot: DateAtBootRequest,
     pub modules: ModuleRequest,
     pub bootloader_performance: BootloaderPerformanceRequest,
+    pub mp: MpRequest,
     _end_marker: RequestsEndMarker,
 }
 
@@ -50,6 +51,7 @@ impl LimineRequests {
             date_at_boot: DateAtBootRequest::new(),
             modules: ModuleRequest::new(core::ptr::null(), 0),
             bootloader_performance: BootloaderPerformanceRequest::new(),
+            mp: MpRequest::new(0),
             _end_marker: RequestsEndMarker::new(),
         }
     }
