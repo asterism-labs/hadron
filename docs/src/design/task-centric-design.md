@@ -314,7 +314,7 @@ The async I/O ring is an opt-in fast path for programs that want to express conc
 
 | Syscall | Signature | Description |
 |---------|-----------|-------------|
-| `sys_info` | `(kind: InfoKind) -> SysInfo` | Query system information (memory, CPU count, uptime) |
+| `sys_query` | `(topic: u64, sub_id: u64, out_buf: *mut u8, out_len: usize) -> isize` | Query system information via typed `#[repr(C)]` response structs (memory, uptime, kernel version) |
 | `sys_debug_log` | `(msg: &str)` | Write to kernel debug log (development only) |
 
 ## Userspace Programming Model
@@ -468,6 +468,6 @@ These are areas where the design needs further refinement:
 
 3. **Device driver sandboxing.** Driver tasks run in kernel context for performance, but could they be given limited capability sets to reduce the blast radius of a buggy driver? The framekernel's unsafe/safe split already provides memory safety; capabilities could additionally restrict which I/O ports or MMIO regions a driver can access.
 
-4. **Debugging and introspection.** POSIX provides `/proc` and `ptrace` for debugging. Hadron needs equivalent mechanisms that work with the capability model. A debug handle to a task could grant inspection rights without granting control.
+4. **Debugging and introspection.** POSIX provides `ptrace` for debugging and `/proc` for introspection. Hadron replaces `/proc` with the typed `sys_query` syscall for kernel state queries, and will expose task introspection via `TaskHandle`-based syscalls (`sys_task_info`). A debug handle to a task could grant inspection rights without granting control.
 
 5. **Resource limits.** POSIX uses `rlimit` for per-process resource limits. Hadron could attach resource budgets to tasks (memory quota, CPU time, handle count) enforced by the kernel, with budget inheritance/subdivision at spawn time.

@@ -6,6 +6,7 @@
 mod io;
 mod memory;
 mod process;
+mod query;
 mod time;
 mod vfs;
 
@@ -21,7 +22,7 @@ extern "C" fn syscall_dispatch(
     a0: usize,
     a1: usize,
     a2: usize,
-    _a3: usize,
+    a3: usize,
     _a4: usize,
 ) -> isize {
     match nr {
@@ -41,7 +42,8 @@ extern "C" fn syscall_dispatch(
         // Time
         SYS_CLOCK_GETTIME => time::sys_clock_gettime(a0, a1),
 
-        // System / debug
+        // System
+        SYS_QUERY => query::sys_query(a0, a1, a2, a3),
         SYS_DEBUG_LOG => io::sys_debug_log(a0, a1),
 
         _ => -ENOSYS,

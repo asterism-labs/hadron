@@ -1,14 +1,13 @@
 //! Virtual filesystem layer.
 //!
 //! Provides the [`Inode`] and [`FileSystem`] traits that abstract over different
-//! filesystem implementations (ramfs, devfs, procfs, ext2, etc.). All file I/O
-//! goes through these traits via the VFS mount table.
+//! filesystem implementations (ramfs, devfs, ext2, etc.). All file I/O goes
+//! through these traits via the VFS mount table.
 
 pub mod devfs;
 pub mod file;
 pub mod initramfs;
 pub mod path;
-pub mod procfs;
 pub mod ramfs;
 pub mod vfs;
 
@@ -209,7 +208,7 @@ pub trait FileSystem: Send + Sync {
 ///
 /// Constructs a noop waker, polls once, and panics if the future returns
 /// `Pending`. This is appropriate for in-memory filesystem operations
-/// (ramfs, devfs, procfs) that never yield.
+/// (ramfs, devfs) that never yield.
 ///
 /// # Panics
 ///

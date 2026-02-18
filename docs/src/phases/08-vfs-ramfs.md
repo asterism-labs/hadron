@@ -2,7 +2,9 @@
 
 ## Goal
 
-Create a Virtual Filesystem layer with async inode operations, an in-memory ramfs, an initramfs CPIO unpacker, and special filesystems (devfs, procfs). After this phase, the kernel has a unified async file abstraction where heap-backed operations resolve immediately and block-backed operations can await I/O completion through the same interface.
+Create a Virtual Filesystem layer with async inode operations, an in-memory ramfs, an initramfs CPIO unpacker, and a device filesystem (devfs). After this phase, the kernel has a unified async file abstraction where heap-backed operations resolve immediately and block-backed operations can await I/O completion through the same interface.
+
+> **Note:** Kernel state queries (memory stats, uptime, version) are exposed via the typed `sys_query` syscall (`SYS_QUERY`) rather than a virtual procfs. This avoids text serialization overhead and fits the kernel's capability-based, handle-centric design.
 
 ## Key Design: Async Inode Trait
 
@@ -51,7 +53,6 @@ For ramfs (heap-backed), the returned futures resolve immediately -- the `async`
 | `hadron-kernel/src/fs/ramfs.rs` | Heap-backed in-memory filesystem |
 | `hadron-kernel/src/fs/initramfs.rs` | CPIO newc format unpacker |
 | `hadron-kernel/src/fs/devfs.rs` | `/dev/console`, `/dev/null`, `/dev/zero` |
-| `hadron-kernel/src/fs/procfs.rs` | `/proc/meminfo` |
 
 ## Key Data Structures
 
@@ -164,12 +165,6 @@ Provides device nodes mounted at `/dev`:
 
 Each device node implements the `Inode` trait with async read/write.
 
-### procfs
-
-Provides kernel information mounted at `/proc`:
-
-- `/proc/meminfo` -- reports total and free memory from the physical memory allocator.
-
 ## Frame vs Service
 
 | Component | Layer | Reason |
@@ -177,7 +172,7 @@ Provides kernel information mounted at `/proc`:
 | All VFS code | Service | Pure data structure management |
 | Ramfs | Service | Heap-backed, no hardware interaction |
 | Initramfs unpacker | Service | Parses byte array from boot module |
-| devfs, procfs | Service | Virtual filesystems, safe code |
+| devfs | Service | Virtual filesystem, safe code |
 | File descriptor table | Service | Per-process bookkeeping |
 
 This phase is **entirely** service code -- no new unsafe frame code is needed.
@@ -194,8 +189,8 @@ Kernel mounts ramfs at `/`, unpacks initramfs, and demonstrates file operations:
 ```
 VFS: Mounted ramfs at /
 Initramfs: Unpacked 5 files
-ls /: bin dev proc
+ls /: bin dev
 cat /bin/hello: Hello from initramfs!
 /dev/null: write 100 bytes -> 100, read -> 0
-/proc/meminfo: MemTotal: 256 MiB, MemFree: 240 MiB
+sys_query(QUERY_MEMORY): total=256 MiB, free=240 MiB
 ```

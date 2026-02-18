@@ -423,10 +423,6 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
         // Mount devfs at /dev.
         let devfs = Arc::new(fs::devfs::DevFs::new());
         fs::vfs::with_vfs_mut(|vfs| vfs.mount("/dev", devfs));
-
-        // Mount procfs at /proc.
-        let procfs = Arc::new(fs::procfs::ProcFs::new());
-        fs::vfs::with_vfs_mut(|vfs| vfs.mount("/proc", procfs));
     }
 
     crate::proc::save_kernel_cr3();

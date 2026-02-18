@@ -106,11 +106,19 @@ pub const SYS_TIMER_CREATE: usize = 0x55;
 
 // ── System (0xF0–0xFF) ───────────────────────────────────────────────
 
-/// Query system information.
-#[allow(dead_code)] // Phase 9+
-pub const SYS_INFO: usize = 0xF0;
+/// Query system information via typed `#[repr(C)]` response structs.
+pub const SYS_QUERY: usize = 0xF0;
 /// Write a debug message to the kernel serial console.
 pub const SYS_DEBUG_LOG: usize = 0xF1;
+
+// ── Query topics for SYS_QUERY ──────────────────────────────────────
+
+/// Query topic: physical memory statistics.
+pub const QUERY_MEMORY: u64 = 0;
+/// Query topic: time since boot.
+pub const QUERY_UPTIME: u64 = 1;
+/// Query topic: kernel version information.
+pub const QUERY_KERNEL_VERSION: u64 = 2;
 
 // ── Clock IDs ───────────────────────────────────────────────────────
 
@@ -155,6 +163,42 @@ pub struct Timespec {
     pub tv_nsec: u64,
 }
 
+/// Response for [`QUERY_MEMORY`]: physical memory statistics.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct MemoryInfo {
+    /// Total physical memory in bytes.
+    pub total_bytes: u64,
+    /// Free physical memory in bytes.
+    pub free_bytes: u64,
+    /// Used physical memory in bytes (`total_bytes - free_bytes`).
+    pub used_bytes: u64,
+}
+
+/// Response for [`QUERY_UPTIME`]: time elapsed since boot.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct UptimeInfo {
+    /// Nanoseconds since boot.
+    pub uptime_ns: u64,
+}
+
+/// Response for [`QUERY_KERNEL_VERSION`]: kernel version metadata.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct KernelVersionInfo {
+    /// Major version number.
+    pub major: u16,
+    /// Minor version number.
+    pub minor: u16,
+    /// Patch version number.
+    pub patch: u16,
+    /// Padding for alignment.
+    pub _pad: u16,
+    /// Kernel name as a UTF-8 byte array, NUL-padded.
+    pub name: [u8; 32],
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -171,6 +215,7 @@ mod tests {
             SYS_MEM_MAP,
             SYS_MEM_UNMAP,
             SYS_CLOCK_GETTIME,
+            SYS_QUERY,
             SYS_DEBUG_LOG,
         ];
         for (i, a) in active.iter().enumerate() {
@@ -212,6 +257,7 @@ mod tests {
         assert!((0x30..0x40).contains(&SYS_VNODE_OPEN));
         assert!((0x40..0x50).contains(&SYS_MEM_MAP));
         assert!((0x50..0x60).contains(&SYS_CLOCK_GETTIME));
+        assert!((0xF0..=0xFF).contains(&SYS_QUERY));
         assert!((0xF0..=0xFF).contains(&SYS_DEBUG_LOG));
     }
 }
