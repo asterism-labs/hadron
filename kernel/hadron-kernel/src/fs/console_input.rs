@@ -4,12 +4,19 @@
 //! until Enter is pressed, then the completed line (with trailing newline) is
 //! copied into a ready buffer that userspace can read from.
 //!
-//! Keyboard hardware is polled synchronously via the i8042 PS/2 controller.
+//! Keyboard input is driven by IRQ1: the interrupt handler wakes any futures
+//! waiting on the [`INPUT_READY`] wait queue, and the reader future polls the
+//! i8042 PS/2 controller for scancodes.
 
 use hadron_core::sync::SpinLock;
 use hadron_driver_api::input::KeyCode;
 use hadron_drivers::i8042::{self, I8042};
 use noalloc::ringbuf::RingBuf;
+
+use crate::sync::HeapWaitQueue;
+
+/// Woken by the keyboard IRQ handler when a scancode is available.
+static INPUT_READY: HeapWaitQueue = HeapWaitQueue::new();
 
 /// Maximum line length for cooked-mode editing.
 const LINE_BUF_SIZE: usize = 256;
@@ -154,6 +161,32 @@ pub fn try_read(buf: &mut [u8]) -> usize {
         }
     }
     n
+}
+
+/// Keyboard IRQ handler — just wakes all waiting readers.
+fn keyboard_irq_handler(_vector: u8) {
+    INPUT_READY.wake_all();
+}
+
+/// Initialize IRQ-driven keyboard input.
+///
+/// Registers the keyboard IRQ1 handler and unmasks it in the I/O APIC.
+/// Must be called after APIC initialization.
+pub fn init() {
+    use crate::arch::x86_64::interrupts::dispatch;
+
+    let vector = dispatch::vectors::isa_irq_vector(1);
+    dispatch::register_handler(vector, keyboard_irq_handler)
+        .expect("console_input: failed to register keyboard IRQ handler");
+
+    crate::arch::x86_64::acpi::with_io_apic(|ioapic| ioapic.unmask(1));
+
+    hadron_core::kinfo!("Console input: keyboard IRQ1 enabled (vector {})", vector);
+}
+
+/// Registers a waker to be notified when keyboard input arrives.
+pub fn subscribe(waker: &core::task::Waker) {
+    INPUT_READY.register_waker(waker);
 }
 
 /// Translate a [`KeyCode`] to an ASCII byte, accounting for shift and caps lock.

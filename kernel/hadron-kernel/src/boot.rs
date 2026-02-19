@@ -532,6 +532,9 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
         }
     }
 
+    // Initialize IRQ-driven keyboard input for /dev/console reads.
+    crate::fs::console_input::init();
+
     crate::proc::save_kernel_cr3();
 
     // Populate BSP per-CPU pointers for assembly stubs (timer, syscall).
