@@ -72,7 +72,8 @@ fn load_model_inner(root: &PathBuf, validate: bool) -> Result<model::BuildModel>
     // Auto-register vendored dependencies if any dependency() declarations exist.
     if !model.dependencies.is_empty() {
         let vendor_dir = root.join("vendor");
-        let resolved = vendor::resolve_transitive(&model.dependencies, &vendor_dir)?;
+        let mut version_cache = vendor::VersionCache::new();
+        let resolved = vendor::resolve_transitive(&model.dependencies, &vendor_dir, &mut version_cache)?;
 
         // Determine the default target from the "default" profile.
         let default_target = model.profiles.get("default")
@@ -235,7 +236,8 @@ fn cmd_vendor(args: &cli::VendorArgs) -> Result<()> {
         let lock = vendor::read_lock_file(&lock_path)?
             .ok_or_else(|| anyhow::anyhow!("gluon.lock not found — run `gluon vendor` first"))?;
 
-        let resolved = vendor::resolve_transitive(&model.dependencies, &vendor_dir)?;
+        let mut version_cache = vendor::VersionCache::new();
+        let resolved = vendor::resolve_transitive(&model.dependencies, &vendor_dir, &mut version_cache)?;
         let new_lock = vendor::build_lock_file(&resolved, &vendor_dir)?;
 
         let mut mismatches = 0;
@@ -281,6 +283,7 @@ fn cmd_vendor(args: &cli::VendorArgs) -> Result<()> {
     }
 
     // Fetch missing dependencies.
+    let mut version_cache = vendor::VersionCache::new();
     let mut fetched = 0;
     for (name, dep) in &model.dependencies {
         match &dep.source {
@@ -288,9 +291,10 @@ fn cmd_vendor(args: &cli::VendorArgs) -> Result<()> {
                 if version.is_empty() {
                     anyhow::bail!("dependency '{name}' has no version specified");
                 }
+                let resolved_version = vendor::resolve_version(name, version, &mut version_cache)?;
                 let dest = vendor::find_vendor_dir(name, &vendor_dir);
                 if !dest.exists() {
-                    vendor::fetch_crates_io(name, version, &vendor_dir)?;
+                    vendor::fetch_crates_io(name, &resolved_version, &vendor_dir)?;
                     fetched += 1;
                 }
             }
@@ -323,7 +327,7 @@ fn cmd_vendor(args: &cli::VendorArgs) -> Result<()> {
             anyhow::bail!("transitive resolution did not converge after {max_iterations} iterations");
         }
 
-        let resolved = vendor::resolve_transitive(&model.dependencies, &vendor_dir)?;
+        let resolved = vendor::resolve_transitive(&model.dependencies, &vendor_dir, &mut version_cache)?;
 
         let mut needed_fetch = false;
         for dep in &resolved {

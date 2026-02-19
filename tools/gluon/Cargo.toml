@@ -18,6 +18,7 @@ hadron-elf = { path = "../../crates/elf" }
 ratatui = "0.29"
 rhai = { version = "1", features = ["sync"] }
 rustc-demangle = "0.1"
+semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

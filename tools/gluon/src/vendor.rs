@@ -267,6 +267,7 @@ pub enum ResolvedSource {
 pub fn resolve_transitive(
     roots: &BTreeMap<String, crate::model::ExternalDepDef>,
     vendor_dir: &Path,
+    version_cache: &mut VersionCache,
 ) -> Result<Vec<ResolvedDep>> {
     let mut resolved: BTreeMap<String, ResolvedDep> = BTreeMap::new();
     let mut queue: std::collections::VecDeque<QueueEntry> = std::collections::VecDeque::new();
@@ -392,9 +393,18 @@ pub fn resolve_transitive(
                 ResolvedSource::CratesIo
             };
 
+            let raw_version = cargo_dep.version.clone().unwrap_or_default();
+            let resolved_version = if !raw_version.is_empty()
+                && matches!(source, ResolvedSource::CratesIo)
+            {
+                resolve_version(&cargo_dep.name, &raw_version, version_cache)?
+            } else {
+                raw_version
+            };
+
             queue.push_back(QueueEntry {
                 name: cargo_dep.name.clone(),
-                version: cargo_dep.version.clone().unwrap_or_default(),
+                version: resolved_version,
                 source,
                 requested_features: trans_features,
             });
@@ -657,6 +667,108 @@ fn apply_member_overrides(resolved: &mut toml::Table, member: &toml::Table) {
     // `optional` — member overrides workspace.
     if let Some(opt) = member.get("optional") {
         resolved.insert("optional".to_string(), opt.clone());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Semver version resolution
+// ---------------------------------------------------------------------------
+
+/// In-memory cache for crates.io version listings.
+pub struct VersionCache {
+    entries: std::collections::HashMap<String, Vec<CrateVersionEntry>>,
+}
+
+#[derive(Clone)]
+struct CrateVersionEntry {
+    num: String,
+    yanked: bool,
+}
+
+impl VersionCache {
+    pub fn new() -> Self {
+        Self { entries: std::collections::HashMap::new() }
+    }
+}
+
+/// Ensure crate version listings are present in the cache, fetching from
+/// crates.io if needed.
+fn ensure_versions_cached(name: &str, cache: &mut VersionCache) -> Result<()> {
+    if cache.entries.contains_key(name) {
+        return Ok(());
+    }
+
+    let url = format!("https://crates.io/api/v1/crates/{name}");
+    let output = std::process::Command::new("curl")
+        .args(["-sSfL", "-H", "User-Agent: gluon-build-system", &url])
+        .output()
+        .context("failed to run curl")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("failed to query crates.io for '{name}': {stderr}");
+    }
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .with_context(|| format!("parsing crates.io response for '{name}'"))?;
+
+    let versions = json.get("versions")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| anyhow::anyhow!("no 'versions' array in crates.io response for '{name}'"))?;
+
+    let entries: Vec<CrateVersionEntry> = versions.iter().filter_map(|v| {
+        let num = v.get("num")?.as_str()?.to_string();
+        let yanked = v.get("yanked").and_then(|y| y.as_bool()).unwrap_or(false);
+        Some(CrateVersionEntry { num, yanked })
+    }).collect();
+
+    cache.entries.insert(name.to_string(), entries);
+    Ok(())
+}
+
+/// Resolve a version string to an exact version.
+///
+/// If `version_str` is already an exact semver version, returns it as-is.
+/// Otherwise, treats it as a `VersionReq` and queries crates.io for the
+/// newest non-yanked release that matches.
+pub fn resolve_version(
+    name: &str,
+    version_str: &str,
+    cache: &mut VersionCache,
+) -> Result<String> {
+    // If it parses as an exact version, return immediately.
+    if semver::Version::parse(version_str).is_ok() {
+        return Ok(version_str.to_string());
+    }
+
+    // Parse as a version requirement (e.g. "0.4", "^1.2", ">=0.3, <0.5").
+    let req: semver::VersionReq = version_str.parse()
+        .with_context(|| format!("invalid version requirement '{version_str}' for '{name}'"))?;
+
+    ensure_versions_cached(name, cache)?;
+    let versions = &cache.entries[name];
+
+    // Find the newest non-yanked version that matches the requirement.
+    let mut best: Option<(semver::Version, &str)> = None;
+    for entry in versions {
+        if entry.yanked {
+            continue;
+        }
+        let Ok(ver) = semver::Version::parse(&entry.num) else {
+            continue;
+        };
+        if req.matches(&ver) {
+            if best.as_ref().map_or(true, |(b, _)| ver > *b) {
+                best = Some((ver, &entry.num));
+            }
+        }
+    }
+
+    match best {
+        Some((_, num)) => Ok(num.to_string()),
+        None => bail!(
+            "no non-yanked version of '{name}' matches requirement '{version_str}'"
+        ),
     }
 }
 
