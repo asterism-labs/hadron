@@ -58,6 +58,14 @@ fn main() -> Result<()> {
 /// If `dependency()` declarations are present, auto-registers vendored crates
 /// into the model before validation.
 fn load_model(root: &PathBuf) -> Result<model::BuildModel> {
+    load_model_inner(root, true)
+}
+
+/// Load the build model, optionally skipping validation.
+///
+/// `gluon vendor` uses `validate = false` because vendor directories may not
+/// exist yet — the whole point of the command is to create them.
+fn load_model_inner(root: &PathBuf, validate: bool) -> Result<model::BuildModel> {
     println!("Loading gluon.rhai...");
     let mut model = engine::evaluate_script(root)?;
 
@@ -74,7 +82,9 @@ fn load_model(root: &PathBuf) -> Result<model::BuildModel> {
         vendor::auto_register_dependencies(&mut model, &resolved, &vendor_dir, &default_target)?;
     }
 
-    validate::validate_model(&model)?;
+    if validate {
+        validate::validate_model(&model)?;
+    }
     Ok(model)
 }
 
@@ -208,7 +218,8 @@ fn cmd_clean() -> Result<()> {
 /// Vendor external dependencies.
 fn cmd_vendor(args: &cli::VendorArgs) -> Result<()> {
     let root = config::find_project_root()?;
-    let model = load_model(&root)?;
+    // Skip validation: vendor dirs may not exist yet.
+    let model = load_model_inner(&root, false)?;
     let vendor_dir = root.join("vendor");
     let lock_path = root.join("gluon.lock");
 

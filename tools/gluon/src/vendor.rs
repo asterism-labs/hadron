@@ -493,6 +493,174 @@ pub fn find_vendor_dir(name: &str, vendor_dir: &Path) -> std::path::PathBuf {
 }
 
 // ---------------------------------------------------------------------------
+// Workspace reference resolution
+// ---------------------------------------------------------------------------
+
+/// Metadata extracted from a workspace root `Cargo.toml`.
+struct WorkspaceMetadata {
+    /// `[workspace.package]` fields (version, edition, authors, etc.).
+    package: toml::Table,
+    /// `[workspace.dependencies]` table mapping dep name → dep spec.
+    dependencies: toml::Table,
+}
+
+/// Parse `[workspace.package]` and `[workspace.dependencies]` from a workspace
+/// root `Cargo.toml` table.
+fn parse_workspace_metadata(root: &toml::Table) -> WorkspaceMetadata {
+    let ws = root.get("workspace").and_then(|v| v.as_table());
+
+    let package = ws
+        .and_then(|w| w.get("package"))
+        .and_then(|v| v.as_table())
+        .cloned()
+        .unwrap_or_default();
+
+    let dependencies = ws
+        .and_then(|w| w.get("dependencies"))
+        .and_then(|v| v.as_table())
+        .cloned()
+        .unwrap_or_default();
+
+    WorkspaceMetadata { package, dependencies }
+}
+
+/// Check whether a TOML value is `{ workspace = true }`.
+fn is_workspace_inherited(value: &toml::Value) -> bool {
+    value
+        .as_table()
+        .and_then(|t| t.get("workspace"))
+        .and_then(|v| v.as_bool())
+        == Some(true)
+}
+
+/// Rewrite all `workspace = true` references in a member `Cargo.toml` with
+/// concrete values from the workspace root, returning the normalized TOML
+/// string. Behaves like `cargo publish` — the vendored crate becomes
+/// self-contained.
+fn resolve_workspace_references(
+    member: &mut toml::Table,
+    meta: &WorkspaceMetadata,
+) {
+    resolve_package_workspace_fields(member, &meta.package);
+
+    for section in ["dependencies", "dev-dependencies", "build-dependencies"] {
+        resolve_deps_workspace_refs(member, section, &meta.dependencies);
+    }
+}
+
+/// Replace `version.workspace = true`, `edition.workspace = true`, etc. in
+/// `[package]` with values from `[workspace.package]`.
+fn resolve_package_workspace_fields(member: &mut toml::Table, ws_pkg: &toml::Table) {
+    let Some(pkg) = member.get_mut("package").and_then(|v| v.as_table_mut()) else {
+        return;
+    };
+
+    // Fields that support `key.workspace = true` inheritance.
+    let inheritable: &[&str] = &[
+        "version", "authors", "description", "documentation", "readme",
+        "homepage", "repository", "license", "license-file", "keywords",
+        "categories", "edition", "rust-version", "exclude", "include",
+        "publish",
+    ];
+
+    for &field in inheritable {
+        let Some(val) = pkg.get(field) else { continue };
+        if is_workspace_inherited(val) {
+            if let Some(ws_val) = ws_pkg.get(field) {
+                pkg.insert(field.to_string(), ws_val.clone());
+            } else {
+                // No workspace value — remove the broken reference.
+                pkg.remove(field);
+            }
+        }
+    }
+}
+
+/// Replace `dep = { workspace = true, ... }` entries in a dependency section
+/// with the concrete spec from `[workspace.dependencies]`.
+fn resolve_deps_workspace_refs(
+    member: &mut toml::Table,
+    section: &str,
+    ws_deps: &toml::Table,
+) {
+    let Some(deps) = member.get_mut(section).and_then(|v| v.as_table_mut()) else {
+        return;
+    };
+
+    let keys: Vec<String> = deps.keys().cloned().collect();
+    for key in keys {
+        let Some(val) = deps.get(&key) else { continue };
+        if !is_workspace_inherited(val) {
+            continue;
+        }
+
+        // Capture member-level overrides before replacing.
+        let member_table = val.as_table().cloned().unwrap_or_default();
+
+        let Some(ws_entry) = ws_deps.get(&key) else {
+            // No workspace definition — leave as-is (will error later, but
+            // that's the user's problem, not ours to silently swallow).
+            continue;
+        };
+
+        // Build the resolved dep value.
+        let mut resolved = match ws_entry {
+            toml::Value::String(version) => {
+                // Simple form: `dep = "version"` in workspace.
+                let mut t = toml::Table::new();
+                t.insert("version".to_string(), toml::Value::String(version.clone()));
+                t
+            }
+            toml::Value::Table(t) => t.clone(),
+            _ => continue,
+        };
+
+        // Remove `workspace = true` if it somehow ended up in the resolved table.
+        resolved.remove("workspace");
+
+        // Strip `path` — intra-workspace paths are meaningless in vendor.
+        resolved.remove("path");
+
+        // Apply member-level overrides.
+        apply_member_overrides(&mut resolved, &member_table);
+
+        deps.insert(key, toml::Value::Table(resolved));
+    }
+}
+
+/// Merge member-level overrides onto a resolved workspace dependency entry.
+///
+/// - `features` is additive (workspace features + member features).
+/// - `default-features` and `optional` override the workspace value.
+fn apply_member_overrides(resolved: &mut toml::Table, member: &toml::Table) {
+    // `features` — merge additively, dedup.
+    if let Some(member_feats) = member.get("features").and_then(|v| v.as_array()) {
+        let mut all_feats: Vec<toml::Value> = resolved
+            .get("features")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        for f in member_feats {
+            if !all_feats.contains(f) {
+                all_feats.push(f.clone());
+            }
+        }
+        resolved.insert("features".to_string(), toml::Value::Array(all_feats));
+    }
+
+    // `default-features` — member overrides workspace.
+    if let Some(df) = member.get("default-features") {
+        resolved.insert("default-features".to_string(), df.clone());
+    }
+
+    // `optional` — member overrides workspace.
+    if let Some(opt) = member.get("optional") {
+        resolved.insert("optional".to_string(), opt.clone());
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Fetching
 // ---------------------------------------------------------------------------
 
@@ -622,6 +790,20 @@ pub fn fetch_git(
                                         if member_name == Some(name) {
                                             // Copy just this member.
                                             copy_dir_recursive(&member_dir, &dest)?;
+
+                                            // Resolve workspace = true references
+                                            // so the vendored crate is self-contained.
+                                            let ws_meta = parse_workspace_metadata(&doc);
+                                            let dest_cargo = dest.join("Cargo.toml");
+                                            if let Ok(raw) = std::fs::read_to_string(&dest_cargo) {
+                                                if let Ok(mut member_doc) = raw.parse::<toml::Table>() {
+                                                    resolve_workspace_references(&mut member_doc, &ws_meta);
+                                                    let normalized = toml::to_string_pretty(&member_doc)
+                                                        .expect("resolved Cargo.toml should serialize");
+                                                    let _ = std::fs::write(&dest_cargo, normalized);
+                                                }
+                                            }
+
                                             std::fs::remove_dir_all(&tmp_dir)?;
                                             return Ok(dest);
                                         }
@@ -839,11 +1021,10 @@ pub fn auto_register_dependencies(
         let vendor_path = find_vendor_dir(&dep.name, vendor_dir);
         let cargo_toml_path = vendor_path.join("Cargo.toml");
         if !cargo_toml_path.exists() {
-            bail!(
-                "vendored directory for '{}' not found at {}",
-                dep.name,
-                vendor_path.display()
-            );
+            // Not yet vendored — skip registration for now.
+            // `gluon vendor` will fetch missing crates, then a subsequent
+            // load_model() call will register them.
+            continue;
         }
 
         let parsed = parse_cargo_toml(&cargo_toml_path)?;
