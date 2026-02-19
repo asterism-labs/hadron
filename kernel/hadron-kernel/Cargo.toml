@@ -15,7 +15,9 @@ doctest = false
 [dependencies]
 bitflags = { workspace = true }
 hadris-cpio = { workspace = true, features = [ "read", "alloc" ] }
+hadris-fat = { workspace = true, features = [ "read", "write", "alloc", "lfn" ] }
 hadris-io = { workspace = true }
+hadris-iso = { workspace = true, features = [ "read", "alloc" ] }
 hadron-acpi = { workspace = true }
 hadron-core = { workspace = true }
 hadron-driver-api = { workspace = true }

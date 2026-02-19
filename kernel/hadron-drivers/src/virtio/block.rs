@@ -272,6 +272,20 @@ pub fn with_disk<R>(index: usize, f: impl FnOnce(&VirtioBlkDisk) -> R) -> Option
     guard.as_ref().and_then(|disks| disks.get(index).map(f))
 }
 
+/// Removes and returns the disk at `index`, transferring ownership to the caller.
+///
+/// Uses `swap_remove` so remaining disk indices may shift. Returns `None` if
+/// the index is out of bounds or the registry is not initialized.
+pub fn take_disk(index: usize) -> Option<VirtioBlkDisk> {
+    let mut guard = VIRTIO_BLK_DISKS.lock();
+    let disks = guard.as_mut()?;
+    if index < disks.len() {
+        Some(disks.swap_remove(index))
+    } else {
+        None
+    }
+}
+
 // ---------------------------------------------------------------------------
 // PCI registration
 // ---------------------------------------------------------------------------

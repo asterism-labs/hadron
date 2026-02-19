@@ -40,7 +40,9 @@ uefi = { path = "crates/uefi" }
 # External dependencies
 bitflags = "2"
 hadris-cpio = { git = "https://github.com/hxyulin/hadris", default-features = false }
+hadris-fat = { git = "https://github.com/hxyulin/hadris", default-features = false }
 hadris-io = { git = "https://github.com/hxyulin/hadris", default-features = false }
+hadris-iso = { git = "https://github.com/hxyulin/hadris", default-features = false }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "warn"

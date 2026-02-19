@@ -116,12 +116,18 @@ dependency("bitflags").version("2.11.0");
 dependency("cfg-if").version("1.0.4");
 dependency("bytemuck").version("1.25.0").no_default_features();
 
-// Hadris archive format crates (from git).
+// Hadris ecosystem crates (from git).
 dependency("hadris-cpio").git("https://github.com/hxyulin/hadris").rev("88fd9890")
     .features(["read", "alloc"]).no_default_features();
 dependency("hadris-io").git("https://github.com/hxyulin/hadris").rev("88fd9890")
     .no_default_features();
 dependency("hadris-common").git("https://github.com/hxyulin/hadris").rev("88fd9890")
+    .no_default_features();
+dependency("hadris-fat").git("https://github.com/hxyulin/hadris").rev("88fd9890")
+    .features(["read", "write", "alloc", "lfn"]).no_default_features();
+dependency("hadris-iso").git("https://github.com/hxyulin/hadris").rev("88fd9890")
+    .features(["read", "alloc"]).no_default_features();
+dependency("hadris-part").git("https://github.com/hxyulin/hadris").rev("88fd9890")
     .no_default_features();
 
 // ===========================================================================
@@ -132,6 +138,11 @@ let host = group("host").target("host").edition("2021").project(false);
 
 host.add("hadron-syscall-macros", "crates/hadron-syscall-macros")
     .edition("2024")
+    .crate_type(PROC_MACRO)
+    .deps(#{ syn: "syn", quote: "quote", proc_macro2: "proc-macro2" });
+
+host.add("bytemuck_derive", "vendor/bytemuck_derive")
+    .edition("2018")
     .crate_type(PROC_MACRO)
     .deps(#{ syn: "syn", quote: "quote", proc_macro2: "proc-macro2" });
 
@@ -191,7 +202,9 @@ kernel_main.add("hadron-kernel", "kernel/hadron-kernel")
     .deps(#{
         bitflags: "bitflags",
         hadris_cpio: "hadris-cpio",
+        hadris_fat: "hadris-fat",
         hadris_io: "hadris-io",
+        hadris_iso: "hadris-iso",
         hadron_acpi: "hadron-acpi",
         hadron_core: "hadron-core",
         hadron_driver_api: "hadron-driver-api",

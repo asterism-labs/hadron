@@ -502,6 +502,34 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
         // Mount devfs at /dev.
         let devfs = Arc::new(fs::devfs::DevFs::new());
         fs::vfs::with_vfs_mut(|vfs| vfs.mount("/dev", devfs));
+
+        // Try to mount the first VirtIO block disk as FAT at /mnt.
+        if hadron_drivers::virtio::block::disk_count() > 0 {
+            if let Some(disk) = hadron_drivers::virtio::block::take_disk(0) {
+                match fs::fat::FatFileSystem::mount(disk) {
+                    Ok(fat) => {
+                        fs::vfs::with_vfs_mut(|vfs| vfs.mount("/mnt", Arc::new(fat)));
+                    }
+                    Err(e) => {
+                        hadron_core::kinfo!("No FAT filesystem on virtio disk 0: {:?}", e);
+                    }
+                }
+            }
+        }
+
+        // Try to mount the first AHCI disk as ISO 9660 at /cdrom.
+        if hadron_drivers::ahci::disk_count() > 0 {
+            if let Some(disk) = hadron_drivers::ahci::take_disk(0) {
+                match fs::iso9660::Iso9660Fs::mount(disk) {
+                    Ok(iso) => {
+                        fs::vfs::with_vfs_mut(|vfs| vfs.mount("/cdrom", Arc::new(iso)));
+                    }
+                    Err(e) => {
+                        hadron_core::kinfo!("No ISO 9660 filesystem on AHCI disk 0: {:?}", e);
+                    }
+                }
+            }
+        }
     }
 
     crate::proc::save_kernel_cr3();

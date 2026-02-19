@@ -5,6 +5,7 @@
 //! preemption flag ensures fairness even if a task polls for a long time
 //! between awaits.
 
+pub mod block_on;
 pub mod executor;
 pub mod primitives;
 pub mod smp;

@@ -7,12 +7,25 @@ name = "bitflags"
 version = "2.11.0"
 source = "crates-io"
 checksum = "6523d30d6b809c93c87daf1f8f1c58f84e34f7b89188be04565f0e30878ee20c"
+dependencies = ["bytemuck"]
 
 [[package]]
 name = "bytemuck"
 version = "1.25.0"
 source = "crates-io"
 checksum = "79009bad968c67ecc0bcd3fdd9d4767fe6046e155c7fb009a1ff335071f8f05d"
+dependencies = ["bytemuck_derive"]
+
+[[package]]
+name = "bytemuck_derive"
+version = "1.10.2"
+source = "crates-io"
+checksum = "054332e08033403bb6fd06cdd5963160bcd508d96eb99bdf692e37ae311d3eab"
+dependencies = [
+    "proc-macro2",
+    "quote",
+    "syn",
+]
 
 [[package]]
 name = "cfg-if"
@@ -26,6 +39,7 @@ version = "1.0.0"
 source = "git+https://github.com/hxyulin/hadris#88fd9890"
 checksum = "064a235a097b029c5e0ac7268994130b915a85e2fe0a0716c3588aa1fe1ef2f2"
 dependencies = [
+    "bytemuck",
     "hadris-io",
     "noalloc",
 ]
@@ -41,6 +55,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "hadris-fat"
+version = "1.0.0"
+source = "git+https://github.com/hxyulin/hadris#88fd9890"
+checksum = "d38e151f3397b23e700fea2402b8c0906434a442629686e240a8675a717eac89"
+dependencies = [
+    "bitflags",
+    "bytemuck",
+    "hadris-common",
+    "hadris-io",
+    "spin",
+]
+
+[[package]]
 name = "hadris-io"
 version = "1.0.0"
 source = "git+https://github.com/hxyulin/hadris#88fd9890"
@@ -49,6 +76,37 @@ dependencies = [
     "bytemuck",
     "cfg-if",
 ]
+
+[[package]]
+name = "hadris-iso"
+version = "1.0.0"
+source = "git+https://github.com/hxyulin/hadris#88fd9890"
+checksum = "9b89ccfd615455c7c70ce43edbdc57d49e5206b7a064771e816d615a7c9a8271"
+dependencies = [
+    "bitflags",
+    "bytemuck",
+    "hadris-common",
+    "hadris-io",
+    "hadris-part",
+    "spin",
+]
+
+[[package]]
+name = "hadris-part"
+version = "1.0.0"
+source = "git+https://github.com/hxyulin/hadris#88fd9890"
+checksum = "cff4795c027d20f4fe8e2a213c0990e3524324972c09243fd4677020a556d167"
+dependencies = [
+    "bytemuck",
+    "hadris-io",
+]
+
+[[package]]
+name = "lock_api"
+version = "0.4"
+source = "crates-io"
+checksum = "c677a87a35dfd39abf271fa5bb19a013b807d2826037167d0559a52a09fd4b4f"
+dependencies = ["scopeguard"]
 
 [[package]]
 name = "noalloc"
@@ -69,6 +127,19 @@ version = "1.0.35"
 source = "crates-io"
 checksum = "db3a297c5e9a2773ecff836ef4f6157f68688ff0dc20dc1bb4066410d846e286"
 dependencies = ["proc-macro2"]
+
+[[package]]
+name = "scopeguard"
+version = "1.1.0"
+source = "crates-io"
+checksum = "b8e340e818b4df7db9e1b49680687b92975e5254765df4f687d7359f65d4806c"
+
+[[package]]
+name = "spin"
+version = "0.10.0"
+source = "crates-io"
+checksum = "48402dd9806f887b7fde1d25183010bc7308410d0ef4eacd14b2f9cee56974bd"
+dependencies = ["lock_api"]
 
 [[package]]
 name = "syn"
