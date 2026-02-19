@@ -242,22 +242,7 @@ fn execute_stage(
     // from other groups in the same stage are compiled first.
     toposort_stage_crates(&mut all_crates);
 
-    // Quick stage check.
-    let stage_names: Vec<String> = all_crates.iter().map(|(k, _)| k.name.clone()).collect();
-    let total = all_crates.len();
-    state.total_crates += total;
-
-    if !state.force && state.cache.is_stage_fresh(&stage_names, &state.rebuilt) {
-        println!("  All {total} crates unchanged, skipping.");
-        for (krate, _) in &all_crates {
-            let artifact_path = compile::crate_artifact_path(krate, root, None, mode);
-            if krate.name == state.config.profile.boot_binary {
-                state.kernel_binary = Some(artifact_path.clone());
-            }
-            state.artifacts.insert(&krate.name, artifact_path);
-        }
-        return Ok(());
-    }
+    state.total_crates += all_crates.len();
 
     // Compile each crate in topological order.
     for (krate, has_config) in &all_crates {

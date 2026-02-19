@@ -184,42 +184,6 @@ impl CacheManifest {
         );
     }
 
-    /// Quick stage-level freshness check using only artifact mtimes.
-    ///
-    /// Checks that every crate in `names` has a cached entry whose artifact
-    /// still exists with a matching mtime. This avoids per-source-file stat
-    /// calls when nothing has changed.
-    ///
-    /// Returns `true` only if ALL crates in the stage pass the quick check
-    /// and no dependencies from previous stages were rebuilt.
-    pub fn is_stage_fresh(
-        &self,
-        names: &[String],
-        rebuilt_deps: &HashSet<String>,
-    ) -> bool {
-        if names.is_empty() {
-            return true;
-        }
-
-        // If any previous-stage crate was rebuilt, we can't skip.
-        if !rebuilt_deps.is_empty() {
-            return false;
-        }
-
-        for name in names {
-            let entry = match self.entries.get(name) {
-                Some(e) => e,
-                None => return false,
-            };
-            match file_mtime_secs(&entry.artifact_path) {
-                Some(mtime) if mtime == entry.artifact_mtime_secs => {}
-                _ => return false,
-            }
-        }
-
-        true
-    }
-
     /// Check if the initrd output is still fresh.
     ///
     /// Checks output file existence + mtime, and also that none of the
