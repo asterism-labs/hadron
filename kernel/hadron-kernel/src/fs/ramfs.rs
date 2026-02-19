@@ -122,61 +122,75 @@ impl Inode for RamInode {
         })
     }
 
-    fn lookup(&self, name: &str) -> Result<Arc<dyn Inode>, FsError> {
-        if self.itype != InodeType::Directory {
-            return Err(FsError::NotADirectory);
-        }
-        let children = self.children.lock();
-        children
-            .get(name)
-            .cloned()
-            .map(|n| n as Arc<dyn Inode>)
-            .ok_or(FsError::NotFound)
+    fn lookup<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Arc<dyn Inode>, FsError>> + Send + 'a>> {
+        Box::pin(async move {
+            if self.itype != InodeType::Directory {
+                return Err(FsError::NotADirectory);
+            }
+            let children = self.children.lock();
+            children
+                .get(name)
+                .cloned()
+                .map(|n| n as Arc<dyn Inode>)
+                .ok_or(FsError::NotFound)
+        })
     }
 
-    fn readdir(&self) -> Result<Vec<DirEntry>, FsError> {
-        if self.itype != InodeType::Directory {
-            return Err(FsError::NotADirectory);
-        }
-        let children = self.children.lock();
-        Ok(children
-            .iter()
-            .map(|(name, inode)| DirEntry {
-                name: name.clone(),
-                inode_type: inode.itype,
-            })
-            .collect())
+    fn readdir(&self) -> Pin<Box<dyn Future<Output = Result<Vec<DirEntry>, FsError>> + Send + '_>> {
+        Box::pin(async move {
+            if self.itype != InodeType::Directory {
+                return Err(FsError::NotADirectory);
+            }
+            let children = self.children.lock();
+            Ok(children
+                .iter()
+                .map(|(name, inode)| DirEntry {
+                    name: name.clone(),
+                    inode_type: inode.itype,
+                })
+                .collect())
+        })
     }
 
-    fn create(
-        &self,
-        name: &str,
+    fn create<'a>(
+        &'a self,
+        name: &'a str,
         itype: InodeType,
         perms: Permissions,
-    ) -> Result<Arc<dyn Inode>, FsError> {
-        if self.itype != InodeType::Directory {
-            return Err(FsError::NotADirectory);
-        }
-        let mut children = self.children.lock();
-        if children.contains_key(name) {
-            return Err(FsError::AlreadyExists);
-        }
-        let new_inode = Arc::new(RamInode {
-            itype,
-            data: SpinLock::new(Vec::new()),
-            children: SpinLock::new(BTreeMap::new()),
-            permissions: perms,
-        });
-        children.insert(name.to_string(), new_inode.clone());
-        Ok(new_inode)
+    ) -> Pin<Box<dyn Future<Output = Result<Arc<dyn Inode>, FsError>> + Send + 'a>> {
+        Box::pin(async move {
+            if self.itype != InodeType::Directory {
+                return Err(FsError::NotADirectory);
+            }
+            let mut children = self.children.lock();
+            if children.contains_key(name) {
+                return Err(FsError::AlreadyExists);
+            }
+            let new_inode = Arc::new(RamInode {
+                itype,
+                data: SpinLock::new(Vec::new()),
+                children: SpinLock::new(BTreeMap::new()),
+                permissions: perms,
+            });
+            children.insert(name.to_string(), new_inode.clone());
+            Ok(new_inode as Arc<dyn Inode>)
+        })
     }
 
-    fn unlink(&self, name: &str) -> Result<(), FsError> {
-        if self.itype != InodeType::Directory {
-            return Err(FsError::NotADirectory);
-        }
-        let mut children = self.children.lock();
-        children.remove(name).ok_or(FsError::NotFound)?;
-        Ok(())
+    fn unlink<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), FsError>> + Send + 'a>> {
+        Box::pin(async move {
+            if self.itype != InodeType::Directory {
+                return Err(FsError::NotADirectory);
+            }
+            let mut children = self.children.lock();
+            children.remove(name).ok_or(FsError::NotFound)?;
+            Ok(())
+        })
     }
 }

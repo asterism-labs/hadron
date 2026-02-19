@@ -89,32 +89,40 @@ impl Inode for DevFsDir {
         Box::pin(async { Err(FsError::IsADirectory) })
     }
 
-    fn lookup(&self, name: &str) -> Result<Arc<dyn Inode>, FsError> {
-        self.entries.get(name).cloned().ok_or(FsError::NotFound)
+    fn lookup<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Arc<dyn Inode>, FsError>> + Send + 'a>> {
+        Box::pin(async move { self.entries.get(name).cloned().ok_or(FsError::NotFound) })
     }
 
-    fn readdir(&self) -> Result<Vec<DirEntry>, FsError> {
-        Ok(self
-            .entries
-            .iter()
-            .map(|(name, inode)| DirEntry {
-                name: (*name).to_string(),
-                inode_type: inode.inode_type(),
-            })
-            .collect())
+    fn readdir(&self) -> Pin<Box<dyn Future<Output = Result<Vec<DirEntry>, FsError>> + Send + '_>> {
+        Box::pin(async move {
+            Ok(self
+                .entries
+                .iter()
+                .map(|(name, inode)| DirEntry {
+                    name: (*name).to_string(),
+                    inode_type: inode.inode_type(),
+                })
+                .collect())
+        })
     }
 
-    fn create(
-        &self,
-        _name: &str,
+    fn create<'a>(
+        &'a self,
+        _name: &'a str,
         _itype: InodeType,
         _perms: Permissions,
-    ) -> Result<Arc<dyn Inode>, FsError> {
-        Err(FsError::NotSupported)
+    ) -> Pin<Box<dyn Future<Output = Result<Arc<dyn Inode>, FsError>> + Send + 'a>> {
+        Box::pin(async { Err(FsError::NotSupported) })
     }
 
-    fn unlink(&self, _name: &str) -> Result<(), FsError> {
-        Err(FsError::NotSupported)
+    fn unlink<'a>(
+        &'a self,
+        _name: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), FsError>> + Send + 'a>> {
+        Box::pin(async { Err(FsError::NotSupported) })
     }
 }
 
@@ -152,25 +160,31 @@ impl Inode for DevNull {
         Box::pin(async move { Ok(buf.len()) })
     }
 
-    fn lookup(&self, _name: &str) -> Result<Arc<dyn Inode>, FsError> {
-        Err(FsError::NotADirectory)
+    fn lookup<'a>(
+        &'a self,
+        _name: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Arc<dyn Inode>, FsError>> + Send + 'a>> {
+        Box::pin(async { Err(FsError::NotADirectory) })
     }
 
-    fn readdir(&self) -> Result<Vec<DirEntry>, FsError> {
-        Err(FsError::NotADirectory)
+    fn readdir(&self) -> Pin<Box<dyn Future<Output = Result<Vec<DirEntry>, FsError>> + Send + '_>> {
+        Box::pin(async { Err(FsError::NotADirectory) })
     }
 
-    fn create(
-        &self,
-        _name: &str,
+    fn create<'a>(
+        &'a self,
+        _name: &'a str,
         _itype: InodeType,
         _perms: Permissions,
-    ) -> Result<Arc<dyn Inode>, FsError> {
-        Err(FsError::NotADirectory)
+    ) -> Pin<Box<dyn Future<Output = Result<Arc<dyn Inode>, FsError>> + Send + 'a>> {
+        Box::pin(async { Err(FsError::NotADirectory) })
     }
 
-    fn unlink(&self, _name: &str) -> Result<(), FsError> {
-        Err(FsError::NotADirectory)
+    fn unlink<'a>(
+        &'a self,
+        _name: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), FsError>> + Send + 'a>> {
+        Box::pin(async { Err(FsError::NotADirectory) })
     }
 }
 
@@ -211,25 +225,31 @@ impl Inode for DevZero {
         Box::pin(async move { Ok(buf.len()) })
     }
 
-    fn lookup(&self, _name: &str) -> Result<Arc<dyn Inode>, FsError> {
-        Err(FsError::NotADirectory)
+    fn lookup<'a>(
+        &'a self,
+        _name: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Arc<dyn Inode>, FsError>> + Send + 'a>> {
+        Box::pin(async { Err(FsError::NotADirectory) })
     }
 
-    fn readdir(&self) -> Result<Vec<DirEntry>, FsError> {
-        Err(FsError::NotADirectory)
+    fn readdir(&self) -> Pin<Box<dyn Future<Output = Result<Vec<DirEntry>, FsError>> + Send + '_>> {
+        Box::pin(async { Err(FsError::NotADirectory) })
     }
 
-    fn create(
-        &self,
-        _name: &str,
+    fn create<'a>(
+        &'a self,
+        _name: &'a str,
         _itype: InodeType,
         _perms: Permissions,
-    ) -> Result<Arc<dyn Inode>, FsError> {
-        Err(FsError::NotADirectory)
+    ) -> Pin<Box<dyn Future<Output = Result<Arc<dyn Inode>, FsError>> + Send + 'a>> {
+        Box::pin(async { Err(FsError::NotADirectory) })
     }
 
-    fn unlink(&self, _name: &str) -> Result<(), FsError> {
-        Err(FsError::NotADirectory)
+    fn unlink<'a>(
+        &'a self,
+        _name: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), FsError>> + Send + 'a>> {
+        Box::pin(async { Err(FsError::NotADirectory) })
     }
 }
 
@@ -295,24 +315,30 @@ impl Inode for DevConsole {
         })
     }
 
-    fn lookup(&self, _name: &str) -> Result<Arc<dyn Inode>, FsError> {
-        Err(FsError::NotADirectory)
+    fn lookup<'a>(
+        &'a self,
+        _name: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Arc<dyn Inode>, FsError>> + Send + 'a>> {
+        Box::pin(async { Err(FsError::NotADirectory) })
     }
 
-    fn readdir(&self) -> Result<Vec<DirEntry>, FsError> {
-        Err(FsError::NotADirectory)
+    fn readdir(&self) -> Pin<Box<dyn Future<Output = Result<Vec<DirEntry>, FsError>> + Send + '_>> {
+        Box::pin(async { Err(FsError::NotADirectory) })
     }
 
-    fn create(
-        &self,
-        _name: &str,
+    fn create<'a>(
+        &'a self,
+        _name: &'a str,
         _itype: InodeType,
         _perms: Permissions,
-    ) -> Result<Arc<dyn Inode>, FsError> {
-        Err(FsError::NotADirectory)
+    ) -> Pin<Box<dyn Future<Output = Result<Arc<dyn Inode>, FsError>> + Send + 'a>> {
+        Box::pin(async { Err(FsError::NotADirectory) })
     }
 
-    fn unlink(&self, _name: &str) -> Result<(), FsError> {
-        Err(FsError::NotADirectory)
+    fn unlink<'a>(
+        &'a self,
+        _name: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), FsError>> + Send + 'a>> {
+        Box::pin(async { Err(FsError::NotADirectory) })
     }
 }

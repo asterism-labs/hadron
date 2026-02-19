@@ -4,7 +4,7 @@ use hadron_core::syscall::EFAULT;
 use hadron_core::syscall::userptr::UserSlice;
 
 use crate::fs::file::OpenFlags;
-use crate::fs::try_poll_immediate;
+use crate::fs::{poll_immediate, try_poll_immediate};
 
 /// `sys_vnode_open` — open a file by path, returning a file descriptor.
 ///
@@ -339,7 +339,7 @@ pub(super) fn sys_vnode_readdir(fd: usize, buf_ptr: usize, buf_len: usize) -> is
         let inode = file.inode.clone();
         drop(fd_table);
 
-        let entries = match inode.readdir() {
+        let entries = match poll_immediate(inode.readdir()) {
             Ok(entries) => entries,
             Err(e) => return -e.to_errno(),
         };

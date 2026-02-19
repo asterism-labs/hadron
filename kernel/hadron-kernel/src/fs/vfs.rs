@@ -13,7 +13,7 @@ use alloc::sync::Arc;
 use hadron_core::sync::SpinLock;
 
 use super::path;
-use super::{FileSystem, FsError, Inode};
+use super::{FileSystem, FsError, Inode, poll_immediate};
 
 /// Global VFS instance.
 static VFS: SpinLock<Option<Vfs>> = SpinLock::new(None);
@@ -66,7 +66,7 @@ impl Vfs {
 
         let mut current = root;
         for component in path::components(remainder) {
-            current = current.lookup(component)?;
+            current = poll_immediate(current.lookup(component))?;
         }
 
         Ok(current)

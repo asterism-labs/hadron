@@ -4,10 +4,13 @@
 //! filesystem implementations (ramfs, devfs, ext2, etc.). All file I/O goes
 //! through these traits via the VFS mount table.
 
+pub mod block_adapter;
 pub mod console_input;
 pub mod devfs;
+pub mod fat;
 pub mod file;
 pub mod initramfs;
+pub mod iso9660;
 pub mod path;
 pub mod ramfs;
 pub mod vfs;
@@ -162,38 +165,56 @@ pub trait Inode: Send + Sync {
 
     /// Look up a child entry by name (directories only).
     ///
+    /// Returns a future for forward-compatibility with block-backed filesystems.
+    /// In-memory implementations resolve in a single poll.
+    ///
     /// # Errors
     ///
     /// Returns [`FsError::NotFound`] if the name does not exist, or
     /// [`FsError::NotADirectory`] if this inode is not a directory.
-    fn lookup(&self, name: &str) -> Result<Arc<dyn Inode>, FsError>;
+    fn lookup<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Arc<dyn Inode>, FsError>> + Send + 'a>>;
 
     /// List all entries in this directory.
+    ///
+    /// Returns a future for forward-compatibility with block-backed filesystems.
+    /// In-memory implementations resolve in a single poll.
     ///
     /// # Errors
     ///
     /// Returns [`FsError::NotADirectory`] if this inode is not a directory.
-    fn readdir(&self) -> Result<Vec<DirEntry>, FsError>;
+    fn readdir(&self) -> Pin<Box<dyn Future<Output = Result<Vec<DirEntry>, FsError>> + Send + '_>>;
 
     /// Create a child entry in this directory.
+    ///
+    /// Returns a future for forward-compatibility with block-backed filesystems.
+    /// In-memory implementations resolve in a single poll.
     ///
     /// # Errors
     ///
     /// Returns [`FsError::AlreadyExists`] if the name already exists, or
     /// [`FsError::NotADirectory`] if this inode is not a directory.
-    fn create(
-        &self,
-        name: &str,
+    fn create<'a>(
+        &'a self,
+        name: &'a str,
         itype: InodeType,
         perms: Permissions,
-    ) -> Result<Arc<dyn Inode>, FsError>;
+    ) -> Pin<Box<dyn Future<Output = Result<Arc<dyn Inode>, FsError>> + Send + 'a>>;
 
     /// Remove a child entry from this directory.
+    ///
+    /// Returns a future for forward-compatibility with block-backed filesystems.
+    /// In-memory implementations resolve in a single poll.
     ///
     /// # Errors
     ///
     /// Returns [`FsError::NotFound`] if the name does not exist.
-    fn unlink(&self, name: &str) -> Result<(), FsError>;
+    fn unlink<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), FsError>> + Send + 'a>>;
 }
 
 /// A mounted filesystem.
@@ -206,7 +227,9 @@ pub trait FileSystem: Send + Sync {
 }
 
 /// Construct a noop waker for single-poll helpers.
-fn noop_waker() -> core::task::Waker {
+///
+/// Also used by [`crate::sched::block_on`] for the blocking sync-async bridge.
+pub(crate) fn noop_waker() -> core::task::Waker {
     use core::task::{RawWaker, RawWakerVTable, Waker};
 
     fn noop_clone(_: *const ()) -> RawWaker {
