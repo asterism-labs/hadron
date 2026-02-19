@@ -1,6 +1,7 @@
 //! Initrd (initial ramdisk) CPIO archive creation.
 //!
-//! Packages pre-compiled userspace binaries into a CPIO newc archive.
+//! Packages pre-compiled userspace binaries into a CPIO newc archive,
+//! and creates symlinks for coreutils multi-call dispatch.
 
 use anyhow::{Context, Result};
 use hadris_cpio::write::file_tree::{FileNode, FileTree};
@@ -9,10 +10,15 @@ use std::path::PathBuf;
 
 use crate::config::ResolvedConfig;
 
+/// Coreutils commands that get symlinks pointing to `/coreutils`.
+const COREUTILS_COMMANDS: &[&str] = &[
+    "echo", "cat", "ls", "uname", "uptime", "clear", "true", "false", "yes",
+];
+
 /// Packages already-compiled userspace binaries into `build/initrd.cpio`.
 ///
 /// Accepts a list of (crate_name, binary_path) pairs from the pipeline's
-/// artifact map.
+/// artifact map. Creates symlinks for coreutils multi-call commands.
 pub fn build_initrd(
     config: &ResolvedConfig,
     bin_artifacts: &[(String, PathBuf)],
@@ -25,12 +31,15 @@ pub fn build_initrd(
             .with_context(|| format!("reading userspace binary: {}", bin_path.display()))?;
 
         // Use binary name without crate prefix as the filename in initrd.
-        let initrd_name = name.strip_prefix("hadron-").unwrap_or(name);
-        println!(
-            "  Initrd: /{initrd_name} ({} bytes)",
-            data.len()
-        );
+        let initrd_name = name.strip_prefix("lepton-").unwrap_or(name);
+        println!("  Initrd: /{initrd_name} ({} bytes)", data.len());
         tree.add(FileNode::file(initrd_name, data, 0o755));
+    }
+
+    // Create symlinks for coreutils multi-call commands.
+    for cmd in COREUTILS_COMMANDS {
+        println!("  Initrd: /{cmd} -> /coreutils (symlink)");
+        tree.add(FileNode::symlink(cmd, "/coreutils"));
     }
 
     std::fs::create_dir_all(output_path.parent().unwrap())?;

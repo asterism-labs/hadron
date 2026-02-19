@@ -4,7 +4,7 @@ use hadron_syscall::raw::{syscall0, syscall1, syscall2, syscall4};
 use hadron_syscall::{
     CLOCK_MONOTONIC, KernelVersionInfo, MemoryInfo, QUERY_KERNEL_VERSION, QUERY_MEMORY,
     QUERY_UPTIME, SYS_CLOCK_GETTIME, SYS_HANDLE_DUP, SYS_HANDLE_PIPE, SYS_QUERY, SYS_TASK_EXIT,
-    SYS_TASK_INFO, SYS_TASK_SPAWN, SYS_TASK_WAIT, Timespec, UptimeInfo,
+    SYS_TASK_INFO, SYS_TASK_SPAWN, SYS_TASK_WAIT, SpawnArg, Timespec, UptimeInfo,
 };
 
 // ── Functions ─────────────────────────────────────────────────────────
@@ -31,9 +31,32 @@ pub fn getpid() -> u32 {
 
 /// Spawn a new process from an ELF binary at the given path.
 ///
+/// `argv` is passed to the child process. If empty, no arguments are passed.
+///
 /// Returns the child PID on success, or a negative errno on failure.
-pub fn spawn(path: &str) -> isize {
-    syscall2(SYS_TASK_SPAWN, path.as_ptr() as usize, path.len())
+pub fn spawn(path: &str, argv: &[&str]) -> isize {
+    if argv.is_empty() {
+        return syscall4(SYS_TASK_SPAWN, path.as_ptr() as usize, path.len(), 0, 0);
+    }
+
+    // Build SpawnArg descriptors on the stack.
+    // Max 32 args to match the kernel limit.
+    let mut descs = [SpawnArg { ptr: 0, len: 0 }; 32];
+    let count = argv.len().min(32);
+    for (i, arg) in argv[..count].iter().enumerate() {
+        descs[i] = SpawnArg {
+            ptr: arg.as_ptr() as usize,
+            len: arg.len(),
+        };
+    }
+
+    syscall4(
+        SYS_TASK_SPAWN,
+        path.as_ptr() as usize,
+        path.len(),
+        descs.as_ptr() as usize,
+        count,
+    )
 }
 
 /// Wait for a child process to exit.
@@ -73,9 +96,9 @@ pub fn query_memory() -> Option<MemoryInfo> {
     let ret = syscall4(
         SYS_QUERY,
         QUERY_MEMORY as usize,
+        0, // sub_id (reserved)
         info.as_mut_ptr() as usize,
         core::mem::size_of::<MemoryInfo>(),
-        0,
     );
     if ret >= 0 {
         // SAFETY: The kernel wrote a valid MemoryInfo into the buffer on success.
@@ -91,9 +114,9 @@ pub fn query_uptime() -> Option<UptimeInfo> {
     let ret = syscall4(
         SYS_QUERY,
         QUERY_UPTIME as usize,
+        0, // sub_id (reserved)
         info.as_mut_ptr() as usize,
         core::mem::size_of::<UptimeInfo>(),
-        0,
     );
     if ret >= 0 {
         // SAFETY: The kernel wrote a valid UptimeInfo into the buffer on success.
@@ -109,9 +132,9 @@ pub fn query_kernel_version() -> Option<KernelVersionInfo> {
     let ret = syscall4(
         SYS_QUERY,
         QUERY_KERNEL_VERSION as usize,
+        0, // sub_id (reserved)
         info.as_mut_ptr() as usize,
         core::mem::size_of::<KernelVersionInfo>(),
-        0,
     );
     if ret >= 0 {
         // SAFETY: The kernel wrote a valid KernelVersionInfo into the buffer on success.

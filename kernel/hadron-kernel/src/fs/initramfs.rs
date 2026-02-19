@@ -99,8 +99,40 @@ pub fn unpack_cpio(initrd: &[u8], root: &Arc<dyn Inode>) -> usize {
 
                 file_count += 1;
             }
+            FileType::Symlink => {
+                let data_size = entry.file_size() as usize;
+                let mut target_buf = vec![0u8; data_size];
+                reader
+                    .read_entry_data(&entry, &mut target_buf)
+                    .expect("failed to read CPIO symlink target");
+                let target = core::str::from_utf8(&target_buf)
+                    .expect("initramfs: symlink target is not valid UTF-8");
+
+                // Ensure parent directories exist.
+                if let Some(parent_path) = name.rsplit_once('/') {
+                    ensure_directory(root, parent_path.0);
+                }
+
+                // Navigate to the parent directory.
+                let (parent, link_name) = if let Some((dir, file)) = name.rsplit_once('/') {
+                    (resolve_path(root, dir), file)
+                } else {
+                    (root.clone(), name)
+                };
+
+                parent
+                    .create_symlink(link_name, target, Permissions::all())
+                    .unwrap_or_else(|e| {
+                        panic!(
+                            "initramfs: failed to create symlink '{}' -> '{}': {:?}",
+                            name, target, e
+                        )
+                    });
+
+                file_count += 1;
+            }
             _ => {
-                // Skip unsupported entry types (symlinks, devices, etc.).
+                // Skip unsupported entry types (devices, etc.).
                 reader
                     .skip_entry_data(&entry)
                     .expect("failed to skip CPIO entry");

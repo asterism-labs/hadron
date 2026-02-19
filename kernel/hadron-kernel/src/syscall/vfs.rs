@@ -245,6 +245,7 @@ pub(super) fn sys_vnode_stat(fd: usize, buf_ptr: usize, buf_len: usize) -> isize
             crate::fs::InodeType::File => hadron_core::syscall::INODE_TYPE_FILE,
             crate::fs::InodeType::Directory => hadron_core::syscall::INODE_TYPE_DIR,
             crate::fs::InodeType::CharDevice => hadron_core::syscall::INODE_TYPE_CHARDEV,
+            crate::fs::InodeType::Symlink => hadron_core::syscall::INODE_TYPE_SYMLINK,
         };
 
         let perms = inode.permissions();
@@ -357,6 +358,7 @@ pub(super) fn sys_vnode_readdir(fd: usize, buf_ptr: usize, buf_len: usize) -> is
                 crate::fs::InodeType::File => hadron_core::syscall::INODE_TYPE_FILE,
                 crate::fs::InodeType::Directory => hadron_core::syscall::INODE_TYPE_DIR,
                 crate::fs::InodeType::CharDevice => hadron_core::syscall::INODE_TYPE_CHARDEV,
+                crate::fs::InodeType::Symlink => hadron_core::syscall::INODE_TYPE_SYMLINK,
             };
 
             let name_bytes = entry.name.as_bytes();

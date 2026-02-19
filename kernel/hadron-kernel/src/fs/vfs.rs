@@ -13,7 +13,7 @@ use alloc::sync::Arc;
 use hadron_core::sync::SpinLock;
 
 use super::path;
-use super::{FileSystem, FsError, Inode, poll_immediate};
+use super::{FileSystem, FsError, Inode, InodeType, poll_immediate};
 
 /// Global VFS instance.
 static VFS: SpinLock<Option<Vfs>> = SpinLock::new(None);
@@ -38,16 +38,34 @@ impl Vfs {
         self.mounts.insert(path.to_string(), fs);
     }
 
+    /// Maximum symlink resolution depth to prevent infinite loops.
+    const MAX_SYMLINK_DEPTH: usize = 8;
+
     /// Resolve an absolute path to an inode.
     ///
     /// Finds the longest mount prefix, obtains the root inode, then walks
-    /// the remaining path components via `lookup`.
+    /// the remaining path components via `lookup`. Symlinks are followed
+    /// up to [`MAX_SYMLINK_DEPTH`](Self::MAX_SYMLINK_DEPTH) levels deep.
     ///
     /// # Errors
     ///
     /// Returns [`FsError::InvalidArgument`] if the path is not absolute,
-    /// or [`FsError::NotFound`] if the path cannot be resolved.
+    /// [`FsError::NotFound`] if the path cannot be resolved, or
+    /// [`FsError::SymlinkLoop`] if symlink depth exceeds the limit.
     pub fn resolve(&self, abs_path: &str) -> Result<Arc<dyn Inode>, FsError> {
+        self.resolve_with_depth(abs_path, 0)
+    }
+
+    /// Internal resolve with symlink depth tracking.
+    fn resolve_with_depth(
+        &self,
+        abs_path: &str,
+        depth: usize,
+    ) -> Result<Arc<dyn Inode>, FsError> {
+        if depth > Self::MAX_SYMLINK_DEPTH {
+            return Err(FsError::SymlinkLoop);
+        }
+
         if !path::is_absolute(abs_path) {
             return Err(FsError::InvalidArgument);
         }
@@ -67,6 +85,12 @@ impl Vfs {
         let mut current = root;
         for component in path::components(remainder) {
             current = poll_immediate(current.lookup(component))?;
+
+            // Follow symlinks.
+            if current.inode_type() == InodeType::Symlink {
+                let target = current.read_link()?;
+                current = self.resolve_with_depth(&target, depth + 1)?;
+            }
         }
 
         Ok(current)

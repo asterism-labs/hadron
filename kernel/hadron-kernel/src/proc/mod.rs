@@ -204,6 +204,11 @@ pub struct Process {
 }
 
 impl Process {
+    /// Returns a reference to the process's address space.
+    pub(crate) fn address_space(&self) -> &AddressSpace<PageTableMapper> {
+        &self.address_space
+    }
+
     /// Creates a new process with the given address space and parent PID.
     pub fn new(address_space: AddressSpace<PageTableMapper>, parent_pid: Option<u32>) -> Self {
         let user_cr3 = address_space.root_phys();
@@ -434,8 +439,13 @@ fn enter_userspace_resume_wrapper(process: &Process) {
 pub fn spawn_init() {
     let init_elf = read_init_from_vfs();
 
-    let (process, entry, stack_top) =
+    let (process, entry, _stack_top) =
         exec::create_process_from_binary(init_elf, None).expect("failed to load init binary");
+
+    // Write argv onto the init process's stack: ["/init"].
+    let hhdm_offset = hadron_core::mm::hhdm::offset();
+    let stack_top = exec::write_argv_to_init_stack(process.address_space(), hhdm_offset)
+        .expect("failed to write argv for init");
 
     // Set up stdin/stdout/stderr pointing to /dev/console.
     {

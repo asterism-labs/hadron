@@ -33,6 +33,8 @@ hadron_syscall_macros::define_syscalls! {
         EINVAL = 22;
         /// `ENOSYS` — function not implemented.
         ENOSYS = 38;
+        /// `ELOOP` — too many levels of symbolic links.
+        ELOOP = 40;
     }
 
     types {
@@ -94,6 +96,15 @@ hadron_syscall_macros::define_syscalls! {
             permissions: u32,
         }
 
+        /// Argument descriptor for [`task_spawn`]: pointer + length of one arg string.
+        #[derive(Debug, Clone, Copy)]
+        struct SpawnArg {
+            /// Pointer to the argument string bytes.
+            ptr: usize,
+            /// Length of the argument string in bytes.
+            len: usize,
+        }
+
         /// A single directory entry returned by `vnode_readdir`.
         #[derive(Debug, Clone, Copy)]
         struct DirEntryInfo {
@@ -123,6 +134,8 @@ hadron_syscall_macros::define_syscalls! {
         INODE_TYPE_DIR: u8 = 1;
         /// Inode type: character device.
         INODE_TYPE_CHARDEV: u8 = 2;
+        /// Inode type: symbolic link.
+        INODE_TYPE_SYMLINK: u8 = 3;
     }
 
     /// Task management.
@@ -131,7 +144,10 @@ hadron_syscall_macros::define_syscalls! {
         fn task_exit(status: usize) = 0x00;
 
         /// Spawn a new task from an ELF binary at the given path.
-        fn task_spawn(path_ptr: usize, path_len: usize) = 0x01;
+        ///
+        /// If `argv_ptr` and `argv_count` are both 0, no arguments are passed.
+        /// Otherwise `argv_ptr` points to an array of [`SpawnArg`] descriptors.
+        fn task_spawn(path_ptr: usize, path_len: usize, argv_ptr: usize, argv_count: usize) = 0x01;
 
         /// Wait for a child task to exit. Returns child PID on success.
         fn task_wait(pid: usize, status_ptr: usize) = 0x02;

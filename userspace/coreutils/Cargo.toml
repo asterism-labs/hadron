@@ -1,5 +1,5 @@
 [package]
-name = "lepton-spinner"
+name = "lepton-coreutils"
 version = "0.1.0"
 edition = "2024"
 publish = false
@@ -7,7 +7,7 @@ publish = false
 [workspace]
 
 [[bin]]
-name = "lepton-spinner"
+name = "lepton-coreutils"
 path = "src/main.rs"
 
 [dependencies]

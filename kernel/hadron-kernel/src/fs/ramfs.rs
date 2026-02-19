@@ -74,7 +74,7 @@ impl Inode for RamInode {
 
     fn size(&self) -> usize {
         match self.itype {
-            InodeType::File => self.data.lock().len(),
+            InodeType::File | InodeType::Symlink => self.data.lock().len(),
             _ => 0,
         }
     }
@@ -192,5 +192,36 @@ impl Inode for RamInode {
             children.remove(name).ok_or(FsError::NotFound)?;
             Ok(())
         })
+    }
+
+    fn read_link(&self) -> Result<String, FsError> {
+        if self.itype != InodeType::Symlink {
+            return Err(FsError::InvalidArgument);
+        }
+        let data = self.data.lock();
+        String::from_utf8(data.clone()).map_err(|_| FsError::IoError)
+    }
+
+    fn create_symlink(
+        &self,
+        name: &str,
+        target: &str,
+        perms: Permissions,
+    ) -> Result<Arc<dyn Inode>, FsError> {
+        if self.itype != InodeType::Directory {
+            return Err(FsError::NotADirectory);
+        }
+        let mut children = self.children.lock();
+        if children.contains_key(name) {
+            return Err(FsError::AlreadyExists);
+        }
+        let new_inode = Arc::new(RamInode {
+            itype: InodeType::Symlink,
+            data: SpinLock::new(target.as_bytes().to_vec()),
+            children: SpinLock::new(BTreeMap::new()),
+            permissions: perms,
+        });
+        children.insert(name.to_string(), new_inode.clone());
+        Ok(new_inode)
     }
 }

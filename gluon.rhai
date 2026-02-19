@@ -254,23 +254,7 @@ userspace.add("lepton-shell", "userspace/shell")
     .crate_type(BIN).root("src/main.rs")
     .deps(#{ lepton_syslib: "lepton-syslib" });
 
-userspace.add("lepton-spinner", "userspace/spinner")
-    .crate_type(BIN).root("src/main.rs")
-    .deps(#{ lepton_syslib: "lepton-syslib" });
-
-userspace.add("lepton-spawn-worker", "userspace/spawn-worker")
-    .crate_type(BIN).root("src/main.rs")
-    .deps(#{ lepton_syslib: "lepton-syslib" });
-
-userspace.add("lepton-spawn-stress", "userspace/spawn-stress")
-    .crate_type(BIN).root("src/main.rs")
-    .deps(#{ lepton_syslib: "lepton-syslib" });
-
-userspace.add("lepton-pipe-consumer", "userspace/pipe-consumer")
-    .crate_type(BIN).root("src/main.rs")
-    .deps(#{ lepton_syslib: "lepton-syslib" });
-
-userspace.add("lepton-pipe-test", "userspace/pipe-test")
+userspace.add("lepton-coreutils", "userspace/coreutils")
     .crate_type(BIN).root("src/main.rs")
     .deps(#{ lepton_syslib: "lepton-syslib" });
 
@@ -284,9 +268,7 @@ rule("hbtf")
     .handler("hbtf");
 
 rule("initrd")
-    .inputs(["lepton-init", "lepton-shell", "lepton-spinner",
-             "lepton-spawn-stress", "lepton-spawn-worker",
-             "lepton-pipe-test", "lepton-pipe-consumer"])
+    .inputs(["lepton-init", "lepton-shell", "lepton-coreutils"])
     .output("build/initrd.cpio")
     .handler("initrd");
 

@@ -33,6 +33,8 @@ pub enum InodeType {
     Directory,
     /// Character device.
     CharDevice,
+    /// Symbolic link.
+    Symlink,
 }
 
 /// File permissions.
@@ -108,6 +110,8 @@ pub enum FsError {
     InvalidArgument,
     /// Operation not supported.
     NotSupported,
+    /// Too many levels of symbolic links.
+    SymlinkLoop,
 }
 
 impl FsError {
@@ -124,6 +128,7 @@ impl FsError {
             FsError::IoError => hadron_core::syscall::EIO,
             FsError::InvalidArgument => hadron_core::syscall::EINVAL,
             FsError::NotSupported => hadron_core::syscall::ENOSYS,
+            FsError::SymlinkLoop => hadron_core::syscall::ELOOP,
         }
     }
 }
@@ -215,6 +220,25 @@ pub trait Inode: Send + Sync {
         &'a self,
         name: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), FsError>> + Send + 'a>>;
+
+    /// Read the target path of a symlink.
+    ///
+    /// Default implementation returns [`FsError::NotSupported`].
+    fn read_link(&self) -> Result<String, FsError> {
+        Err(FsError::NotSupported)
+    }
+
+    /// Create a symbolic link in this directory.
+    ///
+    /// Default implementation returns [`FsError::NotSupported`].
+    fn create_symlink(
+        &self,
+        _name: &str,
+        _target: &str,
+        _perms: Permissions,
+    ) -> Result<Arc<dyn Inode>, FsError> {
+        Err(FsError::NotSupported)
+    }
 }
 
 /// A mounted filesystem.

@@ -10,9 +10,9 @@
 use lepton_syslib::{println, sys};
 
 #[unsafe(no_mangle)]
-pub extern "C" fn main() -> i32 {
+pub extern "C" fn main(_args: &[&str]) -> i32 {
     loop {
-        let ret = sys::spawn("/shell");
+        let ret = sys::spawn("/shell", &["/shell"]);
         if ret < 0 {
             println!("init: failed to spawn /shell (error {})", ret);
             return 1;
