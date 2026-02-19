@@ -419,9 +419,9 @@ fn compile_crate_host(
         cmd.arg("--extern").arg("proc_macro");
     }
 
-    // proc-macro2 requires build.rs cfg flags we must set manually.
-    if krate.name == "proc-macro2" {
-        cmd.arg("--cfg").arg("wrap_proc_macro");
+    // Per-crate cfg flags (e.g. proc-macro2 needs `wrap_proc_macro`).
+    for flag in &krate.cfg_flags {
+        cmd.arg("--cfg").arg(flag);
     }
 
     // Features.

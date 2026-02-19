@@ -8,7 +8,7 @@ use std::collections::{BTreeSet, HashSet};
 
 use anyhow::{Result, bail, ensure};
 
-use crate::model::{BuildModel, ConfigType, ConfigValue, PipelineStep};
+use crate::model::{BuildModel, ConfigType, ConfigValue, DepSource, PipelineStep};
 
 /// Validate a fully populated build model.
 ///
@@ -23,6 +23,7 @@ pub fn validate_model(model: &BuildModel) -> Result<()> {
     validate_rules(model)?;
     validate_pipeline(model)?;
     validate_tests(model)?;
+    validate_dependencies(model)?;
     Ok(())
 }
 
@@ -383,6 +384,47 @@ fn validate_tests(model: &BuildModel) -> Result<()> {
             model.tests.kernel_tests_linker_script.is_some(),
             "tests.kernel_tests_crate is set but kernel_tests_linker_script is not"
         );
+    }
+
+    Ok(())
+}
+
+fn validate_dependencies(model: &BuildModel) -> Result<()> {
+    for (name, dep) in &model.dependencies {
+        ensure!(
+            !name.is_empty(),
+            "dependency has an empty name"
+        );
+
+        match &dep.source {
+            DepSource::CratesIo { version } => {
+                ensure!(
+                    !version.is_empty(),
+                    "dependency '{name}' has crates.io source but no version"
+                );
+                // Basic semver format check: should contain at least one dot.
+                ensure!(
+                    version.contains('.'),
+                    "dependency '{name}' version '{version}' does not look like a semver version (expected X.Y.Z)"
+                );
+            }
+            DepSource::Git { url, .. } => {
+                ensure!(
+                    !url.is_empty(),
+                    "dependency '{name}' has git source but no URL"
+                );
+                ensure!(
+                    url.starts_with("https://") || url.starts_with("http://") || url.starts_with("git://") || url.starts_with("ssh://"),
+                    "dependency '{name}' git URL '{url}' does not look like a valid URL"
+                );
+            }
+            DepSource::Path { path } => {
+                ensure!(
+                    !path.is_empty(),
+                    "dependency '{name}' has path source but empty path"
+                );
+            }
+        }
     }
 
     Ok(())

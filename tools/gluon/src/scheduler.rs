@@ -238,6 +238,10 @@ fn execute_stage(
         return Ok(());
     }
 
+    // Cross-group topological sort: re-order all_crates so that dependencies
+    // from other groups in the same stage are compiled first.
+    toposort_stage_crates(&mut all_crates);
+
     // Quick stage check.
     let stage_names: Vec<String> = all_crates.iter().map(|(k, _)| k.name.clone()).collect();
     let total = all_crates.len();
@@ -342,6 +346,75 @@ fn execute_stage(
     }
 
     Ok(())
+}
+
+/// Re-order crates across all groups in a stage using topological sort.
+///
+/// Within a single pipeline stage, multiple groups may contribute crates that
+/// depend on each other (e.g. vendored `hadris-common` depends on project
+/// `noalloc` from `kernel-libs`). The per-group toposort in `crate_graph.rs`
+/// only orders within a group. This function does a unified sort across all
+/// crates collected for the stage.
+fn toposort_stage_crates(crates: &mut Vec<(ResolvedCrate, bool)>) {
+    use std::collections::VecDeque;
+
+    let name_set: HashSet<&str> = crates.iter().map(|(k, _)| k.name.as_str()).collect();
+
+    // Build in-degree and forward adjacency (dep → dependents).
+    let mut in_degree: HashMap<&str, usize> = HashMap::new();
+    let mut dependents: HashMap<&str, Vec<&str>> = HashMap::new();
+
+    for (krate, _) in crates.iter() {
+        in_degree.insert(&krate.name, 0);
+    }
+
+    for (krate, _) in crates.iter() {
+        for dep in &krate.deps {
+            if name_set.contains(dep.crate_name.as_str()) {
+                *in_degree.entry(krate.name.as_str()).or_insert(0) += 1;
+                dependents
+                    .entry(dep.crate_name.as_str())
+                    .or_default()
+                    .push(&krate.name);
+            }
+        }
+    }
+
+    // Kahn's algorithm.
+    let mut queue: VecDeque<&str> = VecDeque::new();
+    for (&name, &degree) in &in_degree {
+        if degree == 0 {
+            queue.push_back(name);
+        }
+    }
+
+    let mut sorted_names: Vec<String> = Vec::with_capacity(crates.len());
+    while let Some(name) = queue.pop_front() {
+        sorted_names.push(name.to_string());
+        if let Some(deps) = dependents.get(name) {
+            for dep in deps {
+                if let Some(degree) = in_degree.get_mut(dep) {
+                    *degree -= 1;
+                    if *degree == 0 {
+                        queue.push_back(dep);
+                    }
+                }
+            }
+        }
+    }
+
+    // If we couldn't sort all crates (cycle), leave them as-is.
+    if sorted_names.len() != crates.len() {
+        return;
+    }
+
+    // Build index map and reorder in-place.
+    let order: HashMap<&str, usize> = sorted_names
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.as_str(), i))
+        .collect();
+    crates.sort_by_key(|(k, _)| order.get(k.name.as_str()).copied().unwrap_or(usize::MAX));
 }
 
 /// Execute a named rule.

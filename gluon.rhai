@@ -102,60 +102,38 @@ sysroot.add("alloc", "{sysroot}/alloc")
     .deps(#{ core: "core", compiler_builtins: "compiler_builtins" });
 
 // ===========================================================================
-// Host crates (proc-macro and its dependencies, built for host triple)
+// External dependencies (resolved + vendored by `gluon vendor`)
+// ===========================================================================
+
+// Host proc-macro ecosystem (syn pulls in proc-macro2, quote, unicode-ident).
+dependency("syn").version("2.0.116")
+    .features(["full", "extra-traits", "parsing", "printing", "clone-impls", "proc-macro", "derive"]);
+dependency("proc-macro2").version("1.0.106")
+    .cfg_flags(["wrap_proc_macro"]);
+
+// Kernel no_std dependencies.
+dependency("bitflags").version("2.11.0");
+dependency("cfg-if").version("1.0.4");
+dependency("bytemuck").version("1.25.0").no_default_features();
+
+// Hadris archive format crates (from git).
+dependency("hadris-cpio").git("https://github.com/hxyulin/hadris").rev("88fd9890")
+    .features(["read", "alloc"]).no_default_features();
+dependency("hadris-io").git("https://github.com/hxyulin/hadris").rev("88fd9890")
+    .no_default_features();
+dependency("hadris-common").git("https://github.com/hxyulin/hadris").rev("88fd9890")
+    .no_default_features();
+
+// ===========================================================================
+// Host crates (project proc-macros, built for host triple)
 // ===========================================================================
 
 let host = group("host").target("host").edition("2021").project(false);
-
-host.add("unicode-ident", "vendor/unicode-ident")
-    .edition("2018");
-
-host.add("proc-macro2", "vendor/proc-macro2")
-    .features(["default", "proc-macro"])
-    .deps(#{ unicode_ident: "unicode-ident" });
-
-host.add("quote", "vendor/quote")
-    .features(["default", "proc-macro"])
-    .deps(#{ proc_macro2: "proc-macro2" });
-
-host.add("syn", "vendor/syn")
-    .features(["full", "extra-traits", "parsing", "printing", "clone-impls", "proc-macro", "derive"])
-    .deps(#{ proc_macro2: "proc-macro2", quote: "quote", unicode_ident: "unicode-ident" });
 
 host.add("hadron-syscall-macros", "crates/hadron-syscall-macros")
     .edition("2024")
     .crate_type(PROC_MACRO)
     .deps(#{ syn: "syn", quote: "quote", proc_macro2: "proc-macro2" });
-
-// ===========================================================================
-// Vendored external crates (built for kernel target, no_std)
-// ===========================================================================
-
-let vendored = group("vendored").target("x86_64-unknown-hadron").edition("2021").project(false);
-
-vendored.add("bitflags", "vendor/bitflags");
-
-vendored.add("cfg-if", "vendor/cfg-if")
-    .edition("2018");
-
-vendored.add("bytemuck", "vendor/bytemuck")
-    .edition("2018");
-
-vendored.add("noalloc-vendored", "vendor/noalloc")
-    .edition("2024");
-
-vendored.add("hadris-io", "vendor/hadris-io")
-    .edition("2024")
-    .deps(#{ bytemuck: "bytemuck", cfg_if: "cfg-if" });
-
-vendored.add("hadris-common", "vendor/hadris-common")
-    .edition("2024")
-    .deps(#{ noalloc: "noalloc-vendored", hadris_io: "hadris-io" });
-
-vendored.add("hadris-cpio", "vendor/hadris-cpio")
-    .edition("2024")
-    .features(["read", "alloc"])
-    .deps(#{ hadris_io: "hadris-io", hadris_common: "hadris-common" });
 
 // ===========================================================================
 // Project kernel library crates

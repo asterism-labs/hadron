@@ -12,7 +12,8 @@ use rhai::{Dynamic, Engine, Map};
 
 use crate::model::{
     BuildModel, ConfigOptionDef, ConfigType, ConfigValue,
-    CrateDef, CrateType, DepDef, GroupDef, PipelineStep, ProfileDef,
+    CrateDef, CrateType, DepDef, DepSource, ExternalDepDef, GitRef,
+    GroupDef, PipelineStep, ProfileDef,
     ProjectDef, RuleDef, RuleHandler, TargetDef,
 };
 
@@ -47,6 +48,7 @@ pub fn evaluate_script(root: &Path) -> Result<BuildModel> {
     register_bootloader_api(&mut engine, model.clone());
     register_image_api(&mut engine, model.clone());
     register_tests_api(&mut engine, model.clone());
+    register_dependency_api(&mut engine, model.clone());
     register_helpers(&mut engine, &root_path);
 
     // Set up include() mechanism with circular-include detection.
@@ -756,6 +758,7 @@ fn register_group_api(engine: &mut Engine, model: SharedModel) {
                     linker_script: None,
                     group: Some(builder.name.clone()),
                     is_project_crate: is_project,
+                    cfg_flags: Vec::new(),
                 },
             );
             CrateBuilder {
@@ -1164,6 +1167,158 @@ fn register_tests_api(engine: &mut Engine, model: SharedModel) {
 #[derive(Debug, Clone)]
 struct TestsBuilder {
     model: SharedModel,
+}
+
+// ---------------------------------------------------------------------------
+// dependency() -> DependencyBuilder
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+struct DependencyBuilder {
+    model: SharedModel,
+    name: String,
+}
+
+fn register_dependency_api(engine: &mut Engine, model: SharedModel) {
+    // dependency(name) -> DependencyBuilder
+    let m = model.clone();
+    engine.register_fn("dependency", move |name: &str| -> DependencyBuilder {
+        let mut model = m.lock().unwrap();
+        model.dependencies.entry(name.into()).or_insert_with(|| ExternalDepDef {
+            name: name.into(),
+            source: DepSource::CratesIo { version: String::new() },
+            features: Vec::new(),
+            default_features: true,
+            cfg_flags: Vec::new(),
+        });
+        DependencyBuilder {
+            model: m.clone(),
+            name: name.into(),
+        }
+    });
+
+    // .version(str) — sets crates.io source
+    engine.register_fn(
+        "version",
+        |builder: &mut DependencyBuilder, version: &str| -> DependencyBuilder {
+            let mut model = builder.model.lock().unwrap();
+            if let Some(dep) = model.dependencies.get_mut(&builder.name) {
+                dep.source = DepSource::CratesIo { version: version.into() };
+            }
+            builder.clone()
+        },
+    );
+
+    // .git(url) — sets git source with default ref
+    engine.register_fn(
+        "git",
+        |builder: &mut DependencyBuilder, url: &str| -> DependencyBuilder {
+            let mut model = builder.model.lock().unwrap();
+            if let Some(dep) = model.dependencies.get_mut(&builder.name) {
+                dep.source = DepSource::Git {
+                    url: url.into(),
+                    reference: GitRef::Default,
+                };
+            }
+            builder.clone()
+        },
+    );
+
+    // .path(path) — sets local path source
+    engine.register_fn(
+        "path",
+        |builder: &mut DependencyBuilder, path: &str| -> DependencyBuilder {
+            let mut model = builder.model.lock().unwrap();
+            if let Some(dep) = model.dependencies.get_mut(&builder.name) {
+                dep.source = DepSource::Path { path: path.into() };
+            }
+            builder.clone()
+        },
+    );
+
+    // .rev(str) — refine git reference to a specific commit
+    engine.register_fn(
+        "rev",
+        |builder: &mut DependencyBuilder, rev: &str| -> DependencyBuilder {
+            let mut model = builder.model.lock().unwrap();
+            if let Some(dep) = model.dependencies.get_mut(&builder.name) {
+                if let DepSource::Git { ref mut reference, .. } = dep.source {
+                    *reference = GitRef::Rev(rev.into());
+                }
+            }
+            builder.clone()
+        },
+    );
+
+    // .tag(str) — refine git reference to a tag
+    engine.register_fn(
+        "tag",
+        |builder: &mut DependencyBuilder, tag: &str| -> DependencyBuilder {
+            let mut model = builder.model.lock().unwrap();
+            if let Some(dep) = model.dependencies.get_mut(&builder.name) {
+                if let DepSource::Git { ref mut reference, .. } = dep.source {
+                    *reference = GitRef::Tag(tag.into());
+                }
+            }
+            builder.clone()
+        },
+    );
+
+    // .branch(str) — refine git reference to a branch
+    engine.register_fn(
+        "branch",
+        |builder: &mut DependencyBuilder, branch: &str| -> DependencyBuilder {
+            let mut model = builder.model.lock().unwrap();
+            if let Some(dep) = model.dependencies.get_mut(&builder.name) {
+                if let DepSource::Git { ref mut reference, .. } = dep.source {
+                    *reference = GitRef::Branch(branch.into());
+                }
+            }
+            builder.clone()
+        },
+    );
+
+    // .features([...]) — add extra features
+    engine.register_fn(
+        "features",
+        |builder: &mut DependencyBuilder, feats: rhai::Array| -> DependencyBuilder {
+            let mut model = builder.model.lock().unwrap();
+            if let Some(dep) = model.dependencies.get_mut(&builder.name) {
+                dep.features = feats
+                    .into_iter()
+                    .filter_map(|v| v.into_string().ok())
+                    .collect();
+            }
+            builder.clone()
+        },
+    );
+
+    // .no_default_features() — disable default features
+    engine.register_fn(
+        "no_default_features",
+        |builder: &mut DependencyBuilder| -> DependencyBuilder {
+            let mut model = builder.model.lock().unwrap();
+            if let Some(dep) = model.dependencies.get_mut(&builder.name) {
+                dep.default_features = false;
+            }
+            builder.clone()
+        },
+    );
+
+    // .cfg_flags([...]) — extra --cfg flags for compilation
+    engine.register_fn(
+        "cfg_flags",
+        |builder: &mut DependencyBuilder, flags: rhai::Array| -> DependencyBuilder {
+            let mut model = builder.model.lock().unwrap();
+            if let Some(dep) = model.dependencies.get_mut(&builder.name) {
+                dep.cfg_flags = flags
+                    .into_iter()
+                    .filter_map(|v| v.into_string().ok())
+                    .collect();
+            }
+            builder.clone()
+        },
+    );
 }
 
 // ---------------------------------------------------------------------------

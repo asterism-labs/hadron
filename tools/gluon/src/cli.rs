@@ -45,7 +45,7 @@ pub enum Command {
     /// Remove build artifacts.
     Clean,
     /// Vendor external dependencies into vendor/.
-    Vendor,
+    Vendor(VendorArgs),
 }
 
 /// Arguments for the `build` subcommand.
@@ -82,6 +82,18 @@ pub struct TestArgs {
     /// Extra arguments passed to the test harness after `--`.
     #[arg(last = true)]
     pub extra_args: Vec<String>,
+}
+
+/// Arguments for the `vendor` subcommand.
+#[derive(Parser)]
+pub struct VendorArgs {
+    /// Verify lock file and vendor directory without modifying anything.
+    #[arg(long)]
+    pub check: bool,
+
+    /// Remove vendored crates no longer referenced by any dependency.
+    #[arg(long)]
+    pub prune: bool,
 }
 
 /// Arguments for the `fmt` subcommand.

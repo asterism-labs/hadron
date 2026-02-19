@@ -27,6 +27,8 @@ pub struct BuildModel {
     pub bootloader: BootloaderDef,
     pub image: ImageDef,
     pub tests: TestsDef,
+    /// External dependency declarations from `dependency()` calls in gluon.rhai.
+    pub dependencies: BTreeMap<String, ExternalDepDef>,
 }
 
 /// Project metadata.
@@ -157,6 +159,8 @@ pub struct CrateDef {
     pub group: Option<String>,
     /// Whether this crate is a project crate (for clippy linting).
     pub is_project_crate: bool,
+    /// Extra `--cfg` flags for this crate (e.g. `wrap_proc_macro` for proc-macro2).
+    pub cfg_flags: Vec<String>,
 }
 
 /// A dependency specification within a crate definition.
@@ -167,6 +171,41 @@ pub struct DepDef {
     pub crate_name: String,
     #[allow(dead_code)] // used by future feature-gated compilation
     pub features: Vec<String>,
+}
+
+/// Source location for an external dependency.
+#[derive(Debug, Clone)]
+pub enum DepSource {
+    /// crates.io with exact version.
+    CratesIo { version: String },
+    /// Git repository.
+    Git { url: String, reference: GitRef },
+    /// Local path (not vendored, used in-place).
+    Path { path: String },
+}
+
+/// Git reference type for git-sourced dependencies.
+#[derive(Debug, Clone)]
+pub enum GitRef {
+    /// Exact commit hash.
+    Rev(String),
+    /// Git tag.
+    Tag(String),
+    /// Branch name.
+    Branch(String),
+    /// HEAD of the default branch.
+    Default,
+}
+
+/// An external dependency declaration from `gluon.rhai`.
+#[derive(Debug, Clone)]
+pub struct ExternalDepDef {
+    pub name: String,
+    pub source: DepSource,
+    pub features: Vec<String>,
+    pub default_features: bool,
+    /// Extra `--cfg` flags to pass when compiling this dependency.
+    pub cfg_flags: Vec<String>,
 }
 
 /// A group of crates with shared compilation behavior.

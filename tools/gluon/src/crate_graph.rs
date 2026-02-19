@@ -23,6 +23,8 @@ pub struct ResolvedCrate {
     pub linker_script: Option<String>,
     /// Whether this crate is a project crate (for clippy linting).
     pub is_project_crate: bool,
+    /// Extra `--cfg` flags for this crate.
+    pub cfg_flags: Vec<String>,
 }
 
 /// A resolved dependency.
@@ -136,6 +138,7 @@ pub fn resolve_group_from_model(
             root_file: rf,
             linker_script: def.linker_script.clone(),
             is_project_crate: def.is_project_crate,
+            cfg_flags: def.cfg_flags.clone(),
         });
     }
 

@@ -22,6 +22,7 @@ mod scheduler;
 mod sysroot;
 mod test;
 mod validate;
+mod vendor;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -44,9 +45,7 @@ fn main() -> Result<()> {
         cli::Command::Clippy => cmd_clippy(&cli),
         cli::Command::Fmt(ref args) => fmt::cmd_fmt(args),
         cli::Command::Menuconfig => cmd_menuconfig(&cli),
-        cli::Command::Vendor => {
-            todo!("vendor command")
-        }
+        cli::Command::Vendor(ref args) => cmd_vendor(args),
     }
 }
 
@@ -55,9 +54,26 @@ fn main() -> Result<()> {
 // ===========================================================================
 
 /// Load and validate the build model from `gluon.rhai`.
+///
+/// If `dependency()` declarations are present, auto-registers vendored crates
+/// into the model before validation.
 fn load_model(root: &PathBuf) -> Result<model::BuildModel> {
     println!("Loading gluon.rhai...");
-    let model = engine::evaluate_script(root)?;
+    let mut model = engine::evaluate_script(root)?;
+
+    // Auto-register vendored dependencies if any dependency() declarations exist.
+    if !model.dependencies.is_empty() {
+        let vendor_dir = root.join("vendor");
+        let resolved = vendor::resolve_transitive(&model.dependencies, &vendor_dir)?;
+
+        // Determine the default target from the "default" profile.
+        let default_target = model.profiles.get("default")
+            .and_then(|p| p.target.clone())
+            .unwrap_or_else(|| "x86_64-unknown-hadron".into());
+
+        vendor::auto_register_dependencies(&mut model, &resolved, &vendor_dir, &default_target)?;
+    }
+
     validate::validate_model(&model)?;
     Ok(model)
 }
@@ -186,6 +202,215 @@ fn cmd_clean() -> Result<()> {
     } else {
         println!("Nothing to clean.");
     }
+    Ok(())
+}
+
+/// Vendor external dependencies.
+fn cmd_vendor(args: &cli::VendorArgs) -> Result<()> {
+    let root = config::find_project_root()?;
+    let model = load_model(&root)?;
+    let vendor_dir = root.join("vendor");
+    let lock_path = root.join("gluon.lock");
+
+    if model.dependencies.is_empty() {
+        println!("No dependency() declarations found in gluon.rhai.");
+        return Ok(());
+    }
+
+    println!("Resolving {} dependencies...", model.dependencies.len());
+
+    if args.check {
+        // Verify mode: check lock file and vendor directory match.
+        let lock = vendor::read_lock_file(&lock_path)?
+            .ok_or_else(|| anyhow::anyhow!("gluon.lock not found — run `gluon vendor` first"))?;
+
+        let resolved = vendor::resolve_transitive(&model.dependencies, &vendor_dir)?;
+        let new_lock = vendor::build_lock_file(&resolved, &vendor_dir)?;
+
+        let mut mismatches = 0;
+        for new_pkg in &new_lock.packages {
+            match lock.packages.iter().find(|p| p.name == new_pkg.name) {
+                Some(existing) => {
+                    if existing.version != new_pkg.version {
+                        println!(
+                            "  MISMATCH: {} version {} (lock) vs {} (resolved)",
+                            new_pkg.name, existing.version, new_pkg.version
+                        );
+                        mismatches += 1;
+                    }
+                    if existing.checksum != new_pkg.checksum {
+                        println!(
+                            "  MISMATCH: {} checksum differs",
+                            new_pkg.name
+                        );
+                        mismatches += 1;
+                    }
+                }
+                None => {
+                    println!("  MISSING: {} not in lock file", new_pkg.name);
+                    mismatches += 1;
+                }
+            }
+        }
+
+        // Check for extra packages in lock file.
+        for existing in &lock.packages {
+            if !new_lock.packages.iter().any(|p| p.name == existing.name) {
+                println!("  EXTRA: {} in lock file but not in dependencies", existing.name);
+                mismatches += 1;
+            }
+        }
+
+        if mismatches > 0 {
+            anyhow::bail!("{mismatches} mismatch(es) found — run `gluon vendor` to update");
+        }
+
+        println!("Lock file and vendor directory are up to date.");
+        return Ok(());
+    }
+
+    // Fetch missing dependencies.
+    let mut fetched = 0;
+    for (name, dep) in &model.dependencies {
+        match &dep.source {
+            model::DepSource::CratesIo { version } => {
+                if version.is_empty() {
+                    anyhow::bail!("dependency '{name}' has no version specified");
+                }
+                let dest = vendor::find_vendor_dir(name, &vendor_dir);
+                if !dest.exists() {
+                    vendor::fetch_crates_io(name, version, &vendor_dir)?;
+                    fetched += 1;
+                }
+            }
+            model::DepSource::Git { url, reference } => {
+                let ref_str = match reference {
+                    model::GitRef::Rev(r) => r.clone(),
+                    model::GitRef::Tag(t) => t.clone(),
+                    model::GitRef::Branch(b) => b.clone(),
+                    model::GitRef::Default => "HEAD".into(),
+                };
+                let dest = vendor::find_vendor_dir(name, &vendor_dir);
+                if !dest.exists() {
+                    vendor::fetch_git(name, url, &ref_str, &vendor_dir)?;
+                    fetched += 1;
+                }
+            }
+            model::DepSource::Path { .. } => {
+                // Path deps are not vendored.
+            }
+        }
+    }
+
+    // Resolve transitive dependencies and fetch any that are missing.
+    // Iterate until all transitive deps are present.
+    let mut iterations = 0;
+    let max_iterations = 10;
+    loop {
+        iterations += 1;
+        if iterations > max_iterations {
+            anyhow::bail!("transitive resolution did not converge after {max_iterations} iterations");
+        }
+
+        let resolved = vendor::resolve_transitive(&model.dependencies, &vendor_dir)?;
+
+        let mut needed_fetch = false;
+        for dep in &resolved {
+            let vendor_path = vendor::find_vendor_dir(&dep.name, &vendor_dir);
+            if !vendor_path.join("Cargo.toml").exists() {
+                match &dep.source {
+                    vendor::ResolvedSource::CratesIo => {
+                        if dep.version.is_empty() {
+                            anyhow::bail!(
+                                "transitive dependency '{}' has no version — it may need a version in a parent Cargo.toml",
+                                dep.name
+                            );
+                        }
+                        vendor::fetch_crates_io(&dep.name, &dep.version, &vendor_dir)?;
+                        fetched += 1;
+                        needed_fetch = true;
+                    }
+                    vendor::ResolvedSource::Git { url, reference } => {
+                        vendor::fetch_git(&dep.name, url, reference, &vendor_dir)?;
+                        fetched += 1;
+                        needed_fetch = true;
+                    }
+                    vendor::ResolvedSource::Path { .. } => {}
+                }
+            }
+        }
+
+        if !needed_fetch {
+            // All deps present — build and write lock file.
+            let lock = vendor::build_lock_file(&resolved, &vendor_dir)?;
+            vendor::write_lock_file(&lock_path, &lock)?;
+
+            println!("\nVendoring complete:");
+            println!("  {} dependencies resolved", resolved.len());
+            println!("  {} crates fetched", fetched);
+            println!("  Lock file written to {}", lock_path.display());
+
+            if args.prune {
+                prune_vendor_dir(&resolved, &vendor_dir)?;
+            }
+
+            return Ok(());
+        }
+    }
+}
+
+/// Remove vendored crates not referenced by any resolved dependency.
+fn prune_vendor_dir(resolved: &[vendor::ResolvedDep], vendor_dir: &std::path::Path) -> Result<()> {
+    let referenced: HashSet<String> = resolved.iter().map(|d| d.name.clone()).collect();
+    let mut removed = 0;
+
+    if let Ok(entries) = std::fs::read_dir(vendor_dir) {
+        for entry in entries.flatten() {
+            if !entry.path().is_dir() {
+                continue;
+            }
+            let dir_name = entry.file_name().to_string_lossy().to_string();
+
+            // Extract the crate name (strip version suffix if present).
+            let crate_name = if let Some(idx) = dir_name.rfind('-') {
+                let maybe_version = &dir_name[idx + 1..];
+                // Heuristic: if the part after the last '-' looks like a version, strip it.
+                if maybe_version.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+                    dir_name[..idx].to_string()
+                } else {
+                    dir_name.clone()
+                }
+            } else {
+                dir_name.clone()
+            };
+
+            if !referenced.contains(&crate_name) {
+                // Double-check by looking at Cargo.toml name.
+                let cargo_toml = entry.path().join("Cargo.toml");
+                let actual_name = if cargo_toml.exists() {
+                    vendor::parse_cargo_toml(&cargo_toml)
+                        .ok()
+                        .map(|p| p.package.name)
+                } else {
+                    None
+                };
+
+                let name = actual_name.as_deref().unwrap_or(&crate_name);
+                if !referenced.contains(name) {
+                    println!("  Pruning unreferenced: {dir_name}");
+                    std::fs::remove_dir_all(entry.path())?;
+                    removed += 1;
+                }
+            }
+        }
+    }
+
+    if removed > 0 {
+        println!("  Pruned {removed} unreferenced crate(s).");
+    } else {
+        println!("  No unreferenced crates to prune.");
+    }
+
     Ok(())
 }
 
