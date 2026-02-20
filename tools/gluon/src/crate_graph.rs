@@ -38,6 +38,8 @@ pub struct ResolvedDep {
 fn resolve_path(raw: &str, root: &Path, sysroot_src: &Path) -> PathBuf {
     if let Some(rest) = raw.strip_prefix("{sysroot}/") {
         sysroot_src.join(rest)
+    } else if let Some(name) = raw.strip_prefix("vendor/") {
+        crate::vendor::find_vendor_dir(name, &root.join("vendor"))
     } else {
         root.join(raw)
     }
