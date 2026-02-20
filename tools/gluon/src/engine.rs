@@ -49,6 +49,7 @@ pub fn evaluate_script(root: &Path) -> Result<BuildModel> {
     register_image_api(&mut engine, model.clone());
     register_tests_api(&mut engine, model.clone());
     register_dependency_api(&mut engine, model.clone());
+    register_kconfig_api(&mut engine, model.clone(), &root_path);
     register_helpers(&mut engine, &root_path);
 
     // Set up include() mechanism with circular-include detection.
@@ -164,6 +165,7 @@ fn register_config_api(engine: &mut Engine, model: SharedModel) {
                 range: None,
                 choices: None,
                 menu: None,
+                bindings: Vec::new(),
             },
         );
         ConfigBuilder {
@@ -188,6 +190,7 @@ fn register_config_api(engine: &mut Engine, model: SharedModel) {
                 range: None,
                 choices: None,
                 menu: None,
+                bindings: Vec::new(),
             },
         );
         ConfigBuilder {
@@ -213,6 +216,7 @@ fn register_config_api(engine: &mut Engine, model: SharedModel) {
                 range: None,
                 choices: None,
                 menu: None,
+                bindings: Vec::new(),
             },
         );
         ConfigBuilder {
@@ -237,6 +241,7 @@ fn register_config_api(engine: &mut Engine, model: SharedModel) {
                 range: None,
                 choices: None,
                 menu: None,
+                bindings: Vec::new(),
             },
         );
         ConfigBuilder {
@@ -261,6 +266,7 @@ fn register_config_api(engine: &mut Engine, model: SharedModel) {
                 range: None,
                 choices: None,
                 menu: None,
+                bindings: Vec::new(),
             },
         );
         ConfigBuilder {
@@ -291,6 +297,7 @@ fn register_config_api(engine: &mut Engine, model: SharedModel) {
                     range: None,
                     choices: Some(choices),
                     menu: None,
+                    bindings: Vec::new(),
                 },
             );
             ConfigBuilder {
@@ -322,6 +329,7 @@ fn register_config_api(engine: &mut Engine, model: SharedModel) {
                     range: None,
                     choices: None,
                     menu: None,
+                    bindings: Vec::new(),
                 },
             );
             ConfigBuilder {
@@ -349,6 +357,7 @@ fn register_config_api(engine: &mut Engine, model: SharedModel) {
                     range: None,
                     choices: None,
                     menu: None,
+                    bindings: Vec::new(),
                 },
             );
             ConfigGroupBuilder {
@@ -390,6 +399,7 @@ fn register_config_api(engine: &mut Engine, model: SharedModel) {
                     range: None,
                     choices: None,
                     menu,
+                    bindings: Vec::new(),
                 },
             );
             builder.clone()
@@ -759,6 +769,7 @@ fn register_group_api(engine: &mut Engine, model: SharedModel) {
                     group: Some(builder.name.clone()),
                     is_project_crate: is_project,
                     cfg_flags: Vec::new(),
+                    requires_config: Vec::new(),
                 },
             );
             CrateBuilder {
@@ -850,6 +861,17 @@ fn register_group_api(engine: &mut Engine, model: SharedModel) {
             let mut model = builder.model.lock().unwrap();
             if let Some(krate) = model.crates.get_mut(&builder.name) {
                 krate.linker_script = Some(script.into());
+            }
+            builder.clone()
+        },
+    );
+
+    engine.register_fn(
+        "requires_config",
+        |builder: &mut CrateBuilder, config_name: &str| -> CrateBuilder {
+            let mut model = builder.model.lock().unwrap();
+            if let Some(krate) = model.crates.get_mut(&builder.name) {
+                krate.requires_config.push(config_name.into());
             }
             builder.clone()
         },
@@ -1389,6 +1411,26 @@ fn register_include_api(engine: &mut Engine, root: &Path, visited: VisitedInclud
             },
         )
         .expect("failed to register include syntax");
+}
+
+// ---------------------------------------------------------------------------
+// kconfig() — Load Kconfig DSL files
+// ---------------------------------------------------------------------------
+
+fn register_kconfig_api(engine: &mut Engine, model: SharedModel, root: &Path) {
+    let m = model;
+    let root_path = root.to_path_buf();
+    engine.register_fn("kconfig", move |path: &str| {
+        let (options, order) = crate::kconfig::load_kconfig(&root_path, path)
+            .unwrap_or_else(|e| panic!("kconfig error: {e}"));
+        let mut model = m.lock().unwrap();
+        model.config_options.extend(options);
+        for menu in order {
+            if !model.menu_order.iter().any(|m| m == &menu) {
+                model.menu_order.push(menu);
+            }
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------

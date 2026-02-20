@@ -18,40 +18,10 @@ target("aarch64-unknown-hadron", "targets/aarch64-unknown-hadron.json");
 target("x86_64-unknown-hadron-user", "targets/x86_64-unknown-hadron-user.json");
 
 // ===========================================================================
-// Kconfig-style options
+// Kconfig-style options (loaded from distributed Kconfig files)
 // ===========================================================================
 
-config_bool("serial_log", true)
-    .menu("General")
-    .help("Enable serial port logging");
-
-config_bool("smp", true)
-    .menu("SMP")
-    .depends_on(["acpi"])
-    .selects(["apic"])
-    .help("Enable symmetric multiprocessing");
-
-config_bool("acpi", true)
-    .menu("Hardware")
-    .help("Enable ACPI table parsing");
-
-config_bool("apic", false)
-    .menu("Hardware")
-    .help("Enable APIC interrupt controller");
-
-config_u32("MAX_CPUS", 256)
-    .menu("SMP")
-    .range(1, 256)
-    .depends_on(["smp"])
-    .help("Maximum number of CPUs supported");
-
-config_choice("LOG_LEVEL", "debug", ["error", "warn", "info", "debug", "trace"])
-    .menu("General")
-    .help("Kernel log level");
-
-config_u64("KERNEL_HEAP_SIZE", "0x10_0000")
-    .menu("General")
-    .help("Kernel heap size in bytes");
+kconfig("Kconfig");
 
 // ===========================================================================
 // Build profiles

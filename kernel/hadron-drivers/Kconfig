@@ -1,0 +1,4 @@
+# Hadron driver configuration.
+#
+# Driver-specific config options will be added here as drivers
+# gain configurable parameters (AHCI, VirtIO, etc.).

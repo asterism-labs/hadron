@@ -1,0 +1,54 @@
+# Hadron kernel core configuration.
+
+menu "General"
+
+config serial_log
+    bool "Enable serial port logging"
+    default y
+    binding cfg
+
+config LOG_LEVEL
+    choice "Kernel log level" [error, warn, info, debug, trace]
+    default "debug"
+    binding cfg cumulative
+    binding const
+
+config KERNEL_HEAP_SIZE
+    u64 "Kernel heap size in bytes"
+    default 0x100000
+    binding const
+
+endmenu
+
+menu "SMP"
+
+config smp
+    bool "Enable symmetric multiprocessing"
+    default y
+    depends on acpi
+    select apic
+    binding cfg
+    binding build
+
+config MAX_CPUS
+    u32 "Maximum number of CPUs supported"
+    default 256
+    range 1 256
+    depends on smp
+    binding const
+
+endmenu
+
+menu "Hardware"
+
+config acpi
+    bool "Enable ACPI table parsing"
+    default y
+    binding cfg
+
+config apic
+    bool "Enable APIC interrupt controller"
+    default n
+    binding cfg
+
+endmenu

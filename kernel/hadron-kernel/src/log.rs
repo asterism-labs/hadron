@@ -168,33 +168,63 @@ macro_rules! kfatal {
 }
 
 /// Logs an error-level message (level 1).
+///
+/// Compiled out when `LOG_LEVEL` is below `error`.
 #[macro_export]
 macro_rules! kerr {
-    ($($arg:tt)*) => { $crate::klog!($crate::log::LogLevel::Error, $($arg)*) };
+    ($($arg:tt)*) => {
+        if cfg!(hadron_LOG_LEVEL_error) {
+            $crate::klog!($crate::log::LogLevel::Error, $($arg)*)
+        }
+    };
 }
 
 /// Logs a warning-level message (level 2).
+///
+/// Compiled out when `LOG_LEVEL` is below `warn`.
 #[macro_export]
 macro_rules! kwarn {
-    ($($arg:tt)*) => { $crate::klog!($crate::log::LogLevel::Warn, $($arg)*) };
+    ($($arg:tt)*) => {
+        if cfg!(hadron_LOG_LEVEL_warn) {
+            $crate::klog!($crate::log::LogLevel::Warn, $($arg)*)
+        }
+    };
 }
 
 /// Logs an info-level message (level 3).
+///
+/// Compiled out when `LOG_LEVEL` is below `info`.
 #[macro_export]
 macro_rules! kinfo {
-    ($($arg:tt)*) => { $crate::klog!($crate::log::LogLevel::Info, $($arg)*) };
+    ($($arg:tt)*) => {
+        if cfg!(hadron_LOG_LEVEL_info) {
+            $crate::klog!($crate::log::LogLevel::Info, $($arg)*)
+        }
+    };
 }
 
 /// Logs a debug-level message (level 4).
+///
+/// Compiled out when `LOG_LEVEL` is below `debug`.
 #[macro_export]
 macro_rules! kdebug {
-    ($($arg:tt)*) => { $crate::klog!($crate::log::LogLevel::Debug, $($arg)*) };
+    ($($arg:tt)*) => {
+        if cfg!(hadron_LOG_LEVEL_debug) {
+            $crate::klog!($crate::log::LogLevel::Debug, $($arg)*)
+        }
+    };
 }
 
 /// Logs a trace-level message (level 5).
+///
+/// Compiled out when `LOG_LEVEL` is below `trace`.
 #[macro_export]
 macro_rules! ktrace {
-    ($($arg:tt)*) => { $crate::klog!($crate::log::LogLevel::Trace, $($arg)*) };
+    ($($arg:tt)*) => {
+        if cfg!(hadron_LOG_LEVEL_trace) {
+            $crate::klog!($crate::log::LogLevel::Trace, $($arg)*)
+        }
+    };
 }
 
 // ---------------------------------------------------------------------------
@@ -463,7 +493,13 @@ fn early_serial_print(args: fmt::Arguments<'_>) {
 }
 
 /// Early log function: formats a leveled, timestamped message to COM1.
+///
+/// Filters messages by [`crate::config::MAX_LOG_LEVEL`] — messages above
+/// the configured level are discarded even during early boot.
 fn early_serial_log(level: LogLevel, args: fmt::Arguments<'_>) {
+    if level > crate::config::MAX_LOG_LEVEL {
+        return;
+    }
     let nanos = crate::time::boot_nanos();
     let total_micros = nanos / 1_000;
     let secs = total_micros / 1_000_000;
@@ -522,7 +558,7 @@ impl Logger {
             let mut guard = self.inner.lock();
             let serial_sink = Box::new(SerialSink::new(
                 EarlySerial::new(COM1),
-                LogLevel::Trace,
+                crate::config::MAX_LOG_LEVEL,
             ));
             let mut sinks: Vec<Box<dyn LogSink>> = Vec::with_capacity(4);
             sinks.push(serial_sink);

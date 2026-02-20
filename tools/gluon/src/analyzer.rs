@@ -221,12 +221,43 @@ fn resolve_groups_by_target(
     Ok(crates)
 }
 
-/// Build --cfg flags from resolved config bool options.
+/// Build --cfg flags from resolved config options respecting bindings.
 fn build_config_cfgs(config: &ResolvedConfig) -> Vec<String> {
+    use crate::model::Binding;
+
     let mut cfgs = Vec::new();
     for (name, value) in &config.options {
-        if let ResolvedValue::Bool(true) = value {
-            cfgs.push(format!("hadron_{name}"));
+        let opt_bindings = config.bindings.get(name);
+
+        let has_cfg = opt_bindings.map_or(false, |bs| bs.contains(&Binding::Cfg));
+        let has_cfg_cumulative = opt_bindings.map_or(false, |bs| bs.contains(&Binding::CfgCumulative));
+        let is_legacy = opt_bindings.is_none();
+
+        if has_cfg {
+            match value {
+                ResolvedValue::Bool(true) => {
+                    cfgs.push(format!("hadron_{name}"));
+                }
+                ResolvedValue::Choice(v) | ResolvedValue::Str(v) => {
+                    cfgs.push(format!("hadron_{name}=\"{v}\""));
+                }
+                _ => {}
+            }
+        } else if has_cfg_cumulative {
+            if let ResolvedValue::Choice(selected) = value {
+                cfgs.push(format!("hadron_{name}=\"{selected}\""));
+                if let Some(variants) = config.choices.get(name) {
+                    if let Some(selected_idx) = variants.iter().position(|v| v == selected) {
+                        for variant in &variants[..=selected_idx] {
+                            cfgs.push(format!("hadron_{name}_{variant}"));
+                        }
+                    }
+                }
+            }
+        } else if is_legacy {
+            if let ResolvedValue::Bool(true) = value {
+                cfgs.push(format!("hadron_{name}"));
+            }
         }
     }
     cfgs

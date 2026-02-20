@@ -208,8 +208,8 @@ pub unsafe fn init_gs_base() {
     );
 }
 
-/// Maximum supported CPUs.
-pub const MAX_CPUS: usize = 256;
+/// Maximum supported CPUs (from Kconfig).
+pub use crate::config::MAX_CPUS;
 
 /// CPU-local storage. Wraps `[T; MAX_CPUS]`, indexed by current CPU ID.
 ///

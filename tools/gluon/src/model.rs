@@ -84,6 +84,21 @@ pub struct ConfigOptionDef {
     pub choices: Option<Vec<String>>,
     /// Menu category for TUI menuconfig grouping.
     pub menu: Option<String>,
+    /// Code generation bindings for this option.
+    pub bindings: Vec<Binding>,
+}
+
+/// How a config option maps to generated code or build flags.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Binding {
+    /// Emit `--cfg hadron_<name>` (bool=y) or `--cfg hadron_<name>="value"`.
+    Cfg,
+    /// Emit `--cfg` for all values up to the configured one (ordered choices).
+    CfgCumulative,
+    /// Emit `pub const NAME: Type = value;` in the generated config crate.
+    Const,
+    /// Available to gluon for crate-gating decisions (no codegen).
+    Build,
 }
 
 /// Configuration option type tag.
@@ -161,6 +176,8 @@ pub struct CrateDef {
     pub is_project_crate: bool,
     /// Extra `--cfg` flags for this crate (e.g. `wrap_proc_macro` for proc-macro2).
     pub cfg_flags: Vec<String>,
+    /// Config options that must be enabled for this crate to be compiled.
+    pub requires_config: Vec<String>,
 }
 
 /// A dependency specification within a crate definition.

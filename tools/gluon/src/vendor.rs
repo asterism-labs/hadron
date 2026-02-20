@@ -1209,6 +1209,7 @@ pub fn auto_register_dependencies(
             group: Some(group_name.clone()),
             is_project_crate: false,
             cfg_flags,
+            requires_config: Vec::new(),
         };
 
         model.crates.insert(dep.name.clone(), crate_def);

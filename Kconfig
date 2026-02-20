@@ -1,0 +1,7 @@
+# Hadron kernel root configuration.
+#
+# Distributed Kconfig files are sourced from subdirectories
+# near the code they affect.
+
+source "kernel/hadron-kernel/Kconfig"
+source "kernel/hadron-drivers/Kconfig"

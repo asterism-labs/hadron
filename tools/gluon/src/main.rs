@@ -15,6 +15,7 @@ mod config;
 mod crate_graph;
 mod engine;
 mod fmt;
+mod kconfig;
 mod menuconfig;
 mod model;
 mod run;
@@ -460,6 +461,8 @@ fn prepare_pipeline_state(
                 spec: resolved.target.spec.clone(),
             },
             options: resolved.options.clone(),
+            bindings: resolved.bindings.clone(),
+            choices: resolved.choices.clone(),
             profile: config::ResolvedProfile {
                 name: resolved.profile.name.clone(),
                 target: resolved.profile.target.clone(),

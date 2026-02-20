@@ -42,11 +42,17 @@ impl ArtifactMap {
 }
 
 /// Generate the `hadron_config` crate source and compile it.
+///
+/// Only emits constants for options with `Binding::Const`. Options without
+/// any `binding const` line are not included. Build metadata (TARGET,
+/// PROFILE, VERSION) is always emitted.
 pub fn build_config_crate(
     config: &ResolvedConfig,
     target_spec: &str,
     sysroot_dir: &Path,
 ) -> Result<PathBuf> {
+    use crate::model::Binding;
+
     let gen_dir = config.root.join("build/generated");
     std::fs::create_dir_all(&gen_dir)?;
 
@@ -55,6 +61,17 @@ pub fn build_config_crate(
     source.push_str("//! Auto-generated kernel configuration constants.\n");
     source.push_str("#![no_std]\n\n");
 
+    // Helper: check if an option should emit a constant.
+    // Options with no bindings at all (legacy Rhai-defined) emit constants for
+    // backwards compatibility. Options with explicit bindings only emit if
+    // `Binding::Const` is present.
+    let should_emit_const = |name: &str| -> bool {
+        match config.bindings.get(name) {
+            None => true,  // no bindings = legacy behavior, emit everything
+            Some(bs) => bs.contains(&Binding::Const),
+        }
+    };
+
     // Collect dotted keys (group sub-fields) by their prefix for nested module codegen.
     let mut group_fields: BTreeMap<String, Vec<(String, &ResolvedValue)>> = BTreeMap::new();
 
@@ -62,98 +79,44 @@ pub fn build_config_crate(
         if let Some(dot_pos) = name.find('.') {
             let prefix = &name[..dot_pos];
             let field = &name[dot_pos + 1..];
-            group_fields
-                .entry(prefix.to_string())
-                .or_default()
-                .push((field.to_string(), value));
+            if should_emit_const(name) {
+                group_fields
+                    .entry(prefix.to_string())
+                    .or_default()
+                    .push((field.to_string(), value));
+            }
             continue;
         }
 
-        match value {
-            ResolvedValue::Bool(v) => {
-                source.push_str(&format!(
-                    "pub const {}: bool = {v};\n",
-                    name.to_uppercase()
-                ));
-            }
-            ResolvedValue::U32(v) => {
-                source.push_str(&format!(
-                    "pub const {}: u32 = {v};\n",
-                    name.to_uppercase()
-                ));
-            }
-            ResolvedValue::U64(v) => {
-                source.push_str(&format!(
-                    "pub const {}: u64 = {v:#x};\n",
-                    name.to_uppercase()
-                ));
-            }
-            ResolvedValue::Str(v) | ResolvedValue::Choice(v) => {
-                source.push_str(&format!(
-                    "pub const {}: &str = \"{}\";\n",
-                    name.to_uppercase(),
-                    v.replace('\\', "\\\\").replace('"', "\\\"")
-                ));
-            }
-            ResolvedValue::List(v) => {
-                let quoted: Vec<String> = v
-                    .iter()
-                    .map(|s| format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")))
-                    .collect();
-                source.push_str(&format!(
-                    "pub const {}: &[&str] = &[{}];\n",
-                    name.to_uppercase(),
-                    quoted.join(", ")
-                ));
-            }
+        if !should_emit_const(name) {
+            continue;
         }
+
+        emit_const(&mut source, &name.to_uppercase(), value, "");
     }
 
     // Generate nested modules for group sub-fields.
     for (prefix, fields) in &group_fields {
         source.push_str(&format!("pub mod {} {{\n", prefix.to_lowercase()));
         for (field, value) in fields {
-            match value {
-                ResolvedValue::Bool(v) => {
-                    source.push_str(&format!(
-                        "    pub const {}: bool = {v};\n",
-                        field.to_uppercase()
-                    ));
-                }
-                ResolvedValue::U32(v) => {
-                    source.push_str(&format!(
-                        "    pub const {}: u32 = {v};\n",
-                        field.to_uppercase()
-                    ));
-                }
-                ResolvedValue::U64(v) => {
-                    source.push_str(&format!(
-                        "    pub const {}: u64 = {v:#x};\n",
-                        field.to_uppercase()
-                    ));
-                }
-                ResolvedValue::Str(v) | ResolvedValue::Choice(v) => {
-                    source.push_str(&format!(
-                        "    pub const {}: &str = \"{}\";\n",
-                        field.to_uppercase(),
-                        v.replace('\\', "\\\\").replace('"', "\\\"")
-                    ));
-                }
-                ResolvedValue::List(v) => {
-                    let quoted: Vec<String> = v
-                        .iter()
-                        .map(|s| format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")))
-                        .collect();
-                    source.push_str(&format!(
-                        "    pub const {}: &[&str] = &[{}];\n",
-                        field.to_uppercase(),
-                        quoted.join(", ")
-                    ));
-                }
-            }
+            emit_const(&mut source, &field.to_uppercase(), value, "    ");
         }
         source.push_str("}\n");
     }
+
+    // Always emit build metadata.
+    source.push_str(&format!(
+        "\npub const TARGET: &str = \"{}\";\n",
+        config.target_name.replace('\\', "\\\\").replace('"', "\\\"")
+    ));
+    source.push_str(&format!(
+        "pub const PROFILE: &str = \"{}\";\n",
+        config.profile.name.replace('\\', "\\\\").replace('"', "\\\"")
+    ));
+    source.push_str(&format!(
+        "pub const VERSION: &str = \"{}\";\n",
+        config.project.version.replace('\\', "\\\\").replace('"', "\\\"")
+    ));
 
     let src_path = gen_dir.join("hadron_config.rs");
     std::fs::write(&src_path, &source)?;
@@ -195,6 +158,37 @@ pub fn build_config_crate(
     }
 
     Ok(rlib)
+}
+
+/// Emit a single `pub const` line for a resolved config value.
+fn emit_const(source: &mut String, name: &str, value: &ResolvedValue, indent: &str) {
+    match value {
+        ResolvedValue::Bool(v) => {
+            source.push_str(&format!("{indent}pub const {name}: bool = {v};\n"));
+        }
+        ResolvedValue::U32(v) => {
+            source.push_str(&format!("{indent}pub const {name}: u32 = {v};\n"));
+        }
+        ResolvedValue::U64(v) => {
+            source.push_str(&format!("{indent}pub const {name}: u64 = {v:#x};\n"));
+        }
+        ResolvedValue::Str(v) | ResolvedValue::Choice(v) => {
+            source.push_str(&format!(
+                "{indent}pub const {name}: &str = \"{}\";\n",
+                v.replace('\\', "\\\\").replace('"', "\\\"")
+            ));
+        }
+        ResolvedValue::List(v) => {
+            let quoted: Vec<String> = v
+                .iter()
+                .map(|s| format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")))
+                .collect();
+            source.push_str(&format!(
+                "{indent}pub const {name}: &[&str] = &[{}];\n",
+                quoted.join(", ")
+            ));
+        }
+    }
 }
 
 /// Compile a single crate.
@@ -311,11 +305,47 @@ fn compile_crate_cross(
         cmd.arg("--cfg").arg(format!("feature=\"{feat}\""));
     }
 
-    // Config cfgs for bool options (only if config_rlib is provided).
+    // Config cfgs for options with Binding::Cfg or Binding::CfgCumulative.
     if config_rlib.is_some() {
+        use crate::model::Binding;
+
         for (name, value) in &config.options {
-            if let crate::config::ResolvedValue::Bool(true) = value {
-                cmd.arg("--cfg").arg(format!("hadron_{name}"));
+            let opt_bindings = config.bindings.get(name);
+
+            // Legacy behavior: options with no bindings emit cfg for Bool(true).
+            let has_cfg = opt_bindings.map_or(false, |bs| bs.contains(&Binding::Cfg));
+            let has_cfg_cumulative = opt_bindings.map_or(false, |bs| bs.contains(&Binding::CfgCumulative));
+            let is_legacy = opt_bindings.is_none();
+
+            if has_cfg {
+                match value {
+                    ResolvedValue::Bool(true) => {
+                        cmd.arg("--cfg").arg(format!("hadron_{name}"));
+                    }
+                    ResolvedValue::Choice(v) | ResolvedValue::Str(v) => {
+                        cmd.arg("--cfg").arg(format!("hadron_{name}=\"{v}\""));
+                    }
+                    _ => {}
+                }
+            } else if has_cfg_cumulative {
+                // Emit cfg for all choice values up to and including the selected one.
+                if let ResolvedValue::Choice(selected) = value {
+                    cmd.arg("--cfg").arg(format!("hadron_{name}=\"{selected}\""));
+
+                    // Use the choice variants from the config definition for ordering.
+                    if let Some(variants) = config.choices.get(name) {
+                        if let Some(selected_idx) = variants.iter().position(|v| v == selected) {
+                            for variant in &variants[..=selected_idx] {
+                                cmd.arg("--cfg").arg(format!("hadron_{name}_{variant}"));
+                            }
+                        }
+                    }
+                }
+            } else if is_legacy {
+                // Backwards compatibility: emit hadron_<name> for Bool(true).
+                if let ResolvedValue::Bool(true) = value {
+                    cmd.arg("--cfg").arg(format!("hadron_{name}"));
+                }
             }
         }
     }

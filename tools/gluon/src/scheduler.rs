@@ -234,6 +234,23 @@ fn execute_stage(
         }
     }
 
+    // Crate gating: remove crates whose requires_config options are disabled.
+    all_crates.retain(|(krate, _)| {
+        let crate_def = model.crates.get(&krate.name);
+        if let Some(def) = crate_def {
+            for req in &def.requires_config {
+                match state.config.options.get(req) {
+                    Some(crate::config::ResolvedValue::Bool(true)) => {}
+                    _ => {
+                        println!("  Skipping {} (requires config '{req}' which is disabled)", krate.name);
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    });
+
     if all_crates.is_empty() {
         return Ok(());
     }

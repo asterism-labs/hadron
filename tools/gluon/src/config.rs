@@ -87,6 +87,10 @@ pub struct ResolvedConfig {
     pub target_name: String,
     pub target: TargetConfig,
     pub options: BTreeMap<String, ResolvedValue>,
+    /// Per-option bindings (controls codegen: cfg, const, build).
+    pub bindings: BTreeMap<String, Vec<crate::model::Binding>>,
+    /// Per-option choice variants (for cumulative cfg emission ordering).
+    pub choices: BTreeMap<String, Vec<String>>,
     pub profile: ResolvedProfile,
     pub qemu: QemuConfig,
     #[allow(dead_code)] // used by image generation
@@ -244,6 +248,19 @@ pub fn resolve_from_model(
         }).collect(),
     };
 
+    // Collect per-option bindings from the model definitions.
+    let bindings: BTreeMap<String, Vec<crate::model::Binding>> = model.config_options.iter()
+        .filter(|(_, opt)| !opt.bindings.is_empty())
+        .map(|(name, opt)| (name.clone(), opt.bindings.clone()))
+        .collect();
+
+    // Collect choice variants for cumulative cfg emission ordering.
+    let choices: BTreeMap<String, Vec<String>> = model.config_options.iter()
+        .filter_map(|(name, opt)| {
+            opt.choices.as_ref().map(|c| (name.clone(), c.clone()))
+        })
+        .collect();
+
     Ok(ResolvedConfig {
         project: ProjectMeta {
             name: model.project.name.clone(),
@@ -253,6 +270,8 @@ pub fn resolve_from_model(
         target_name,
         target: resolved_target,
         options,
+        bindings,
+        choices,
         profile,
         qemu,
         bootloader,
@@ -600,6 +619,7 @@ mod tests {
             range: None,
             choices: None,
             menu: None,
+            bindings: Vec::new(),
         });
         defs.insert("apic".into(), ConfigOptionDef {
             name: "apic".into(),
@@ -611,6 +631,7 @@ mod tests {
             range: None,
             choices: None,
             menu: None,
+            bindings: Vec::new(),
         });
         defs.insert("acpi".into(), ConfigOptionDef {
             name: "acpi".into(),
@@ -622,6 +643,7 @@ mod tests {
             range: None,
             choices: None,
             menu: None,
+            bindings: Vec::new(),
         });
 
         let result = apply_selects_and_validate(options, &defs).unwrap();
@@ -645,6 +667,7 @@ mod tests {
             range: None,
             choices: None,
             menu: None,
+            bindings: Vec::new(),
         });
         defs.insert("acpi".into(), ConfigOptionDef {
             name: "acpi".into(),
@@ -656,6 +679,7 @@ mod tests {
             range: None,
             choices: None,
             menu: None,
+            bindings: Vec::new(),
         });
 
         let result = apply_selects_and_validate(options, &defs);

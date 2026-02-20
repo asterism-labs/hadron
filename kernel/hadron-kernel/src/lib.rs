@@ -33,6 +33,8 @@ pub mod boot;
 #[cfg(target_os = "none")]
 pub mod bus;
 #[cfg(target_os = "none")]
+pub mod config;
+#[cfg(target_os = "none")]
 pub mod drivers;
 #[cfg(target_os = "none")]
 pub mod fs;
