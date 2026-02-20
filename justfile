@@ -18,6 +18,9 @@ menuconfig *args: bootstrap
 build *args: bootstrap
     {{hb}} build {{args}}
 
+vendor *args: bootstrap
+    {{hb}} vendor {{args}}
+
 # Build and run in QEMU
 run *args: bootstrap
     {{hb}} run {{args}}
@@ -27,17 +30,17 @@ test *args: bootstrap
     {{hb}} test {{args}}
 
 # Type-check without linking
-check: bootstrap
-    {{hb}} check
+check *args: bootstrap
+    {{hb}} check {{args}}
 
 # Run clippy lints
-clippy: bootstrap
-    {{hb}} clippy
+clippy *args: bootstrap
+    {{hb}} clippy {{args}}
 
 # Format source files
 fmt *args: bootstrap
     {{hb}} fmt {{args}}
 
 # Remove build artifacts
-clean:
-    {{hb}} clean
+clean *args: bootstrap
+    {{hb}} clean {{args}}

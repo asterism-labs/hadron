@@ -6,14 +6,14 @@ version = 1
 name = "bitflags"
 version = "2.11.0"
 source = "crates-io"
-checksum = "6523d30d6b809c93c87daf1f8f1c58f84e34f7b89188be04565f0e30878ee20c"
+checksum = "8b53ca3634786bf4591edc26aa2c93b4dde1e4ef52b9da47ab6466e85af92db7"
 dependencies = ["bytemuck"]
 
 [[package]]
 name = "bytemuck"
 version = "1.25.0"
 source = "crates-io"
-checksum = "79009bad968c67ecc0bcd3fdd9d4767fe6046e155c7fb009a1ff335071f8f05d"
+checksum = "13c036beb44d169c761b08e1174a6311e36ae79aea5af1c73b2c1f55c5213ab7"
 dependencies = ["bytemuck_derive"]
 
 [[package]]
@@ -31,7 +31,7 @@ dependencies = [
 name = "cfg-if"
 version = "1.0.4"
 source = "crates-io"
-checksum = "74c24732bfbc12472c37813e49c1a166e181ea809f8dffb019209acf159de050"
+checksum = "72a483a6390b4d4cc710d4b9a1d8832259be70b68c94b98d9376a364c1858474"
 
 [[package]]
 name = "hadris-common"
@@ -123,20 +123,20 @@ dependencies = ["scopeguard"]
 name = "noalloc"
 version = "0.0.1"
 source = "crates-io"
-checksum = "41bbdcfe09558c8875b728ed070a9d622ad934245a7342dda14a92a506afc36c"
+checksum = "7ea18a98c3f06efad7d9f3b407c13f8da4828bbf7e489141d506c2e83623e0e6"
 
 [[package]]
 name = "proc-macro2"
 version = "1.0.106"
 source = "crates-io"
-checksum = "2f33807c410a4070dfaeb5fd88b1a9135128ad26bafd9d4ae5c8243aaa9bbbee"
+checksum = "55dd14f287aa987f0834a86bc2a24604fa086ee8e172e3b000bf0f6a61cdc17b"
 dependencies = ["unicode-ident"]
 
 [[package]]
 name = "quote"
 version = "1.0.35"
 source = "crates-io"
-checksum = "db3a297c5e9a2773ecff836ef4f6157f68688ff0dc20dc1bb4066410d846e286"
+checksum = "ddad7525eb41d21c43f47197d506895519f01f2600ef59763a30ec92f1b4d4ee"
 dependencies = ["proc-macro2"]
 
 [[package]]
@@ -156,7 +156,7 @@ dependencies = ["lock_api"]
 name = "syn"
 version = "2.0.116"
 source = "crates-io"
-checksum = "9ca3afa2dcb675b9275fcf9ebee98837935b1d6cab11d84d037ad25b02b65f51"
+checksum = "2e5f495e05d3ac8ce9b12cd180c654b4387ba18da8353b6e84090ca7639764d9"
 dependencies = [
     "proc-macro2",
     "quote",
@@ -167,4 +167,4 @@ dependencies = [
 name = "unicode-ident"
 version = "1.0.24"
 source = "crates-io"
-checksum = "64080a8b8eeae284a4c42ad033669bdefa1c67f0b613482f22a3d27cf949de20"
+checksum = "f1da8d44c3e3006aca526afce3cd01be3d742a2820acd98e2de958cdaaeaa20b"
