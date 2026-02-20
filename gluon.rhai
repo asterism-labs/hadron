@@ -116,18 +116,18 @@ dependency("bitflags").version("2.11.0");
 dependency("cfg-if").version("1.0.4");
 dependency("bytemuck").version("1.25.0").no_default_features();
 
-// Hadris ecosystem crates (from git).
-dependency("hadris-cpio").git("https://github.com/hxyulin/hadris").rev("88fd9890")
-    .features(["read", "alloc"]).no_default_features();
-dependency("hadris-io").git("https://github.com/hxyulin/hadris").rev("88fd9890")
+// Hadris ecosystem crates (from crates.io).
+dependency("hadris-cpio").version("1.0.1")
+    .features(["sync", "read", "alloc"]).no_default_features();
+dependency("hadris-io").version("1.0.1")
+    .features(["sync"]).no_default_features();
+dependency("hadris-common").version("1.0.1")
     .no_default_features();
-dependency("hadris-common").git("https://github.com/hxyulin/hadris").rev("88fd9890")
-    .no_default_features();
-dependency("hadris-fat").git("https://github.com/hxyulin/hadris").rev("88fd9890")
-    .features(["read", "write", "alloc", "lfn"]).no_default_features();
-dependency("hadris-iso").git("https://github.com/hxyulin/hadris").rev("88fd9890")
-    .features(["read", "alloc"]).no_default_features();
-dependency("hadris-part").git("https://github.com/hxyulin/hadris").rev("88fd9890")
+dependency("hadris-fat").version("1.0.1")
+    .features(["sync", "read", "write", "alloc", "lfn"]).no_default_features();
+dependency("hadris-iso").version("1.0.1")
+    .features(["sync", "read", "alloc"]).no_default_features();
+dependency("hadris-part").version("1.0.1")
     .no_default_features();
 
 // ===========================================================================

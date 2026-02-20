@@ -20,7 +20,7 @@ dependencies = ["bytemuck_derive"]
 name = "bytemuck_derive"
 version = "1.10.2"
 source = "crates-io"
-checksum = "054332e08033403bb6fd06cdd5963160bcd508d96eb99bdf692e37ae311d3eab"
+checksum = "8d9bd70ecc2b3b10360689dd2952d6787fe41afe03c0e041f2c5c618ca70d166"
 dependencies = [
     "proc-macro2",
     "quote",
@@ -35,9 +35,9 @@ checksum = "74c24732bfbc12472c37813e49c1a166e181ea809f8dffb019209acf159de050"
 
 [[package]]
 name = "hadris-common"
-version = "1.0.0"
-source = "git+https://github.com/hxyulin/hadris#88fd9890"
-checksum = "064a235a097b029c5e0ac7268994130b915a85e2fe0a0716c3588aa1fe1ef2f2"
+version = "1.0.1"
+source = "crates-io"
+checksum = "eec78e1561a266a7567bce88eb07b07929d6e04c8c1ab67e52f953c8d567d6ae"
 dependencies = [
     "bytemuck",
     "hadris-io",
@@ -46,32 +46,34 @@ dependencies = [
 
 [[package]]
 name = "hadris-cpio"
-version = "1.0.0"
-source = "git+https://github.com/hxyulin/hadris#88fd9890"
-checksum = "2227fd22917c5d5fb02d58088d6e72719bf8c2fe2680a2b29a22f074d2c1e480"
+version = "1.0.1"
+source = "crates-io"
+checksum = "6f5489ed1d1e4a21f89a5612a281ad6a20f7775af6c5ac6374c976b200509fdf"
 dependencies = [
     "hadris-common",
     "hadris-io",
+    "hadris-macros",
 ]
 
 [[package]]
 name = "hadris-fat"
-version = "1.0.0"
-source = "git+https://github.com/hxyulin/hadris#88fd9890"
-checksum = "d38e151f3397b23e700fea2402b8c0906434a442629686e240a8675a717eac89"
+version = "1.0.1"
+source = "crates-io"
+checksum = "a02d780f0d5dc2949892076b79b445de869caac6205c6de4d8f83b503f0d6213"
 dependencies = [
     "bitflags",
     "bytemuck",
     "hadris-common",
     "hadris-io",
+    "hadris-macros",
     "spin",
 ]
 
 [[package]]
 name = "hadris-io"
-version = "1.0.0"
-source = "git+https://github.com/hxyulin/hadris#88fd9890"
-checksum = "7019278154440cdbf6837af1c054e5d6cdb74b8d4890b44312e5642fa2e99dbb"
+version = "1.0.1"
+source = "crates-io"
+checksum = "5c1d43cd68407797f776f427f646f756f74b4962a9a86558c7316bf2916b45ef"
 dependencies = [
     "bytemuck",
     "cfg-if",
@@ -79,33 +81,42 @@ dependencies = [
 
 [[package]]
 name = "hadris-iso"
-version = "1.0.0"
-source = "git+https://github.com/hxyulin/hadris#88fd9890"
-checksum = "9b89ccfd615455c7c70ce43edbdc57d49e5206b7a064771e816d615a7c9a8271"
+version = "1.0.1"
+source = "crates-io"
+checksum = "27202f0c503b3dc98741c7452439874fe96208c86e0aaf055e741d63783d6e77"
 dependencies = [
     "bitflags",
     "bytemuck",
     "hadris-common",
     "hadris-io",
+    "hadris-macros",
     "hadris-part",
     "spin",
 ]
 
 [[package]]
+name = "hadris-macros"
+version = "1.0.1"
+source = "crates-io"
+checksum = "7d9eb77e310510c83b816b42c50526d635c7812f29656d1fbf08eb01592332d9"
+dependencies = ["proc-macro2"]
+
+[[package]]
 name = "hadris-part"
-version = "1.0.0"
-source = "git+https://github.com/hxyulin/hadris#88fd9890"
-checksum = "cff4795c027d20f4fe8e2a213c0990e3524324972c09243fd4677020a556d167"
+version = "1.0.1"
+source = "crates-io"
+checksum = "0652eef38cbc886bf3279bded31328ca6567a0fec62e8b5d6fd7c3ee4c3fe7af"
 dependencies = [
     "bytemuck",
     "hadris-io",
+    "hadris-macros",
 ]
 
 [[package]]
 name = "lock_api"
-version = "0.4"
+version = "0.4.14"
 source = "crates-io"
-checksum = "c677a87a35dfd39abf271fa5bb19a013b807d2826037167d0559a52a09fd4b4f"
+checksum = "c3e27e8dcadf36a79b64bee048feb1da6e3d7e8004db6db064892c4230ef3ee0"
 dependencies = ["scopeguard"]
 
 [[package]]
@@ -132,13 +143,13 @@ dependencies = ["proc-macro2"]
 name = "scopeguard"
 version = "1.1.0"
 source = "crates-io"
-checksum = "b8e340e818b4df7db9e1b49680687b92975e5254765df4f687d7359f65d4806c"
+checksum = "ed909c57030e64e3f693b944807443d475fd4385162e1aa826a2d8afbc4881f3"
 
 [[package]]
 name = "spin"
 version = "0.10.0"
 source = "crates-io"
-checksum = "48402dd9806f887b7fde1d25183010bc7308410d0ef4eacd14b2f9cee56974bd"
+checksum = "9a452eab87e07c9fffcd0acc355376a9ae75cc4e3e01130a73b5d87212da199f"
 dependencies = ["lock_api"]
 
 [[package]]
@@ -154,6 +165,6 @@ dependencies = [
 
 [[package]]
 name = "unicode-ident"
-version = "1.0"
+version = "1.0.24"
 source = "crates-io"
 checksum = "64080a8b8eeae284a4c42ad033669bdefa1c67f0b613482f22a3d27cf949de20"

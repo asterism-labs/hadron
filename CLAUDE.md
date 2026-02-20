@@ -50,6 +50,7 @@ First, build the tool itself:
 ```sh
 cargo build --manifest-path tools/gluon/Cargo.toml
 ```
+Alternatively, a `justfile` is provided for common capabilities like `just build`, `just test`, etc. (which internally call the `gluon` binary):
 
 Then use it (from the project root):
 ```sh

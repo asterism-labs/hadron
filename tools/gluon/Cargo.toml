@@ -12,7 +12,7 @@ cargo-image-runner = { version = "0.4", default-features = false, features = ["b
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.28"
 flate2 = "1"
-hadris-cpio = { path = "../../vendor/hadris-cpio", default-features = false, features = ["std", "write"] }
+hadris-cpio = { version = "1.0.1", default-features = false, features = ["std", "write"] }
 hadron-dwarf = { path = "../../crates/dwarf" }
 hadron-elf = { path = "../../crates/elf" }
 ratatui = "0.29"
