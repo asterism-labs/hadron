@@ -21,6 +21,10 @@ pub struct Cli {
     /// Force rebuild, bypassing all cache checks.
     #[arg(long, short = 'f', global = true)]
     pub force: bool,
+
+    /// Enable verbose output with timing and cache diagnostics.
+    #[arg(long, short = 'v', global = true)]
+    pub verbose: bool,
 }
 
 /// Available subcommands.

@@ -6,6 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, RwLock, mpsc};
 
 use anyhow::{Result, bail};
 
@@ -51,6 +52,7 @@ pub fn execute_pipeline(
                     continue;
                 }
                 println!("\nCompiling stage '{name}'...");
+                let _t = crate::verbose::Timer::start("stage");
                 execute_stage(model, state, groups, &root, &sysroot_src, mode)?;
             }
             PipelineStep::Barrier(_) => {
@@ -179,7 +181,37 @@ fn ensure_config_crate(
     Ok(())
 }
 
-/// Execute a single pipeline stage: expand groups, toposort, compile.
+// ---------------------------------------------------------------------------
+// Parallel DAG compilation
+// ---------------------------------------------------------------------------
+
+/// A compilation job dispatched to a worker thread.
+struct CompileJob {
+    /// Index into the stage's `all_crates` vector.
+    krate_idx: usize,
+    /// Pre-computed flags hash for cache recording.
+    flags_hash: String,
+    /// Whether this crate's group has config enabled.
+    has_config: bool,
+    mode: CompileMode,
+}
+
+/// Result sent back from a worker thread.
+enum CompileOutcome {
+    /// Compilation succeeded.
+    Compiled {
+        krate_idx: usize,
+        artifact: PathBuf,
+        flags_hash: String,
+    },
+    /// Compilation failed.
+    Error {
+        krate_idx: usize,
+        error: anyhow::Error,
+    },
+}
+
+/// Execute a single pipeline stage: expand groups, toposort, compile with parallelism.
 fn execute_stage(
     model: &BuildModel,
     state: &mut PipelineState,
@@ -259,95 +291,317 @@ fn execute_stage(
     // from other groups in the same stage are compiled first.
     toposort_stage_crates(&mut all_crates);
 
-    state.total_crates += all_crates.len();
+    let total = all_crates.len();
+    state.total_crates += total;
 
-    // Compile each crate in topological order.
-    for (krate, has_config) in &all_crates {
-        let is_host = krate.target == "host";
-        let artifact_path = compile::crate_artifact_path(krate, root, None, mode);
-        let dep_info_path = compile::crate_dep_info_path(krate, root, None);
-        let dep_names: Vec<String> = krate.deps.iter().map(|d| d.crate_name.clone()).collect();
+    // Build in-degree map and forward adjacency for DAG scheduling.
+    // Only count dependencies that are within this stage.
+    let name_to_idx: HashMap<&str, usize> = all_crates.iter()
+        .enumerate()
+        .map(|(i, (k, _))| (k.name.as_str(), i))
+        .collect();
 
-        let mode_tag = match mode {
-            CompileMode::Build if is_host => "host",
-            CompileMode::Build => "kernel",
-            CompileMode::Check => "check",
-            CompileMode::Clippy => "clippy",
-        };
+    let mut in_degree: Vec<usize> = vec![0; total];
+    let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); total];
 
-        let flags_hash = if is_host {
-            compile::hash_args(&[
-                "host".as_ref(),
-                krate.name.as_ref(),
-                krate.edition.as_ref(),
-                krate.crate_type.as_ref(),
-            ])
-        } else {
-            let target_spec = state.target_specs.get(&krate.target).map(|s| s.as_str()).unwrap_or("");
-            compile::hash_args(&[
-                mode_tag.as_ref(),
-                krate.name.as_ref(),
-                krate.edition.as_ref(),
-                krate.crate_type.as_ref(),
-                format!("{}", state.config.profile.opt_level).as_ref(),
-                target_spec.as_ref(),
-            ])
-        };
+    for (idx, (krate, _)) in all_crates.iter().enumerate() {
+        for dep in &krate.deps {
+            if let Some(&dep_idx) = name_to_idx.get(dep.crate_name.as_str()) {
+                in_degree[idx] += 1;
+                dependents[dep_idx].push(idx);
+            }
+        }
+    }
 
-        // Check cache freshness.
-        if !state.force {
-            if let Some(entry) = state.cache.entries.get_mut(&krate.name) {
-                if entry.is_fresh(&flags_hash, &state.rebuilt, &dep_names).is_fresh() {
-                    println!("  Skipping {} (unchanged)", krate.name);
-                    if krate.name == state.config.profile.boot_binary {
-                        state.kernel_binary = Some(artifact_path.clone());
+    // Seed the ready queue with zero-in-degree crates.
+    let mut ready_queue: Vec<usize> = (0..total)
+        .filter(|&i| in_degree[i] == 0)
+        .collect();
+
+    let num_workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .min(8);
+
+    crate::verbose::vprintln!("  parallel compilation: {} workers, {} crates", num_workers, total);
+
+    // Move artifacts into shared RwLock for concurrent access.
+    let shared_artifacts = RwLock::new(std::mem::take(&mut state.artifacts));
+
+    // Create channels.
+    let (job_tx, job_rx) = mpsc::channel::<CompileJob>();
+    let (result_tx, result_rx) = mpsc::channel::<CompileOutcome>();
+    let job_rx = Mutex::new(job_rx);
+
+    // References for workers (captured by thread::scope closures).
+    let all_crates_ref = &all_crates;
+    let config_ref = &state.config;
+    let target_specs_ref = &state.target_specs;
+    let sysroots_ref = &state.sysroots;
+    let config_rlibs_ref = &state.config_rlibs;
+    let shared_artifacts_ref = &shared_artifacts;
+    let job_rx_ref = &job_rx;
+
+    let stage_result: Result<()> = std::thread::scope(|s| {
+        // Spawn worker threads.
+        for _ in 0..num_workers {
+            let tx = result_tx.clone();
+            s.spawn(move || {
+                loop {
+                    let job = match job_rx_ref.lock().unwrap().recv() {
+                        Ok(j) => j,
+                        Err(_) => break, // channel closed, exit
+                    };
+
+                    let (krate, _) = &all_crates_ref[job.krate_idx];
+                    let target_spec = target_specs_ref.get(&krate.target)
+                        .map(|s| s.as_str());
+                    let sysroot_dir = sysroots_ref.get(&krate.target)
+                        .map(|p| p.as_path());
+                    let config_rlib = if job.has_config {
+                        config_rlibs_ref.get(&krate.target).map(|p| p.as_path())
+                    } else {
+                        None
+                    };
+
+                    let arts = shared_artifacts_ref.read().unwrap();
+                    let result = compile::compile_crate(
+                        krate,
+                        config_ref,
+                        target_spec,
+                        sysroot_dir,
+                        &arts,
+                        config_rlib,
+                        None,
+                        job.mode,
+                    );
+                    drop(arts);
+
+                    let outcome = match result {
+                        Ok(artifact) => CompileOutcome::Compiled {
+                            krate_idx: job.krate_idx,
+                            artifact,
+                            flags_hash: job.flags_hash,
+                        },
+                        Err(error) => CompileOutcome::Error {
+                            krate_idx: job.krate_idx,
+                            error,
+                        },
+                    };
+                    if tx.send(outcome).is_err() {
+                        break;
                     }
-                    state.artifacts.insert(&krate.name, artifact_path);
-                    continue;
+                }
+            });
+        }
+
+        // Drop the original result_tx so the channel closes when all workers finish.
+        drop(result_tx);
+
+        // --- Main thread: dispatch jobs and process results ---
+        let boot_binary_name = &state.config.profile.boot_binary;
+        let mut compiled_count = 0usize;
+        let mut in_flight = 0usize;
+        let mut first_error: Option<anyhow::Error> = None;
+
+        while compiled_count < total {
+            // Dispatch all ready crates.
+            let batch: Vec<usize> = ready_queue.drain(..).collect();
+            for idx in batch {
+                if first_error.is_some() {
+                    break;
+                }
+
+                let (krate, has_config) = &all_crates[idx];
+                let is_host = krate.target == "host";
+                let artifact_path = compile::crate_artifact_path(krate, root, None, mode);
+                let dep_names: Vec<String> = krate.deps.iter()
+                    .map(|d| d.crate_name.clone())
+                    .collect();
+
+                let mode_tag = match mode {
+                    CompileMode::Build if is_host => "host",
+                    CompileMode::Build => "kernel",
+                    CompileMode::Check => "check",
+                    CompileMode::Clippy => "clippy",
+                };
+
+                let flags_hash = if is_host {
+                    compile::hash_args(&[
+                        "host".as_ref(),
+                        krate.name.as_ref(),
+                        krate.edition.as_ref(),
+                        krate.crate_type.as_ref(),
+                    ])
+                } else {
+                    let target_spec = state.target_specs
+                        .get(&krate.target)
+                        .map(|s| s.as_str())
+                        .unwrap_or("");
+                    compile::hash_args(&[
+                        mode_tag.as_ref(),
+                        krate.name.as_ref(),
+                        krate.edition.as_ref(),
+                        krate.crate_type.as_ref(),
+                        format!("{}", state.config.profile.opt_level).as_ref(),
+                        target_spec.as_ref(),
+                    ])
+                };
+
+                // Check cache freshness (main thread only — mutates cache).
+                if !state.force {
+                    if let Some(entry) = state.cache.entries.get_mut(&krate.name) {
+                        let freshness = entry.is_fresh(
+                            &flags_hash,
+                            &state.rebuilt,
+                            &dep_names,
+                        );
+                        if freshness.is_fresh() {
+                            println!("  Skipping {} (unchanged)", krate.name);
+                            if krate.name == *boot_binary_name {
+                                state.kernel_binary = Some(artifact_path.clone());
+                            }
+                            shared_artifacts.write().unwrap()
+                                .insert(&krate.name, artifact_path);
+                            compiled_count += 1;
+
+                            // Decrement dependents' in-degree.
+                            for &dep_idx in &dependents[idx] {
+                                in_degree[dep_idx] -= 1;
+                                if in_degree[dep_idx] == 0 {
+                                    ready_queue.push(dep_idx);
+                                }
+                            }
+                            continue;
+                        }
+                        if let crate::cache::FreshResult::Stale(ref reason) = freshness {
+                            crate::verbose::vprintln!(
+                                "  stale: {} — {}",
+                                krate.name,
+                                reason
+                            );
+                        }
+                    }
+                }
+
+                // Not cached — dispatch to worker.
+                let verb = match mode {
+                    CompileMode::Build => "Compiling",
+                    CompileMode::Check => "Checking",
+                    CompileMode::Clippy => "Checking",
+                };
+                let ctx_tag = if is_host { " (host)" } else { "" };
+                println!("  {verb} {}{}...", krate.name, ctx_tag);
+
+                let _ = job_tx.send(CompileJob {
+                    krate_idx: idx,
+                    flags_hash,
+                    has_config: *has_config,
+                    mode,
+                });
+                in_flight += 1;
+            }
+
+            // If nothing in flight and nothing ready, check if we're done or stuck.
+            if in_flight == 0 {
+                if compiled_count >= total {
+                    break;
+                }
+                if ready_queue.is_empty() {
+                    bail!("dependency cycle detected: {} of {} crates cannot be scheduled",
+                        total - compiled_count, total);
+                }
+                // There are newly-ready crates from cache skips; loop back to dispatch them.
+                continue;
+            }
+
+            if first_error.is_some() {
+                // Drain remaining in-flight results before returning.
+                while in_flight > 0 {
+                    if result_rx.recv().is_ok() {
+                        in_flight -= 1;
+                    } else {
+                        break;
+                    }
+                }
+                // Close job channel to shut down workers.
+                drop(job_tx);
+                return Err(first_error.unwrap());
+            }
+
+            // Wait for one result.
+            match result_rx.recv() {
+                Ok(CompileOutcome::Compiled { krate_idx, artifact, flags_hash }) => {
+                    in_flight -= 1;
+                    compiled_count += 1;
+
+                    let (krate, _) = &all_crates[krate_idx];
+                    let dep_info_path = compile::crate_dep_info_path(krate, root, None);
+
+                    // Update cache.
+                    if let Ok(entry) = CrateEntry::from_compilation(
+                        flags_hash,
+                        &artifact,
+                        &dep_info_path,
+                    ) {
+                        state.cache.entries.insert(krate.name.clone(), entry);
+                    }
+
+                    // Track kernel binary.
+                    if krate.name == *boot_binary_name {
+                        state.kernel_binary = Some(artifact.clone());
+                        state.kernel_binary_rebuilt = true;
+                    }
+
+                    state.rebuilt.insert(krate.name.clone());
+                    shared_artifacts.write().unwrap()
+                        .insert(&krate.name, artifact);
+                    state.recompiled_crates += 1;
+
+                    // Decrement dependents' in-degree.
+                    for &dep_idx in &dependents[krate_idx] {
+                        in_degree[dep_idx] -= 1;
+                        if in_degree[dep_idx] == 0 {
+                            ready_queue.push(dep_idx);
+                        }
+                    }
+                }
+                Ok(CompileOutcome::Error { krate_idx, error }) => {
+                    in_flight -= 1;
+                    let (krate, _) = &all_crates[krate_idx];
+                    first_error = Some(anyhow::anyhow!(
+                        "failed to compile '{}': {error}",
+                        krate.name,
+                    ));
+                    // Close job channel to stop new dispatches.
+                    drop(job_tx);
+                    // Drain remaining.
+                    while in_flight > 0 {
+                        if result_rx.recv().is_ok() {
+                            in_flight -= 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    return Err(first_error.unwrap());
+                }
+                Err(_) => {
+                    // All workers dropped — shouldn't happen if in_flight > 0.
+                    bail!("worker threads terminated unexpectedly");
                 }
             }
         }
 
-        let verb = match mode {
-            CompileMode::Build => "Compiling",
-            CompileMode::Check => "Checking",
-            CompileMode::Clippy => "Checking",
-        };
-        let ctx_tag = if is_host { " (host)" } else { "" };
-        println!("  {verb} {}{}...", krate.name, ctx_tag);
+        // Close job channel to shut down workers.
+        drop(job_tx);
 
-        let target_spec = state.target_specs.get(&krate.target).map(|s| s.as_str());
-        let sysroot_dir = state.sysroots.get(&krate.target).map(|p| p.as_path());
-        let config_rlib = if *has_config {
-            state.config_rlibs.get(&krate.target).map(|p| p.as_path())
-        } else {
-            None
-        };
+        Ok(())
+    });
 
-        let artifact = compile::compile_crate(
-            krate,
-            &state.config,
-            target_spec,
-            sysroot_dir,
-            &state.artifacts,
-            config_rlib,
-            None,
-            mode,
-        )?;
+    // Move artifacts back from RwLock into state.
+    state.artifacts = shared_artifacts.into_inner().unwrap();
 
-        if let Ok(entry) = CrateEntry::from_compilation(flags_hash, &artifact, &dep_info_path) {
-            state.cache.entries.insert(krate.name.clone(), entry);
-        }
-        if krate.name == state.config.profile.boot_binary {
-            state.kernel_binary = Some(artifact.clone());
-            state.kernel_binary_rebuilt = true;
-        }
-        state.rebuilt.insert(krate.name.clone());
-        state.artifacts.insert(&krate.name, artifact);
-        state.recompiled_crates += 1;
-    }
-
-    Ok(())
+    stage_result
 }
 
 /// Re-order crates across all groups in a stage using topological sort.

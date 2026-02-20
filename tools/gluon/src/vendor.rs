@@ -47,6 +47,7 @@ pub struct ParsedCargoToml {
     pub default_features: Vec<String>,
     pub crate_type: CargoCrateType,
     /// The `[lib]` name override, if any.
+    #[allow(dead_code)] // used by future crate resolution improvements
     pub lib_name: Option<String>,
 }
 
@@ -1224,7 +1225,7 @@ pub fn auto_register_dependencies(
 }
 
 /// Check if a dependency is transitively needed only by proc-macros.
-fn is_transitive_proc_macro_dep(name: &str, resolved: &[ResolvedDep]) -> bool {
+fn is_transitive_proc_macro_dep(name: &str, _resolved: &[ResolvedDep]) -> bool {
     // A dep is a host dep if all resolved deps that depend on it are proc-macros
     // or are themselves host deps. Simple heuristic: check if any proc-macro
     // in the resolved set transitively depends on this crate.

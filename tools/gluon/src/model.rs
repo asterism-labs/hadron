@@ -7,11 +7,13 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use serde::{Deserialize, Serialize};
+
 /// The complete build model produced by evaluating `gluon.rhai`.
 ///
 /// Contains all declarations: targets, crates, groups, rules, pipeline,
 /// configuration options, profiles, and auxiliary settings.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct BuildModel {
     pub project: ProjectDef,
     pub targets: BTreeMap<String, TargetDef>,
@@ -29,17 +31,21 @@ pub struct BuildModel {
     pub tests: TestsDef,
     /// External dependency declarations from `dependency()` calls in gluon.rhai.
     pub dependencies: BTreeMap<String, ExternalDepDef>,
+    /// Paths to input files discovered during evaluation (Kconfig files, etc.).
+    /// Used by model caching to track invalidation inputs.
+    #[serde(default)]
+    pub input_files: Vec<PathBuf>,
 }
 
 /// Project metadata.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct ProjectDef {
     pub name: String,
     pub version: String,
 }
 
 /// A compilation target definition.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TargetDef {
     #[allow(dead_code)] // used by validation
     pub name: String,
@@ -47,7 +53,7 @@ pub struct TargetDef {
 }
 
 /// Crate output type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CrateType {
     Lib,
     Bin,
@@ -71,7 +77,7 @@ impl CrateType {
 }
 
 /// A typed configuration option (Kconfig-style).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfigOptionDef {
     #[allow(dead_code)] // used by validation
     pub name: String,
@@ -89,7 +95,7 @@ pub struct ConfigOptionDef {
 }
 
 /// How a config option maps to generated code or build flags.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Binding {
     /// Emit `--cfg hadron_<name>` (bool=y) or `--cfg hadron_<name>="value"`.
     Cfg,
@@ -102,7 +108,7 @@ pub enum Binding {
 }
 
 /// Configuration option type tag.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConfigType {
     Bool,
     U32,
@@ -117,7 +123,7 @@ pub enum ConfigType {
 }
 
 /// A typed configuration value.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ConfigValue {
     Bool(bool),
     U32(u32),
@@ -136,7 +142,7 @@ impl Default for ConfigValue {
 }
 
 /// A build profile definition.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProfileDef {
     #[allow(dead_code)] // used by validation
     pub name: String,
@@ -154,7 +160,7 @@ pub struct ProfileDef {
 }
 
 /// A crate definition.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrateDef {
     #[allow(dead_code)] // used by validation
     pub name: String,
@@ -181,7 +187,7 @@ pub struct CrateDef {
 }
 
 /// A dependency specification within a crate definition.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DepDef {
     #[allow(dead_code)] // used by crate_graph resolution
     pub extern_name: String,
@@ -191,7 +197,7 @@ pub struct DepDef {
 }
 
 /// Source location for an external dependency.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DepSource {
     /// crates.io with exact version.
     CratesIo { version: String },
@@ -202,7 +208,7 @@ pub enum DepSource {
 }
 
 /// Git reference type for git-sourced dependencies.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum GitRef {
     /// Exact commit hash.
     Rev(String),
@@ -215,7 +221,7 @@ pub enum GitRef {
 }
 
 /// An external dependency declaration from `gluon.rhai`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExternalDepDef {
     pub name: String,
     pub source: DepSource,
@@ -226,7 +232,7 @@ pub struct ExternalDepDef {
 }
 
 /// A group of crates with shared compilation behavior.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GroupDef {
     #[allow(dead_code)] // used by validation
     pub name: String,
@@ -257,7 +263,7 @@ impl Default for GroupDef {
 }
 
 /// A rule for custom artifact generation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuleDef {
     #[allow(dead_code)] // used by validation
     pub name: String,
@@ -268,7 +274,7 @@ pub struct RuleDef {
 }
 
 /// How a rule's artifact is generated.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RuleHandler {
     /// A built-in Rust function identified by name (e.g. "hbtf", "initrd", "config_crate").
     Builtin(String),
@@ -278,13 +284,13 @@ pub enum RuleHandler {
 }
 
 /// The build pipeline definition.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct PipelineDef {
     pub steps: Vec<PipelineStep>,
 }
 
 /// A single step in the build pipeline.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PipelineStep {
     /// Compile groups of crates (DAG-scheduled within the stage).
     Stage { name: String, groups: Vec<String> },
@@ -296,7 +302,7 @@ pub enum PipelineStep {
 }
 
 /// QEMU configuration.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QemuDef {
     pub machine: String,
     pub memory: u32,
@@ -316,7 +322,7 @@ impl Default for QemuDef {
 }
 
 /// QEMU test configuration.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QemuTestDef {
     pub success_exit_code: u32,
     pub timeout: u32,
@@ -334,7 +340,7 @@ impl Default for QemuTestDef {
 }
 
 /// Bootloader configuration.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BootloaderDef {
     pub kind: String,
     pub config_file: Option<String>,
@@ -350,13 +356,13 @@ impl Default for BootloaderDef {
 }
 
 /// Image configuration.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ImageDef {
     pub extra_files: BTreeMap<String, String>,
 }
 
 /// Test configuration.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TestsDef {
     pub host_testable: Vec<String>,
     pub kernel_tests_dir: Option<String>,
@@ -368,7 +374,7 @@ pub struct TestsDef {
 }
 
 /// A crash test definition.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrashTestDef {
     pub name: String,
     pub source: String,

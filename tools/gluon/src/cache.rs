@@ -7,7 +7,6 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::SystemTime;
 
 use anyhow::{Context, Result};
@@ -25,7 +24,6 @@ pub enum FreshResult {
     /// The crate does not need recompilation.
     Fresh,
     /// The crate must be recompiled, with a human-readable reason.
-    #[allow(dead_code)] // reason string available for diagnostic logging
     Stale(String),
 }
 
@@ -352,11 +350,7 @@ impl CrateEntry {
 
 /// Compute a SHA-256 hash of the `rustc -vV` output to detect toolchain changes.
 pub fn get_rustc_version_hash() -> Result<String> {
-    let output = Command::new("rustc")
-        .arg("-vV")
-        .output()
-        .context("failed to run `rustc -vV`")?;
-    Ok(hash_bytes(&output.stdout))
+    Ok(hash_bytes(crate::rustc_info::version_output().as_bytes()))
 }
 
 /// Parse a Makefile-style `.d` dep-info file into a list of source paths.

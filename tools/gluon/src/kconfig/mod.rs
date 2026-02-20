@@ -9,7 +9,7 @@ pub mod lexer;
 pub mod parser;
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::model::{ConfigOptionDef, ConfigType, ConfigValue};
 
@@ -18,20 +18,23 @@ use parser::Parser;
 
 /// Parse a root Kconfig file and all sourced sub-files.
 ///
-/// Returns the parsed config options and the menu ordering (for menuconfig).
+/// Returns the parsed config options, the menu ordering, and all file paths loaded.
 pub fn load_kconfig(
     root_path: &Path,
     kconfig_path: &str,
-) -> Result<(BTreeMap<String, ConfigOptionDef>, Vec<String>), String> {
+) -> Result<(BTreeMap<String, ConfigOptionDef>, Vec<String>, Vec<PathBuf>), String> {
+    crate::verbose::vprintln!("  loading kconfig: {}", kconfig_path);
     let abs_path = root_path.join(kconfig_path);
     let file = parse_file(&abs_path)?;
 
     let mut options = BTreeMap::new();
     let mut menu_order = Vec::new();
+    let mut loaded_files = vec![abs_path];
 
-    process_items(&file.items, root_path, None, &mut options, &mut menu_order)?;
+    process_items(&file.items, root_path, None, &mut options, &mut menu_order, &mut loaded_files)?;
+    crate::verbose::vprintln!("  kconfig: {} options from {} files", options.len(), loaded_files.len());
 
-    Ok((options, menu_order))
+    Ok((options, menu_order, loaded_files))
 }
 
 /// Parse a single Kconfig file into an AST.
@@ -50,6 +53,7 @@ fn process_items(
     menu_title: Option<&str>,
     options: &mut BTreeMap<String, ConfigOptionDef>,
     menu_order: &mut Vec<String>,
+    loaded_files: &mut Vec<PathBuf>,
 ) -> Result<(), String> {
     // Track menu for ordering
     if let Some(title) = menu_title {
@@ -65,12 +69,13 @@ fn process_items(
                 options.insert(opt.name.clone(), opt);
             }
             KconfigItem::Menu(menu) => {
-                process_items(&menu.items, root_path, Some(&menu.title), options, menu_order)?;
+                process_items(&menu.items, root_path, Some(&menu.title), options, menu_order, loaded_files)?;
             }
             KconfigItem::Source(path) => {
                 let abs_path = root_path.join(path);
                 let sub_file = parse_file(&abs_path)?;
-                process_items(&sub_file.items, root_path, menu_title, options, menu_order)?;
+                loaded_files.push(abs_path);
+                process_items(&sub_file.items, root_path, menu_title, options, menu_order, loaded_files)?;
             }
         }
     }
@@ -157,24 +162,6 @@ fn convert_config_block(
     })
 }
 
-/// Parse Kconfig and populate a pre-existing config options map.
-///
-/// This is the entry point used by the Rhai engine's `kconfig()` function.
-pub fn parse_kconfig_into(
-    root_path: &Path,
-    kconfig_path: &str,
-    config_options: &mut BTreeMap<String, ConfigOptionDef>,
-    menu_order: &mut Vec<String>,
-) -> Result<(), String> {
-    let (options, order) = load_kconfig(root_path, kconfig_path)?;
-    config_options.extend(options);
-    for m in order {
-        if !menu_order.iter().any(|existing| existing == &m) {
-            menu_order.push(m);
-        }
-    }
-    Ok(())
-}
 
 #[cfg(test)]
 mod tests {

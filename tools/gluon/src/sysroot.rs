@@ -8,6 +8,7 @@ use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+
 /// Paths to the compiled sysroot rlibs.
 pub struct SysrootOutput {
     pub sysroot_dir: PathBuf,
@@ -20,25 +21,9 @@ pub struct SysrootOutput {
 
 /// Locate the rustc sysroot source directory.
 pub fn sysroot_src_dir() -> Result<PathBuf> {
-    let output = Command::new("rustc")
-        .arg("--print")
-        .arg("sysroot")
-        .output()
-        .context("failed to run `rustc --print sysroot`")?;
+    let sysroot = crate::rustc_info::sysroot_path();
 
-    if !output.status.success() {
-        bail!(
-            "rustc --print sysroot failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    let sysroot = String::from_utf8(output.stdout)
-        .context("non-UTF-8 sysroot path")?
-        .trim()
-        .to_string();
-
-    let src_dir = PathBuf::from(&sysroot).join("lib/rustlib/src/rust/library");
+    let src_dir = sysroot.join("lib/rustlib/src/rust/library");
     if !src_dir.exists() {
         bail!(
             "sysroot source not found at {}\n\

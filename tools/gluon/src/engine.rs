@@ -25,8 +25,8 @@ pub fn evaluate_script(root: &Path) -> Result<BuildModel> {
     let model = Arc::new(Mutex::new(BuildModel::default()));
     let mut engine = Engine::new();
 
-    // Disable features we don't need.
     engine.set_max_expr_depths(64, 64);
+    engine.set_optimization_level(rhai::OptimizationLevel::Full);
 
     // Store root path for include() and path resolution.
     let root_path = root.to_path_buf();
@@ -61,14 +61,17 @@ pub fn evaluate_script(root: &Path) -> Result<BuildModel> {
     register_include_api(&mut engine, &root_path, visited_includes);
 
     // Evaluate gluon.rhai with the scope containing constants.
+    crate::verbose::vprintln!("  compiling script: {}", script_path.display());
     let ast = engine
         .compile_file(script_path.clone().into())
         .map_err(|e| anyhow::anyhow!("error compiling {}: {e}", script_path.display()))?;
+    crate::verbose::vprintln!("  evaluating script...");
     engine
         .run_ast_with_scope(&mut scope, &ast)
         .map_err(|e| anyhow::anyhow!("error evaluating {}: {e}", script_path.display()))?;
 
-    // Drop the engine to release all Arc references held by closures.
+    // Drop the engine, AST, and scope to release all Arc references held by closures.
+    drop(ast);
     drop(engine);
     drop(scope);
 
@@ -1421,7 +1424,7 @@ fn register_kconfig_api(engine: &mut Engine, model: SharedModel, root: &Path) {
     let m = model;
     let root_path = root.to_path_buf();
     engine.register_fn("kconfig", move |path: &str| {
-        let (options, order) = crate::kconfig::load_kconfig(&root_path, path)
+        let (options, order, files) = crate::kconfig::load_kconfig(&root_path, path)
             .unwrap_or_else(|e| panic!("kconfig error: {e}"));
         let mut model = m.lock().unwrap();
         model.config_options.extend(options);
@@ -1430,6 +1433,8 @@ fn register_kconfig_api(engine: &mut Engine, model: SharedModel, root: &Path) {
                 model.menu_order.push(menu);
             }
         }
+        // Track kconfig files for model cache invalidation.
+        model.input_files.extend(files);
     });
 }
 
@@ -1447,18 +1452,7 @@ fn register_helpers(engine: &mut Engine, root: &Path) {
 
     // host_triple() -> string
     engine.register_fn("host_triple", || -> String {
-        std::process::Command::new("rustc")
-            .arg("-vV")
-            .output()
-            .ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .and_then(|s| {
-                s.lines()
-                    .find(|l| l.starts_with("host:"))
-                    .and_then(|l| l.strip_prefix("host: "))
-                    .map(|s| s.to_string())
-            })
-            .unwrap_or_else(|| "unknown".into())
+        crate::rustc_info::host_triple().to_string()
     });
 
     // env("VAR") -> string

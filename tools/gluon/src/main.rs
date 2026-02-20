@@ -18,12 +18,15 @@ mod fmt;
 mod kconfig;
 mod menuconfig;
 mod model;
+mod model_cache;
 mod run;
+mod rustc_info;
 mod scheduler;
 mod sysroot;
 mod test;
 mod validate;
 mod vendor;
+mod verbose;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -35,6 +38,7 @@ use compile::{ArtifactMap, CompileMode};
 
 fn main() -> Result<()> {
     let cli = cli::Cli::parse();
+    verbose::init(cli.verbose);
 
     match cli.command {
         cli::Command::Configure => cmd_configure(&cli),
@@ -57,24 +61,42 @@ fn main() -> Result<()> {
 /// Load and validate the build model from `gluon.rhai`.
 ///
 /// If `dependency()` declarations are present, auto-registers vendored crates
-/// into the model before validation.
-fn load_model(root: &PathBuf) -> Result<model::BuildModel> {
-    load_model_inner(root, true)
+/// into the model before validation. Uses the model cache when available.
+fn load_model(root: &PathBuf, force: bool) -> Result<model::BuildModel> {
+    load_model_inner(root, true, force)
 }
 
 /// Load the build model, optionally skipping validation.
 ///
 /// `gluon vendor` uses `validate = false` because vendor directories may not
 /// exist yet — the whole point of the command is to create them.
-fn load_model_inner(root: &PathBuf, validate: bool) -> Result<model::BuildModel> {
+fn load_model_inner(root: &PathBuf, validate: bool, force: bool) -> Result<model::BuildModel> {
+    use verbose::vprintln;
+
+    let _t = verbose::Timer::start("model loading (total)");
+
+    // Try the model cache first (unless forced).
+    if !force {
+        if let Some(model) = model_cache::load_cached_model(root) {
+            println!("Using cached build model.");
+            return Ok(model);
+        }
+    }
+
     println!("Loading gluon.rhai...");
-    let mut model = engine::evaluate_script(root)?;
+
+    let mut model = {
+        let _t = verbose::Timer::start("script evaluation");
+        engine::evaluate_script(root)?
+    };
 
     // Auto-register vendored dependencies if any dependency() declarations exist.
     if !model.dependencies.is_empty() {
+        let _t = verbose::Timer::start("vendor dependency resolution");
         let vendor_dir = root.join("vendor");
         let mut version_cache = vendor::VersionCache::new();
         let resolved = vendor::resolve_transitive(&model.dependencies, &vendor_dir, &mut version_cache)?;
+        vprintln!("  resolved {} transitive dependencies", resolved.len());
 
         // Determine the default target from the "default" profile.
         let default_target = model.profiles.get("default")
@@ -85,8 +107,15 @@ fn load_model_inner(root: &PathBuf, validate: bool) -> Result<model::BuildModel>
     }
 
     if validate {
+        let _t = verbose::Timer::start("model validation");
         validate::validate_model(&model)?;
     }
+
+    // Save the validated model to cache for next time.
+    if let Err(e) = model_cache::save_cached_model(root, &model) {
+        vprintln!("  warning: failed to save model cache: {e}");
+    }
+
     Ok(model)
 }
 
@@ -94,11 +123,16 @@ fn load_model_inner(root: &PathBuf, validate: bool) -> Result<model::BuildModel>
 fn resolve_config(
     cli: &cli::Cli,
 ) -> Result<(config::ResolvedConfig, model::BuildModel)> {
+    use verbose::vprintln;
+
     let root = config::find_project_root()?;
-    let model = load_model(&root)?;
+    let model = load_model(&root, cli.force)?;
+    let profile_name = cli.profile.as_deref().unwrap_or("default");
+    vprintln!("  resolving config: profile={}, target={}", profile_name,
+        cli.target.as_deref().unwrap_or("(from profile)"));
     let resolved = config::resolve_from_model(
         &model,
-        cli.profile.as_deref().unwrap_or("default"),
+        profile_name,
         cli.target.as_deref(),
         &root,
     )?;
@@ -200,7 +234,7 @@ fn cmd_test(cli: &cli::Cli, args: &cli::TestArgs) -> Result<()> {
 /// Interactive TUI menuconfig.
 fn cmd_menuconfig(cli: &cli::Cli) -> Result<()> {
     let root = config::find_project_root()?;
-    let model = load_model(&root)?;
+    let model = load_model(&root, false)?;
     menuconfig::run_menuconfig(&model, &root, cli.profile.as_deref().unwrap_or("default"))
 }
 
@@ -221,7 +255,7 @@ fn cmd_clean() -> Result<()> {
 fn cmd_vendor(args: &cli::VendorArgs) -> Result<()> {
     let root = config::find_project_root()?;
     // Skip validation: vendor dirs may not exist yet.
-    let model = load_model_inner(&root, false)?;
+    let model = load_model_inner(&root, false, true)?;
     let vendor_dir = root.join("vendor");
     let lock_path = root.join("gluon.lock");
 
@@ -439,13 +473,26 @@ fn prepare_pipeline_state(
     resolved: &config::ResolvedConfig,
     force: bool,
 ) -> Result<scheduler::PipelineState> {
+    use verbose::vprintln;
+
     let rustc_hash = cache::get_rustc_version_hash()?;
     let cache = if force {
+        vprintln!("  force build: ignoring cache");
         CacheManifest::new(rustc_hash.clone())
     } else {
         match CacheManifest::load(&resolved.root) {
-            Some(m) if m.rustc_version_hash == rustc_hash => m,
-            _ => CacheManifest::new(rustc_hash.clone()),
+            Some(m) if m.rustc_version_hash == rustc_hash => {
+                vprintln!("  loaded cache manifest ({} entries)", m.entries.len());
+                m
+            }
+            Some(_) => {
+                vprintln!("  rustc version changed, discarding cache");
+                CacheManifest::new(rustc_hash.clone())
+            }
+            _ => {
+                vprintln!("  no cache manifest found, starting fresh");
+                CacheManifest::new(rustc_hash.clone())
+            }
         }
     };
 
