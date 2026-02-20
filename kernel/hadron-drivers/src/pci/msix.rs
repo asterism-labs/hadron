@@ -6,10 +6,10 @@
 
 use super::cam::PciCam;
 use super::caps::MsixCapability;
+use hadron_kernel::driver_api::capability::MmioCapability;
 use hadron_kernel::driver_api::error::DriverError;
 use hadron_kernel::driver_api::pci::{PciBar, PciDeviceInfo};
 use hadron_kernel::driver_api::resource::MmioRegion;
-use hadron_kernel::driver_api::services::KernelServices;
 
 /// MSI-X table entry size in bytes.
 const MSIX_ENTRY_SIZE: u32 = 16;
@@ -60,7 +60,7 @@ impl MsixTable {
     pub fn setup(
         info: &PciDeviceInfo,
         cap: &MsixCapability,
-        services: &'static dyn KernelServices,
+        mmio_cap: &MmioCapability,
     ) -> Result<Self, DriverError> {
         // Extract the BAR that contains the MSI-X table.
         let (bar_phys, bar_size) = match info.bars[cap.table_bar as usize] {
@@ -69,7 +69,7 @@ impl MsixTable {
         };
 
         // Map the BAR.
-        let mmio = services.map_mmio(bar_phys, bar_size)?;
+        let mmio = mmio_cap.map_mmio(bar_phys, bar_size)?;
 
         let table = Self {
             mmio,

@@ -5,8 +5,8 @@
 //! matches entries against discovered devices.
 
 use hadron_kernel::driver_api::pci::PciDeviceInfo;
+use hadron_kernel::driver_api::probe_context;
 use hadron_kernel::driver_api::registration::{PciDriverEntry, PlatformDriverEntry};
-use hadron_kernel::driver_api::services::KernelServices;
 
 // Linker-defined section boundaries (set in the linker script).
 unsafe extern "C" {
@@ -45,9 +45,10 @@ pub fn platform_driver_entries() -> &'static [PlatformDriverEntry] {
 
 /// Matches discovered PCI devices against registered PCI drivers.
 ///
-/// For each driver entry, iterates its ID table and calls `probe` on the
-/// first matching device. Logs all matches and probe results.
-pub fn match_pci_drivers(devices: &[PciDeviceInfo], services: &'static dyn KernelServices) {
+/// For each driver entry, iterates its ID table and calls `probe` with a
+/// [`PciProbeContext`](hadron_kernel::driver_api::probe_context::PciProbeContext)
+/// on the first matching device. Registers resulting devices in the device registry.
+pub fn match_pci_drivers(devices: &[PciDeviceInfo]) {
     let entries = pci_driver_entries();
     for entry in entries {
         for device in devices {
@@ -58,9 +59,19 @@ pub fn match_pci_drivers(devices: &[PciDeviceInfo], services: &'static dyn Kerne
                         device.address,
                         entry.name,
                     );
-                    match (entry.probe)(device, services) {
-                        Ok(()) => {
+                    let ctx = probe_context::pci_probe_context(device);
+                    match (entry.probe)(ctx) {
+                        Ok(registration) => {
                             hadron_kernel::kprintln!("PCI: driver '{}' probe OK", entry.name);
+                            hadron_kernel::drivers::device_registry::with_device_registry_mut(
+                                |dr| {
+                                    dr.register_driver(
+                                        entry.name,
+                                        registration.devices,
+                                        registration.lifecycle,
+                                    );
+                                },
+                            );
                         }
                         Err(e) => {
                             hadron_kernel::kprintln!(
@@ -80,19 +91,32 @@ pub fn match_pci_drivers(devices: &[PciDeviceInfo], services: &'static dyn Kerne
 /// Matches platform devices against registered platform drivers.
 ///
 /// Compares each platform device's compatible string against driver entries.
-/// Calls `init` on the first match.
-pub fn match_platform_drivers(devices: &[(&str, &str)], services: &'static dyn KernelServices) {
+/// Calls `init` with a [`PlatformProbeContext`](hadron_kernel::driver_api::probe_context::PlatformProbeContext)
+/// on the first match. Registers resulting devices in the device registry.
+pub fn match_platform_drivers(devices: &[(&str, &str)]) {
     let entries = platform_driver_entries();
     for &(name, compatible) in devices {
         for entry in entries {
             if entry.compatible == compatible {
                 hadron_kernel::kprintln!("Platform: matched '{}' -> driver '{}'", name, entry.name,);
-                match (entry.init)(services) {
-                    Ok(()) => {
+                let ctx = probe_context::platform_probe_context();
+                match (entry.init)(ctx) {
+                    Ok(registration) => {
                         hadron_kernel::kprintln!("Platform: driver '{}' init OK", entry.name);
+                        hadron_kernel::drivers::device_registry::with_device_registry_mut(|dr| {
+                            dr.register_driver(
+                                entry.name,
+                                registration.devices,
+                                registration.lifecycle,
+                            );
+                        });
                     }
                     Err(e) => {
-                        hadron_kernel::kprintln!("Platform: driver '{}' init failed: {}", name, e,);
+                        hadron_kernel::kprintln!(
+                            "Platform: driver '{}' init failed: {}",
+                            name,
+                            e,
+                        );
                     }
                 }
                 break;

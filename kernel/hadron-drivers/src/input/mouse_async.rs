@@ -3,9 +3,9 @@
 //! Wraps the sync [`I8042`] hardware accessor with an [`IrqLine`] to provide
 //! interrupt-driven async mouse event reads via the [`MouseDevice`] trait.
 
+use hadron_kernel::driver_api::capability::IrqCapability;
 use hadron_kernel::driver_api::error::DriverError;
 use hadron_kernel::driver_api::input::{MouseDevice, MouseEvent};
-use hadron_kernel::driver_api::services::KernelServices;
 
 use crate::input::i8042::{I8042, MousePacket};
 use hadron_kernel::drivers::irq::IrqLine;
@@ -26,14 +26,14 @@ impl AsyncMouse {
     ///
     /// Returns a [`DriverError`] if the IRQ cannot be bound or the I/O APIC
     /// is not initialized.
-    pub fn new(services: &'static dyn KernelServices) -> Result<Self, DriverError> {
+    pub fn new(irq_cap: &IrqCapability) -> Result<Self, DriverError> {
         let i8042 = I8042::new();
 
         // 1. Bind IRQ handler to vector.
-        let irq = IrqLine::bind_isa(12, services)?;
+        let irq = IrqLine::bind_isa(12, irq_cap)?;
 
         // 2. Unmask the I/O APIC entry for IRQ 12.
-        services.unmask_irq(12)?;
+        irq_cap.unmask_irq(12)?;
 
         hadron_kernel::kprintln!(
             "AsyncMouse: bound to vector {}, IRQ 12 unmasked",

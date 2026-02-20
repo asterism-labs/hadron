@@ -5,15 +5,13 @@
 
 extern crate alloc;
 
-use alloc::boxed::Box;
 use core::ptr;
 
 use hadron_kernel::sync::SpinLock;
 use hadron_kernel::driver_api::block::{BlockDevice, IoError};
-use hadron_kernel::driver_api::dyn_dispatch::DynBlockDeviceWrapper;
+use hadron_kernel::driver_api::capability::DmaCapability;
 use hadron_kernel::driver_api::error::DriverError;
-use hadron_kernel::driver_api::pci::{PciDeviceId, PciDeviceInfo};
-use hadron_kernel::driver_api::services::KernelServices;
+use hadron_kernel::driver_api::pci::PciDeviceId;
 
 use super::pci::VirtioPciTransport;
 use super::queue::{Virtqueue, VIRTQ_DESC_F_WRITE};
@@ -73,8 +71,8 @@ pub struct VirtioBlkDisk {
     queue: SpinLock<Virtqueue>,
     /// IRQ line for async completion notification.
     irq: IrqLine,
-    /// Kernel services reference (for DMA allocation).
-    services: &'static dyn KernelServices,
+    /// DMA capability for memory allocation.
+    dma: DmaCapability,
     /// Total number of sectors.
     capacity: u64,
     /// Sector size in bytes.
@@ -82,7 +80,7 @@ pub struct VirtioBlkDisk {
 }
 
 // SAFETY: VirtioBlkDisk is Send+Sync because all mutable state is behind
-// SpinLock, IrqLine is just a u8, and services is &'static.
+// SpinLock, IrqLine is just a u8, and DmaCapability is Copy.
 unsafe impl Send for VirtioBlkDisk {}
 unsafe impl Sync for VirtioBlkDisk {}
 
@@ -98,10 +96,10 @@ impl BlockDevice for VirtioBlkDisk {
 
         // Allocate DMA bounce buffer (1 page covers header + data + status).
         let dma_phys = self
-            .services
-            .alloc_dma_frames(1)
+            .dma
+            .alloc_frames(1)
             .map_err(|_| IoError::DmaError)?;
-        let dma_virt = self.services.phys_to_virt(dma_phys);
+        let dma_virt = self.dma.phys_to_virt(dma_phys);
 
         // Layout within the DMA page:
         //   [0..16)           = VirtioBlkReqHeader
@@ -166,7 +164,7 @@ impl BlockDevice for VirtioBlkDisk {
 
         // Free the DMA bounce buffer.
         // SAFETY: We are done with the DMA buffer.
-        unsafe { self.services.free_dma_frames(dma_phys, 1) };
+        unsafe { self.dma.free_frames(dma_phys, 1) };
 
         result
     }
@@ -182,10 +180,10 @@ impl BlockDevice for VirtioBlkDisk {
 
         // Allocate DMA bounce buffer.
         let dma_phys = self
-            .services
-            .alloc_dma_frames(1)
+            .dma
+            .alloc_frames(1)
             .map_err(|_| IoError::DmaError)?;
-        let dma_virt = self.services.phys_to_virt(dma_phys);
+        let dma_virt = self.dma.phys_to_virt(dma_phys);
 
         let header_phys = dma_phys;
         let data_phys = dma_phys + 16;
@@ -236,7 +234,7 @@ impl BlockDevice for VirtioBlkDisk {
 
         // Free the DMA bounce buffer.
         // SAFETY: We are done with the DMA buffer.
-        unsafe { self.services.free_dma_frames(dma_phys, 1) };
+        unsafe { self.dma.free_frames(dma_phys, 1) };
 
         if status == VIRTIO_BLK_S_OK {
             Ok(())
@@ -281,24 +279,26 @@ hadron_kernel::pci_driver_entry!(
 /// PCI probe function for VirtIO block devices.
 #[cfg(target_os = "none")]
 fn virtio_blk_probe(
-    info: &PciDeviceInfo,
-    services: &'static dyn KernelServices,
-) -> Result<(), DriverError> {
+    ctx: hadron_kernel::driver_api::probe_context::PciProbeContext,
+) -> Result<hadron_kernel::driver_api::registration::PciDriverRegistration, DriverError> {
+    use hadron_kernel::driver_api::device_path::DevicePath;
+    use hadron_kernel::driver_api::registration::{DeviceSet, PciDriverRegistration};
+
     hadron_kernel::kinfo!(
         "virtio-blk: probing {:04x}:{:04x} at {}",
-        info.vendor_id,
-        info.device_id,
-        info.address
+        ctx.device.vendor_id,
+        ctx.device.device_id,
+        ctx.device.address
     );
 
     // Enable bus mastering.
-    services.enable_bus_mastering(info.address.bus, info.address.device, info.address.function);
+    ctx.pci_config.enable_bus_mastering();
 
     // Initialize VirtIO PCI transport.
-    let transport = VirtioPciTransport::new(info, services)?;
+    let transport = VirtioPciTransport::new(&ctx.device, &ctx.mmio)?;
 
     // Try MSI-X setup, fall back to legacy.
-    let (irq, msix_table) = setup_irq(info, &transport, services)?;
+    let (irq, msix_table) = setup_irq(&ctx.device, &transport, &ctx.irq, &ctx.mmio)?;
 
     // Initialize VirtIO device (steps 1-6).
     // No device-specific feature bits needed for basic block I/O.
@@ -323,7 +323,7 @@ fn virtio_blk_probe(
     );
 
     // Setup request queue (queue 0).
-    let vq = device.setup_queue(0, services)?;
+    let vq = device.setup_queue(0, &ctx.dma)?;
 
     // If using MSI-X, configure the queue's MSI-X vector.
     if let Some(ref msix) = msix_table {
@@ -347,35 +347,47 @@ fn virtio_blk_probe(
         device,
         queue: SpinLock::new(vq),
         irq,
-        services,
+        dma: ctx.dma,
         capacity,
         sector_size: blk_size,
     };
 
-    // Register in the kernel device registry.
+    // Register in the kernel device registry via DeviceSet.
     let idx = {
         let mut counter = DISK_INDEX.lock();
         let i = *counter;
         *counter += 1;
         i
     };
-    let name = alloc::format!("virtio-blk-{}", idx);
-    services.register_block_device(&name, Box::new(DynBlockDeviceWrapper(disk)));
 
-    hadron_kernel::kinfo!("virtio-blk: registered as \"{}\"", name);
-    Ok(())
+    let mut devices = DeviceSet::new();
+    let path = DevicePath::pci(
+        ctx.device.address.bus,
+        ctx.device.address.device,
+        ctx.device.address.function,
+        "virtio-blk",
+        idx,
+    );
+    devices.add_block_device(path, disk);
+
+    hadron_kernel::kinfo!("virtio-blk: registered as \"virtio-blk-{}\"", idx);
+    Ok(PciDriverRegistration {
+        devices,
+        lifecycle: None,
+    })
 }
 
 /// Sets up IRQ delivery (MSI-X preferred, legacy fallback).
 #[cfg(target_os = "none")]
 fn setup_irq(
-    info: &PciDeviceInfo,
+    info: &hadron_kernel::driver_api::pci::PciDeviceInfo,
     transport: &VirtioPciTransport,
-    services: &'static dyn KernelServices,
+    irq_cap: &hadron_kernel::driver_api::capability::IrqCapability,
+    mmio_cap: &hadron_kernel::driver_api::capability::MmioCapability,
 ) -> Result<(IrqLine, Option<MsixTable>), DriverError> {
     if let Some(msix_cap) = transport.msix_cap() {
         // Try MSI-X.
-        match try_setup_msix(info, msix_cap, services) {
+        match try_setup_msix(info, msix_cap, irq_cap, mmio_cap) {
             Ok((irq, table)) => {
                 hadron_kernel::kinfo!(
                     "virtio-blk: MSI-X enabled, vector {}",
@@ -390,9 +402,9 @@ fn setup_irq(
     }
 
     // Legacy INTx fallback.
-    let irq = IrqLine::bind_isa(info.interrupt_line, services)
+    let irq = IrqLine::bind_isa(info.interrupt_line, irq_cap)
         .map_err(|_| DriverError::InitFailed)?;
-    services
+    irq_cap
         .unmask_irq(info.interrupt_line)
         .map_err(|_| DriverError::InitFailed)?;
 
@@ -402,17 +414,18 @@ fn setup_irq(
 /// Attempts to set up MSI-X for the device.
 #[cfg(target_os = "none")]
 fn try_setup_msix(
-    info: &PciDeviceInfo,
+    info: &hadron_kernel::driver_api::pci::PciDeviceInfo,
     msix_cap: &crate::pci::caps::MsixCapability,
-    services: &'static dyn KernelServices,
+    irq_cap: &hadron_kernel::driver_api::capability::IrqCapability,
+    mmio_cap: &hadron_kernel::driver_api::capability::MmioCapability,
 ) -> Result<(IrqLine, MsixTable), DriverError> {
-    let msix_table = MsixTable::setup(info, msix_cap, services)?;
+    let msix_table = MsixTable::setup(info, msix_cap, mmio_cap)?;
 
     // Allocate a vector for the request queue.
-    let vector = services.alloc_vector()?;
+    let vector = irq_cap.alloc_vector()?;
 
     // Bind the IRQ handler.
-    let irq = IrqLine::bind(vector, services)?;
+    let irq = IrqLine::bind(vector, irq_cap)?;
 
     // Configure MSI-X entry 0 for CPU 0.
     msix_table.set_entry(0, vector, 0);

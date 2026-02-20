@@ -53,8 +53,6 @@ pub mod proc;
 #[cfg(target_os = "none")]
 pub mod sched;
 #[cfg(target_os = "none")]
-pub mod services;
-#[cfg(target_os = "none")]
 pub mod syscall;
 #[cfg(target_os = "none")]
 pub mod time;

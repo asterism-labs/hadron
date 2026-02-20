@@ -524,12 +524,22 @@ hadron_kernel::platform_driver_entry!(
 
 #[cfg(all(target_os = "none", target_arch = "x86_64"))]
 fn i8042_platform_init(
-    _services: &'static dyn hadron_kernel::driver_api::services::KernelServices,
-) -> Result<(), hadron_kernel::driver_api::error::DriverError> {
+    _ctx: hadron_kernel::driver_api::probe_context::PlatformProbeContext,
+) -> Result<
+    hadron_kernel::driver_api::registration::PlatformDriverRegistration,
+    hadron_kernel::driver_api::error::DriverError,
+> {
+    use hadron_kernel::driver_api::registration::{DeviceSet, PlatformDriverRegistration};
+
     // Platform init hook — performs the actual controller initialization.
     let ctrl = I8042::new();
     // SAFETY: Called once during driver matching, ports 0x60/0x64 are valid i8042.
-    unsafe { ctrl.init() }.map_err(|_| hadron_kernel::driver_api::error::DriverError::InitFailed)
+    unsafe { ctrl.init() }.map_err(|_| hadron_kernel::driver_api::error::DriverError::InitFailed)?;
+
+    Ok(PlatformDriverRegistration {
+        devices: DeviceSet::new(),
+        lifecycle: None,
+    })
 }
 
 #[cfg(test)]

@@ -7,16 +7,14 @@
 
 extern crate alloc;
 
-use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::ptr;
 
 use hadron_kernel::sync::SpinLock;
 use hadron_kernel::driver_api::block::{BlockDevice, IoError};
-use hadron_kernel::driver_api::dyn_dispatch::DynBlockDeviceWrapper;
+use hadron_kernel::driver_api::capability::DmaCapability;
 use hadron_kernel::driver_api::error::DriverError;
-use hadron_kernel::driver_api::pci::{PciBar, PciDeviceId, PciDeviceInfo};
-use hadron_kernel::driver_api::services::KernelServices;
+use hadron_kernel::driver_api::pci::{PciBar, PciDeviceId};
 
 pub mod command;
 pub mod hba;
@@ -58,12 +56,12 @@ pub struct AhciDisk {
     port: AhciPort,
     /// The bound IRQ line for async completion notification.
     irq: hadron_kernel::drivers::irq::IrqLine,
-    /// Kernel services reference (for DMA allocation).
-    services: &'static dyn KernelServices,
+    /// DMA capability for memory allocation.
+    dma: DmaCapability,
 }
 
 // SAFETY: AhciDisk is Send+Sync because AhciPort is Send+Sync, IrqLine has
-// no interior mutability (just a u8 vector), and services is &'static.
+// no interior mutability (just a u8 vector), and DmaCapability is Copy.
 unsafe impl Send for AhciDisk {}
 unsafe impl Sync for AhciDisk {}
 
@@ -81,10 +79,10 @@ impl BlockDevice for AhciDisk {
 
         // Allocate a DMA bounce buffer.
         let dma_phys = self
-            .services
-            .alloc_dma_frames(1)
+            .dma
+            .alloc_frames(1)
             .map_err(|_| IoError::DmaError)?;
-        let dma_virt = self.services.phys_to_virt(dma_phys);
+        let dma_virt = self.dma.phys_to_virt(dma_phys);
 
         // Zero the DMA buffer.
         // SAFETY: Freshly allocated page.
@@ -106,7 +104,7 @@ impl BlockDevice for AhciDisk {
 
         // Free the DMA bounce buffer.
         // SAFETY: We are done with the DMA buffer.
-        unsafe { self.services.free_dma_frames(dma_phys, 1) };
+        unsafe { self.dma.free_frames(dma_phys, 1) };
 
         result
     }
@@ -152,9 +150,12 @@ hadron_kernel::pci_driver_entry!(
 /// PCI probe function for AHCI controllers.
 #[cfg(target_os = "none")]
 fn ahci_probe(
-    info: &PciDeviceInfo,
-    services: &'static dyn KernelServices,
-) -> Result<(), DriverError> {
+    ctx: hadron_kernel::driver_api::probe_context::PciProbeContext,
+) -> Result<hadron_kernel::driver_api::registration::PciDriverRegistration, DriverError> {
+    use hadron_kernel::driver_api::device_path::DevicePath;
+    use hadron_kernel::driver_api::registration::{DeviceSet, PciDriverRegistration};
+
+    let info = &ctx.device;
     hadron_kernel::kinfo!(
         "AHCI: probing {:04x}:{:04x} at {}",
         info.vendor_id,
@@ -172,10 +173,10 @@ fn ahci_probe(
     };
 
     // Enable bus mastering + memory space.
-    services.enable_bus_mastering(info.address.bus, info.address.device, info.address.function);
+    ctx.pci_config.enable_bus_mastering();
 
     // Map ABAR.
-    let mmio = services.map_mmio(abar_phys, abar_size)?;
+    let mmio = ctx.mmio.map_mmio(abar_phys, abar_size)?;
 
     // Initialize HBA.
     // SAFETY: mmio.virt_base() points to the mapped AHCI ABAR.
@@ -186,11 +187,11 @@ fn ahci_probe(
     hadron_kernel::kinfo!("AHCI: version {}.{}", major, minor);
 
     // Bind IRQ line for async completion.
-    let _irq = hadron_kernel::drivers::irq::IrqLine::bind_isa(info.interrupt_line, services)
+    let _irq = hadron_kernel::drivers::irq::IrqLine::bind_isa(info.interrupt_line, &ctx.irq)
         .map_err(|_| DriverError::InitFailed)?;
 
     // Unmask the IRQ.
-    services
+    ctx.irq
         .unmask_irq(info.interrupt_line)
         .map_err(|_| DriverError::InitFailed)?;
 
@@ -205,25 +206,25 @@ fn ahci_probe(
 
         hadron_kernel::kdebug!("AHCI: checking port {}", port_num);
 
-        if let Some(port) = AhciPort::init(&hba, port_num, services) {
+        if let Some(port) = AhciPort::init(&hba, port_num, &ctx.dma) {
             if port.identity.is_some() {
                 hadron_kernel::kinfo!("AHCI: port {} has device", port_num);
 
                 // Clone the IRQ binding for each disk.
                 // All ports on the same HBA share the same IRQ.
-                let disk_irq = hadron_kernel::drivers::irq::IrqLine::bind_isa(info.interrupt_line, services)
+                let disk_irq = hadron_kernel::drivers::irq::IrqLine::bind_isa(info.interrupt_line, &ctx.irq)
                     .unwrap_or_else(|_| {
                         // If we can't bind a second time (already registered), reuse
                         // by creating a new IrqLine that references the same vector.
                         hadron_kernel::drivers::irq::IrqLine::from_vector(
-                            services.isa_irq_vector(info.interrupt_line),
+                            ctx.irq.isa_irq_vector(info.interrupt_line),
                         )
                     });
 
                 disks.push(AhciDisk {
                     port,
                     irq: disk_irq,
-                    services,
+                    dma: ctx.dma,
                 });
             }
         }
@@ -235,7 +236,8 @@ fn ahci_probe(
         hadron_kernel::kinfo!("AHCI: {} disk(s) discovered", disks.len());
     }
 
-    // Register each disk in the kernel device registry.
+    // Register each disk via DeviceSet.
+    let mut devices = DeviceSet::new();
     for disk in disks {
         let idx = {
             let mut counter = DISK_INDEX.lock();
@@ -243,10 +245,19 @@ fn ahci_probe(
             *counter += 1;
             i
         };
-        let name = alloc::format!("ahci-{}", idx);
-        services.register_block_device(&name, Box::new(DynBlockDeviceWrapper(disk)));
-        hadron_kernel::kinfo!("AHCI: registered as \"{}\"", name);
+        let path = DevicePath::pci(
+            info.address.bus,
+            info.address.device,
+            info.address.function,
+            "ahci",
+            idx,
+        );
+        hadron_kernel::kinfo!("AHCI: registered as \"ahci-{}\"", idx);
+        devices.add_block_device(path, disk);
     }
 
-    Ok(())
+    Ok(PciDriverRegistration {
+        devices,
+        lifecycle: None,
+    })
 }

@@ -5,7 +5,9 @@
 //! registration and matching pipeline end-to-end.
 
 use hadron_kernel::driver_api::error::DriverError;
-use hadron_kernel::driver_api::pci::{PciDeviceId, PciDeviceInfo};
+use hadron_kernel::driver_api::pci::PciDeviceId;
+use hadron_kernel::driver_api::probe_context::PciProbeContext;
+use hadron_kernel::driver_api::registration::{DeviceSet, PciDriverRegistration};
 
 /// PCI device ID table for the ICH9 LPC/ISA bridge.
 #[cfg(target_os = "none")]
@@ -24,10 +26,10 @@ hadron_kernel::pci_driver_entry!(
 );
 
 #[cfg(target_os = "none")]
-fn ich9_lpc_probe(
-    _info: &PciDeviceInfo,
-    _services: &'static dyn hadron_kernel::driver_api::services::KernelServices,
-) -> Result<(), DriverError> {
+fn ich9_lpc_probe(_ctx: PciProbeContext) -> Result<PciDriverRegistration, DriverError> {
     // Stub: validates the entire PCI pipeline. No actual hardware setup needed.
-    Ok(())
+    Ok(PciDriverRegistration {
+        devices: DeviceSet::new(),
+        lifecycle: None,
+    })
 }

@@ -8,11 +8,22 @@
 
 extern crate alloc;
 
+use alloc::boxed::Box;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 
+use super::block::BlockDevice;
+use super::device_path::DevicePath;
+use super::dyn_dispatch::{DynBlockDevice, DynBlockDeviceWrapper};
 use super::error::DriverError;
-use super::pci::{PciDeviceId, PciDeviceInfo};
-use super::services::KernelServices;
+use super::framebuffer::Framebuffer;
+use super::lifecycle::ManagedDriver;
+use super::pci::PciDeviceId;
+use super::probe_context::{PciProbeContext, PlatformProbeContext};
+
+// ---------------------------------------------------------------------------
+// PCI driver entry
+// ---------------------------------------------------------------------------
 
 /// PCI driver entry placed in the `.hadron_pci_drivers` linker section.
 ///
@@ -25,8 +36,26 @@ pub struct PciDriverEntry {
     /// Device IDs this driver supports.
     pub id_table: &'static [PciDeviceId],
     /// Called when a matching device is found.
-    pub probe: fn(&PciDeviceInfo, &'static dyn KernelServices) -> Result<(), DriverError>,
+    ///
+    /// Receives a [`PciProbeContext`] with typed capability tokens.
+    /// Returns a [`PciDriverRegistration`] describing the devices created.
+    pub probe: fn(PciProbeContext) -> Result<PciDriverRegistration, DriverError>,
 }
+
+/// Registration bundle returned by a PCI driver's probe function.
+///
+/// Contains the set of devices the driver created and an optional lifecycle
+/// handle for power management.
+pub struct PciDriverRegistration {
+    /// Devices registered by this driver.
+    pub devices: DeviceSet,
+    /// Optional lifecycle handle for suspend/resume/shutdown.
+    pub lifecycle: Option<Arc<dyn ManagedDriver>>,
+}
+
+// ---------------------------------------------------------------------------
+// Platform driver entry
+// ---------------------------------------------------------------------------
 
 /// Platform driver entry placed in the `.hadron_platform_drivers` linker section.
 ///
@@ -38,8 +67,69 @@ pub struct PlatformDriverEntry {
     /// Compatible string for matching (e.g., "ns16550").
     pub compatible: &'static str,
     /// Initialization function called when matched.
-    pub init: fn(&'static dyn KernelServices) -> Result<(), DriverError>,
+    ///
+    /// Receives a [`PlatformProbeContext`] with typed capability tokens.
+    /// Returns a [`PlatformDriverRegistration`] describing the devices created.
+    pub init: fn(PlatformProbeContext) -> Result<PlatformDriverRegistration, DriverError>,
 }
+
+/// Registration bundle returned by a platform driver's init function.
+pub struct PlatformDriverRegistration {
+    /// Devices registered by this driver.
+    pub devices: DeviceSet,
+    /// Optional lifecycle handle for suspend/resume/shutdown.
+    pub lifecycle: Option<Arc<dyn ManagedDriver>>,
+}
+
+// ---------------------------------------------------------------------------
+// DeviceSet — bundle of devices a driver registers
+// ---------------------------------------------------------------------------
+
+/// A collection of devices created by a driver during probe/init.
+///
+/// Drivers add their devices to this set, and the kernel processes the
+/// set after probe completes to register them in the device registry.
+pub struct DeviceSet {
+    /// Framebuffer devices.
+    pub(crate) framebuffers: Vec<(DevicePath, Arc<dyn Framebuffer>)>,
+    /// Block devices (type-erased for dynamic dispatch).
+    pub(crate) block_devices: Vec<(DevicePath, Box<dyn DynBlockDevice>)>,
+}
+
+impl DeviceSet {
+    /// Creates an empty device set.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            framebuffers: Vec::new(),
+            block_devices: Vec::new(),
+        }
+    }
+
+    /// Adds a block device to the set.
+    ///
+    /// The concrete `BlockDevice` is automatically wrapped in a
+    /// [`DynBlockDeviceWrapper`] for type-erased storage.
+    pub fn add_block_device<D: BlockDevice + 'static>(&mut self, path: DevicePath, device: D) {
+        self.block_devices
+            .push((path, Box::new(DynBlockDeviceWrapper(device))));
+    }
+
+    /// Adds a framebuffer device to the set.
+    pub fn add_framebuffer(&mut self, path: DevicePath, fb: Arc<dyn Framebuffer>) {
+        self.framebuffers.push((path, fb));
+    }
+}
+
+impl Default for DeviceSet {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Filesystem entries (unchanged from previous design)
+// ---------------------------------------------------------------------------
 
 /// Block-device filesystem entry placed in the `.hadron_block_fs` linker section.
 ///
@@ -137,15 +227,6 @@ macro_rules! platform_driver_entry {
 }
 
 /// Register a block filesystem entry in the `.hadron_block_fs` linker section.
-///
-/// # Example
-///
-/// ```ignore
-/// hadron_kernel::block_fs_entry!(FAT_FS, BlockFsEntry {
-///     name: "fat",
-///     mount: fat_mount,
-/// });
-/// ```
 #[macro_export]
 macro_rules! block_fs_entry {
     ($name:ident, $entry:expr) => {
@@ -156,15 +237,6 @@ macro_rules! block_fs_entry {
 }
 
 /// Register a virtual filesystem entry in the `.hadron_virtual_fs` linker section.
-///
-/// # Example
-///
-/// ```ignore
-/// hadron_kernel::virtual_fs_entry!(RAMFS, VirtualFsEntry {
-///     name: "ramfs",
-///     create: create_ramfs,
-/// });
-/// ```
 #[macro_export]
 macro_rules! virtual_fs_entry {
     ($name:ident, $entry:expr) => {
@@ -175,15 +247,6 @@ macro_rules! virtual_fs_entry {
 }
 
 /// Register an initramfs unpacker entry in the `.hadron_initramfs` linker section.
-///
-/// # Example
-///
-/// ```ignore
-/// hadron_kernel::initramfs_entry!(CPIO_UNPACKER, InitramFsEntry {
-///     name: "cpio",
-///     unpack: unpack_cpio,
-/// });
-/// ```
 #[macro_export]
 macro_rules! initramfs_entry {
     ($name:ident, $entry:expr) => {

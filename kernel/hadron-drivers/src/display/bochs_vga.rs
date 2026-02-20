@@ -10,11 +10,11 @@ use core::ptr;
 
 use hadron_kernel::addr::VirtAddr;
 use hadron_kernel::arch::x86_64::Port;
+use hadron_kernel::driver_api::capability::MmioCapability;
 use hadron_kernel::driver_api::error::DriverError;
 use hadron_kernel::driver_api::framebuffer::{Framebuffer, FramebufferInfo, PixelFormat};
 use hadron_kernel::driver_api::pci::{PciBar, PciDeviceId, PciDeviceInfo};
 use hadron_kernel::driver_api::resource::MmioRegion;
-use hadron_kernel::driver_api::services::KernelServices;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -136,7 +136,7 @@ impl BochsVga {
     /// Validates the BGA version, maps BAR0, and sets the display mode.
     fn init(
         info: &PciDeviceInfo,
-        services: &dyn KernelServices,
+        mmio_cap: &MmioCapability,
         width: u16,
         height: u16,
         bpp: u16,
@@ -162,7 +162,7 @@ impl BochsVga {
         };
 
         // Map the framebuffer MMIO region.
-        let fb_region = services.map_mmio(bar0_phys, bar0_size)?;
+        let fb_region = mmio_cap.map_mmio(bar0_phys, bar0_size)?;
 
         // Set display mode via DISPI registers.
         // SAFETY: Writing DISPI registers to configure the display mode.
@@ -292,15 +292,28 @@ hadron_kernel::pci_driver_entry!(
 /// PCI probe function for the Bochs VGA adapter.
 #[cfg(target_os = "none")]
 fn bochs_vga_probe(
-    info: &PciDeviceInfo,
-    services: &'static dyn KernelServices,
-) -> Result<(), DriverError> {
-    let vga = BochsVga::init(info, services, DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_BPP)?;
+    ctx: hadron_kernel::driver_api::probe_context::PciProbeContext,
+) -> Result<hadron_kernel::driver_api::registration::PciDriverRegistration, DriverError> {
+    use hadron_kernel::driver_api::device_path::DevicePath;
+    use hadron_kernel::driver_api::registration::{DeviceSet, PciDriverRegistration};
 
-    // Register framebuffer with the kernel's device registry.
+    let vga = BochsVga::init(&ctx.device, &ctx.mmio, DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_BPP)?;
+
     let vga_arc = alloc::sync::Arc::new(vga);
-    services.register_framebuffer("bochs-vga", vga_arc);
+
+    let mut devices = DeviceSet::new();
+    let path = DevicePath::pci(
+        ctx.device.address.bus,
+        ctx.device.address.device,
+        ctx.device.address.function,
+        "bochs-vga",
+        0,
+    );
+    devices.add_framebuffer(path, vga_arc);
 
     hadron_kernel::kinfo!("bochs-vga: driver initialized successfully");
-    Ok(())
+    Ok(PciDriverRegistration {
+        devices,
+        lifecycle: None,
+    })
 }

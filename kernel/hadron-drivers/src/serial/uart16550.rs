@@ -409,19 +409,23 @@ hadron_kernel::platform_driver_entry!(
 
 #[cfg(target_os = "none")]
 fn uart16550_platform_init(
-    services: &'static dyn hadron_kernel::driver_api::services::KernelServices,
-) -> Result<(), hadron_kernel::driver_api::error::DriverError> {
+    ctx: hadron_kernel::driver_api::probe_context::PlatformProbeContext,
+) -> Result<
+    hadron_kernel::driver_api::registration::PlatformDriverRegistration,
+    hadron_kernel::driver_api::error::DriverError,
+> {
     use alloc::boxed::Box;
     use core::pin::Pin;
+    use hadron_kernel::driver_api::registration::{DeviceSet, PlatformDriverRegistration};
 
     // Create an async serial port wrapping COM1 with IRQ 4.
     let uart = Uart16550::new(COM1);
     let async_serial =
-        crate::serial::serial_async::AsyncSerial::new(uart, 4, services)?;
+        crate::serial::serial_async::AsyncSerial::new(uart, 4, &ctx.irq)?;
 
     // Spawn the serial echo task — reads bytes from the serial port and
     // echoes them back. Useful for debugging via a serial terminal.
-    services.spawn_task(
+    ctx.spawner.spawn(
         "serial-echo",
         Pin::from(Box::new(async move {
             use hadron_kernel::driver_api::serial::SerialPort;
@@ -437,5 +441,8 @@ fn uart16550_platform_init(
     );
 
     hadron_kernel::kinfo!("uart16550: serial echo task spawned for COM1");
-    Ok(())
+    Ok(PlatformDriverRegistration {
+        devices: DeviceSet::new(),
+        lifecycle: None,
+    })
 }

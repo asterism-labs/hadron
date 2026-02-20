@@ -5,9 +5,9 @@
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
+use hadron_kernel::driver_api::capability::IrqCapability;
 use hadron_kernel::driver_api::error::DriverError;
 use hadron_kernel::driver_api::input::{KeyCode, KeyEvent, KeyboardDevice};
-use hadron_kernel::driver_api::services::KernelServices;
 
 use crate::input::i8042::{self, I8042};
 use hadron_kernel::drivers::irq::IrqLine;
@@ -30,14 +30,14 @@ impl AsyncKeyboard {
     ///
     /// Returns a [`DriverError`] if the IRQ cannot be bound or the I/O APIC
     /// is not initialized.
-    pub fn new(services: &'static dyn KernelServices) -> Result<Self, DriverError> {
+    pub fn new(irq_cap: &IrqCapability) -> Result<Self, DriverError> {
         let i8042 = I8042::new();
 
         // 1. Bind IRQ handler to vector.
-        let irq = IrqLine::bind_isa(1, services)?;
+        let irq = IrqLine::bind_isa(1, irq_cap)?;
 
         // 2. Unmask the I/O APIC entry for IRQ 1.
-        services.unmask_irq(1)?;
+        irq_cap.unmask_irq(1)?;
 
         hadron_kernel::kprintln!(
             "AsyncKeyboard: bound to vector {}, IRQ 1 unmasked",

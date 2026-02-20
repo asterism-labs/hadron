@@ -45,15 +45,9 @@ pub fn platform_init(boot_info: &impl crate::boot::BootInfo) {
             platform_entries.len()
         );
 
-        crate::drivers::registry::match_pci_drivers(
-            &pci_devices,
-            &crate::services::KERNEL_SERVICES,
-        );
+        crate::drivers::registry::match_pci_drivers(&pci_devices);
         let platform_devs: alloc::vec::Vec<_> = tree.platform_devices().collect();
-        crate::drivers::registry::match_platform_drivers(
-            &platform_devs,
-            &crate::services::KERNEL_SERVICES,
-        );
+        crate::drivers::registry::match_platform_drivers(&platform_devs);
     }
     #[cfg(target_arch = "aarch64")]
     {
@@ -64,8 +58,8 @@ pub fn platform_init(boot_info: &impl crate::boot::BootInfo) {
 /// Spawn arch-specific async tasks.
 ///
 /// The serial echo task is now spawned by the serial driver during probe
-/// via [`KernelServices::spawn_task`]. This function handles any remaining
-/// arch-specific platform tasks.
+/// via the [`TaskSpawner`](crate::driver_api::TaskSpawner) capability. This
+/// function handles any remaining arch-specific platform tasks.
 pub fn spawn_platform_tasks() {
     #[cfg(target_arch = "aarch64")]
     {

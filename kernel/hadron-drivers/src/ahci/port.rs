@@ -9,7 +9,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 use hadron_kernel::addr::VirtAddr;
 use hadron_kernel::driver_api::block::IoError;
-use hadron_kernel::driver_api::services::KernelServices;
+use hadron_kernel::driver_api::capability::DmaCapability;
 
 use super::command::{
     CMD_FIS_LEN_DWORDS, CMD_FIS_OFFSET, CommandHeader, FisRegH2d, PRDT_OFFSET, PrdtEntry,
@@ -80,7 +80,7 @@ impl AhciPort {
     pub fn init(
         hba: &AhciHba,
         port_num: u8,
-        services: &'static dyn KernelServices,
+        dma: &DmaCapability,
     ) -> Option<Self> {
         let port_base = hba.port_base(port_num);
 
@@ -94,10 +94,10 @@ impl AhciPort {
         stop_command_engine(port_base);
 
         // Allocate one page for CLB (1024 bytes) + received FIS (256 bytes).
-        let clb_fb_phys = services
-            .alloc_dma_frames(1)
+        let clb_fb_phys = dma
+            .alloc_frames(1)
             .expect("AHCI: failed to allocate CLB/FB page");
-        let clb_fb_virt = services.phys_to_virt(clb_fb_phys);
+        let clb_fb_virt = dma.phys_to_virt(clb_fb_phys);
 
         // Zero-initialize the CLB/FB page.
         // SAFETY: We just allocated and mapped this page.
@@ -117,10 +117,10 @@ impl AhciPort {
         let mut cmd_table_virt = [0u64; 32];
 
         for slot in 0..num_slots as usize {
-            let ct_phys = services
-                .alloc_dma_frames(1)
+            let ct_phys = dma
+                .alloc_frames(1)
                 .expect("AHCI: failed to allocate command table");
-            let ct_virt = services.phys_to_virt(ct_phys);
+            let ct_virt = dma.phys_to_virt(ct_phys);
             // SAFETY: Newly allocated page.
             unsafe { ptr::write_bytes(ct_virt as *mut u8, 0, PAGE_SIZE as usize) };
 
@@ -161,7 +161,7 @@ impl AhciPort {
         };
 
         // Run IDENTIFY DEVICE.
-        if let Ok(ident) = port.identify_device(services) {
+        if let Ok(ident) = port.identify_device(dma) {
             hadron_kernel::kinfo!(
                 "AHCI: port {} -- {} sectors, {} bytes/sector",
                 port_num,
@@ -209,15 +209,15 @@ impl AhciPort {
     /// Runs IDENTIFY DEVICE on this port (blocking poll).
     fn identify_device(
         &mut self,
-        services: &'static dyn KernelServices,
+        dma: &DmaCapability,
     ) -> Result<DeviceIdentity, IoError> {
         let slot = self.alloc_slot()?;
 
         // Allocate a DMA buffer for the 512-byte IDENTIFY response.
-        let buf_phys = services
-            .alloc_dma_frames(1)
+        let buf_phys = dma
+            .alloc_frames(1)
             .map_err(|_| IoError::DmaError)?;
-        let buf_virt = services.phys_to_virt(buf_phys);
+        let buf_virt = dma.phys_to_virt(buf_phys);
         // SAFETY: Freshly allocated page.
         unsafe { ptr::write_bytes(buf_virt as *mut u8, 0, PAGE_SIZE as usize) };
 
@@ -242,7 +242,7 @@ impl AhciPort {
 
         // Free the DMA buffer.
         // SAFETY: buf_phys was allocated by us and is no longer referenced.
-        unsafe { services.free_dma_frames(buf_phys, 1) };
+        unsafe { dma.free_frames(buf_phys, 1) };
 
         Ok(ident)
     }

@@ -5,8 +5,8 @@
 
 use core::sync::atomic::{AtomicU16, Ordering};
 
+use hadron_kernel::driver_api::capability::DmaCapability;
 use hadron_kernel::driver_api::error::DriverError;
-use hadron_kernel::driver_api::services::KernelServices;
 
 use super::pci::VirtioPciTransport;
 
@@ -120,7 +120,7 @@ impl Virtqueue {
     /// used ring. Initializes the free list through descriptor `next` fields.
     pub fn new(
         queue_size: u16,
-        services: &'static dyn KernelServices,
+        dma: &DmaCapability,
     ) -> Result<Self, DriverError> {
         let qs = queue_size as usize;
 
@@ -134,13 +134,13 @@ impl Virtqueue {
         let avail_pages = pages_for(avail_bytes);
         let used_pages = pages_for(used_bytes);
 
-        let desc_phys = services.alloc_dma_frames(desc_pages)?;
-        let avail_phys = services.alloc_dma_frames(avail_pages)?;
-        let used_phys = services.alloc_dma_frames(used_pages)?;
+        let desc_phys = dma.alloc_frames(desc_pages)?;
+        let avail_phys = dma.alloc_frames(avail_pages)?;
+        let used_phys = dma.alloc_frames(used_pages)?;
 
-        let desc_virt = services.phys_to_virt(desc_phys) as *mut VirtqDesc;
-        let avail_virt = services.phys_to_virt(avail_phys) as *mut u8;
-        let used_virt = services.phys_to_virt(used_phys) as *mut u8;
+        let desc_virt = dma.phys_to_virt(desc_phys) as *mut VirtqDesc;
+        let avail_virt = dma.phys_to_virt(avail_phys) as *mut u8;
+        let used_virt = dma.phys_to_virt(used_phys) as *mut u8;
 
         // Zero all DMA memory.
         // SAFETY: Freshly allocated DMA pages.

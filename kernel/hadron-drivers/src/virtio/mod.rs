@@ -9,8 +9,8 @@ pub mod block;
 pub mod pci;
 pub mod queue;
 
+use hadron_kernel::driver_api::capability::DmaCapability;
 use hadron_kernel::driver_api::error::DriverError;
-use hadron_kernel::driver_api::services::KernelServices;
 
 use pci::VirtioPciTransport;
 use queue::Virtqueue;
@@ -127,7 +127,7 @@ impl VirtioDevice {
     pub fn setup_queue(
         &self,
         queue_index: u16,
-        services: &'static dyn KernelServices,
+        dma: &DmaCapability,
     ) -> Result<Virtqueue, DriverError> {
         let t = &self.transport;
 
@@ -145,7 +145,7 @@ impl VirtioDevice {
         t.set_queue_size(queue_size);
 
         // Allocate the virtqueue.
-        let vq = Virtqueue::new(queue_size, services)?;
+        let vq = Virtqueue::new(queue_size, dma)?;
 
         // Program addresses.
         t.set_queue_desc(vq.desc_phys());

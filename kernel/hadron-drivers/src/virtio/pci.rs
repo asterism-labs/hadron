@@ -7,10 +7,10 @@ use crate::pci::cam::regs;
 use crate::pci::caps::{
     self, MsixCapability, RawCapability, VirtioPciCap, VirtioPciCfgType,
 };
+use hadron_kernel::driver_api::capability::MmioCapability;
 use hadron_kernel::driver_api::error::DriverError;
 use hadron_kernel::driver_api::pci::{PciBar, PciDeviceInfo};
 use hadron_kernel::driver_api::resource::MmioRegion;
-use hadron_kernel::driver_api::services::KernelServices;
 
 /// Mapped VirtIO PCI configuration regions.
 ///
@@ -41,7 +41,7 @@ impl VirtioPciTransport {
     /// Discovers VirtIO config structures via PCI capabilities and maps the BARs.
     pub fn new(
         info: &PciDeviceInfo,
-        services: &'static dyn KernelServices,
+        mmio_cap: &MmioCapability,
     ) -> Result<Self, DriverError> {
         let cap_iter = caps::walk_capabilities(&info.address)
             .ok_or(DriverError::InitFailed)?;
@@ -99,7 +99,7 @@ impl VirtioPciTransport {
                     PciBar::Memory { base, size, .. } => (base, size),
                     _ => return Err(DriverError::InitFailed),
                 };
-                let mmio = services.map_mmio(phys, size)?;
+                let mmio = mmio_cap.map_mmio(phys, size)?;
                 bar_mmios[bar_idx as usize] = Some(mmio);
                 Ok(mmio)
             };

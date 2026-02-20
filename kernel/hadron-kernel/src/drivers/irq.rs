@@ -6,8 +6,8 @@
 use core::future::Future;
 
 use crate::sync::WaitQueue;
+use crate::driver_api::capability::IrqCapability;
 use crate::driver_api::error::DriverError;
-use crate::driver_api::services::KernelServices;
 
 /// Number of IRQ wait queues covering vectors 32-255 (ISA + MSI-X).
 const MAX_IRQ_LINES: usize = 224;
@@ -40,16 +40,16 @@ impl IrqLine {
     ///
     /// The vector should be an ISA IRQ vector (32-47) or a dynamically
     /// allocated vector. Returns an error if the vector is already in use.
-    pub fn bind(vector: u8, services: &'static dyn KernelServices) -> Result<Self, DriverError> {
-        services.register_irq_handler(vector, irq_wakeup_handler)?;
+    pub fn bind(vector: u8, irq_cap: &IrqCapability) -> Result<Self, DriverError> {
+        irq_cap.register_handler(vector, irq_wakeup_handler)?;
         Ok(Self { vector })
     }
 
     /// Binds a wakeup handler to the ISA IRQ number (0-15).
     ///
     /// Convenience wrapper that converts the IRQ number to a vector.
-    pub fn bind_isa(irq: u8, services: &'static dyn KernelServices) -> Result<Self, DriverError> {
-        Self::bind(services.isa_irq_vector(irq), services)
+    pub fn bind_isa(irq: u8, irq_cap: &IrqCapability) -> Result<Self, DriverError> {
+        Self::bind(irq_cap.isa_irq_vector(irq), irq_cap)
     }
 
     /// Creates an `IrqLine` for a vector whose handler is already registered.

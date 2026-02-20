@@ -35,12 +35,19 @@ pub struct DriverInfo {
 /// The lifecycle state of a registered driver instance.
 ///
 /// Tracked externally by the driver registry, not by individual drivers.
+///
+/// State machine: `Probing → Active → Suspended ↔ Active → Shutdown`
+/// (also `Probing → Failed`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DriverState {
     /// Driver is registered but not yet probed.
     Registered,
+    /// Driver probe is in progress.
+    Probing,
     /// Driver has been probed and is active.
     Active,
+    /// Driver has been suspended (can be resumed).
+    Suspended,
     /// Driver has been shut down.
     Shutdown,
     /// Driver probe or operation failed.

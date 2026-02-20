@@ -4,9 +4,9 @@
 //! interrupt-driven async reads via the [`SerialPort`] trait. TX remains synchronous
 //! (the async signature permits future flow-control implementations).
 
+use hadron_kernel::driver_api::capability::IrqCapability;
 use hadron_kernel::driver_api::error::DriverError;
 use hadron_kernel::driver_api::serial::SerialPort;
-use hadron_kernel::driver_api::services::KernelServices;
 
 use hadron_kernel::drivers::irq::IrqLine;
 use crate::uart16550::Uart16550;
@@ -31,13 +31,13 @@ impl AsyncSerial {
     pub fn new(
         uart: Uart16550,
         isa_irq: u8,
-        services: &'static dyn KernelServices,
+        irq_cap: &IrqCapability,
     ) -> Result<Self, DriverError> {
         // 1. Bind IRQ handler to vector.
-        let irq = IrqLine::bind_isa(isa_irq, services)?;
+        let irq = IrqLine::bind_isa(isa_irq, irq_cap)?;
 
         // 2. Unmask the I/O APIC entry for this IRQ.
-        services.unmask_irq(isa_irq)?;
+        irq_cap.unmask_irq(isa_irq)?;
 
         // 3. Enable UART RX interrupt (IER bit 0).
         // SAFETY: We just registered a handler and unmasked the I/O APIC entry.

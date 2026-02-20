@@ -423,7 +423,7 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
     //    have re-initialized it, so we re-zero and reset the cursor.
     #[cfg(target_arch = "x86_64")]
     if let Some(fb) =
-        crate::drivers::device_registry::with_device_registry(|dr| dr.take_framebuffer("bochs-vga"))
+        crate::drivers::device_registry::with_device_registry(|dr| dr.take_framebuffer("bochs-vga-0"))
     {
         let info = fb.info();
         let total = info.pitch as usize * info.height as usize;
