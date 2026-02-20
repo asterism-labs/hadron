@@ -8,9 +8,8 @@
 //! waiting on the [`INPUT_READY`] wait queue, and the reader future polls the
 //! i8042 PS/2 controller for scancodes.
 
-use hadron_core::sync::SpinLock;
-use hadron_driver_api::input::KeyCode;
-use hadron_drivers::i8042::{self, I8042};
+use crate::sync::SpinLock;
+use crate::driver_api::input::KeyCode;
 use noalloc::ringbuf::RingBuf;
 
 use crate::sync::HeapWaitQueue;
@@ -56,30 +55,148 @@ impl ConsoleInputState {
     }
 }
 
+/// Reads a keyboard scancode from the PS/2 data port, if available.
+///
+/// Checks the i8042 status register (port 0x64) for output-buffer-full
+/// without the mouse-data bit, then reads the data port (0x60).
+#[cfg(target_arch = "x86_64")]
+fn try_read_keyboard_scancode() -> Option<u8> {
+    use crate::arch::x86_64::Port;
+    // SAFETY: Reading status and data ports is a standard PS/2 operation.
+    let status = unsafe { Port::<u8>::new(0x64).read() };
+    // Bit 0: output buffer full, bit 5: mouse data.
+    if status & 0x01 != 0 && status & 0x20 == 0 {
+        Some(unsafe { Port::<u8>::new(0x60).read() })
+    } else {
+        None
+    }
+}
+
+/// Returns `true` if the scancode represents a key release (bit 7 set).
+const fn is_release(scancode: u8) -> bool {
+    scancode & 0x80 != 0
+}
+
+/// Translates a Set 1 scancode to a [`KeyCode`].
+fn scancode_to_keycode(scancode: u8) -> Option<KeyCode> {
+    let make = scancode & 0x7F;
+    match make {
+        0x01 => Some(KeyCode::Escape),
+        0x02 => Some(KeyCode::Num1),
+        0x03 => Some(KeyCode::Num2),
+        0x04 => Some(KeyCode::Num3),
+        0x05 => Some(KeyCode::Num4),
+        0x06 => Some(KeyCode::Num5),
+        0x07 => Some(KeyCode::Num6),
+        0x08 => Some(KeyCode::Num7),
+        0x09 => Some(KeyCode::Num8),
+        0x0A => Some(KeyCode::Num9),
+        0x0B => Some(KeyCode::Num0),
+        0x0C => Some(KeyCode::Minus),
+        0x0D => Some(KeyCode::Equals),
+        0x0E => Some(KeyCode::Backspace),
+        0x0F => Some(KeyCode::Tab),
+        0x10 => Some(KeyCode::Q),
+        0x11 => Some(KeyCode::W),
+        0x12 => Some(KeyCode::E),
+        0x13 => Some(KeyCode::R),
+        0x14 => Some(KeyCode::T),
+        0x15 => Some(KeyCode::Y),
+        0x16 => Some(KeyCode::U),
+        0x17 => Some(KeyCode::I),
+        0x18 => Some(KeyCode::O),
+        0x19 => Some(KeyCode::P),
+        0x1A => Some(KeyCode::LeftBracket),
+        0x1B => Some(KeyCode::RightBracket),
+        0x1C => Some(KeyCode::Enter),
+        0x1D => Some(KeyCode::LeftCtrl),
+        0x1E => Some(KeyCode::A),
+        0x1F => Some(KeyCode::S),
+        0x20 => Some(KeyCode::D),
+        0x21 => Some(KeyCode::F),
+        0x22 => Some(KeyCode::G),
+        0x23 => Some(KeyCode::H),
+        0x24 => Some(KeyCode::J),
+        0x25 => Some(KeyCode::K),
+        0x26 => Some(KeyCode::L),
+        0x27 => Some(KeyCode::Semicolon),
+        0x28 => Some(KeyCode::Apostrophe),
+        0x29 => Some(KeyCode::Grave),
+        0x2A => Some(KeyCode::LeftShift),
+        0x2B => Some(KeyCode::Backslash),
+        0x2C => Some(KeyCode::Z),
+        0x2D => Some(KeyCode::X),
+        0x2E => Some(KeyCode::C),
+        0x2F => Some(KeyCode::V),
+        0x30 => Some(KeyCode::B),
+        0x31 => Some(KeyCode::N),
+        0x32 => Some(KeyCode::M),
+        0x33 => Some(KeyCode::Comma),
+        0x34 => Some(KeyCode::Period),
+        0x35 => Some(KeyCode::Slash),
+        0x36 => Some(KeyCode::RightShift),
+        0x38 => Some(KeyCode::LeftAlt),
+        0x39 => Some(KeyCode::Space),
+        0x3A => Some(KeyCode::CapsLock),
+        0x3B => Some(KeyCode::F1),
+        0x3C => Some(KeyCode::F2),
+        0x3D => Some(KeyCode::F3),
+        0x3E => Some(KeyCode::F4),
+        0x3F => Some(KeyCode::F5),
+        0x40 => Some(KeyCode::F6),
+        0x41 => Some(KeyCode::F7),
+        0x42 => Some(KeyCode::F8),
+        0x43 => Some(KeyCode::F9),
+        0x44 => Some(KeyCode::F10),
+        0x57 => Some(KeyCode::F11),
+        0x58 => Some(KeyCode::F12),
+        _ => None,
+    }
+}
+
+/// Translates an extended (0xE0-prefixed) scancode to a [`KeyCode`].
+fn extended_scancode_to_keycode(scancode: u8) -> Option<KeyCode> {
+    let make = scancode & 0x7F;
+    match make {
+        0x1D => Some(KeyCode::RightCtrl),
+        0x38 => Some(KeyCode::RightAlt),
+        0x47 => Some(KeyCode::Home),
+        0x48 => Some(KeyCode::ArrowUp),
+        0x49 => Some(KeyCode::PageUp),
+        0x4B => Some(KeyCode::ArrowLeft),
+        0x4D => Some(KeyCode::ArrowRight),
+        0x4F => Some(KeyCode::End),
+        0x50 => Some(KeyCode::ArrowDown),
+        0x51 => Some(KeyCode::PageDown),
+        0x52 => Some(KeyCode::Insert),
+        0x53 => Some(KeyCode::Delete),
+        _ => None,
+    }
+}
+
 /// Poll i8042 hardware directly, decode scancodes, and push ASCII into the buffer.
 ///
 /// Reads all available scancodes from the PS/2 controller, translates them
 /// to ASCII using the current modifier state, and performs cooked-mode line
 /// editing (echo, backspace, enter).
 pub fn poll_keyboard_hardware() {
-    let controller = I8042::new();
     let mut state = STATE.lock();
 
     // Drain all available scancodes from the hardware.
-    while let Some(scancode) = controller.try_read_keyboard() {
+    while let Some(scancode) = try_read_keyboard_scancode() {
         // Handle 0xE0 extended prefix.
         if scancode == 0xE0 {
             state.extended_prefix = true;
             continue;
         }
 
-        let is_release = i8042::is_release(scancode);
+        let is_release = is_release(scancode);
 
         let keycode = if state.extended_prefix {
             state.extended_prefix = false;
-            i8042::extended_scancode_to_keycode(scancode)
+            extended_scancode_to_keycode(scancode)
         } else {
-            i8042::scancode_to_keycode(scancode)
+            scancode_to_keycode(scancode)
         };
 
         let Some(key) = keycode else {
@@ -116,7 +233,7 @@ pub fn poll_keyboard_hardware() {
                     if state.line_len > 0 {
                         state.line_len -= 1;
                         // Echo: move cursor back, overwrite with space, move back again.
-                        hadron_core::kprint!("\x08 \x08");
+                        crate::kprint!("\x08 \x08");
                     }
                 }
                 b'\n' => {
@@ -128,7 +245,7 @@ pub fn poll_keyboard_hardware() {
                     }
                     let _ = state.ready_buf.try_push(b'\n');
                     state.line_len = 0;
-                    hadron_core::kprint!("\n");
+                    crate::kprint!("\n");
                 }
                 _ => {
                     // Printable character: append to line buffer if there's room.
@@ -136,7 +253,7 @@ pub fn poll_keyboard_hardware() {
                     if len < LINE_BUF_SIZE {
                         state.line_buf[len] = ch;
                         state.line_len += 1;
-                        hadron_core::kprint!("{}", ch as char);
+                        crate::kprint!("{}", ch as char);
                     }
                 }
             }
@@ -181,7 +298,7 @@ pub fn init() {
 
     crate::arch::x86_64::acpi::with_io_apic(|ioapic| ioapic.unmask(1));
 
-    hadron_core::kinfo!("Console input: keyboard IRQ1 enabled (vector {})", vector);
+    crate::kinfo!("Console input: keyboard IRQ1 enabled (vector {})", vector);
 }
 
 /// Registers a waker to be notified when keyboard input arrives.

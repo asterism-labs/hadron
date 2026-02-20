@@ -63,6 +63,19 @@ SECTIONS {
         KEEP(*(.hadron_platform_drivers))
         __hadron_platform_drivers_end = .;
 
+        /* Filesystem driver entries */
+        __hadron_block_fs_start = .;
+        KEEP(*(.hadron_block_fs))
+        __hadron_block_fs_end = .;
+
+        __hadron_virtual_fs_start = .;
+        KEEP(*(.hadron_virtual_fs))
+        __hadron_virtual_fs_end = .;
+
+        __hadron_initramfs_start = .;
+        KEEP(*(.hadron_initramfs))
+        __hadron_initramfs_end = .;
+
         *(.rodata .rodata.*)
     } :rodata
 

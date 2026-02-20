@@ -4,11 +4,11 @@
 //! interrupt-driven async reads via the [`SerialPort`] trait. TX remains synchronous
 //! (the async signature permits future flow-control implementations).
 
-use hadron_driver_api::error::DriverError;
-use hadron_driver_api::serial::SerialPort;
-use hadron_driver_api::services::KernelServices;
+use hadron_kernel::driver_api::error::DriverError;
+use hadron_kernel::driver_api::serial::SerialPort;
+use hadron_kernel::driver_api::services::KernelServices;
 
-use crate::irq::IrqLine;
+use hadron_kernel::drivers::irq::IrqLine;
 use crate::uart16550::Uart16550;
 
 /// Async serial port: composes a [`Uart16550`] with an [`IrqLine`] for
@@ -43,7 +43,7 @@ impl AsyncSerial {
         // SAFETY: We just registered a handler and unmasked the I/O APIC entry.
         unsafe { uart.enable_rx_interrupt() };
 
-        hadron_core::kprintln!(
+        hadron_kernel::kprintln!(
             "AsyncSerial: COM port {:#x} bound to vector {}, IRQ {} unmasked",
             uart.base(),
             irq.vector(),

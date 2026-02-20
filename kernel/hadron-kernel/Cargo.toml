@@ -6,28 +6,22 @@ rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 publish.workspace = true
+# Integration tests are QEMU-only (built by gluon, not cargo).
+autotests = false
 
 [lib]
-test = false
 bench = false
 doctest = false
 
 [dependencies]
 bitflags = { workspace = true }
-hadris-cpio = { workspace = true, features = [ "read", "alloc" ] }
-hadris-fat = { workspace = true, features = [ "read", "write", "alloc", "lfn" ] }
 hadris-io = { workspace = true }
-hadris-iso = { workspace = true, features = [ "read", "alloc" ] }
 hadron-acpi = { workspace = true }
-hadron-core = { workspace = true }
-hadron-driver-api = { workspace = true }
-hadron-drivers = { workspace = true }
 hadron-elf = { workspace = true }
 hadron-syscall = { workspace = true, features = [ "kernel" ] }
 noalloc = { workspace = true }
 
 [dev-dependencies]
-hadron-core = { workspace = true }
 hadron-test = { workspace = true, features = [ "limine" ] }
 limine = { workspace = true }
 noalloc = { workspace = true }

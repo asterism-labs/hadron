@@ -13,12 +13,12 @@ pub mod timer;
 mod waker;
 
 pub use executor::Executor;
-pub use hadron_core::task::{Priority, TaskMeta};
+pub use crate::task::{Priority, TaskMeta};
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use hadron_core::percpu::{CpuLocal, MAX_CPUS};
-use hadron_core::task::TaskId;
+use crate::percpu::{CpuLocal, MAX_CPUS};
+use crate::task::TaskId;
 
 /// Per-CPU preemption flag.
 static PREEMPT_PENDING: CpuLocal<AtomicBool> =

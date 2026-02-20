@@ -7,12 +7,8 @@
 pub mod block_adapter;
 pub mod console_input;
 pub mod devfs;
-pub mod fat;
 pub mod file;
-pub mod initramfs;
-pub mod iso9660;
 pub mod path;
-pub mod ramfs;
 pub mod vfs;
 
 extern crate alloc;
@@ -119,16 +115,16 @@ impl FsError {
     #[must_use]
     pub fn to_errno(self) -> isize {
         match self {
-            FsError::NotFound => hadron_core::syscall::ENOENT,
-            FsError::NotADirectory => hadron_core::syscall::ENOTDIR,
-            FsError::IsADirectory => hadron_core::syscall::EISDIR,
-            FsError::AlreadyExists => hadron_core::syscall::EEXIST,
-            FsError::BadFd => hadron_core::syscall::EBADF,
-            FsError::PermissionDenied => hadron_core::syscall::EACCES,
-            FsError::IoError => hadron_core::syscall::EIO,
-            FsError::InvalidArgument => hadron_core::syscall::EINVAL,
-            FsError::NotSupported => hadron_core::syscall::ENOSYS,
-            FsError::SymlinkLoop => hadron_core::syscall::ELOOP,
+            FsError::NotFound => crate::syscall::ENOENT,
+            FsError::NotADirectory => crate::syscall::ENOTDIR,
+            FsError::IsADirectory => crate::syscall::EISDIR,
+            FsError::AlreadyExists => crate::syscall::EEXIST,
+            FsError::BadFd => crate::syscall::EBADF,
+            FsError::PermissionDenied => crate::syscall::EACCES,
+            FsError::IoError => crate::syscall::EIO,
+            FsError::InvalidArgument => crate::syscall::EINVAL,
+            FsError::NotSupported => crate::syscall::ENOSYS,
+            FsError::SymlinkLoop => crate::syscall::ELOOP,
         }
     }
 }

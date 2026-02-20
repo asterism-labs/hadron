@@ -2,7 +2,7 @@
 
 use core::cell::UnsafeCell;
 
-use hadron_core::arch::x86_64::structures::gdt::{
+use crate::arch::x86_64::structures::gdt::{
     Descriptor, GlobalDescriptorTable, SegmentSelector, TaskStateSegment,
 };
 
@@ -55,7 +55,7 @@ static TSS: LazyLock<SyncUnsafeCell<TaskStateSegment>> = LazyLock::new(|| {
         stack_start + DOUBLE_FAULT_STACK_SIZE as u64
     };
     // Set RSP0 to early BSS stack (same as percpu.kernel_rsp during early boot).
-    tss.privilege_stack_table[0] = hadron_core::percpu::early_kernel_rsp();
+    tss.privilege_stack_table[0] = crate::percpu::early_kernel_rsp();
     SyncUnsafeCell::new(tss)
 });
 
@@ -100,7 +100,7 @@ static GDT: LazyLock<(GlobalDescriptorTable, Selectors)> = LazyLock::new(|| {
 ///
 /// Must be called exactly once during early kernel initialization.
 pub unsafe fn init() {
-    use hadron_core::arch::x86_64::instructions::segmentation::{
+    use crate::arch::x86_64::instructions::segmentation::{
         load_ds, load_es, load_fs, load_gs, load_ss, load_tss, set_cs,
     };
 
@@ -120,7 +120,7 @@ pub unsafe fn init() {
         load_tss(selectors.tss);
     }
 
-    hadron_core::kdebug!("GDT initialized");
+    crate::kdebug!("GDT initialized");
 }
 
 /// Updates RSP0 in the TSS (ring 3 → ring 0 stack pointer).
@@ -164,10 +164,10 @@ pub unsafe fn init_ap(cpu_id: u32) -> u64 {
     extern crate alloc;
     use alloc::boxed::Box;
 
-    use hadron_core::arch::x86_64::instructions::segmentation::{
+    use crate::arch::x86_64::instructions::segmentation::{
         load_ds, load_es, load_fs, load_gs, load_ss, load_tss, set_cs,
     };
-    use hadron_core::mm::pmm::BitmapFrameAllocRef;
+    use crate::mm::pmm::BitmapFrameAllocRef;
 
     // Allocate and set up a new TSS.
     let mut tss = TaskStateSegment::new();
@@ -215,7 +215,7 @@ pub unsafe fn init_ap(cpu_id: u32) -> u64 {
         load_tss(tss_sel);
     }
 
-    hadron_core::kdebug!("AP {} GDT/TSS initialized", cpu_id);
+    crate::kdebug!("AP {} GDT/TSS initialized", cpu_id);
 
     kernel_stack_top
 }

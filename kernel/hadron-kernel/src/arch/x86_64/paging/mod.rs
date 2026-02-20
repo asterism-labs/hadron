@@ -1,8 +1,6 @@
-//! x86_64 page table types and utilities.
-//!
-//! Re-exports type definitions from `hadron_core`.
+//! Page table mapper for walking and building page tables via the HHDM.
 
-pub use hadron_core::arch::x86_64::paging::{PageTableMapper, TranslateResult, UnmapError};
-pub use hadron_core::arch::x86_64::structures::paging::{
-    PageTable, PageTableEntry, PageTableFlags,
-};
+mod mapper;
+
+pub use mapper::{PageTableMapper, TranslateResult, UnmapError};
+pub use super::structures::paging::{PageTable, PageTableEntry, PageTableFlags};

@@ -6,10 +6,10 @@
 
 use super::cam::PciCam;
 use super::caps::MsixCapability;
-use hadron_driver_api::error::DriverError;
-use hadron_driver_api::pci::{PciBar, PciDeviceInfo};
-use hadron_driver_api::resource::MmioRegion;
-use hadron_driver_api::services::KernelServices;
+use hadron_kernel::driver_api::error::DriverError;
+use hadron_kernel::driver_api::pci::{PciBar, PciDeviceInfo};
+use hadron_kernel::driver_api::resource::MmioRegion;
+use hadron_kernel::driver_api::services::KernelServices;
 
 /// MSI-X table entry size in bytes.
 const MSIX_ENTRY_SIZE: u32 = 16;

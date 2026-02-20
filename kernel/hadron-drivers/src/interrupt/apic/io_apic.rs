@@ -2,7 +2,7 @@
 //!
 //! Controls external interrupt routing from hardware devices to Local APICs.
 
-use hadron_core::addr::VirtAddr;
+use hadron_kernel::addr::VirtAddr;
 
 const IOREGSEL: u32 = 0x00;
 const IOWIN: u32 = 0x10;

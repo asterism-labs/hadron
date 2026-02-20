@@ -3,7 +3,7 @@
 //! Provides just enough functionality to remap the PIC to vectors 32-47
 //! and then mask all IRQs so the APIC can take over.
 
-use hadron_core::arch::x86_64::Port;
+use hadron_kernel::arch::x86_64::Port;
 
 const PIC1_CMD: u16 = 0x20;
 const PIC1_DATA: u16 = 0x21;

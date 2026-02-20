@@ -5,19 +5,20 @@
 
 extern crate alloc;
 
-use alloc::vec::Vec;
+use alloc::boxed::Box;
 use core::ptr;
 
-use hadron_core::sync::SpinLock;
-use hadron_driver_api::block::{BlockDevice, IoError};
-use hadron_driver_api::error::DriverError;
-use hadron_driver_api::pci::{PciBar, PciDeviceId, PciDeviceInfo};
-use hadron_driver_api::services::KernelServices;
+use hadron_kernel::sync::SpinLock;
+use hadron_kernel::driver_api::block::{BlockDevice, IoError};
+use hadron_kernel::driver_api::dyn_dispatch::DynBlockDeviceWrapper;
+use hadron_kernel::driver_api::error::DriverError;
+use hadron_kernel::driver_api::pci::{PciDeviceId, PciDeviceInfo};
+use hadron_kernel::driver_api::services::KernelServices;
 
 use super::pci::VirtioPciTransport;
 use super::queue::{Virtqueue, VIRTQ_DESC_F_WRITE};
 use super::{VirtioDevice, VIRTIO_MSI_NO_VECTOR};
-use crate::irq::IrqLine;
+use hadron_kernel::drivers::irq::IrqLine;
 use crate::pci::msix::MsixTable;
 
 // ---------------------------------------------------------------------------
@@ -253,38 +254,8 @@ impl BlockDevice for VirtioBlkDisk {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Global disk registry
-// ---------------------------------------------------------------------------
-
-/// Global registry of discovered VirtIO block disks.
-static VIRTIO_BLK_DISKS: SpinLock<Option<Vec<VirtioBlkDisk>>> = SpinLock::new(None);
-
-/// Returns the number of registered VirtIO block disks.
-#[must_use]
-pub fn disk_count() -> usize {
-    VIRTIO_BLK_DISKS.lock().as_ref().map_or(0, Vec::len)
-}
-
-/// Executes a closure with a reference to the disk at `index`.
-pub fn with_disk<R>(index: usize, f: impl FnOnce(&VirtioBlkDisk) -> R) -> Option<R> {
-    let guard = VIRTIO_BLK_DISKS.lock();
-    guard.as_ref().and_then(|disks| disks.get(index).map(f))
-}
-
-/// Removes and returns the disk at `index`, transferring ownership to the caller.
-///
-/// Uses `swap_remove` so remaining disk indices may shift. Returns `None` if
-/// the index is out of bounds or the registry is not initialized.
-pub fn take_disk(index: usize) -> Option<VirtioBlkDisk> {
-    let mut guard = VIRTIO_BLK_DISKS.lock();
-    let disks = guard.as_mut()?;
-    if index < disks.len() {
-        Some(disks.swap_remove(index))
-    } else {
-        None
-    }
-}
+/// Counter for assigning unique device names to discovered disks.
+static DISK_INDEX: SpinLock<usize> = SpinLock::new(0);
 
 // ---------------------------------------------------------------------------
 // PCI registration
@@ -298,9 +269,9 @@ static ID_TABLE: [PciDeviceId; 2] = [
 ];
 
 #[cfg(target_os = "none")]
-hadron_driver_api::pci_driver_entry!(
+hadron_kernel::pci_driver_entry!(
     VIRTIO_BLK_PCI_DRIVER,
-    hadron_driver_api::registration::PciDriverEntry {
+    hadron_kernel::driver_api::registration::PciDriverEntry {
         name: "virtio-blk",
         id_table: &ID_TABLE,
         probe: virtio_blk_probe,
@@ -313,7 +284,7 @@ fn virtio_blk_probe(
     info: &PciDeviceInfo,
     services: &'static dyn KernelServices,
 ) -> Result<(), DriverError> {
-    hadron_core::kinfo!(
+    hadron_kernel::kinfo!(
         "virtio-blk: probing {:04x}:{:04x} at {}",
         info.vendor_id,
         info.device_id,
@@ -345,7 +316,7 @@ fn virtio_blk_probe(
         .device_cfg_read_u32(20)
         .unwrap_or(512);
 
-    hadron_core::kinfo!(
+    hadron_kernel::kinfo!(
         "virtio-blk: capacity={} sectors, sector_size={}",
         capacity,
         blk_size
@@ -360,7 +331,7 @@ fn virtio_blk_probe(
         device.transport().set_queue_msix_vector(0);
         let readback = device.transport().queue_msix_vector();
         if readback == VIRTIO_MSI_NO_VECTOR {
-            hadron_core::kwarn!("virtio-blk: failed to set queue MSI-X vector");
+            hadron_kernel::kwarn!("virtio-blk: failed to set queue MSI-X vector");
         }
         // Unmask and enable MSI-X.
         msix.unmask(0);
@@ -370,7 +341,7 @@ fn virtio_blk_probe(
     // Complete initialization.
     device.set_driver_ok();
 
-    hadron_core::kinfo!("virtio-blk: device ready, irq vector {}", irq.vector());
+    hadron_kernel::kinfo!("virtio-blk: device ready, irq vector {}", irq.vector());
 
     let disk = VirtioBlkDisk {
         device,
@@ -381,13 +352,17 @@ fn virtio_blk_probe(
         sector_size: blk_size,
     };
 
-    // Register in global registry.
-    let mut global = VIRTIO_BLK_DISKS.lock();
-    match global.as_mut() {
-        Some(disks) => disks.push(disk),
-        None => *global = Some(alloc::vec![disk]),
-    }
+    // Register in the kernel device registry.
+    let idx = {
+        let mut counter = DISK_INDEX.lock();
+        let i = *counter;
+        *counter += 1;
+        i
+    };
+    let name = alloc::format!("virtio-blk-{}", idx);
+    services.register_block_device(&name, Box::new(DynBlockDeviceWrapper(disk)));
 
+    hadron_kernel::kinfo!("virtio-blk: registered as \"{}\"", name);
     Ok(())
 }
 
@@ -402,14 +377,14 @@ fn setup_irq(
         // Try MSI-X.
         match try_setup_msix(info, msix_cap, services) {
             Ok((irq, table)) => {
-                hadron_core::kinfo!(
+                hadron_kernel::kinfo!(
                     "virtio-blk: MSI-X enabled, vector {}",
                     irq.vector()
                 );
                 return Ok((irq, Some(table)));
             }
             Err(e) => {
-                hadron_core::kwarn!("virtio-blk: MSI-X setup failed ({:?}), falling back to legacy", e);
+                hadron_kernel::kwarn!("virtio-blk: MSI-X setup failed ({:?}), falling back to legacy", e);
             }
         }
     }

@@ -1,9 +1,9 @@
 //! Task syscall handlers: task_exit, task_info, task_spawn, task_wait.
 
-use hadron_core::arch::x86_64::registers::control::Cr3;
-use hadron_core::arch::x86_64::registers::model_specific::{IA32_GS_BASE, IA32_KERNEL_GS_BASE};
-use hadron_core::arch::x86_64::userspace::restore_kernel_context;
-use hadron_core::syscall::userptr::UserSlice;
+use crate::arch::x86_64::registers::control::Cr3;
+use crate::arch::x86_64::registers::model_specific::{IA32_GS_BASE, IA32_KERNEL_GS_BASE};
+use crate::arch::x86_64::userspace::restore_kernel_context;
+use crate::syscall::userptr::UserSlice;
 
 /// `sys_task_exit` — terminates the current user process.
 ///
@@ -76,7 +76,7 @@ pub(super) fn sys_task_spawn(
     let path_bytes = unsafe { uslice.as_slice() };
     let path = match core::str::from_utf8(path_bytes) {
         Ok(s) => s,
-        Err(_) => return -(hadron_core::syscall::EINVAL),
+        Err(_) => return -(crate::syscall::EINVAL),
     };
 
     // Read argv from parent address space.
@@ -87,7 +87,7 @@ pub(super) fn sys_task_spawn(
 
     if argv_ptr != 0 && argv_count != 0 {
         if argv_count > MAX_SPAWN_ARGS {
-            return -(hadron_core::syscall::EINVAL);
+            return -(crate::syscall::EINVAL);
         }
 
         let desc_size = core::mem::size_of::<hadron_syscall::SpawnArg>() * argv_count;
@@ -113,7 +113,7 @@ pub(super) fn sys_task_spawn(
                 continue;
             }
             if total_bytes + desc.len > MAX_ARGV_TOTAL_BYTES {
-                return -(hadron_core::syscall::EINVAL);
+                return -(crate::syscall::EINVAL);
             }
             let arg_slice = match UserSlice::new(desc.ptr, desc.len) {
                 Ok(s) => s,
@@ -123,7 +123,7 @@ pub(super) fn sys_task_spawn(
             let arg_bytes = unsafe { arg_slice.as_slice() };
             // Validate UTF-8.
             if core::str::from_utf8(arg_bytes).is_err() {
-                return -(hadron_core::syscall::EINVAL);
+                return -(crate::syscall::EINVAL);
             }
             arg_storage[total_bytes..total_bytes + desc.len].copy_from_slice(arg_bytes);
             arg_offsets[arg_count] = (total_bytes, desc.len);
@@ -146,7 +146,7 @@ pub(super) fn sys_task_spawn(
 
     match crate::proc::exec::spawn_process(path, parent_pid, args) {
         Ok(child) => child.pid as isize,
-        Err(_) => -(hadron_core::syscall::ENOENT),
+        Err(_) => -(crate::syscall::ENOENT),
     }
 }
 

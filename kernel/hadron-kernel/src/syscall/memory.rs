@@ -2,7 +2,7 @@
 //!
 //! Stubs returning `-ENOSYS` until the process memory model is implemented.
 
-use hadron_core::syscall::ENOSYS;
+use crate::syscall::ENOSYS;
 
 /// `sys_mem_map` — stub, returns `-ENOSYS`.
 pub(super) fn sys_mem_map() -> isize {

@@ -7,7 +7,7 @@
 use core::fmt;
 use core::ptr;
 
-use hadron_core::addr::VirtAddr;
+use crate::addr::VirtAddr;
 
 use crate::boot::{FramebufferInfo, PixelFormat};
 use crate::drivers::font_console::px16;

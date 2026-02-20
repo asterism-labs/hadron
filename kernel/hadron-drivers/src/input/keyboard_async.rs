@@ -5,12 +5,12 @@
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use hadron_driver_api::error::DriverError;
-use hadron_driver_api::input::{KeyCode, KeyEvent, KeyboardDevice};
-use hadron_driver_api::services::KernelServices;
+use hadron_kernel::driver_api::error::DriverError;
+use hadron_kernel::driver_api::input::{KeyCode, KeyEvent, KeyboardDevice};
+use hadron_kernel::driver_api::services::KernelServices;
 
-use crate::i8042::{self, I8042};
-use crate::irq::IrqLine;
+use crate::input::i8042::{self, I8042};
+use hadron_kernel::drivers::irq::IrqLine;
 
 /// Async PS/2 keyboard: composes an [`I8042`] with an [`IrqLine`] for
 /// interrupt-driven scancode reading.
@@ -39,7 +39,7 @@ impl AsyncKeyboard {
         // 2. Unmask the I/O APIC entry for IRQ 1.
         services.unmask_irq(1)?;
 
-        hadron_core::kprintln!(
+        hadron_kernel::kprintln!(
             "AsyncKeyboard: bound to vector {}, IRQ 1 unmasked",
             irq.vector()
         );

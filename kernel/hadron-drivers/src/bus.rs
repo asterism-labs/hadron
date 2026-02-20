@@ -5,7 +5,7 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use hadron_driver_api::pci::PciDeviceInfo;
+use hadron_kernel::driver_api::pci::PciDeviceInfo;
 
 use crate::pci::enumerate::class_name;
 
@@ -131,7 +131,7 @@ impl DeviceTree {
 
     /// Prints the device tree to the kernel log.
     pub fn print(&self) {
-        hadron_core::kprintln!("Device Tree:");
+        hadron_kernel::kprintln!("Device Tree:");
         print_children(&self.root.children, "");
     }
 
@@ -174,7 +174,7 @@ fn print_children(children: &[DeviceNode], prefix: &str) {
 
         match &child.info {
             DeviceInfo::PciDevice(dev) => {
-                hadron_core::kprintln!(
+                hadron_kernel::kprintln!(
                     "{prefix}{connector}{} {} [{:04x}:{:04x}]",
                     child.name,
                     class_name(dev.class, dev.subclass),
@@ -183,17 +183,17 @@ fn print_children(children: &[DeviceNode], prefix: &str) {
                 );
             }
             DeviceInfo::PlatformDevice { compatible, .. } => {
-                hadron_core::kprintln!("{prefix}{connector}{} ({compatible})", child.name);
+                hadron_kernel::kprintln!("{prefix}{connector}{} ({compatible})", child.name);
             }
             DeviceInfo::PlatformBus | DeviceInfo::UsbBus => {
                 if child.children.is_empty() {
-                    hadron_core::kprintln!("{prefix}{connector}{} (no devices)", child.name);
+                    hadron_kernel::kprintln!("{prefix}{connector}{} (no devices)", child.name);
                 } else {
-                    hadron_core::kprintln!("{prefix}{connector}{}", child.name);
+                    hadron_kernel::kprintln!("{prefix}{connector}{}", child.name);
                 }
             }
             _ => {
-                hadron_core::kprintln!("{prefix}{connector}{}", child.name);
+                hadron_kernel::kprintln!("{prefix}{connector}{}", child.name);
             }
         }
 

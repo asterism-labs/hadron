@@ -7,7 +7,7 @@
 
 use core::sync::atomic::{AtomicPtr, Ordering};
 
-use hadron_core::arch::x86_64::structures::idt::InterruptStackFrame;
+use crate::arch::x86_64::structures::idt::InterruptStackFrame;
 
 /// Number of hardware interrupt vectors (32-255).
 const NUM_VECTORS: usize = 224;

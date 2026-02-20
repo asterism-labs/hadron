@@ -11,7 +11,7 @@
 
 use core::task::{RawWaker, RawWakerVTable, Waker};
 
-use hadron_core::task::{Priority, TaskId};
+use crate::task::{Priority, TaskId};
 
 /// Mask for the 56-bit task ID field (bits 55-0).
 const ID_MASK: u64 = 0x00FF_FFFF_FFFF_FFFF;
@@ -32,7 +32,7 @@ pub fn task_waker(id: TaskId, priority: Priority) -> Waker {
 }
 
 fn pack(id: TaskId, priority: Priority) -> *const () {
-    let cpu_id = hadron_core::percpu::current_cpu().get_cpu_id() as u64;
+    let cpu_id = crate::percpu::current_cpu().get_cpu_id() as u64;
     let packed = ((priority as u64) << 62) | (cpu_id << CPU_SHIFT) | (id.0 & ID_MASK);
     packed as *const ()
 }
@@ -69,7 +69,7 @@ fn wake_by_ref(data: *const ()) {
 
     // If the target is a different CPU, send an IPI to wake it from HLT
     // so it processes the newly enqueued task promptly.
-    let current = hadron_core::percpu::current_cpu().get_cpu_id();
+    let current = crate::percpu::current_cpu().get_cpu_id();
     if target_cpu != current {
         super::smp::send_wake_ipi(target_cpu);
     }

@@ -2,7 +2,7 @@
 //!
 //! Used only for LAPIC timer calibration via channel 2 one-shot mode.
 
-use hadron_core::arch::x86_64::Port;
+use hadron_kernel::arch::x86_64::Port;
 
 /// PIT oscillator frequency: 1,193,182 Hz.
 const PIT_FREQUENCY: u32 = 1_193_182;

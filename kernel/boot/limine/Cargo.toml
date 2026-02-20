@@ -14,7 +14,6 @@ bench = false
 doctest = false
 
 [dependencies]
-hadron-core = { workspace = true }
 hadron-drivers = { workspace = true }
 hadron-kernel = { workspace = true }
 limine = { workspace = true }

@@ -5,9 +5,9 @@
 
 use core::mem::size_of;
 
-use hadron_core::mm::PAGE_SIZE;
-use hadron_core::syscall::userptr::is_kernel_caller;
-use hadron_core::syscall::{
+use crate::mm::PAGE_SIZE;
+use crate::syscall::userptr::is_kernel_caller;
+use crate::syscall::{
     EFAULT, EINVAL, KernelVersionInfo, MemoryInfo, QUERY_KERNEL_VERSION, QUERY_MEMORY,
     QUERY_UPTIME, UptimeInfo,
 };
@@ -61,7 +61,7 @@ fn write_response<T>(out_buf: usize, out_len: usize, value: &T) -> isize {
         // large enough.
         unsafe { core::ptr::write(out_buf as *mut T, core::ptr::read(value)) };
     } else {
-        use hadron_core::syscall::userptr::UserPtr;
+        use crate::syscall::userptr::UserPtr;
         let Ok(user_ptr) = UserPtr::<T>::new(out_buf) else {
             return -EFAULT;
         };

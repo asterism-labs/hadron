@@ -5,8 +5,8 @@
 
 use core::sync::atomic::{AtomicU16, Ordering};
 
-use hadron_driver_api::error::DriverError;
-use hadron_driver_api::services::KernelServices;
+use hadron_kernel::driver_api::error::DriverError;
+use hadron_kernel::driver_api::services::KernelServices;
 
 use super::pci::VirtioPciTransport;
 

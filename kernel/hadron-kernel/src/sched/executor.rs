@@ -17,9 +17,9 @@ use core::pin::Pin;
 use core::sync::atomic::{AtomicU64, Ordering};
 use core::task::{Context, Poll};
 
-use hadron_core::percpu::{CpuLocal, MAX_CPUS};
-use hadron_core::sync::{IrqSpinLock, LazyLock};
-use hadron_core::task::{Priority, TaskId, TaskMeta};
+use crate::percpu::{CpuLocal, MAX_CPUS};
+use crate::sync::{IrqSpinLock, LazyLock};
+use crate::task::{Priority, TaskId, TaskMeta};
 
 /// Per-CPU executor instances, initialized on first access.
 static EXECUTORS: CpuLocal<LazyLock<Executor>> =
@@ -234,10 +234,10 @@ impl Executor {
             {
                 // SAFETY: IDT and LAPIC are fully configured before executor starts.
                 unsafe {
-                    hadron_core::arch::x86_64::instructions::interrupts::enable_and_hlt();
+                    crate::arch::x86_64::instructions::interrupts::enable_and_hlt();
                 }
                 // Interrupt fired — disable interrupts and check for ready tasks.
-                hadron_core::arch::x86_64::instructions::interrupts::disable();
+                crate::arch::x86_64::instructions::interrupts::disable();
             }
             #[cfg(target_arch = "aarch64")]
             {

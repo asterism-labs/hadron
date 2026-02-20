@@ -17,12 +17,185 @@ extern crate alloc;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::fmt::{self, Write as _};
+use core::sync::atomic::{AtomicPtr, Ordering};
 
-#[cfg(target_arch = "x86_64")]
-use hadron_drivers::uart16550::{COM1, Uart16550};
-
+use crate::drivers::early_console::{COM1, EarlySerial};
 use crate::drivers::early_fb::EarlyFramebuffer;
 use crate::sync::SpinLock;
+
+// ---------------------------------------------------------------------------
+// Log levels — lower = more severe
+// ---------------------------------------------------------------------------
+
+/// Kernel log severity level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u8)]
+pub enum LogLevel {
+    /// Fatal: unrecoverable error, system will halt.
+    Fatal = 0,
+    /// Error: something failed but the system may continue.
+    Error = 1,
+    /// Warning: unexpected condition, not necessarily an error.
+    Warn = 2,
+    /// Informational: high-level progress messages.
+    Info = 3,
+    /// Debug: detailed diagnostic information.
+    Debug = 4,
+    /// Trace: very verbose, low-level tracing.
+    Trace = 5,
+}
+
+impl LogLevel {
+    /// Returns the human-readable name (fixed-width for aligned output).
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Fatal => "FATAL",
+            Self::Error => "ERROR",
+            Self::Warn => "WARN ",
+            Self::Info => "INFO ",
+            Self::Debug => "DEBUG",
+            Self::Trace => "TRACE",
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Raw print function (kprint! / kprintln!) — no levels, no filtering
+// ---------------------------------------------------------------------------
+
+/// The signature of the global print function.
+pub type PrintFn = fn(fmt::Arguments<'_>);
+
+fn null_print(_args: fmt::Arguments<'_>) {}
+
+static PRINT_FN: AtomicPtr<()> = AtomicPtr::new(null_print as *mut ());
+
+/// Registers the global print function.
+///
+/// # Safety
+///
+/// The provided function must be safe to call from any context. May be called
+/// more than once (e.g., once for early serial, once for the full logger).
+/// Uses `Release` ordering so subsequent loads see the new function.
+pub unsafe fn set_print_fn(f: PrintFn) {
+    PRINT_FN.store(f as *mut (), Ordering::Release);
+}
+
+/// Loads the current print function from the atomic pointer.
+///
+/// # Safety
+///
+/// Relies on the invariant that only valid `PrintFn` pointers (or the
+/// initial `null_print`) are ever stored into `PRINT_FN`.
+#[inline]
+fn load_print_fn() -> PrintFn {
+    let ptr = PRINT_FN.load(Ordering::Acquire);
+    // SAFETY: We only ever store valid `PrintFn` function pointers into PRINT_FN.
+    unsafe { core::mem::transmute(ptr) }
+}
+
+/// Implementation detail for [`kprint!`] / [`kprintln!`]. Not public API.
+#[doc(hidden)]
+pub fn _print(args: fmt::Arguments<'_>) {
+    load_print_fn()(args);
+}
+
+/// Prints to the kernel log sinks (raw, no level, no timestamp).
+#[macro_export]
+macro_rules! kprint {
+    ($($arg:tt)*) => { $crate::log::_print(format_args!($($arg)*)) };
+}
+
+/// Prints to the kernel log sinks with a trailing newline (raw, no level).
+#[macro_export]
+macro_rules! kprintln {
+    () => { $crate::kprint!("\n") };
+    ($($arg:tt)*) => { $crate::kprint!("{}\n", format_args!($($arg)*)) };
+}
+
+// ---------------------------------------------------------------------------
+// Leveled log function (klog! and convenience macros)
+// ---------------------------------------------------------------------------
+
+/// The signature of the global leveled log function.
+pub type LogFn = fn(LogLevel, fmt::Arguments<'_>);
+
+fn null_log(_level: LogLevel, _args: fmt::Arguments<'_>) {}
+
+static LOG_FN: AtomicPtr<()> = AtomicPtr::new(null_log as *mut ());
+
+/// Registers the global leveled log function.
+///
+/// # Safety
+///
+/// The provided function must be safe to call from any context. May be called
+/// more than once (e.g., once for early serial, once for the full logger).
+/// Uses `Release` ordering so subsequent loads see the new function.
+pub unsafe fn set_log_fn(f: LogFn) {
+    LOG_FN.store(f as *mut (), Ordering::Release);
+}
+
+/// Loads the current log function from the atomic pointer.
+///
+/// # Safety
+///
+/// Same invariant as [`load_print_fn`] — only valid `LogFn` pointers are stored.
+#[inline]
+fn load_log_fn() -> LogFn {
+    let ptr = LOG_FN.load(Ordering::Acquire);
+    // SAFETY: We only ever store valid `LogFn` function pointers into LOG_FN.
+    unsafe { core::mem::transmute(ptr) }
+}
+
+/// Implementation detail for [`klog!`]. Not public API.
+#[doc(hidden)]
+pub fn _log(level: LogLevel, args: fmt::Arguments<'_>) {
+    load_log_fn()(level, args);
+}
+
+/// Logs a message at the given level.
+#[macro_export]
+macro_rules! klog {
+    ($level:expr, $($arg:tt)*) => {
+        $crate::log::_log($level, format_args!($($arg)*))
+    };
+}
+
+/// Logs a fatal-level message (level 0).
+#[macro_export]
+macro_rules! kfatal {
+    ($($arg:tt)*) => { $crate::klog!($crate::log::LogLevel::Fatal, $($arg)*) };
+}
+
+/// Logs an error-level message (level 1).
+#[macro_export]
+macro_rules! kerr {
+    ($($arg:tt)*) => { $crate::klog!($crate::log::LogLevel::Error, $($arg)*) };
+}
+
+/// Logs a warning-level message (level 2).
+#[macro_export]
+macro_rules! kwarn {
+    ($($arg:tt)*) => { $crate::klog!($crate::log::LogLevel::Warn, $($arg)*) };
+}
+
+/// Logs an info-level message (level 3).
+#[macro_export]
+macro_rules! kinfo {
+    ($($arg:tt)*) => { $crate::klog!($crate::log::LogLevel::Info, $($arg)*) };
+}
+
+/// Logs a debug-level message (level 4).
+#[macro_export]
+macro_rules! kdebug {
+    ($($arg:tt)*) => { $crate::klog!($crate::log::LogLevel::Debug, $($arg)*) };
+}
+
+/// Logs a trace-level message (level 5).
+#[macro_export]
+macro_rules! ktrace {
+    ($($arg:tt)*) => { $crate::klog!($crate::log::LogLevel::Trace, $($arg)*) };
+}
 
 // ---------------------------------------------------------------------------
 // LogSink trait
@@ -37,7 +210,7 @@ pub trait LogSink: Send + Sync {
     /// Write a string fragment to this sink.
     fn write_str(&self, s: &str);
     /// Maximum log level accepted (messages with `level <= max_level` are written).
-    fn max_level(&self) -> hadron_core::log::LogLevel;
+    fn max_level(&self) -> LogLevel;
     /// Human-readable name for diagnostics.
     fn name(&self) -> &str;
 }
@@ -46,16 +219,16 @@ pub trait LogSink: Send + Sync {
 // SerialSink
 // ---------------------------------------------------------------------------
 
-/// A [`LogSink`] that writes to a 16550 UART serial port.
+/// A [`LogSink`] that writes to a serial port via [`EarlySerial`].
 pub struct SerialSink {
-    uart: Uart16550,
-    max_level: hadron_core::log::LogLevel,
+    serial: EarlySerial,
+    max_level: LogLevel,
 }
 
 impl SerialSink {
     /// Creates a new serial sink.
-    pub fn new(uart: Uart16550, max_level: hadron_core::log::LogLevel) -> Self {
-        Self { uart, max_level }
+    pub fn new(serial: EarlySerial, max_level: LogLevel) -> Self {
+        Self { serial, max_level }
     }
 }
 
@@ -63,13 +236,13 @@ impl LogSink for SerialSink {
     fn write_str(&self, s: &str) {
         for byte in s.bytes() {
             if byte == b'\n' {
-                self.uart.write_byte(b'\r');
+                self.serial.write_byte(b'\r');
             }
-            self.uart.write_byte(byte);
+            self.serial.write_byte(byte);
         }
     }
 
-    fn max_level(&self) -> hadron_core::log::LogLevel {
+    fn max_level(&self) -> LogLevel {
         self.max_level
     }
 
@@ -85,12 +258,12 @@ impl LogSink for SerialSink {
 /// A [`LogSink`] that writes to the early framebuffer console.
 pub struct FramebufferSink {
     fb: EarlyFramebuffer,
-    max_level: hadron_core::log::LogLevel,
+    max_level: LogLevel,
 }
 
 impl FramebufferSink {
     /// Creates a new framebuffer sink.
-    pub fn new(fb: EarlyFramebuffer, max_level: hadron_core::log::LogLevel) -> Self {
+    pub fn new(fb: EarlyFramebuffer, max_level: LogLevel) -> Self {
         Self { fb, max_level }
     }
 }
@@ -103,7 +276,7 @@ impl LogSink for FramebufferSink {
         }
     }
 
-    fn max_level(&self) -> hadron_core::log::LogLevel {
+    fn max_level(&self) -> LogLevel {
         self.max_level
     }
 
@@ -113,40 +286,41 @@ impl LogSink for FramebufferSink {
 }
 
 // ---------------------------------------------------------------------------
-// BochsVgaSink
+// DeviceFramebufferSink
 // ---------------------------------------------------------------------------
 
-/// A [`LogSink`] that writes to the Bochs VGA framebuffer via the driver's
-/// [`Framebuffer`] trait implementation.
-pub struct BochsVgaSink {
-    max_level: hadron_core::log::LogLevel,
+/// A [`LogSink`] that writes to a framebuffer device (e.g., Bochs VGA)
+/// via the device registry's `Arc<dyn Framebuffer>`.
+pub struct DeviceFramebufferSink {
+    fb: alloc::sync::Arc<dyn crate::driver_api::Framebuffer>,
+    max_level: LogLevel,
 }
 
-impl BochsVgaSink {
-    /// Creates a new Bochs VGA sink.
-    pub fn new(max_level: hadron_core::log::LogLevel) -> Self {
-        Self { max_level }
+impl DeviceFramebufferSink {
+    /// Creates a new device framebuffer sink.
+    pub fn new(
+        fb: alloc::sync::Arc<dyn crate::driver_api::Framebuffer>,
+        max_level: LogLevel,
+    ) -> Self {
+        Self { fb, max_level }
     }
 }
 
-impl LogSink for BochsVgaSink {
+impl LogSink for DeviceFramebufferSink {
     fn write_str(&self, s: &str) {
         use crate::drivers::early_fb::{CURSOR, GLYPH_HEIGHT, GLYPH_WIDTH};
-        use hadron_driver_api::Framebuffer;
 
-        hadron_drivers::bochs_vga::with_bochs_vga(|vga| {
-            let info = vga.info();
-            let cols = info.width / GLYPH_WIDTH;
-            let rows = info.height / GLYPH_HEIGHT;
+        let info = self.fb.info();
+        let cols = info.width / GLYPH_WIDTH;
+        let rows = info.height / GLYPH_HEIGHT;
 
-            let mut cursor = CURSOR.lock();
-            for byte in s.bytes() {
-                write_byte_to_fb(vga, &info, cols, rows, byte, &mut cursor);
-            }
-        });
+        let mut cursor = CURSOR.lock();
+        for byte in s.bytes() {
+            write_byte_to_fb(self.fb.as_ref(), &info, cols, rows, byte, &mut cursor);
+        }
     }
 
-    fn max_level(&self) -> hadron_core::log::LogLevel {
+    fn max_level(&self) -> LogLevel {
         self.max_level
     }
 
@@ -155,10 +329,11 @@ impl LogSink for BochsVgaSink {
     }
 }
 
-/// Renders a single byte onto a [`Framebuffer`] using the console font.
+/// Renders a single byte onto a [`Framebuffer`](crate::driver_api::Framebuffer)
+/// using the console font.
 fn write_byte_to_fb(
-    fb: &dyn hadron_driver_api::Framebuffer,
-    info: &hadron_driver_api::framebuffer::FramebufferInfo,
+    fb: &dyn crate::driver_api::Framebuffer,
+    info: &crate::driver_api::framebuffer::FramebufferInfo,
     cols: u32,
     rows: u32,
     byte: u8,
@@ -217,7 +392,7 @@ fn write_byte_to_fb(
 
 /// Draws a single glyph at character position (col, row) onto a framebuffer.
 fn draw_glyph_fb(
-    fb: &dyn hadron_driver_api::Framebuffer,
+    fb: &dyn crate::driver_api::Framebuffer,
     col: u32,
     row: u32,
     ch: u8,
@@ -244,8 +419,8 @@ fn draw_glyph_fb(
 
 /// Scrolls the framebuffer up by one glyph row.
 fn scroll_up_fb(
-    fb: &dyn hadron_driver_api::Framebuffer,
-    info: &hadron_driver_api::framebuffer::FramebufferInfo,
+    fb: &dyn crate::driver_api::Framebuffer,
+    info: &crate::driver_api::framebuffer::FramebufferInfo,
     rows: u32,
 ) {
     use crate::drivers::early_fb::GLYPH_HEIGHT;
@@ -266,9 +441,8 @@ fn scroll_up_fb(
 // Early serial functions (Phase 1, pre-heap)
 // ---------------------------------------------------------------------------
 
-/// Wrapper around `Uart16550` that implements `fmt::Write` using `&self`
-/// semantics (constructs on the stack each time, no state).
-struct SerialWriter(Uart16550);
+/// Wrapper around [`EarlySerial`] that implements `fmt::Write`.
+struct SerialWriter(EarlySerial);
 
 impl fmt::Write for SerialWriter {
     fn write_str(&mut self, s: &str) -> fmt::Result {
@@ -284,23 +458,23 @@ impl fmt::Write for SerialWriter {
 
 /// Early print function: writes directly to COM1 with no locks.
 fn early_serial_print(args: fmt::Arguments<'_>) {
-    let mut w = SerialWriter(Uart16550::new(COM1));
+    let mut w = SerialWriter(EarlySerial::new(COM1));
     let _ = w.write_fmt(args);
 }
 
 /// Early log function: formats a leveled, timestamped message to COM1.
-fn early_serial_log(level: hadron_core::log::LogLevel, args: fmt::Arguments<'_>) {
+fn early_serial_log(level: LogLevel, args: fmt::Arguments<'_>) {
     let nanos = crate::time::boot_nanos();
     let total_micros = nanos / 1_000;
     let secs = total_micros / 1_000_000;
     let micros = total_micros % 1_000_000;
     let level_str = level.name();
 
-    let mut w = SerialWriter(Uart16550::new(COM1));
+    let mut w = SerialWriter(EarlySerial::new(COM1));
     let _ = write!(w, "[{secs:>5}.{micros:06}] {level_str} {args}\n");
 }
 
-/// Registers early serial print/log functions with `hadron_core`.
+/// Registers early serial print/log functions.
 ///
 /// Call this after UART hardware init and before any `kprint!`/`klog!` use.
 /// No heap allocation required.
@@ -308,8 +482,8 @@ pub fn init_early_serial() {
     // SAFETY: Both functions are safe to call from any context — they
     // construct a Uart16550 on the stack (just a u16) and write bytes.
     unsafe {
-        hadron_core::log::set_print_fn(early_serial_print);
-        hadron_core::log::set_log_fn(early_serial_log);
+        set_print_fn(early_serial_print);
+        set_log_fn(early_serial_log);
     }
 }
 
@@ -347,8 +521,8 @@ impl Logger {
         {
             let mut guard = self.inner.lock();
             let serial_sink = Box::new(SerialSink::new(
-                Uart16550::new(COM1),
-                hadron_core::log::LogLevel::Trace,
+                EarlySerial::new(COM1),
+                LogLevel::Trace,
             ));
             let mut sinks: Vec<Box<dyn LogSink>> = Vec::with_capacity(4);
             sinks.push(serial_sink);
@@ -358,8 +532,8 @@ impl Logger {
         // Replace early serial functions with the logger's functions.
         // SAFETY: logger_print and logger_log are safe to call from any context.
         unsafe {
-            hadron_core::log::set_print_fn(logger_print);
-            hadron_core::log::set_log_fn(logger_log);
+            set_print_fn(logger_print);
+            set_log_fn(logger_log);
         }
     }
 
@@ -400,7 +574,7 @@ impl Logger {
 
     /// Leveled write — formats a timestamped, level-tagged message and writes
     /// it only to sinks whose `max_level >= level`.
-    fn log(&self, level: hadron_core::log::LogLevel, args: fmt::Arguments<'_>) {
+    fn log(&self, level: LogLevel, args: fmt::Arguments<'_>) {
         let nanos = crate::time::boot_nanos();
         let total_micros = nanos / 1_000;
         let secs = total_micros / 1_000_000;
@@ -442,7 +616,7 @@ fn logger_print(args: fmt::Arguments<'_>) {
 }
 
 /// Log function that forwards to the global logger (leveled, timestamped).
-fn logger_log(level: hadron_core::log::LogLevel, args: fmt::Arguments<'_>) {
+fn logger_log(level: LogLevel, args: fmt::Arguments<'_>) {
     LOGGER.log(level, args);
 }
 
@@ -467,12 +641,12 @@ pub fn replace_sink_by_name(name: &str, new_sink: Box<dyn LogSink>) -> bool {
 // Panic helper
 // ---------------------------------------------------------------------------
 
-/// Writes a panic message directly to COM1 via `Uart16550`.
+/// Writes a panic message directly to COM1 via [`EarlySerial`].
 ///
 /// No locks, no allocation — safe from any context including inside a
 /// panic while the logger lock is held.
 pub fn panic_serial(info: &core::panic::PanicInfo) {
-    let mut w = SerialWriter(Uart16550::new(COM1));
+    let mut w = SerialWriter(EarlySerial::new(COM1));
     let _ = write!(w, "\n!!! KERNEL PANIC !!!\n{info}\n");
     crate::backtrace::panic_backtrace(&mut w);
 }

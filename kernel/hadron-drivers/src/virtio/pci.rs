@@ -7,10 +7,10 @@ use crate::pci::cam::regs;
 use crate::pci::caps::{
     self, MsixCapability, RawCapability, VirtioPciCap, VirtioPciCfgType,
 };
-use hadron_driver_api::error::DriverError;
-use hadron_driver_api::pci::{PciBar, PciDeviceInfo};
-use hadron_driver_api::resource::MmioRegion;
-use hadron_driver_api::services::KernelServices;
+use hadron_kernel::driver_api::error::DriverError;
+use hadron_kernel::driver_api::pci::{PciBar, PciDeviceInfo};
+use hadron_kernel::driver_api::resource::MmioRegion;
+use hadron_kernel::driver_api::services::KernelServices;
 
 /// Mapped VirtIO PCI configuration regions.
 ///

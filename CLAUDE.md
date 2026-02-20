@@ -1,6 +1,6 @@
 # Hadron
 
-Hadron is an x86_64 kernel written in Rust following the **framekernel** architecture. The kernel is split into two layers: an unsafe **frame** (`hadron-core`) that directly interacts with hardware and exports safe abstractions, and safe **services** (`hadron-kernel`) that implement high-level functionality using only safe Rust. Both layers run in ring 0 with zero IPC overhead.
+Hadron is an x86_64 kernel written in Rust. The kernel follows a two-crate model: a monolithic **hadron-kernel** (arch primitives, driver API traits, memory management, scheduler, VFS, PCI core, device registry) and a pluggable **hadron-drivers** (hardware drivers registered via linker sections). Both run in ring 0.
 
 ## Naming Convention
 
@@ -14,25 +14,23 @@ The project uses a particle physics naming theme:
 ```
 hadron/
 ├── kernel/
-│   ├── hadron-core/        # Frame: unsafe core, safe public API (depends on bitflags)
-│   ├── hadron-kernel/      # Services: arch init, drivers, mm (depends on hadron-core, hadron-drivers, noalloc)
+│   ├── hadron-kernel/      # Monolithic kernel: arch, driver API, mm, sched, VFS, PCI, device registry
+│   ├── hadron-drivers/     # Pluggable drivers: AHCI, VirtIO, serial, display, input, FS impls
 │   └── boot/
 │       └── limine/         # Limine boot stub binary (hadron-boot-limine)
 ├── crates/
 │   ├── limine/             # Limine boot protocol bindings
 │   ├── noalloc/            # Allocation-free data structures
-│   ├── hadron-drivers/     # Hardware drivers
 │   ├── hadron-test/        # Test framework (QEMU isa-debug-exit)
-│   └── uefi/               # UEFI bindings (Phase 2)
+│   ├── acpi/               # ACPI table parsing (hadron-acpi)
+│   ├── dwarf/              # DWARF debug info (hadron-dwarf)
+│   ├── elf/                # ELF parser (hadron-elf)
+│   └── uefi/               # UEFI bindings
 ├── userspace/
-│   ├── init/               # Init process (first userspace binary, lepton-init)
+│   ├── init/               # Init process (lepton-init)
 │   ├── lepton-syslib/      # Userspace syscall library
 │   ├── shell/              # Interactive shell (lepton-shell)
-│   ├── spinner/            # CPU-bound preemption demo (lepton-spinner)
-│   ├── spawn-worker/       # Worker child for stress tests (lepton-spawn-worker)
-│   ├── spawn-stress/       # Spawn stress test (lepton-spawn-stress)
-│   ├── pipe-consumer/      # Pipe consumer child (lepton-pipe-consumer)
-│   └── pipe-test/          # Pipe test orchestrator (lepton-pipe-test)
+│   └── coreutils/          # Core utilities (lepton-coreutils)
 ├── tools/
 │   └── gluon/              # Custom build system (invokes rustc directly)
 ├── targets/                # Custom target specs (x86_64-unknown-hadron.json)
@@ -95,9 +93,10 @@ Limine bootloader → kernel/boot/limine (hadron-boot-limine)
 
 ### Key Dependencies
 
-- `hadron-core` depends on `bitflags`
-- `hadron-kernel` depends on `hadron-core`, `hadron-drivers`, `noalloc`
-- Boot stub depends on `hadron-core`, `hadron-kernel`, `hadron-drivers`, `limine`, `noalloc`
+- `hadron-kernel` depends on `bitflags`, `hadris-io`, `hadron-acpi`, `hadron-elf`, `hadron-syscall`, `noalloc`
+- `hadron-drivers` depends on `hadron-kernel`, `bitflags`, `hadris-cpio`, `hadris-fat`, `hadris-io`, `hadris-iso`
+- Boot stub depends on `hadron-kernel`, `hadron-drivers`, `limine`, `noalloc`
+- Driver registration uses linker sections (`.hadron_pci_drivers`, `.hadron_platform_drivers`, `.hadron_block_fs`, etc.)
 - All `crates/*` are standalone no_std libraries
 
 ### Custom Target
@@ -128,7 +127,7 @@ Clippy lints are applied by `gluon clippy` to project crates (kernel/, crates/, 
 - All `unsafe` blocks require a `// SAFETY:` comment explaining the invariant being upheld
 - Never cast `&T` to `*mut T` for mutation — use interior mutability (`UnsafeCell`, `Cell`, or locks)
 - Prefer safe wrappers: if a struct guarantees preconditions at construction, expose safe methods internally calling unsafe
-- `hadron-kernel` (safe services layer) must minimize unsafe — each `unsafe` block must justify why it can't live in `hadron-core`
+- `hadron-kernel` must minimize unsafe — each `unsafe` block must justify why it's needed
 
 ### Globals Policy
 - Only truly kernel-wide singletons may be module-level statics: global allocator, executor, logger
@@ -137,7 +136,7 @@ Clippy lints are applied by `gluon clippy` to project crates (kernel/, crates/, 
 - `SpinLock<Option<T>>` for init-once globals is acceptable but accessor functions must panic with descriptive messages
 
 ### DRY / No Duplication
-- Inline asm for any instruction must exist in exactly ONE canonical location in `hadron-core::arch::<arch>::instructions` or `registers`
+- Inline asm for any instruction must exist in exactly ONE canonical location in `hadron_kernel::arch::<arch>::instructions` or `registers`
 - Extract repeated patterns into helper functions at 3+ call sites
 - Named constants for all hardware/arch values — never bare `4096`, `0xFFF`, `0x10`, etc.
 
@@ -163,7 +162,8 @@ Clippy lints are applied by `gluon clippy` to project crates (kernel/, crates/, 
 
 ### Hardware Abstraction
 - Key subsystems define traits: `InterruptController`, `ClockSource`, `Timer`
-- Traits in `hadron-driver-api`, implementations in `hadron-drivers`
+- Traits in `hadron_kernel::driver_api`, implementations in `hadron-drivers`
+- Drivers register via linker-section macros (`pci_driver_entry!`, `platform_driver_entry!`, `block_fs_entry!`, etc.)
 - Access hardware through trait interfaces where feasible
 
 ## Git Workflow

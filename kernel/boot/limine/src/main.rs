@@ -12,9 +12,9 @@ mod requests;
 
 use requests::REQUESTS;
 
-use hadron_core::addr::{PhysAddr, VirtAddr};
-use hadron_core::arch::x86_64::structures::paging::{PageTable, PageTableEntry, PageTableFlags};
-use hadron_core::paging::{PhysFrame, Size4KiB};
+use hadron_kernel::addr::{PhysAddr, VirtAddr};
+use hadron_kernel::arch::x86_64::structures::paging::{PageTable, PageTableEntry, PageTableFlags};
+use hadron_kernel::paging::{PhysFrame, Size4KiB};
 use hadron_kernel::arch::x86_64::paging::PageTableMapper;
 use hadron_kernel::boot::{
     BacktraceInfo, BootInfoData, FramebufferInfo, InitrdInfo, KernelAddressInfo, MAX_FRAMEBUFFERS,

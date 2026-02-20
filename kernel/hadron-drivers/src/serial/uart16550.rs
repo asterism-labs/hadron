@@ -4,10 +4,12 @@
 //! formatted text output over a serial port. Supports configurable baud rates,
 //! loopback self-test during initialization, and both blocking read/write.
 
+extern crate alloc;
+
 use core::fmt;
 
 use bitflags::bitflags;
-use hadron_core::arch::x86_64::Port;
+use hadron_kernel::arch::x86_64::Port;
 
 // ---------------------------------------------------------------------------
 // Register offsets
@@ -396,9 +398,9 @@ impl fmt::Write for Uart16550 {
 // in hadron-kernel's AsyncSerial; this entry declares the driver's
 // existence to the registry.
 #[cfg(target_os = "none")]
-hadron_driver_api::platform_driver_entry!(
+hadron_kernel::platform_driver_entry!(
     UART16550_DRIVER,
-    hadron_driver_api::registration::PlatformDriverEntry {
+    hadron_kernel::driver_api::registration::PlatformDriverEntry {
         name: "uart16550",
         compatible: "ns16550",
         init: uart16550_platform_init,
@@ -407,9 +409,33 @@ hadron_driver_api::platform_driver_entry!(
 
 #[cfg(target_os = "none")]
 fn uart16550_platform_init(
-    _services: &'static dyn hadron_driver_api::services::KernelServices,
-) -> Result<(), hadron_driver_api::error::DriverError> {
-    // Platform init hook — currently a no-op.
-    // The actual UART setup is handled by AsyncSerial.
+    services: &'static dyn hadron_kernel::driver_api::services::KernelServices,
+) -> Result<(), hadron_kernel::driver_api::error::DriverError> {
+    use alloc::boxed::Box;
+    use core::pin::Pin;
+
+    // Create an async serial port wrapping COM1 with IRQ 4.
+    let uart = Uart16550::new(COM1);
+    let async_serial =
+        crate::serial::serial_async::AsyncSerial::new(uart, 4, services)?;
+
+    // Spawn the serial echo task — reads bytes from the serial port and
+    // echoes them back. Useful for debugging via a serial terminal.
+    services.spawn_task(
+        "serial-echo",
+        Pin::from(Box::new(async move {
+            use hadron_kernel::driver_api::serial::SerialPort;
+            loop {
+                match async_serial.read_byte().await {
+                    Ok(byte) => {
+                        let _ = async_serial.write_byte(byte).await;
+                    }
+                    Err(_) => break,
+                }
+            }
+        })),
+    );
+
+    hadron_kernel::kinfo!("uart16550: serial echo task spawned for COM1");
     Ok(())
 }

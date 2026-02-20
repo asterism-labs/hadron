@@ -7,14 +7,14 @@
 use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 
 use hadron_acpi::{AcpiHandler, AcpiTables, madt};
-use hadron_core::addr::{PhysAddr, VirtAddr};
-use hadron_core::mm::hhdm;
-use hadron_core::sync::IrqSpinLock;
-use hadron_drivers::apic::io_apic::{
+use crate::addr::{PhysAddr, VirtAddr};
+use crate::mm::hhdm;
+use crate::sync::IrqSpinLock;
+use crate::arch::x86_64::hw::io_apic::{
     DeliveryMode, DestinationMode, IoApic, Polarity, RedirectionEntry, TriggerMode,
 };
-use hadron_drivers::apic::local_apic::LocalApic;
-use hadron_drivers::hpet::Hpet;
+use crate::arch::x86_64::hw::local_apic::LocalApic;
+use crate::arch::x86_64::hw::hpet::Hpet;
 
 use crate::arch::x86_64::interrupts::dispatch::vectors;
 
@@ -140,7 +140,7 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
     let rsdp_phys = match rsdp_phys {
         Some(addr) => addr,
         None => {
-            hadron_core::kwarn!("ACPI: No RSDP address available, skipping ACPI init");
+            crate::kwarn!("ACPI: No RSDP address available, skipping ACPI init");
             return;
         }
     };
@@ -148,7 +148,7 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
     // --- 1. Parse ACPI tables ---
     let tables = match AcpiTables::new(rsdp_phys.as_u64(), HhdmAcpiHandler) {
         Ok(t) => {
-            hadron_core::kinfo!(
+            crate::kinfo!(
                 "ACPI: RSDP validated, {} at {:#x}",
                 if t.is_xsdt() { "XSDT" } else { "RSDT" },
                 t.rsdt_addr()
@@ -156,7 +156,7 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
             t
         }
         Err(e) => {
-            hadron_core::kerr!("ACPI: Failed to parse RSDP: {:?}", e);
+            crate::kerr!("ACPI: Failed to parse RSDP: {:?}", e);
             return;
         }
     };
@@ -177,7 +177,7 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
                     _ => {}
                 }
             }
-            hadron_core::kinfo!(
+            crate::kinfo!(
                 "ACPI: MADT: {} CPUs, {} I/O APICs, LAPIC at {:#x}",
                 cpu_count,
                 io_apic_count,
@@ -186,7 +186,7 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
             Some(m)
         }
         Err(e) => {
-            hadron_core::kwarn!("ACPI: MADT not found: {:?}", e);
+            crate::kwarn!("ACPI: MADT not found: {:?}", e);
             None
         }
     };
@@ -196,11 +196,11 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
         Ok(h) => {
             let hpet_addr = h.base_address.address;
             let min_tick = h.minimum_tick;
-            hadron_core::kdebug!("ACPI: HPET at {:#x}, minimum tick {}", hpet_addr, min_tick);
+            crate::kdebug!("ACPI: HPET at {:#x}, minimum tick {}", hpet_addr, min_tick);
             Some(h)
         }
         Err(_) => {
-            hadron_core::kwarn!("ACPI: HPET not found");
+            crate::kwarn!("ACPI: HPET not found");
             None
         }
     };
@@ -208,23 +208,23 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
     // Parse MCFG
     match tables.mcfg() {
         Ok(m) => {
-            hadron_core::kdebug!("ACPI: MCFG with {} entries", m.entry_count());
+            crate::kdebug!("ACPI: MCFG with {} entries", m.entry_count());
         }
         Err(_) => {
-            hadron_core::kdebug!("ACPI: MCFG not found");
+            crate::kdebug!("ACPI: MCFG not found");
         }
     }
 
     // --- 2. Disable legacy PIC ---
     // SAFETY: Interrupts are disabled at this point (CLI from boot).
-    unsafe { hadron_drivers::pic::remap_and_disable() };
-    hadron_core::kdebug!("PIC: Remapped to vectors 32-47, masked all");
+    unsafe { crate::arch::x86_64::hw::pic::remap_and_disable() };
+    crate::kdebug!("PIC: Remapped to vectors 32-47, masked all");
 
     // --- 3. Map and enable Local APIC ---
     let madt = match madt_info {
         Some(m) => m,
         None => {
-            hadron_core::kerr!("ACPI: Cannot initialize APIC without MADT");
+            crate::kerr!("ACPI: Cannot initialize APIC without MADT");
             return;
         }
     };
@@ -232,7 +232,7 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
     let lapic_phys = PhysAddr::new(u64::from(madt.local_apic_address));
 
     // Map LAPIC MMIO region
-    let lapic_virt = crate::mm::vmm::map_mmio_region(lapic_phys, hadron_core::mm::PAGE_SIZE as u64);
+    let lapic_virt = crate::mm::vmm::map_mmio_region(lapic_phys, crate::mm::PAGE_SIZE as u64);
 
     // SAFETY: lapic_virt was just mapped to the LAPIC MMIO region.
     let lapic = unsafe { LocalApic::new(lapic_virt) };
@@ -241,10 +241,10 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
 
     // Initialize per-CPU state
     let apic_id = lapic.id();
-    hadron_core::percpu::current_cpu().init(0, apic_id);
+    crate::percpu::current_cpu().init(0, apic_id);
     crate::sched::smp::register_cpu_apic_id(0, apic_id);
 
-    hadron_core::kinfo!(
+    crate::kinfo!(
         "LAPIC: Enabled, ID={}, spurious vector={}",
         apic_id,
         vectors::SPURIOUS
@@ -259,13 +259,13 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
             let ioapic_phys = PhysAddr::new(u64::from(ioapic_entry.io_apic_address));
 
             let ioapic_virt =
-                crate::mm::vmm::map_mmio_region(ioapic_phys, hadron_core::mm::PAGE_SIZE as u64);
+                crate::mm::vmm::map_mmio_region(ioapic_phys, crate::mm::PAGE_SIZE as u64);
 
             // SAFETY: ioapic_virt was just mapped to the I/O APIC MMIO region.
             let ioapic = unsafe { IoApic::new(ioapic_virt, ioapic_entry.gsi_base) };
             let max_entry = ioapic.max_redirection_entry();
 
-            hadron_core::kdebug!(
+            crate::kdebug!(
                 "I/O APIC: ID={}, GSI base={}, {} entries",
                 ioapic.id(),
                 ioapic_entry.gsi_base,
@@ -300,7 +300,7 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
     let hpet = hpet_info.and_then(|info| {
         let hpet_phys = PhysAddr::new(info.base_address.address);
         let hpet_virt =
-            crate::mm::vmm::map_mmio_region(hpet_phys, hadron_core::mm::PAGE_SIZE as u64);
+            crate::mm::vmm::map_mmio_region(hpet_phys, crate::mm::PAGE_SIZE as u64);
 
         let hpet = unsafe { Hpet::new(hpet_virt) };
         hpet.enable();
@@ -308,7 +308,7 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
         // Initialize global time source from HPET — timestamps become real after this.
         crate::time::init_hpet(hpet_virt, hpet.period_fs());
 
-        hadron_core::kinfo!(
+        crate::kinfo!(
             "HPET: Enabled, {} Hz, {} comparators",
             hpet.frequency_hz(),
             hpet.num_comparators()
@@ -406,7 +406,7 @@ fn calibrate_and_start_timer(lapic: &LocalApic, hpet: Option<&Hpet>) {
         hpet.busy_wait_ms(10);
     } else {
         // SAFETY: PIT is available, interrupts are disabled.
-        unsafe { hadron_drivers::pit::busy_wait_ms(10) };
+        unsafe { crate::arch::x86_64::hw::pit::busy_wait_ms(10) };
     }
 
     let elapsed = u32::MAX - lapic.timer_current_count();
@@ -416,7 +416,7 @@ fn calibrate_and_start_timer(lapic: &LocalApic, hpet: Option<&Hpet>) {
     let ticks_per_second = u64::from(elapsed) * 100;
     let ticks_per_ms = ticks_per_second / 1000;
 
-    hadron_core::kinfo!(
+    crate::kinfo!(
         "Timer: LAPIC calibrated at {} MHz ({} ticks/ms, divide={})",
         ticks_per_second / 1_000_000,
         ticks_per_ms,
@@ -435,8 +435,8 @@ fn calibrate_and_start_timer(lapic: &LocalApic, hpet: Option<&Hpet>) {
         LAPIC_TIMER_DIVIDE.store(divide, Ordering::Release);
 
         lapic.start_timer_periodic(vectors::TIMER, initial_count, divide);
-        hadron_core::kinfo!("Timer: LAPIC periodic timer started (1ms interval)");
+        crate::kinfo!("Timer: LAPIC periodic timer started (1ms interval)");
     } else {
-        hadron_core::kwarn!("Timer: Calibration returned 0 ticks, timer not started");
+        crate::kwarn!("Timer: Calibration returned 0 ticks, timer not started");
     }
 }

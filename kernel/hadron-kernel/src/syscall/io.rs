@@ -1,7 +1,7 @@
 //! I/O syscall handlers: debug_log.
 
-use hadron_core::syscall::EFAULT;
-use hadron_core::syscall::userptr::UserSlice;
+use crate::syscall::EFAULT;
+use crate::syscall::userptr::UserSlice;
 
 /// `sys_debug_log` — writes a message to the kernel serial console.
 ///
@@ -15,7 +15,7 @@ pub(super) fn sys_debug_log(buf: usize, len: usize) -> isize {
     // in kernel space during early kernel-mode testing). The memory is
     // readable because the caller just passed it.
     let user_slice;
-    let slice = if hadron_core::syscall::userptr::is_kernel_caller(buf) {
+    let slice = if crate::syscall::userptr::is_kernel_caller(buf) {
         // Kernel-mode test: buf is a kernel address, skip user-space check.
         // Validate that buf + len doesn't overflow and len is reasonable.
         if len == 0 {
@@ -38,10 +38,10 @@ pub(super) fn sys_debug_log(buf: usize, len: usize) -> isize {
     };
 
     if let Ok(s) = core::str::from_utf8(slice) {
-        hadron_core::kprint!("{}", s);
+        crate::kprint!("{}", s);
     } else {
         for &byte in slice {
-            hadron_core::kprint!("{}", byte as char);
+            crate::kprint!("{}", byte as char);
         }
     }
     len as isize

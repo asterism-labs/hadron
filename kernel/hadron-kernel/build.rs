@@ -1,6 +1,14 @@
 //! Build script for hadron-kernel: wires up linker script for integration tests.
 
 fn main() {
+    let target = std::env::var("TARGET").unwrap_or_default();
+
+    // Only emit the linker script for kernel targets (QEMU integration tests).
+    // Host targets (e.g., aarch64-apple-darwin) don't need it.
+    if !target.contains("hadron") {
+        return;
+    }
+
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let workspace_root = std::path::Path::new(&manifest_dir)
         .parent()
@@ -8,7 +16,6 @@ fn main() {
         .parent()
         .unwrap(); // workspace root
 
-    let target = std::env::var("TARGET").unwrap_or_default();
     let linker_script = if target.starts_with("x86_64") {
         "x86_64-unknown-hadron.ld"
     } else if target.starts_with("aarch64") {

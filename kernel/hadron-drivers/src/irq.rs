@@ -5,9 +5,9 @@
 
 use core::future::Future;
 
-use hadron_core::sync::WaitQueue;
-use hadron_driver_api::error::DriverError;
-use hadron_driver_api::services::KernelServices;
+use hadron_kernel::sync::WaitQueue;
+use hadron_kernel::driver_api::error::DriverError;
+use hadron_kernel::driver_api::services::KernelServices;
 
 /// Number of IRQ wait queues covering vectors 32-255 (ISA + MSI-X).
 const MAX_IRQ_LINES: usize = 224;

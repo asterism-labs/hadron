@@ -9,7 +9,7 @@ extern crate alloc;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use hadron_driver_api::block::{BlockDevice, IoError};
+use hadron_kernel::driver_api::block::{BlockDevice, IoError};
 
 /// An in-memory block device backed by a `Vec<u8>`.
 pub struct RamDisk {

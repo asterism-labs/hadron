@@ -11,9 +11,16 @@ extern crate alloc;
 use alloc::vec;
 
 use hadris_io::{Error, ErrorKind, Read, Result, Seek, SeekFrom, Write};
-use hadron_driver_api::block::BlockDevice;
+use crate::driver_api::block::BlockDevice;
 
 use crate::sched::block_on::block_on;
+
+/// Type alias for a block device adapter wrapping a type-erased block device.
+///
+/// Used by filesystem registration entries ([`BlockFsEntry`](crate::driver_api::registration::BlockFsEntry))
+/// to pass block devices to filesystem mount functions without generic parameters.
+pub type BoxedBlockAdapter =
+    BlockDeviceAdapter<alloc::boxed::Box<dyn crate::driver_api::dyn_dispatch::DynBlockDevice>>;
 
 /// Adapts an async [`BlockDevice`] into synchronous `hadris_io::Read + Seek + Write`.
 ///

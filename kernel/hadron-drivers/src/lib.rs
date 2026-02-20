@@ -10,40 +10,19 @@ extern crate alloc;
 #[cfg(target_arch = "x86_64")]
 pub mod ahci;
 pub mod block;
-#[cfg(target_arch = "x86_64")]
-pub mod bus;
 pub mod display;
+#[cfg(target_os = "none")]
+pub mod fs;
 pub mod input;
-pub mod interrupt;
-#[cfg(target_arch = "x86_64")]
-pub mod irq;
 pub mod pci;
 #[cfg(target_arch = "x86_64")]
 pub mod virtio;
-#[cfg(target_os = "none")]
-pub mod registry;
 pub mod serial;
-pub mod timer;
 
-// ── Re-exports for backward compatibility ───────────────────────────────
+// ── Re-exports for convenience ──────────────────────────────────────────
 
-#[cfg(target_arch = "x86_64")]
-pub use self::display::bochs_vga;
-pub use self::input::i8042;
-#[cfg(target_arch = "x86_64")]
-pub use self::input::keyboard_async;
-#[cfg(target_arch = "x86_64")]
-pub use self::input::mouse_async;
-#[cfg(target_arch = "x86_64")]
-pub use self::interrupt::apic;
-#[cfg(target_arch = "x86_64")]
-pub use self::interrupt::pic;
-#[cfg(target_arch = "x86_64")]
-pub use self::serial::serial_async;
 #[cfg(target_arch = "x86_64")]
 pub use self::serial::uart16550;
-#[cfg(target_arch = "x86_64")]
-pub use self::timer::{hpet, pit, tsc};
 
 /// Anchor symbol referenced by the linker script's `EXTERN()` directive
 /// to force inclusion of this crate's driver registration entries.

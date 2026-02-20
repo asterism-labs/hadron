@@ -4,7 +4,7 @@
 //! the 256-byte configuration space of each PCI function. This works on all
 //! x86 systems including QEMU q35.
 
-use hadron_core::arch::x86_64::Port;
+use hadron_kernel::arch::x86_64::Port;
 
 const CONFIG_ADDRESS: u16 = 0x0CF8;
 const CONFIG_DATA: u16 = 0x0CFC;

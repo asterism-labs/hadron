@@ -9,7 +9,7 @@
 // Handler names are self-documenting; suppress missing_docs for this module.
 #![allow(missing_docs)]
 
-use hadron_core::arch::x86_64::structures::idt::InterruptStackFrame;
+use crate::arch::x86_64::structures::idt::InterruptStackFrame;
 
 /// RPL mask for the code segment selector — bits [0:1] hold the privilege level.
 const CS_RPL_MASK: u64 = 0x3;
@@ -24,7 +24,7 @@ fn is_user_mode(frame: &InterruptStackFrame) -> bool {
 /// The exception `name` (e.g. "#GP") and stack frame are logged before
 /// termination.
 fn terminate_user_fault(name: &str, frame: &InterruptStackFrame) -> ! {
-    hadron_core::kerr!("USER {name}\n{frame:#?}");
+    crate::kerr!("USER {name}\n{frame:#?}");
     // SAFETY: We are in an exception handler triggered by ring-3 code.
     // A user process is running and SAVED_KERNEL_RSP is valid.
     unsafe {
@@ -34,7 +34,7 @@ fn terminate_user_fault(name: &str, frame: &InterruptStackFrame) -> ! {
 
 /// Like [`terminate_user_fault`] but includes an error code in the log.
 fn terminate_user_fault_with_error(name: &str, frame: &InterruptStackFrame, error_code: u64) -> ! {
-    hadron_core::kerr!("USER {name} (error_code={error_code:#x})\n{frame:#?}");
+    crate::kerr!("USER {name} (error_code={error_code:#x})\n{frame:#?}");
     // SAFETY: Same as terminate_user_fault.
     unsafe {
         crate::proc::terminate_current_process_from_fault();
@@ -49,7 +49,7 @@ pub extern "x86-interrupt" fn divide_error(frame: InterruptStackFrame) {
 }
 
 pub extern "x86-interrupt" fn debug(frame: InterruptStackFrame) {
-    hadron_core::kwarn!("EXCEPTION: DEBUG\n{:#?}", frame);
+    crate::kwarn!("EXCEPTION: DEBUG\n{:#?}", frame);
 }
 
 pub extern "x86-interrupt" fn nmi(frame: InterruptStackFrame) {
@@ -57,7 +57,7 @@ pub extern "x86-interrupt" fn nmi(frame: InterruptStackFrame) {
 }
 
 pub extern "x86-interrupt" fn breakpoint(frame: InterruptStackFrame) {
-    hadron_core::kwarn!("EXCEPTION: BREAKPOINT\n{:#?}", frame);
+    crate::kwarn!("EXCEPTION: BREAKPOINT\n{:#?}", frame);
 }
 
 pub extern "x86-interrupt" fn overflow(frame: InterruptStackFrame) {
@@ -130,8 +130,8 @@ pub extern "x86-interrupt" fn general_protection(frame: InterruptStackFrame, err
 }
 
 pub extern "x86-interrupt" fn page_fault(frame: InterruptStackFrame, error_code: u64) {
-    use hadron_core::arch::x86_64::structures::paging::PageFaultErrorCode;
-    use hadron_core::mm::layout::FaultRegion;
+    use crate::arch::x86_64::structures::paging::PageFaultErrorCode;
+    use crate::mm::layout::FaultRegion;
 
     let cr2: u64;
     unsafe {
@@ -167,7 +167,7 @@ pub extern "x86-interrupt" fn page_fault(frame: InterruptStackFrame, error_code:
 
     // User-mode fault: log and terminate the process instead of panicking.
     if is_user {
-        hadron_core::kerr!(
+        crate::kerr!(
             "USER #PF: {cause} during {access}\n  \
              Address: {cr2:#x}\n  Error: {error:?}\n{frame:#?}"
         );
@@ -182,7 +182,7 @@ pub extern "x86-interrupt" fn page_fault(frame: InterruptStackFrame, error_code:
     // Try to identify the faulting region (non-blocking to avoid deadlock
     // if we faulted inside the VMM itself).
     let region_info = crate::mm::vmm::try_with_vmm(|vmm| {
-        let addr = hadron_core::addr::VirtAddr::new_truncate(cr2);
+        let addr = crate::addr::VirtAddr::new_truncate(cr2);
         let layout = vmm.layout();
         let region = layout.identify_region(addr);
 

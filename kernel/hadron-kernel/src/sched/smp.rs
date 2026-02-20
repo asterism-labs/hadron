@@ -11,9 +11,9 @@
 
 use core::sync::atomic::{AtomicU8, Ordering};
 
-use hadron_core::percpu::MAX_CPUS;
-use hadron_core::task::Priority;
-use hadron_drivers::apic::local_apic::LocalApic;
+use crate::percpu::MAX_CPUS;
+use crate::task::Priority;
+use crate::arch::x86_64::hw::local_apic::LocalApic;
 
 use super::executor::TaskEntry;
 use crate::arch::x86_64::interrupts::dispatch::vectors;
@@ -75,9 +75,9 @@ pub fn send_wake_ipi(target_cpu: u32) {
 ///
 /// The caller must insert the stolen entry into their local executor's task
 /// map and ready queue.
-pub(crate) fn try_steal() -> Option<(hadron_core::task::TaskId, Priority, TaskEntry)> {
-    let local_cpu = hadron_core::percpu::current_cpu().get_cpu_id();
-    let cpu_count = hadron_core::percpu::cpu_count();
+pub(crate) fn try_steal() -> Option<(crate::task::TaskId, Priority, TaskEntry)> {
+    let local_cpu = crate::percpu::current_cpu().get_cpu_id();
+    let cpu_count = crate::percpu::cpu_count();
     if cpu_count <= 1 {
         return None;
     }

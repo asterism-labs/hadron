@@ -1,7 +1,7 @@
 //! Time syscall handlers: clock_gettime.
 
-use hadron_core::syscall::userptr::{UserPtr, is_kernel_caller};
-use hadron_core::syscall::{CLOCK_MONOTONIC, EFAULT, EINVAL, Timespec};
+use crate::syscall::userptr::{UserPtr, is_kernel_caller};
+use crate::syscall::{CLOCK_MONOTONIC, EFAULT, EINVAL, Timespec};
 
 /// `sys_clock_gettime` — returns boot-relative monotonic time.
 ///

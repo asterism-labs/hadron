@@ -7,7 +7,7 @@
 extern crate alloc;
 use alloc::boxed::Box;
 
-use hadron_core::addr::{PhysAddr, VirtAddr};
+use crate::addr::{PhysAddr, VirtAddr};
 use noalloc::vec::ArrayVec;
 
 /// The kind of a physical memory region.
@@ -332,12 +332,12 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
     crate::arch::cpu_init();
 
     // 2. Initialize HHDM global offset.
-    hadron_core::mm::hhdm::init(boot_info.hhdm_offset());
-    hadron_core::kinfo!("HHDM initialized at offset {:#x}", boot_info.hhdm_offset());
+    crate::mm::hhdm::init(boot_info.hhdm_offset());
+    crate::kinfo!("HHDM initialized at offset {:#x}", boot_info.hhdm_offset());
 
     // 2b. Initialize backtrace support (must be after HHDM so we can access the module data).
     if let Some(bt) = boot_info.backtrace() {
-        let virt = hadron_core::mm::hhdm::phys_to_virt(bt.phys_addr);
+        let virt = crate::mm::hhdm::phys_to_virt(bt.phys_addr);
         // SAFETY: The bootloader loaded the HBTF data into contiguous physical memory
         // covered by the HHDM. The slice remains valid for the kernel's lifetime
         // because the module memory region is marked KernelAndModules and is never
@@ -356,12 +356,12 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
     crate::mm::pmm::with_pmm(|pmm| {
         let free = pmm.free_frames();
         let total = pmm.total_frames();
-        hadron_core::kinfo!(
+        crate::kinfo!(
             "PMM: {} MiB free / {} MiB total",
             free * 4 / 1024,
             total * 4 / 1024
         );
-        hadron_core::kdebug!("PMM: {} free frames", free);
+        crate::kdebug!("PMM: {} free frames", free);
     });
 
     // 4. Initialize VMM (wraps root page table, creates memory layout).
@@ -369,14 +369,14 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
 
     // 4b. Allocate a guarded kernel syscall stack (replaces the early BSS stack).
     {
-        use hadron_core::mm::pmm::BitmapFrameAllocRef;
+        use crate::mm::pmm::BitmapFrameAllocRef;
         crate::mm::pmm::with_pmm(|pmm| {
             let mut alloc = BitmapFrameAllocRef(pmm);
             crate::mm::vmm::with_vmm(|vmm| {
                 let stack = vmm
                     .alloc_kernel_stack(&mut alloc, None)
                     .expect("failed to allocate guarded kernel stack");
-                hadron_core::kinfo!(
+                crate::kinfo!(
                     "Guarded kernel stack: {:#x}..{:#x} (guard at {:#x})",
                     stack.bottom().as_u64(),
                     stack.top().as_u64(),
@@ -387,7 +387,7 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
                 // syscall or interrupt will use the old stack between
                 // these two stores (interrupts are still disabled).
                 unsafe {
-                    hadron_core::percpu::set_kernel_rsp(stack.top().as_u64());
+                    crate::percpu::set_kernel_rsp(stack.top().as_u64());
                     crate::arch::x86_64::gdt::set_tss_rsp0(stack.top().as_u64());
                 }
             });
@@ -396,7 +396,10 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
 
     // 5. Map initial heap and initialize the heap allocator.
     crate::mm::heap::init();
-    hadron_core::kinfo!("Heap allocator initialized");
+    crate::kinfo!("Heap allocator initialized");
+
+    // 5b. Initialize device registry (before driver probing).
+    crate::drivers::device_registry::init();
 
     // 6. Initialize the full logger (replaces early serial functions).
     crate::log::init_logger();
@@ -406,7 +409,7 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
         if let Some(early_fb) = crate::drivers::early_fb::EarlyFramebuffer::new(fb_info) {
             crate::log::add_sink(Box::new(crate::log::FramebufferSink::new(
                 early_fb,
-                hadron_core::log::LogLevel::Info,
+                crate::log::LogLevel::Info,
             )));
         }
     }
@@ -414,35 +417,35 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
     // 8. Arch-specific platform init (ACPI, PCI, drivers, etc.).
     crate::arch::platform_init(boot_info);
 
-    // 9. Switch framebuffer sink to Bochs VGA if the driver probed successfully.
-    //    The early FB sink wrote to the same physical framebuffer (via HHDM)
-    //    after the Bochs VGA probe zeroed it, so we must re-zero and reset
-    //    the cursor for a clean transition.
+    // 9. Switch framebuffer sink to a device-registry framebuffer if one was
+    //    registered during driver probing (e.g., Bochs VGA). The early FB sink
+    //    wrote to the same physical framebuffer (via HHDM) but the driver may
+    //    have re-initialized it, so we re-zero and reset the cursor.
     #[cfg(target_arch = "x86_64")]
-    if hadron_drivers::bochs_vga::with_bochs_vga(|vga| {
-        use hadron_driver_api::Framebuffer;
-        let info = vga.info();
+    if let Some(fb) =
+        crate::drivers::device_registry::with_device_registry(|dr| dr.take_framebuffer("bochs-vga"))
+    {
+        let info = fb.info();
         let total = info.pitch as usize * info.height as usize;
         // SAFETY: Entire framebuffer is within the mapped MMIO region.
-        unsafe { vga.fill_zero(0, total) };
-    })
-    .is_some()
-    {
-        // Reset cursor so the BochsVgaSink starts at the top-left corner.
+        unsafe { fb.fill_zero(0, total) };
+
+        // Reset cursor so the new sink starts at the top-left corner.
         {
             let mut cursor = crate::drivers::early_fb::CURSOR.lock();
             cursor.col = 0;
             cursor.row = 0;
         }
-        let bochs_sink = Box::new(crate::log::BochsVgaSink::new(
-            hadron_core::log::LogLevel::Info,
+        let dev_fb_sink = Box::new(crate::log::DeviceFramebufferSink::new(
+            fb,
+            crate::log::LogLevel::Info,
         ));
-        if crate::log::replace_sink_by_name("framebuffer", bochs_sink) {
-            hadron_core::kinfo!("Switched display to Bochs VGA");
+        if crate::log::replace_sink_by_name("framebuffer", dev_fb_sink) {
+            crate::kinfo!("Switched display to device framebuffer");
         }
     }
 
-    hadron_core::kinfo!("Hadron kernel initialized successfully.");
+    crate::kinfo!("Hadron kernel initialized successfully.");
 
     // 8b. Initialize cross-CPU wakeup IPI, then boot Application Processors.
     crate::sched::smp::init();
@@ -457,14 +460,14 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
         loop {
             crate::sched::primitives::sleep_ms(5000).await;
             n += 1;
-            hadron_core::kdebug!("[heartbeat] {}s elapsed", n * 5);
+            crate::kdebug!("[heartbeat] {}s elapsed", n * 5);
         }
     });
 
     // 10. Extract initrd data via HHDM.
     let initrd_info = boot_info.initrd().expect("no initrd loaded by bootloader");
     let initrd_data = {
-        let virt = hadron_core::mm::hhdm::phys_to_virt(initrd_info.phys_addr);
+        let virt = crate::mm::hhdm::phys_to_virt(initrd_info.phys_addr);
         // SAFETY: The bootloader loaded the initrd into contiguous physical memory
         // covered by the HHDM. The slice remains valid for the kernel's lifetime
         // because the initrd memory region is marked KernelAndModules and is never
@@ -477,7 +480,7 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
             core::slice::from_raw_parts(virt.as_u64() as *const u8, initrd_info.size as usize)
         }
     };
-    hadron_core::kinfo!(
+    crate::kinfo!(
         "Initrd loaded: {} bytes at {}",
         initrd_info.size,
         initrd_info.phys_addr
@@ -490,45 +493,51 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
 
         fs::vfs::init();
 
-        // Mount ramfs at root.
-        let ramfs = Arc::new(fs::ramfs::RamFs::new());
+        // Discover and mount the root virtual filesystem (ramfs) from the
+        // driver registry. The ramfs virtual_fs_entry is in hadron-drivers.
+        let ramfs = {
+            let entries = crate::drivers::registry::virtual_fs_entries();
+            let ramfs_entry = entries
+                .iter()
+                .find(|e| e.name == "ramfs")
+                .expect("no ramfs virtual_fs_entry registered");
+            (ramfs_entry.create)()
+        };
         let ramfs_root = ramfs.root();
         fs::vfs::with_vfs_mut(|vfs| vfs.mount("/", ramfs));
 
-        // Unpack initrd CPIO archive into the root filesystem.
-        let file_count = fs::initramfs::unpack_cpio(initrd_data, &ramfs_root);
-        hadron_core::kinfo!("Initramfs: Unpacked {} files", file_count);
-
-        // Mount devfs at /dev.
-        let devfs = Arc::new(fs::devfs::DevFs::new());
-        fs::vfs::with_vfs_mut(|vfs| vfs.mount("/dev", devfs));
-
-        // Try to mount the first VirtIO block disk as FAT at /mnt.
-        if hadron_drivers::virtio::block::disk_count() > 0 {
-            if let Some(disk) = hadron_drivers::virtio::block::take_disk(0) {
-                match fs::fat::FatFileSystem::mount(disk) {
-                    Ok(fat) => {
-                        fs::vfs::with_vfs_mut(|vfs| vfs.mount("/mnt", Arc::new(fat)));
-                    }
-                    Err(e) => {
-                        hadron_core::kinfo!("No FAT filesystem on virtio disk 0: {:?}", e);
-                    }
-                }
+        // Unpack initrd CPIO archive into the root filesystem using the
+        // registered initramfs unpacker.
+        {
+            let entries = crate::drivers::registry::initramfs_entries();
+            if let Some(entry) = entries.first() {
+                let file_count = (entry.unpack)(initrd_data, &ramfs_root);
+                crate::kinfo!("Initramfs ({}): Unpacked {} files", entry.name, file_count);
+            } else {
+                crate::kwarn!("No initramfs unpacker registered");
             }
         }
 
-        // Try to mount the first AHCI disk as ISO 9660 at /cdrom.
-        if hadron_drivers::ahci::disk_count() > 0 {
-            if let Some(disk) = hadron_drivers::ahci::take_disk(0) {
-                match fs::iso9660::Iso9660Fs::mount(disk) {
-                    Ok(iso) => {
-                        fs::vfs::with_vfs_mut(|vfs| vfs.mount("/cdrom", Arc::new(iso)));
-                    }
-                    Err(e) => {
-                        hadron_core::kinfo!("No ISO 9660 filesystem on AHCI disk 0: {:?}", e);
-                    }
-                }
-            }
+        // Mount devfs at /dev (kernel-internal, not from driver registry).
+        let devfs = Arc::new(fs::devfs::DevFs::new());
+        fs::vfs::with_vfs_mut(|vfs| vfs.mount("/dev", devfs));
+
+        // Mount block-device-backed filesystems discovered from the registry.
+        // Each block device is passed to registered block FS drivers until one succeeds.
+        let block_fs_entries = crate::drivers::registry::block_fs_entries();
+
+        // VirtIO block → try registered block FS drivers at /mnt.
+        if let Some(disk) = crate::drivers::device_registry::with_device_registry_mut(|dr| {
+            dr.take_block_device("virtio-blk-0")
+        }) {
+            mount_block_device(disk, "/mnt", block_fs_entries, "virtio-blk-0");
+        }
+
+        // AHCI block → try registered block FS drivers at /cdrom.
+        if let Some(disk) = crate::drivers::device_registry::with_device_registry_mut(|dr| {
+            dr.take_block_device("ahci-0")
+        }) {
+            mount_block_device(disk, "/cdrom", block_fs_entries, "ahci-0");
         }
     }
 
@@ -541,16 +550,16 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
     // These pointers let the naked ASM access per-CPU CpuLocal elements
     // via GS:[offset] instead of RIP-relative addressing.
     {
-        let percpu = hadron_core::percpu::current_cpu();
+        let percpu = crate::percpu::current_cpu();
         // SAFETY: We have exclusive BSP access during init. The pointers
         // are to static CpuLocal elements that live forever.
         unsafe {
             let percpu_mut =
-                percpu as *const hadron_core::percpu::PerCpu as *mut hadron_core::percpu::PerCpu;
+                percpu as *const crate::percpu::PerCpu as *mut crate::percpu::PerCpu;
             (*percpu_mut).user_context_ptr = crate::proc::user_context_ptr() as u64;
             (*percpu_mut).saved_kernel_rsp_ptr = crate::proc::saved_kernel_rsp_ptr() as u64;
             (*percpu_mut).trap_reason_ptr = crate::proc::trap_reason_ptr() as u64;
-            (*percpu_mut).saved_regs_ptr = hadron_core::arch::x86_64::syscall::SYSCALL_SAVED_REGS
+            (*percpu_mut).saved_regs_ptr = crate::arch::x86_64::syscall::SYSCALL_SAVED_REGS
                 .get()
                 .get() as u64;
         }
@@ -560,9 +569,42 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
 
     // 11. Enable BSP interrupts now that all init is done and APs are online.
     // SAFETY: IDT, LAPIC, I/O APIC, per-CPU state, and SMP are all initialized.
-    unsafe { hadron_core::arch::x86_64::instructions::interrupts::enable() };
-    hadron_core::kinfo!("BSP interrupts enabled");
+    unsafe { crate::arch::x86_64::instructions::interrupts::enable() };
+    crate::kinfo!("BSP interrupts enabled");
 
     // 12. Run the executor — drives ALL kernel tasks including the process task.
     crate::sched::executor().run();
+}
+
+/// Try to mount a block device at the given mount point using registered FS drivers.
+///
+/// Iterates block FS entries from the linker section, passing the device to each
+/// mount function until one succeeds. The block device is consumed on first attempt
+/// (success or failure) since the mount function takes ownership.
+#[cfg(target_os = "none")]
+fn mount_block_device(
+    disk: alloc::boxed::Box<dyn crate::driver_api::dyn_dispatch::DynBlockDevice>,
+    mount_point: &str,
+    block_fs_entries: &[crate::driver_api::registration::BlockFsEntry],
+    device_name: &str,
+) {
+    for entry in block_fs_entries {
+        match (entry.mount)(disk) {
+            Ok(fs_instance) => {
+                crate::fs::vfs::with_vfs_mut(|vfs| vfs.mount(mount_point, fs_instance));
+                return;
+            }
+            Err(e) => {
+                crate::kinfo!(
+                    "FS '{}' failed to mount {}: {:?}",
+                    entry.name,
+                    device_name,
+                    e
+                );
+                // Block device consumed by mount attempt; cannot retry.
+                return;
+            }
+        }
+    }
+    crate::kinfo!("No filesystem driver for {}", device_name);
 }

@@ -9,8 +9,8 @@ pub mod block;
 pub mod pci;
 pub mod queue;
 
-use hadron_driver_api::error::DriverError;
-use hadron_driver_api::services::KernelServices;
+use hadron_kernel::driver_api::error::DriverError;
+use hadron_kernel::driver_api::services::KernelServices;
 
 use pci::VirtioPciTransport;
 use queue::Virtqueue;
@@ -77,7 +77,7 @@ impl VirtioDevice {
         let dev_features_hi = transport.device_feature();
 
         if dev_features_hi & VIRTIO_F_VERSION_1 == 0 {
-            hadron_core::kwarn!("virtio: device does not support VIRTIO_F_VERSION_1");
+            hadron_kernel::kwarn!("virtio: device does not support VIRTIO_F_VERSION_1");
             transport.set_device_status(STATUS_FAILED);
             return Err(DriverError::Unsupported);
         }
@@ -98,7 +98,7 @@ impl VirtioDevice {
         // Step 6: Re-read status to verify FEATURES_OK is still set.
         let readback = transport.device_status();
         if readback & STATUS_FEATURES_OK == 0 {
-            hadron_core::kwarn!("virtio: device rejected features");
+            hadron_kernel::kwarn!("virtio: device rejected features");
             transport.set_device_status(STATUS_FAILED);
             return Err(DriverError::InitFailed);
         }

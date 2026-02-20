@@ -4,9 +4,9 @@
 //! structs into dedicated linker sections. This module reads those sections and
 //! matches entries against discovered devices.
 
-use hadron_driver_api::pci::PciDeviceInfo;
-use hadron_driver_api::registration::{PciDriverEntry, PlatformDriverEntry};
-use hadron_driver_api::services::KernelServices;
+use hadron_kernel::driver_api::pci::PciDeviceInfo;
+use hadron_kernel::driver_api::registration::{PciDriverEntry, PlatformDriverEntry};
+use hadron_kernel::driver_api::services::KernelServices;
 
 // Linker-defined section boundaries (set in the linker script).
 unsafe extern "C" {
@@ -53,17 +53,17 @@ pub fn match_pci_drivers(devices: &[PciDeviceInfo], services: &'static dyn Kerne
         for device in devices {
             for id in entry.id_table {
                 if id.matches(device) {
-                    hadron_core::kprintln!(
+                    hadron_kernel::kprintln!(
                         "PCI: matched {} -> driver '{}'",
                         device.address,
                         entry.name,
                     );
                     match (entry.probe)(device, services) {
                         Ok(()) => {
-                            hadron_core::kprintln!("PCI: driver '{}' probe OK", entry.name);
+                            hadron_kernel::kprintln!("PCI: driver '{}' probe OK", entry.name);
                         }
                         Err(e) => {
-                            hadron_core::kprintln!(
+                            hadron_kernel::kprintln!(
                                 "PCI: driver '{}' probe failed: {}",
                                 entry.name,
                                 e,
@@ -86,13 +86,13 @@ pub fn match_platform_drivers(devices: &[(&str, &str)], services: &'static dyn K
     for &(name, compatible) in devices {
         for entry in entries {
             if entry.compatible == compatible {
-                hadron_core::kprintln!("Platform: matched '{}' -> driver '{}'", name, entry.name,);
+                hadron_kernel::kprintln!("Platform: matched '{}' -> driver '{}'", name, entry.name,);
                 match (entry.init)(services) {
                     Ok(()) => {
-                        hadron_core::kprintln!("Platform: driver '{}' init OK", entry.name);
+                        hadron_kernel::kprintln!("Platform: driver '{}' init OK", entry.name);
                     }
                     Err(e) => {
-                        hadron_core::kprintln!("Platform: driver '{}' init failed: {}", name, e,);
+                        hadron_kernel::kprintln!("Platform: driver '{}' init failed: {}", name, e,);
                     }
                 }
                 break;

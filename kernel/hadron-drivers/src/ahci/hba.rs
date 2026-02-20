@@ -5,7 +5,7 @@
 
 use core::ptr;
 
-use hadron_core::addr::VirtAddr;
+use hadron_kernel::addr::VirtAddr;
 
 use super::regs::{self, HbaCap, HbaGhc};
 

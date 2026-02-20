@@ -13,8 +13,8 @@ pub fn cpu_init() {
     {
         unsafe { x86_64::gdt::init() };
         unsafe { x86_64::idt::init() };
-        unsafe { hadron_core::percpu::init_gs_base() };
-        unsafe { hadron_core::arch::x86_64::syscall::init() };
+        unsafe { crate::percpu::init_gs_base() };
+        unsafe { crate::arch::x86_64::syscall::init() };
     }
     #[cfg(target_arch = "aarch64")]
     {
@@ -30,27 +30,27 @@ pub fn platform_init(boot_info: &impl crate::boot::BootInfo) {
         x86_64::acpi::init(boot_info.rsdp_address());
 
         // 2. PCI enumeration and device tree.
-        let pci_devices = hadron_drivers::pci::enumerate::enumerate();
-        hadron_core::kinfo!("PCI: found {} devices", pci_devices.len());
+        let pci_devices = crate::pci::enumerate::enumerate();
+        crate::kinfo!("PCI: found {} devices", pci_devices.len());
 
-        let tree = hadron_drivers::bus::DeviceTree::build(&pci_devices);
+        let tree = crate::bus::DeviceTree::build(&pci_devices);
         tree.print();
 
         // 3. Driver discovery and matching.
-        let pci_entries = hadron_drivers::registry::pci_driver_entries();
-        let platform_entries = hadron_drivers::registry::platform_driver_entries();
-        hadron_core::kinfo!(
+        let pci_entries = crate::drivers::registry::pci_driver_entries();
+        let platform_entries = crate::drivers::registry::platform_driver_entries();
+        crate::kinfo!(
             "Drivers: {} PCI, {} platform registered",
             pci_entries.len(),
             platform_entries.len()
         );
 
-        hadron_drivers::registry::match_pci_drivers(
+        crate::drivers::registry::match_pci_drivers(
             &pci_devices,
             &crate::services::KERNEL_SERVICES,
         );
         let platform_devs: alloc::vec::Vec<_> = tree.platform_devices().collect();
-        hadron_drivers::registry::match_platform_drivers(
+        crate::drivers::registry::match_platform_drivers(
             &platform_devs,
             &crate::services::KERNEL_SERVICES,
         );
@@ -61,52 +61,12 @@ pub fn platform_init(boot_info: &impl crate::boot::BootInfo) {
     }
 }
 
-/// Spawn arch-specific async tasks (serial echo, etc.).
+/// Spawn arch-specific async tasks.
 ///
-/// Note: The keyboard-echo task has been removed to avoid racing with
-/// `DevConsole::read`, which polls the i8042 controller synchronously.
+/// The serial echo task is now spawned by the serial driver during probe
+/// via [`KernelServices::spawn_task`]. This function handles any remaining
+/// arch-specific platform tasks.
 pub fn spawn_platform_tasks() {
-    #[cfg(target_arch = "x86_64")]
-    {
-        // Serial echo task — reads from COM1 and echoes back.
-        crate::sched::spawn_with(
-            async {
-                use hadron_driver_api::serial::SerialPort;
-                use hadron_drivers::uart16550::{COM1, Uart16550};
-
-                let uart = Uart16550::new(COM1);
-                let serial = match hadron_drivers::serial_async::AsyncSerial::new(
-                    uart,
-                    4,
-                    &crate::services::KERNEL_SERVICES,
-                ) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        hadron_core::kerr!("[serial-echo] Failed to init: {}", e);
-                        return;
-                    }
-                };
-
-                hadron_core::kdebug!("[serial-echo] Listening on COM1...");
-                loop {
-                    match serial.read_byte().await {
-                        Ok(byte) => {
-                            if byte == b'\r' {
-                                let _ = serial.write_byte(b'\r').await;
-                                let _ = serial.write_byte(b'\n').await;
-                            } else {
-                                let _ = serial.write_byte(byte).await;
-                            }
-                        }
-                        Err(e) => {
-                            hadron_core::kerr!("[serial-echo] Read error: {}", e);
-                        }
-                    }
-                }
-            },
-            crate::sched::TaskMeta::new("serial-echo"),
-        );
-    }
     #[cfg(target_arch = "aarch64")]
     {
         aarch64::spawn_platform_tasks();

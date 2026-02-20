@@ -5,7 +5,7 @@
 //! capabilities (cap ID 0x09) and MSI-X capabilities (cap ID 0x11).
 
 use super::cam::{regs, PciCam};
-use hadron_driver_api::pci::PciAddress;
+use hadron_kernel::driver_api::pci::PciAddress;
 
 /// A raw PCI capability header: capability ID and its config-space offset.
 #[derive(Debug, Clone, Copy)]

@@ -4,13 +4,13 @@
 //! segments into a fresh user address space, sets up a user stack, and
 //! returns a [`Process`] ready to run.
 
-use hadron_core::addr::VirtAddr;
-use hadron_core::mm::PAGE_SIZE;
-use hadron_core::mm::address_space::AddressSpace;
-use hadron_core::mm::mapper::{MapFlags, PageMapper, PageTranslator};
-use hadron_core::mm::pmm::BitmapFrameAllocRef;
-use hadron_core::paging::{Page, PhysFrame, Size4KiB};
-use hadron_core::{kdebug, kinfo};
+use crate::addr::VirtAddr;
+use crate::mm::PAGE_SIZE;
+use crate::mm::address_space::AddressSpace;
+use crate::mm::mapper::{MapFlags, PageMapper, PageTranslator};
+use crate::mm::pmm::BitmapFrameAllocRef;
+use crate::paging::{Page, PhysFrame, Size4KiB};
+use crate::{kdebug, kinfo};
 
 extern crate alloc;
 
@@ -35,7 +35,7 @@ fn dealloc_frame(frame: PhysFrame<Size4KiB>) {
         // SAFETY: The frame was allocated by BitmapFrameAllocRef and is no
         // longer referenced by any page table (the address space is being dropped).
         unsafe {
-            hadron_core::mm::FrameDeallocator::deallocate_frame(&mut dealloc, frame);
+            crate::mm::FrameDeallocator::deallocate_frame(&mut dealloc, frame);
         }
     });
 }
@@ -58,7 +58,7 @@ pub fn create_process_from_binary(
     parent_pid: Option<u32>,
 ) -> Result<(Process, u64, u64), BinaryError> {
     #[cfg(target_arch = "x86_64")]
-    type KernelMapper = hadron_core::arch::x86_64::paging::PageTableMapper;
+    type KernelMapper = crate::arch::x86_64::paging::PageTableMapper;
 
     let image = binfmt::load_binary(data)?;
     let entry = image.entry_point;
@@ -68,7 +68,7 @@ pub fn create_process_from_binary(
     // be called from a syscall handler where CR3 is the calling process's
     // user page table, not the kernel's.
     let kernel_cr3 = super::kernel_cr3();
-    let hhdm_offset = hadron_core::mm::hhdm::offset();
+    let hhdm_offset = crate::mm::hhdm::offset();
     let mapper = KernelMapper::new(hhdm_offset);
 
     // Create address space and map segments + stack inside PMM lock scope.
@@ -119,7 +119,7 @@ pub fn create_process_from_binary(
     reason = "x86_64: u64 and usize are the same width"
 )]
 fn map_segment<
-    M: hadron_core::mm::mapper::PageMapper<Size4KiB> + hadron_core::mm::mapper::PageTranslator,
+    M: crate::mm::mapper::PageMapper<Size4KiB> + crate::mm::mapper::PageTranslator,
 >(
     address_space: &AddressSpace<M>,
     seg: &ExecSegment<'_>,
@@ -196,7 +196,7 @@ fn map_segment<
 
 /// Maps a user stack (guard page + usable pages) and returns the stack top.
 fn map_user_stack<
-    M: hadron_core::mm::mapper::PageMapper<Size4KiB> + hadron_core::mm::mapper::PageTranslator,
+    M: crate::mm::mapper::PageMapper<Size4KiB> + crate::mm::mapper::PageTranslator,
 >(
     address_space: &AddressSpace<M>,
     alloc: &mut BitmapFrameAllocRef<'_>,
@@ -229,7 +229,7 @@ fn map_user_stack<
             .ignore();
 
         // SAFETY: The frame was just allocated and mapped; zeroing via HHDM is safe.
-        let hhdm_offset = hadron_core::mm::hhdm::offset();
+        let hhdm_offset = crate::mm::hhdm::offset();
         let frame_ptr = (hhdm_offset + frame.start_address().as_u64()) as *mut u8;
         unsafe {
             core::ptr::write_bytes(frame_ptr, 0, PAGE_SIZE);
@@ -386,7 +386,7 @@ pub fn spawn_process(
     let (process, entry, _stack_top) = create_process_from_binary(&buf, Some(parent_pid))?;
 
     // Write argv onto the child's user stack.
-    let hhdm_offset = hadron_core::mm::hhdm::offset();
+    let hhdm_offset = crate::mm::hhdm::offset();
     let stack_top = write_argv_to_stack(process.address_space(), args, hhdm_offset)?;
 
     // Inherit fd 0/1/2 from parent, or fall back to /dev/console.

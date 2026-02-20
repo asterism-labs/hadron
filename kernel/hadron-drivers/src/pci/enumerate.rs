@@ -4,7 +4,7 @@
 //! handling multi-function devices and PCI-to-PCI bridges.
 
 use alloc::vec::Vec;
-use hadron_driver_api::pci::{PciAddress, PciBar, PciDeviceInfo};
+use hadron_kernel::driver_api::pci::{PciAddress, PciBar, PciDeviceInfo};
 
 use crate::pci::cam::{PciCam, regs};
 

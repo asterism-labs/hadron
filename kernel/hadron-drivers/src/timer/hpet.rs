@@ -3,8 +3,8 @@
 //! Provides MMIO-based access to the HPET for high-resolution timing
 //! and calibration.
 
-use hadron_core::addr::VirtAddr;
-use hadron_driver_api::ClockSource;
+use hadron_kernel::addr::VirtAddr;
+use hadron_kernel::driver_api::ClockSource;
 
 // Register offsets.
 const REG_CAPABILITIES: u64 = 0x000;

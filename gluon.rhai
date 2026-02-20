@@ -167,11 +167,6 @@ kernel_libs.add("hadron-syscall", "crates/hadron-syscall")
     .features(["kernel"])
     .deps(#{ hadron_syscall_macros: #{ "crate": "hadron-syscall-macros", proc_macro: true } });
 
-kernel_libs.add("hadron-core", "kernel/hadron-core")
-    .deps(#{ bitflags: "bitflags", hadron_syscall: "hadron-syscall", noalloc: "noalloc" });
-
-kernel_libs.add("hadron-driver-api", "kernel/hadron-driver-api")
-    .deps(#{ hadron_core: "hadron-core" });
 
 // ===========================================================================
 // Project kernel driver crates
@@ -180,7 +175,14 @@ kernel_libs.add("hadron-driver-api", "kernel/hadron-driver-api")
 let kernel_drivers = group("kernel-drivers").target("x86_64-unknown-hadron").edition("2024").config(true);
 
 kernel_drivers.add("hadron-drivers", "kernel/hadron-drivers")
-    .deps(#{ bitflags: "bitflags", hadron_core: "hadron-core", hadron_driver_api: "hadron-driver-api" });
+    .deps(#{
+        bitflags: "bitflags",
+        hadris_cpio: "hadris-cpio",
+        hadris_fat: "hadris-fat",
+        hadris_io: "hadris-io",
+        hadris_iso: "hadris-iso",
+        hadron_kernel: "hadron-kernel"
+    });
 
 // ===========================================================================
 // Test dependency crates (compiled on-demand during tests, NOT in pipeline)
@@ -201,21 +203,14 @@ let kernel_main = group("kernel-main").target("x86_64-unknown-hadron").edition("
 kernel_main.add("hadron-kernel", "kernel/hadron-kernel")
     .deps(#{
         bitflags: "bitflags",
-        hadris_cpio: "hadris-cpio",
-        hadris_fat: "hadris-fat",
         hadris_io: "hadris-io",
-        hadris_iso: "hadris-iso",
         hadron_acpi: "hadron-acpi",
-        hadron_core: "hadron-core",
-        hadron_driver_api: "hadron-driver-api",
-        hadron_drivers: "hadron-drivers",
         hadron_elf: "hadron-elf",
         hadron_syscall: "hadron-syscall",
         noalloc: "noalloc"
     })
     .dev_deps(#{
         hadron_test: "hadron-test",
-        hadron_core: "hadron-core",
         limine: "limine",
         noalloc: "noalloc"
     });
@@ -225,7 +220,6 @@ kernel_main.add("hadron-boot-limine", "kernel/boot/limine")
     .root("src/main.rs")
     .linker_script("targets/x86_64-unknown-hadron.ld")
     .deps(#{
-        hadron_core: "hadron-core",
         hadron_drivers: "hadron-drivers",
         hadron_kernel: "hadron-kernel",
         limine: "limine",
@@ -328,9 +322,8 @@ tests()
         "hadron-dwarf",
         "hadron-elf",
         "noalloc",
-        "hadron-core",
-        "hadron-driver-api",
-        "hadron-drivers"
+        "hadron-drivers",
+        "hadron-kernel"
     ])
     .kernel_tests_dir("kernel/hadron-kernel/tests")
     .kernel_tests_crate("hadron-kernel")

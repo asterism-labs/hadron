@@ -1,12 +1,21 @@
 //! Kernel-side implementation of the driver services trait.
 //!
 //! Bridges driver requests to kernel infrastructure: interrupt registration,
-//! I/O APIC management, and timer access.
+//! I/O APIC management, timer access, and device registration.
 
-use hadron_core::addr::PhysAddr;
-use hadron_driver_api::error::DriverError;
-use hadron_driver_api::resource::MmioRegion;
-use hadron_driver_api::services::KernelServices;
+extern crate alloc;
+
+use alloc::boxed::Box;
+use alloc::sync::Arc;
+use core::future::Future;
+use core::pin::Pin;
+
+use crate::addr::PhysAddr;
+use crate::driver_api::dyn_dispatch::DynBlockDevice;
+use crate::driver_api::error::DriverError;
+use crate::driver_api::framebuffer::Framebuffer;
+use crate::driver_api::resource::MmioRegion;
+use crate::driver_api::services::KernelServices;
 
 /// Hadron kernel's implementation of [`KernelServices`].
 ///
@@ -89,7 +98,7 @@ impl KernelServices for HadronKernelServices {
     }
 
     unsafe fn free_dma_frames(&self, phys_base: u64, count: usize) {
-        use hadron_core::paging::{PhysFrame, Size4KiB};
+        use crate::paging::{PhysFrame, Size4KiB};
         let frame = PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(phys_base));
         crate::mm::pmm::with_pmm(|pmm| {
             // SAFETY: Caller guarantees phys_base/count match a prior allocation
@@ -99,11 +108,11 @@ impl KernelServices for HadronKernelServices {
     }
 
     fn phys_to_virt(&self, phys: u64) -> u64 {
-        hadron_core::mm::hhdm::phys_to_virt(PhysAddr::new(phys)).as_u64()
+        crate::mm::hhdm::phys_to_virt(PhysAddr::new(phys)).as_u64()
     }
 
     fn enable_bus_mastering(&self, bus: u8, device: u8, function: u8) {
-        use hadron_drivers::pci::cam::PciCam;
+        use crate::pci::cam::PciCam;
         // SAFETY: We are setting standard PCI command register bits for a
         // device that was already discovered during enumeration.
         unsafe {
@@ -111,6 +120,26 @@ impl KernelServices for HadronKernelServices {
             // Set bit 1 (Memory Space Enable) and bit 2 (Bus Master Enable).
             PciCam::write_u32(bus, device, function, 0x04, cmd | 0x06);
         }
+    }
+
+    fn register_framebuffer(&self, name: &str, fb: Arc<dyn Framebuffer>) {
+        crate::drivers::device_registry::with_device_registry_mut(|dr| {
+            dr.register_framebuffer(name, fb);
+        });
+    }
+
+    fn register_block_device(&self, name: &str, dev: Box<dyn DynBlockDevice>) {
+        crate::drivers::device_registry::with_device_registry_mut(|dr| {
+            dr.register_block_device(name, dev);
+        });
+    }
+
+    fn spawn_task(
+        &self,
+        name: &'static str,
+        future: Pin<Box<dyn Future<Output = ()> + Send + 'static>>,
+    ) {
+        crate::sched::spawn_background(name, future);
     }
 }
 

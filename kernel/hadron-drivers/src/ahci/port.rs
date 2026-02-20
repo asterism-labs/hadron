@@ -7,9 +7,9 @@
 use core::ptr;
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use hadron_core::addr::VirtAddr;
-use hadron_driver_api::block::IoError;
-use hadron_driver_api::services::KernelServices;
+use hadron_kernel::addr::VirtAddr;
+use hadron_kernel::driver_api::block::IoError;
+use hadron_kernel::driver_api::services::KernelServices;
 
 use super::command::{
     CMD_FIS_LEN_DWORDS, CMD_FIS_OFFSET, CommandHeader, FisRegH2d, PRDT_OFFSET, PrdtEntry,
@@ -162,7 +162,7 @@ impl AhciPort {
 
         // Run IDENTIFY DEVICE.
         if let Ok(ident) = port.identify_device(services) {
-            hadron_core::kinfo!(
+            hadron_kernel::kinfo!(
                 "AHCI: port {} -- {} sectors, {} bytes/sector",
                 port_num,
                 ident.sector_count,
@@ -339,7 +339,7 @@ impl AhciPort {
     pub async fn issue_command_async(
         &self,
         slot: u8,
-        irq: &crate::irq::IrqLine,
+        irq: &hadron_kernel::drivers::irq::IrqLine,
     ) -> Result<(), IoError> {
         let ci_bit = 1u32 << slot;
 

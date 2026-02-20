@@ -8,7 +8,7 @@ use alloc::collections::BinaryHeap;
 use core::cmp::{Ordering, Reverse};
 use core::task::Waker;
 
-use hadron_core::sync::IrqSpinLock;
+use crate::sync::IrqSpinLock;
 
 struct SleepEntry {
     deadline: u64,

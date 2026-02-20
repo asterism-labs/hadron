@@ -1,7 +1,7 @@
 //! VFS syscall handlers: open, read, write, close, stat, readdir, dup.
 
-use hadron_core::syscall::EFAULT;
-use hadron_core::syscall::userptr::UserSlice;
+use crate::syscall::EFAULT;
+use crate::syscall::userptr::UserSlice;
 
 use crate::fs::file::OpenFlags;
 use crate::fs::{poll_immediate, try_poll_immediate};
@@ -26,7 +26,7 @@ pub(super) fn sys_vnode_open(path_ptr: usize, path_len: usize, flags: usize) -> 
     // SAFETY: UserSlice validated that [path_ptr, path_ptr+path_len) is in user space.
     let path_bytes = unsafe { user_slice.as_slice() };
     let Ok(path) = core::str::from_utf8(path_bytes) else {
-        return -hadron_core::syscall::EINVAL;
+        return -crate::syscall::EINVAL;
     };
 
     #[expect(clippy::cast_possible_truncation, reason = "open flags fit in u32")]
@@ -34,7 +34,7 @@ pub(super) fn sys_vnode_open(path_ptr: usize, path_len: usize, flags: usize) -> 
 
     // Resolve path via VFS.
     let Ok(inode) = crate::fs::vfs::with_vfs(|vfs| vfs.resolve(path)) else {
-        return -hadron_core::syscall::ENOENT;
+        return -crate::syscall::ENOENT;
     };
 
     // Allocate fd in the current process's fd table.
@@ -74,11 +74,11 @@ pub(super) fn sys_vnode_read(fd: usize, buf_ptr: usize, buf_len: usize) -> isize
     let (inode, offset) = match crate::proc::with_current_process(|process| {
         let fd_table = process.fd_table.lock();
         let Some(file) = fd_table.get(fd) else {
-            return Err(-hadron_core::syscall::EBADF);
+            return Err(-crate::syscall::EBADF);
         };
 
         if !file.flags.contains(OpenFlags::READ) {
-            return Err(-hadron_core::syscall::EBADF);
+            return Err(-crate::syscall::EBADF);
         }
 
         Ok((file.inode.clone(), file.offset))
@@ -135,11 +135,11 @@ pub(super) fn sys_vnode_write(fd: usize, buf_ptr: usize, buf_len: usize) -> isiz
     let (inode, offset) = match crate::proc::with_current_process(|process| {
         let fd_table = process.fd_table.lock();
         let Some(file) = fd_table.get(fd) else {
-            return Err(-hadron_core::syscall::EBADF);
+            return Err(-crate::syscall::EBADF);
         };
 
         if !file.flags.contains(OpenFlags::WRITE) {
-            return Err(-hadron_core::syscall::EBADF);
+            return Err(-crate::syscall::EBADF);
         }
 
         Ok((file.inode.clone(), file.offset))
@@ -199,7 +199,7 @@ pub(super) fn sys_handle_dup(old_fd: usize, new_fd: usize) -> isize {
     crate::proc::with_current_process(|process| {
         let mut fd_table = process.fd_table.lock();
         let Some(src) = fd_table.get(old_fd) else {
-            return -hadron_core::syscall::EBADF;
+            return -crate::syscall::EBADF;
         };
         let inode = src.inode.clone();
         let flags = src.flags;
@@ -221,7 +221,7 @@ pub(super) fn sys_handle_dup(old_fd: usize, new_fd: usize) -> isize {
 ///
 /// Returns 0 on success, or a negative errno on failure.
 pub(super) fn sys_vnode_stat(fd: usize, buf_ptr: usize, buf_len: usize) -> isize {
-    use hadron_core::syscall::{EINVAL, StatInfo};
+    use crate::syscall::{EINVAL, StatInfo};
 
     let stat_size = core::mem::size_of::<StatInfo>();
     if buf_len < stat_size {
@@ -235,17 +235,17 @@ pub(super) fn sys_vnode_stat(fd: usize, buf_ptr: usize, buf_len: usize) -> isize
     crate::proc::with_current_process(|process| {
         let fd_table = process.fd_table.lock();
         let Some(file) = fd_table.get(fd) else {
-            return -hadron_core::syscall::EBADF;
+            return -crate::syscall::EBADF;
         };
 
         let inode = file.inode.clone();
         drop(fd_table);
 
         let inode_type = match inode.inode_type() {
-            crate::fs::InodeType::File => hadron_core::syscall::INODE_TYPE_FILE,
-            crate::fs::InodeType::Directory => hadron_core::syscall::INODE_TYPE_DIR,
-            crate::fs::InodeType::CharDevice => hadron_core::syscall::INODE_TYPE_CHARDEV,
-            crate::fs::InodeType::Symlink => hadron_core::syscall::INODE_TYPE_SYMLINK,
+            crate::fs::InodeType::File => crate::syscall::INODE_TYPE_FILE,
+            crate::fs::InodeType::Directory => crate::syscall::INODE_TYPE_DIR,
+            crate::fs::InodeType::CharDevice => crate::syscall::INODE_TYPE_CHARDEV,
+            crate::fs::InodeType::Symlink => crate::syscall::INODE_TYPE_SYMLINK,
         };
 
         let perms = inode.permissions();
@@ -318,12 +318,12 @@ pub(super) fn sys_handle_pipe(fds_ptr: usize) -> isize {
     reason = "entry counts are small, wrap is impossible"
 )]
 pub(super) fn sys_vnode_readdir(fd: usize, buf_ptr: usize, buf_len: usize) -> isize {
-    use hadron_core::syscall::DirEntryInfo;
+    use crate::syscall::DirEntryInfo;
 
     let entry_size = core::mem::size_of::<DirEntryInfo>();
     let max_entries = buf_len / entry_size;
     if max_entries == 0 {
-        return -hadron_core::syscall::EINVAL;
+        return -crate::syscall::EINVAL;
     }
 
     let total_bytes = max_entries * entry_size;
@@ -334,7 +334,7 @@ pub(super) fn sys_vnode_readdir(fd: usize, buf_ptr: usize, buf_len: usize) -> is
     crate::proc::with_current_process(|process| {
         let fd_table = process.fd_table.lock();
         let Some(file) = fd_table.get(fd) else {
-            return -hadron_core::syscall::EBADF;
+            return -crate::syscall::EBADF;
         };
 
         let inode = file.inode.clone();
@@ -355,10 +355,10 @@ pub(super) fn sys_vnode_readdir(fd: usize, buf_ptr: usize, buf_len: usize) -> is
             }
 
             let inode_type = match entry.inode_type {
-                crate::fs::InodeType::File => hadron_core::syscall::INODE_TYPE_FILE,
-                crate::fs::InodeType::Directory => hadron_core::syscall::INODE_TYPE_DIR,
-                crate::fs::InodeType::CharDevice => hadron_core::syscall::INODE_TYPE_CHARDEV,
-                crate::fs::InodeType::Symlink => hadron_core::syscall::INODE_TYPE_SYMLINK,
+                crate::fs::InodeType::File => crate::syscall::INODE_TYPE_FILE,
+                crate::fs::InodeType::Directory => crate::syscall::INODE_TYPE_DIR,
+                crate::fs::InodeType::CharDevice => crate::syscall::INODE_TYPE_CHARDEV,
+                crate::fs::InodeType::Symlink => crate::syscall::INODE_TYPE_SYMLINK,
             };
 
             let name_bytes = entry.name.as_bytes();
@@ -390,9 +390,9 @@ pub(super) fn sys_vnode_readdir(fd: usize, buf_ptr: usize, buf_len: usize) -> is
 /// Sets the I/O parameters, restores kernel CR3 and GS bases, then
 /// calls `restore_kernel_context` — never returns.
 fn trap_io(fd: usize, buf_ptr: usize, buf_len: usize, is_write: bool) -> ! {
-    use hadron_core::arch::x86_64::registers::control::Cr3;
-    use hadron_core::arch::x86_64::registers::model_specific::{IA32_GS_BASE, IA32_KERNEL_GS_BASE};
-    use hadron_core::arch::x86_64::userspace::restore_kernel_context;
+    use crate::arch::x86_64::registers::control::Cr3;
+    use crate::arch::x86_64::registers::model_specific::{IA32_GS_BASE, IA32_KERNEL_GS_BASE};
+    use crate::arch::x86_64::userspace::restore_kernel_context;
 
     let kernel_cr3 = crate::proc::kernel_cr3();
 

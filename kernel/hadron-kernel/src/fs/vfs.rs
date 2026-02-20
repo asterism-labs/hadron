@@ -10,7 +10,7 @@ use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 
-use hadron_core::sync::SpinLock;
+use crate::sync::SpinLock;
 
 use super::path;
 use super::{FileSystem, FsError, Inode, InodeType, poll_immediate};
@@ -34,7 +34,7 @@ impl Vfs {
 
     /// Mount a filesystem at the given path.
     pub fn mount(&mut self, path: &str, fs: Arc<dyn FileSystem>) {
-        hadron_core::kinfo!("VFS: Mounted {} at {}", fs.name(), path);
+        crate::kinfo!("VFS: Mounted {} at {}", fs.name(), path);
         self.mounts.insert(path.to_string(), fs);
     }
 

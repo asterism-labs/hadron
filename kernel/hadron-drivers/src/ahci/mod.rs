@@ -2,19 +2,21 @@
 //!
 //! Drives the Intel ICH9 AHCI controller (vendor 0x8086, device 0x2922) and
 //! any AHCI-compatible controller (class 0x01, subclass 0x06, prog-if 0x01).
-//! Implements [`BlockDevice`](hadron_driver_api::block::BlockDevice) for each
+//! Implements [`BlockDevice`](hadron_kernel::driver_api::block::BlockDevice) for each
 //! discovered SATA disk.
 
 extern crate alloc;
-use alloc::vec::Vec;
 
+use alloc::boxed::Box;
+use alloc::vec::Vec;
 use core::ptr;
 
-use hadron_core::sync::SpinLock;
-use hadron_driver_api::block::{BlockDevice, IoError};
-use hadron_driver_api::error::DriverError;
-use hadron_driver_api::pci::{PciBar, PciDeviceId, PciDeviceInfo};
-use hadron_driver_api::services::KernelServices;
+use hadron_kernel::sync::SpinLock;
+use hadron_kernel::driver_api::block::{BlockDevice, IoError};
+use hadron_kernel::driver_api::dyn_dispatch::DynBlockDeviceWrapper;
+use hadron_kernel::driver_api::error::DriverError;
+use hadron_kernel::driver_api::pci::{PciBar, PciDeviceId, PciDeviceInfo};
+use hadron_kernel::driver_api::services::KernelServices;
 
 pub mod command;
 pub mod hba;
@@ -55,7 +57,7 @@ pub struct AhciDisk {
     /// The AHCI port state.
     port: AhciPort,
     /// The bound IRQ line for async completion notification.
-    irq: crate::irq::IrqLine,
+    irq: hadron_kernel::drivers::irq::IrqLine,
     /// Kernel services reference (for DMA allocation).
     services: &'static dyn KernelServices,
 }
@@ -123,38 +125,8 @@ impl BlockDevice for AhciDisk {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Global disk registry
-// ---------------------------------------------------------------------------
-
-/// Global registry of discovered AHCI disks.
-static AHCI_DISKS: SpinLock<Option<Vec<AhciDisk>>> = SpinLock::new(None);
-
-/// Returns the number of registered AHCI disks.
-#[must_use]
-pub fn disk_count() -> usize {
-    AHCI_DISKS.lock().as_ref().map_or(0, Vec::len)
-}
-
-/// Executes a closure with a reference to the disk at `index`.
-pub fn with_disk<R>(index: usize, f: impl FnOnce(&AhciDisk) -> R) -> Option<R> {
-    let guard = AHCI_DISKS.lock();
-    guard.as_ref().and_then(|disks| disks.get(index).map(f))
-}
-
-/// Removes and returns the disk at `index`, transferring ownership to the caller.
-///
-/// Uses `swap_remove` so remaining disk indices may shift. Returns `None` if
-/// the index is out of bounds or the registry is not initialized.
-pub fn take_disk(index: usize) -> Option<AhciDisk> {
-    let mut guard = AHCI_DISKS.lock();
-    let disks = guard.as_mut()?;
-    if index < disks.len() {
-        Some(disks.swap_remove(index))
-    } else {
-        None
-    }
-}
+/// Counter for assigning unique device names to discovered AHCI disks.
+static DISK_INDEX: SpinLock<usize> = SpinLock::new(0);
 
 // ---------------------------------------------------------------------------
 // PCI registration
@@ -168,9 +140,9 @@ static ID_TABLE: [PciDeviceId; 2] = [
 ];
 
 #[cfg(target_os = "none")]
-hadron_driver_api::pci_driver_entry!(
+hadron_kernel::pci_driver_entry!(
     AHCI_PCI_DRIVER,
-    hadron_driver_api::registration::PciDriverEntry {
+    hadron_kernel::driver_api::registration::PciDriverEntry {
         name: "ahci",
         id_table: &ID_TABLE,
         probe: ahci_probe,
@@ -183,7 +155,7 @@ fn ahci_probe(
     info: &PciDeviceInfo,
     services: &'static dyn KernelServices,
 ) -> Result<(), DriverError> {
-    hadron_core::kinfo!(
+    hadron_kernel::kinfo!(
         "AHCI: probing {:04x}:{:04x} at {}",
         info.vendor_id,
         info.device_id,
@@ -194,7 +166,7 @@ fn ahci_probe(
     let (abar_phys, abar_size) = match info.bars[5] {
         PciBar::Memory { base, size, .. } => (base, size.max(AHCI_ABAR_MIN_SIZE)),
         _ => {
-            hadron_core::kwarn!("AHCI: BAR5 is not a memory BAR");
+            hadron_kernel::kwarn!("AHCI: BAR5 is not a memory BAR");
             return Err(DriverError::InitFailed);
         }
     };
@@ -211,10 +183,10 @@ fn ahci_probe(
     hba.enable();
 
     let (major, minor) = hba.version();
-    hadron_core::kinfo!("AHCI: version {}.{}", major, minor);
+    hadron_kernel::kinfo!("AHCI: version {}.{}", major, minor);
 
     // Bind IRQ line for async completion.
-    let _irq = crate::irq::IrqLine::bind_isa(info.interrupt_line, services)
+    let _irq = hadron_kernel::drivers::irq::IrqLine::bind_isa(info.interrupt_line, services)
         .map_err(|_| DriverError::InitFailed)?;
 
     // Unmask the IRQ.
@@ -231,19 +203,19 @@ fn ahci_probe(
             continue;
         }
 
-        hadron_core::kdebug!("AHCI: checking port {}", port_num);
+        hadron_kernel::kdebug!("AHCI: checking port {}", port_num);
 
         if let Some(port) = AhciPort::init(&hba, port_num, services) {
             if port.identity.is_some() {
-                hadron_core::kinfo!("AHCI: port {} has device", port_num);
+                hadron_kernel::kinfo!("AHCI: port {} has device", port_num);
 
                 // Clone the IRQ binding for each disk.
                 // All ports on the same HBA share the same IRQ.
-                let disk_irq = crate::irq::IrqLine::bind_isa(info.interrupt_line, services)
+                let disk_irq = hadron_kernel::drivers::irq::IrqLine::bind_isa(info.interrupt_line, services)
                     .unwrap_or_else(|_| {
                         // If we can't bind a second time (already registered), reuse
                         // by creating a new IrqLine that references the same vector.
-                        crate::irq::IrqLine::from_vector(
+                        hadron_kernel::drivers::irq::IrqLine::from_vector(
                             services.isa_irq_vector(info.interrupt_line),
                         )
                     });
@@ -258,13 +230,23 @@ fn ahci_probe(
     }
 
     if disks.is_empty() {
-        hadron_core::kwarn!("AHCI: no devices found on any port");
+        hadron_kernel::kwarn!("AHCI: no devices found on any port");
     } else {
-        hadron_core::kinfo!("AHCI: {} disk(s) registered", disks.len());
+        hadron_kernel::kinfo!("AHCI: {} disk(s) discovered", disks.len());
     }
 
-    let mut global = AHCI_DISKS.lock();
-    *global = Some(disks);
+    // Register each disk in the kernel device registry.
+    for disk in disks {
+        let idx = {
+            let mut counter = DISK_INDEX.lock();
+            let i = *counter;
+            *counter += 1;
+            i
+        };
+        let name = alloc::format!("ahci-{}", idx);
+        services.register_block_device(&name, Box::new(DynBlockDeviceWrapper(disk)));
+        hadron_kernel::kinfo!("AHCI: registered as \"{}\"", name);
+    }
 
     Ok(())
 }

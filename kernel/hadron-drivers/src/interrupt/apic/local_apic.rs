@@ -3,7 +3,7 @@
 //! Provides MMIO-based access to the Local APIC for interrupt management,
 //! timer configuration, and inter-processor interrupts.
 
-use hadron_core::addr::VirtAddr;
+use hadron_kernel::addr::VirtAddr;
 
 // Register offsets from LAPIC base.
 const REG_ID: u32 = 0x020;

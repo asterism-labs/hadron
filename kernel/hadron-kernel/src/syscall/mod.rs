@@ -1,4 +1,4 @@
-//! Syscall dispatch table.
+//! Syscall dispatch table and userspace pointer validation.
 //!
 //! Routes incoming syscall numbers to individual handler functions via the
 //! generated [`SyscallHandler`] trait from `hadron-syscall`.
@@ -8,9 +8,10 @@ mod memory;
 mod process;
 mod query;
 mod time;
+pub mod userptr;
 mod vfs;
 
-use hadron_syscall::{SyscallHandler, dispatch};
+pub use hadron_syscall::*;
 
 /// Kernel syscall handler implementation.
 ///

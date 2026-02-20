@@ -4,10 +4,10 @@
 //! resolving symbols, computing values via [`hadron_elf::compute_x86_64_reloc`],
 //! and writing the results into already-mapped user pages via the HHDM.
 
-use hadron_core::addr::VirtAddr;
-use hadron_core::mm::address_space::AddressSpace;
-use hadron_core::mm::mapper::{PageMapper, PageTranslator};
-use hadron_core::paging::Size4KiB;
+use crate::addr::VirtAddr;
+use crate::mm::address_space::AddressSpace;
+use crate::mm::mapper::{PageMapper, PageTranslator};
+use crate::paging::Size4KiB;
 use hadron_elf::{
     Elf64SectionHeader, ElfFile, RelocValue, SHN_UNDEF, SHT_DYNSYM, SHT_SYMTAB,
     compute_x86_64_reloc,

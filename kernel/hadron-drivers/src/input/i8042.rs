@@ -8,8 +8,8 @@ use core::fmt;
 
 use bitflags::bitflags;
 #[cfg(target_arch = "x86_64")]
-use hadron_core::arch::x86_64::Port;
-use hadron_driver_api::input::KeyCode;
+use hadron_kernel::arch::x86_64::Port;
+use hadron_kernel::driver_api::input::KeyCode;
 
 // ---------------------------------------------------------------------------
 // I/O ports (x86_64 only)
@@ -513,9 +513,9 @@ impl MousePacket {
 // Matched by compatible string "i8042". The actual async setup happens
 // in hadron-kernel's AsyncKeyboard/AsyncMouse wrappers.
 #[cfg(all(target_os = "none", target_arch = "x86_64"))]
-hadron_driver_api::platform_driver_entry!(
+hadron_kernel::platform_driver_entry!(
     I8042_DRIVER,
-    hadron_driver_api::registration::PlatformDriverEntry {
+    hadron_kernel::driver_api::registration::PlatformDriverEntry {
         name: "i8042",
         compatible: "i8042",
         init: i8042_platform_init,
@@ -524,12 +524,12 @@ hadron_driver_api::platform_driver_entry!(
 
 #[cfg(all(target_os = "none", target_arch = "x86_64"))]
 fn i8042_platform_init(
-    _services: &'static dyn hadron_driver_api::services::KernelServices,
-) -> Result<(), hadron_driver_api::error::DriverError> {
+    _services: &'static dyn hadron_kernel::driver_api::services::KernelServices,
+) -> Result<(), hadron_kernel::driver_api::error::DriverError> {
     // Platform init hook — performs the actual controller initialization.
     let ctrl = I8042::new();
     // SAFETY: Called once during driver matching, ports 0x60/0x64 are valid i8042.
-    unsafe { ctrl.init() }.map_err(|_| hadron_driver_api::error::DriverError::InitFailed)
+    unsafe { ctrl.init() }.map_err(|_| hadron_kernel::driver_api::error::DriverError::InitFailed)
 }
 
 #[cfg(test)]

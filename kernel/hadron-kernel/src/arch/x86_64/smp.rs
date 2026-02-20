@@ -21,10 +21,10 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use alloc::boxed::Box;
 
-use hadron_core::arch::x86_64::registers::model_specific::{IA32_GS_BASE, IA32_KERNEL_GS_BASE};
-use hadron_core::percpu::{MAX_CPUS, PerCpu};
-use hadron_core::{kdebug, kinfo, kwarn};
-use hadron_drivers::apic::local_apic::LocalApic;
+use crate::arch::x86_64::registers::model_specific::{IA32_GS_BASE, IA32_KERNEL_GS_BASE};
+use crate::percpu::{MAX_CPUS, PerCpu};
+use crate::{kdebug, kinfo, kwarn};
+use crate::arch::x86_64::hw::local_apic::LocalApic;
 
 use crate::boot::{BootInfo, SmpCpuEntry};
 
@@ -214,7 +214,7 @@ pub fn boot_aps(boot_info: &impl BootInfo) {
     }
 
     let ready = AP_READY_COUNT.load(Ordering::Acquire);
-    hadron_core::percpu::set_cpu_count(1 + ready);
+    crate::percpu::set_cpu_count(1 + ready);
     kinfo!("SMP: {} APs online ({} total CPUs)", ready, 1 + ready);
 }
 
@@ -255,7 +255,7 @@ fn ap_entry(_mp_info: u64, percpu_addr: u64) -> ! {
 
     // 4. Initialize SYSCALL/SYSRET MSRs.
     // SAFETY: GDT is loaded, GS base is set.
-    unsafe { hadron_core::arch::x86_64::syscall::init() };
+    unsafe { crate::arch::x86_64::syscall::init() };
 
     // 4b. Populate per-CPU pointers for assembly stubs (timer, syscall).
     // These pointers let naked ASM access per-CPU CpuLocal elements via
@@ -270,7 +270,7 @@ fn ap_entry(_mp_info: u64, percpu_addr: u64) -> ! {
         (*percpu_mut).saved_kernel_rsp_ptr =
             proc::SAVED_KERNEL_RSP.get_for(cpu_id) as *const _ as u64;
         (*percpu_mut).trap_reason_ptr = proc::TRAP_REASON.get_for(cpu_id) as *const _ as u64;
-        (*percpu_mut).saved_regs_ptr = hadron_core::arch::x86_64::syscall::SYSCALL_SAVED_REGS
+        (*percpu_mut).saved_regs_ptr = crate::arch::x86_64::syscall::SYSCALL_SAVED_REGS
             .get_for(cpu_id)
             .get() as u64;
     }
@@ -289,7 +289,7 @@ fn ap_entry(_mp_info: u64, percpu_addr: u64) -> ! {
 
     // 7. Enable interrupts and enter this AP's executor loop.
     // SAFETY: All interrupt infrastructure is initialized.
-    unsafe { hadron_core::arch::x86_64::instructions::interrupts::enable() };
+    unsafe { crate::arch::x86_64::instructions::interrupts::enable() };
 
     // Run this AP's per-CPU executor. Initially empty — tasks arrive via
     // cross-CPU wakeup (Step 12.5) or work stealing (Step 12.6).

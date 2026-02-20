@@ -4,16 +4,17 @@
 //! VBE DISPI interface for mode setting and a PCI BAR0 linear framebuffer.
 //! Implements [`Framebuffer`] for pixel-level access.
 
+extern crate alloc;
+
 use core::ptr;
 
-use hadron_core::addr::VirtAddr;
-use hadron_core::arch::x86_64::Port;
-use hadron_core::sync::SpinLock;
-use hadron_driver_api::error::DriverError;
-use hadron_driver_api::framebuffer::{Framebuffer, FramebufferInfo, PixelFormat};
-use hadron_driver_api::pci::{PciBar, PciDeviceId, PciDeviceInfo};
-use hadron_driver_api::resource::MmioRegion;
-use hadron_driver_api::services::KernelServices;
+use hadron_kernel::addr::VirtAddr;
+use hadron_kernel::arch::x86_64::Port;
+use hadron_kernel::driver_api::error::DriverError;
+use hadron_kernel::driver_api::framebuffer::{Framebuffer, FramebufferInfo, PixelFormat};
+use hadron_kernel::driver_api::pci::{PciBar, PciDeviceId, PciDeviceInfo};
+use hadron_kernel::driver_api::resource::MmioRegion;
+use hadron_kernel::driver_api::services::KernelServices;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -145,14 +146,14 @@ impl BochsVga {
         // SAFETY: Reading the BGA version register via DISPI ports.
         let version = unsafe { dispi.read(DISPI_INDEX_ID) };
         if version < BGA_VERSION_MIN {
-            hadron_core::kwarn!(
+            hadron_kernel::kwarn!(
                 "bochs-vga: unsupported BGA version {:#06x} (need >= {:#06x})",
                 version,
                 BGA_VERSION_MIN
             );
             return Err(DriverError::Unsupported);
         }
-        hadron_core::kinfo!("bochs-vga: BGA version {:#06x}", version);
+        hadron_kernel::kinfo!("bochs-vga: BGA version {:#06x}", version);
 
         // Extract BAR0 (framebuffer memory).
         let (bar0_phys, bar0_size) = match info.bars[0] {
@@ -196,7 +197,7 @@ impl BochsVga {
             pixel_format: PixelFormat::Bgr32,
         };
 
-        hadron_core::kinfo!(
+        hadron_kernel::kinfo!(
             "bochs-vga: mode set {}x{}x{}, pitch={}, fb at {:#x}",
             width,
             height,
@@ -274,25 +275,14 @@ impl Framebuffer for BochsVga {
 // Global state + PCI registration
 // ---------------------------------------------------------------------------
 
-/// Global Bochs VGA driver instance.
-static BOCHS_VGA: SpinLock<Option<BochsVga>> = SpinLock::new(None);
-
-/// Executes a closure with a reference to the initialized Bochs VGA driver.
-///
-/// Returns `None` if the driver has not been initialized.
-pub fn with_bochs_vga<R>(f: impl FnOnce(&BochsVga) -> R) -> Option<R> {
-    let guard = BOCHS_VGA.lock();
-    guard.as_ref().map(f)
-}
-
 /// PCI device ID table for Bochs VGA.
 #[cfg(target_os = "none")]
 static ID_TABLE: [PciDeviceId; 1] = [PciDeviceId::new(BGA_VENDOR_ID, BGA_DEVICE_ID)];
 
 #[cfg(target_os = "none")]
-hadron_driver_api::pci_driver_entry!(
+hadron_kernel::pci_driver_entry!(
     BOCHS_VGA_DRIVER,
-    hadron_driver_api::registration::PciDriverEntry {
+    hadron_kernel::driver_api::registration::PciDriverEntry {
         name: "bochs-vga",
         id_table: &ID_TABLE,
         probe: bochs_vga_probe,
@@ -307,9 +297,10 @@ fn bochs_vga_probe(
 ) -> Result<(), DriverError> {
     let vga = BochsVga::init(info, services, DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_BPP)?;
 
-    let mut guard = BOCHS_VGA.lock();
-    *guard = Some(vga);
+    // Register framebuffer with the kernel's device registry.
+    let vga_arc = alloc::sync::Arc::new(vga);
+    services.register_framebuffer("bochs-vga", vga_arc);
 
-    hadron_core::kinfo!("bochs-vga: driver initialized successfully");
+    hadron_kernel::kinfo!("bochs-vga: driver initialized successfully");
     Ok(())
 }

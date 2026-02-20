@@ -1,6 +1,8 @@
 //! AArch64 architecture support for the kernel (stub).
 
+pub mod instructions;
 pub mod interrupts;
+pub mod paging;
 
 /// AArch64 CPU initialization (exception vectors, etc.).
 pub fn cpu_init() {

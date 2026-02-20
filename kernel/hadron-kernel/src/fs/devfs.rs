@@ -331,10 +331,10 @@ impl Inode for DevConsole {
     ) -> Pin<Box<dyn Future<Output = Result<usize, FsError>> + Send + 'a>> {
         Box::pin(async move {
             if let Ok(s) = core::str::from_utf8(buf) {
-                hadron_core::kprint!("{}", s);
+                crate::kprint!("{}", s);
             } else {
                 for &byte in buf {
-                    hadron_core::kprint!("{}", byte as char);
+                    crate::kprint!("{}", byte as char);
                 }
             }
             Ok(buf.len())

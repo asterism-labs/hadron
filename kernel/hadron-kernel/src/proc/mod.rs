@@ -18,17 +18,17 @@ use alloc::vec::Vec;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 
-use hadron_core::addr::PhysAddr;
-use hadron_core::arch::x86_64::paging::PageTableMapper;
-use hadron_core::arch::x86_64::registers::control::Cr3;
-use hadron_core::arch::x86_64::registers::model_specific::{IA32_GS_BASE, IA32_KERNEL_GS_BASE};
-use hadron_core::arch::x86_64::userspace::{
+use crate::addr::PhysAddr;
+use crate::arch::x86_64::paging::PageTableMapper;
+use crate::arch::x86_64::registers::control::Cr3;
+use crate::arch::x86_64::registers::model_specific::{IA32_GS_BASE, IA32_KERNEL_GS_BASE};
+use crate::arch::x86_64::userspace::{
     UserRegisters, enter_userspace_resume, enter_userspace_save, restore_kernel_context,
 };
-use hadron_core::mm::address_space::AddressSpace;
-use hadron_core::percpu::{CpuLocal, MAX_CPUS};
-use hadron_core::sync::SpinLock;
-use hadron_core::{kdebug, kinfo};
+use crate::mm::address_space::AddressSpace;
+use crate::percpu::{CpuLocal, MAX_CPUS};
+use crate::sync::SpinLock;
+use crate::{kdebug, kinfo};
 
 use crate::fs::file::{FileDescriptorTable, OpenFlags};
 use crate::sync::HeapWaitQueue;
@@ -443,7 +443,7 @@ pub fn spawn_init() {
         exec::create_process_from_binary(init_elf, None).expect("failed to load init binary");
 
     // Write argv onto the init process's stack: ["/init"].
-    let hhdm_offset = hadron_core::mm::hhdm::offset();
+    let hhdm_offset = crate::mm::hhdm::offset();
     let stack_top = exec::write_argv_to_init_stack(process.address_space(), hhdm_offset)
         .expect("failed to write argv for init");
 
@@ -604,7 +604,7 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                     saved_r15,
                     saved_user_rsp,
                 ) = unsafe {
-                    let saved = &*hadron_core::arch::x86_64::syscall::SYSCALL_SAVED_REGS
+                    let saved = &*crate::arch::x86_64::syscall::SYSCALL_SAVED_REGS
                         .get()
                         .get();
                     (
@@ -616,7 +616,7 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                         saved.r13,
                         saved.r14,
                         saved.r15,
-                        hadron_core::percpu::current_cpu().user_rsp,
+                        crate::percpu::current_cpu().user_rsp,
                     )
                 };
 
@@ -629,7 +629,7 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                     unsafe {
                         Cr3::write(process.user_cr3);
                     }
-                    let uslice = hadron_core::syscall::userptr::UserSlice::new(
+                    let uslice = crate::syscall::userptr::UserSlice::new(
                         status_ptr as usize,
                         core::mem::size_of::<u64>(),
                     );
@@ -695,7 +695,7 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                     saved_r15,
                     saved_user_rsp,
                 ) = unsafe {
-                    let saved = &*hadron_core::arch::x86_64::syscall::SYSCALL_SAVED_REGS
+                    let saved = &*crate::arch::x86_64::syscall::SYSCALL_SAVED_REGS
                         .get()
                         .get();
                     (
@@ -707,7 +707,7 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                         saved.r13,
                         saved.r14,
                         saved.r15,
-                        hadron_core::percpu::current_cpu().user_rsp,
+                        crate::percpu::current_cpu().user_rsp,
                     )
                 };
 
@@ -722,7 +722,7 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                 let result: isize = if let Some((inode, offset, flags)) = io_result {
                     if is_write {
                         if !flags.contains(crate::fs::file::OpenFlags::WRITE) {
-                            -hadron_core::syscall::EBADF
+                            -crate::syscall::EBADF
                         } else {
                             // Copy user data to kernel buffer under user CR3.
                             let mut kbuf = alloc::vec![0u8; io_buf_len];
@@ -730,7 +730,7 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                             unsafe {
                                 Cr3::write(process.user_cr3);
                             }
-                            let uslice = hadron_core::syscall::userptr::UserSlice::new(
+                            let uslice = crate::syscall::userptr::UserSlice::new(
                                 io_buf_ptr, io_buf_len,
                             );
                             if let Ok(slice) = uslice {
@@ -762,7 +762,7 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                         }
                     } else {
                         if !flags.contains(crate::fs::file::OpenFlags::READ) {
-                            -hadron_core::syscall::EBADF
+                            -crate::syscall::EBADF
                         } else {
                             let mut kbuf = alloc::vec![0u8; io_buf_len];
                             match inode.read(offset, &mut kbuf).await {
@@ -772,7 +772,7 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                                     unsafe {
                                         Cr3::write(process.user_cr3);
                                     }
-                                    let uslice = hadron_core::syscall::userptr::UserSlice::new(
+                                    let uslice = crate::syscall::userptr::UserSlice::new(
                                         io_buf_ptr, n,
                                     );
                                     if let Ok(slice) = uslice {
@@ -804,7 +804,7 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                         }
                     }
                 } else {
-                    -hadron_core::syscall::EBADF
+                    -crate::syscall::EBADF
                 };
 
                 // Restore user registers and set result in rax.
@@ -858,7 +858,7 @@ async fn handle_wait(parent_pid: u32, target_pid: u32) -> (isize, u64) {
         // Wait for any child — pick the first one.
         let children = children_of(parent_pid);
         if children.is_empty() {
-            return (-(hadron_core::syscall::EINVAL), 0);
+            return (-(crate::syscall::EINVAL), 0);
         }
         lookup_process(children[0])
     } else {
@@ -867,12 +867,12 @@ async fn handle_wait(parent_pid: u32, target_pid: u32) -> (isize, u64) {
 
     let child = match child {
         Some(c) => c,
-        None => return (-(hadron_core::syscall::EINVAL), 0),
+        None => return (-(crate::syscall::EINVAL), 0),
     };
 
     // Verify it's actually our child.
     if child.parent_pid != Some(parent_pid) {
-        return (-(hadron_core::syscall::EINVAL), 0);
+        return (-(crate::syscall::EINVAL), 0);
     }
 
     // Wait for the child to exit (may already be done).

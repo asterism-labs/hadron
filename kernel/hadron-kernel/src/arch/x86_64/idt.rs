@@ -1,6 +1,6 @@
 //! IDT setup: exception handlers and hardware interrupt stubs.
 
-use hadron_core::arch::x86_64::structures::idt::InterruptDescriptorTable;
+use crate::arch::x86_64::structures::idt::InterruptDescriptorTable;
 
 use crate::sync::LazyLock;
 
@@ -75,5 +75,5 @@ static IDT: LazyLock<InterruptDescriptorTable> = LazyLock::new(|| {
 /// Must be called after GDT initialization (CS must be valid).
 pub unsafe fn init() {
     unsafe { IDT.load() };
-    hadron_core::kdebug!("IDT initialized");
+    crate::kdebug!("IDT initialized");
 }

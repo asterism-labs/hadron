@@ -53,7 +53,7 @@ static KERNEL_VIRT_BASE: AtomicU64 = AtomicU64::new(0);
 pub fn init(hbtf_data: &'static [u8], kernel_virt_base: u64) {
     // Validate the HBTF header
     if hbtf_data.len() < HBTF_HEADER_SIZE {
-        hadron_core::kwarn!(
+        crate::kwarn!(
             "HBTF: data too short ({} bytes), backtraces disabled",
             hbtf_data.len()
         );
@@ -61,13 +61,13 @@ pub fn init(hbtf_data: &'static [u8], kernel_virt_base: u64) {
     }
 
     if hbtf_data[..4] != HBTF_MAGIC {
-        hadron_core::kwarn!("HBTF: invalid magic, backtraces disabled");
+        crate::kwarn!("HBTF: invalid magic, backtraces disabled");
         return;
     }
 
     let version = u32::from_le_bytes([hbtf_data[4], hbtf_data[5], hbtf_data[6], hbtf_data[7]]);
     if version != HBTF_VERSION {
-        hadron_core::kwarn!("HBTF: unsupported version {version}, backtraces disabled");
+        crate::kwarn!("HBTF: unsupported version {version}, backtraces disabled");
         return;
     }
 
@@ -78,7 +78,7 @@ pub fn init(hbtf_data: &'static [u8], kernel_virt_base: u64) {
     KERNEL_VIRT_BASE.store(kernel_virt_base, Ordering::Relaxed);
     *HBTF_DATA.lock() = Some(hbtf_data);
 
-    hadron_core::kinfo!(
+    crate::kinfo!(
         "Backtrace: loaded HBTF ({} symbols, {} lines)",
         sym_count,
         line_count
