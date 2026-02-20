@@ -222,8 +222,35 @@ pub fn compile_crate(
             config_rlib,
             out_dir_suffix,
             mode,
+            &[],
         )
     }
+}
+
+/// Re-link a binary crate with additional object files (e.g., HKIF blob).
+///
+/// This performs a full cross-compilation of the crate, appending the given
+/// object files as extra linker arguments. Used for the two-pass HKIF link.
+pub fn relink_with_objects(
+    krate: &ResolvedCrate,
+    config: &ResolvedConfig,
+    target_spec: &str,
+    sysroot_dir: &Path,
+    artifacts: &ArtifactMap,
+    config_rlib: Option<&Path>,
+    extra_objects: &[PathBuf],
+) -> Result<PathBuf> {
+    compile_crate_cross(
+        krate,
+        config,
+        target_spec,
+        sysroot_dir,
+        artifacts,
+        config_rlib,
+        None,
+        CompileMode::Build,
+        extra_objects,
+    )
 }
 
 /// Compile a crate for a custom (cross) target.
@@ -236,6 +263,7 @@ fn compile_crate_cross(
     config_rlib: Option<&Path>,
     out_dir_suffix: Option<&str>,
     mode: CompileMode,
+    extra_link_objects: &[PathBuf],
 ) -> Result<PathBuf> {
     let suffix = out_dir_suffix.unwrap_or(&krate.target);
     let out_dir = config
@@ -298,6 +326,11 @@ fn compile_crate_cross(
             cmd.arg(format!("-Clink-arg=-T{}", ld_path.display()));
         }
         cmd.arg("-Clink-arg=--gc-sections");
+
+        // Extra object files (e.g., HKIF blob for pass-2 link).
+        for obj in extra_link_objects {
+            cmd.arg(format!("-Clink-arg={}", obj.display()));
+        }
     }
 
     // Features as --cfg.

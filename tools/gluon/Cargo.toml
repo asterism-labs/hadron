@@ -10,6 +10,7 @@ publish = false
 anyhow = "1"
 cargo-image-runner = { version = "0.4", default-features = false, features = ["bios", "limine", "iso", "qemu"] }
 clap = { version = "4", features = ["derive"] }
+crc32fast = "1"
 crossterm = "0.28"
 flate2 = "1"
 hadris-cpio = { version = "1.0.1", default-features = false, features = ["std", "write"] }

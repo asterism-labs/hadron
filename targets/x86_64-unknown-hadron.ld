@@ -84,7 +84,14 @@ SECTIONS {
     .dynstr : AT(ADDR(.dynstr) - KERNEL_VADDR) { *(.dynstr) } :rodata
     .rela.dyn : AT(ADDR(.rela.dyn) - KERNEL_VADDR) { *(.rela .rela.*) } :rodata
     .gnu.hash : AT(ADDR(.gnu.hash) - KERNEL_VADDR) { *(.gnu.hash) } :rodata
-    .hash : AT(ADDR(.hash) - KERNEL_VADDR) { *(.hash) __rodata_end = .; } :rodata
+    .hash : AT(ADDR(.hash) - KERNEL_VADDR) { *(.hash) } :rodata
+
+    .hadron_hkif : AT(ADDR(.hadron_hkif) - KERNEL_VADDR) {
+        __hadron_hkif_start = .;
+        KEEP(*(.hadron_hkif))
+        __hadron_hkif_end = .;
+        __rodata_end = .;
+    } :rodata
 
     . = ALIGN(4K);
 

@@ -752,6 +752,68 @@ fn execute_rule(
                         std::fs::copy(&built, &target_initrd)?;
                     }
                 }
+                "hkif" => {
+                    if let Some(ref kernel_bin) = state.kernel_binary {
+                        if state.kernel_binary_rebuilt || state.force {
+                            println!("\nGenerating HKIF (two-pass link)...");
+                            let hkif_bin = root.join("build/hkif.bin");
+                            let hkif_asm = root.join("build/hkif.S");
+                            let hkif_obj = crate::artifact::hkif::hkif_object_path(root);
+
+                            // Step 1: Generate HKIF blob from pass-1 kernel ELF.
+                            crate::artifact::hkif::generate_hkif(
+                                kernel_bin,
+                                &hkif_bin,
+                                state.config.profile.debug_info,
+                            )?;
+
+                            // Step 2: Generate assembly stub.
+                            crate::artifact::hkif::generate_hkif_asm(&hkif_bin, &hkif_asm)?;
+
+                            // Step 3: Assemble to object file.
+                            crate::artifact::hkif::assemble_hkif(&hkif_asm, &hkif_obj)?;
+
+                            // Step 4: Re-link kernel with HKIF object (pass 2).
+                            let boot_name = &state.config.profile.boot_binary;
+                            let sysroot_src = sysroot::sysroot_src_dir()?;
+                            let group_crates = crate_graph::resolve_group_from_model(
+                                model, "kernel-main", root, &sysroot_src,
+                            )?;
+                            let boot_crate = group_crates.iter()
+                                .find(|k| k.name == *boot_name)
+                                .ok_or_else(|| anyhow::anyhow!(
+                                    "boot binary '{}' not found in kernel-main group", boot_name
+                                ))?;
+
+                            let target_spec = state.target_specs.get(&boot_crate.target)
+                                .ok_or_else(|| anyhow::anyhow!(
+                                    "target spec for '{}' not found", boot_crate.target
+                                ))?;
+                            let sysroot_dir = state.sysroots.get(&boot_crate.target)
+                                .ok_or_else(|| anyhow::anyhow!(
+                                    "sysroot for '{}' not found", boot_crate.target
+                                ))?;
+                            let config_rlib = state.config_rlibs.get(&boot_crate.target)
+                                .map(|p| p.as_path());
+
+                            println!("  Re-linking {} with HKIF object...", boot_name);
+                            let new_binary = compile::relink_with_objects(
+                                boot_crate,
+                                &state.config,
+                                target_spec,
+                                sysroot_dir,
+                                &state.artifacts,
+                                config_rlib,
+                                &[hkif_obj],
+                            )?;
+
+                            state.kernel_binary = Some(new_binary.clone());
+                            state.artifacts.insert(boot_name, new_binary);
+                        } else {
+                            println!("\nHKIF unchanged, skipping.");
+                        }
+                    }
+                }
                 "config_crate" => {
                     // Config crate is built lazily by ensure_config_crate().
                 }

@@ -231,6 +231,11 @@ rule("hbtf")
     .output("build/backtrace.hbtf")
     .handler("hbtf");
 
+rule("hkif")
+    .inputs(["hadron-boot-limine"])
+    .output("build/hkif.bin")
+    .handler("hkif");
+
 rule("initrd")
     .inputs(["lepton-init", "lepton-shell", "lepton-coreutils"])
     .output("build/initrd.cpio")
@@ -247,6 +252,7 @@ pipeline()
     .barrier("host-ready")
     .stage("kernel", ["vendored", "kernel-libs", "kernel-drivers", "kernel-main"])
     .barrier("kernel-ready")
+    .rule("hkif")
     .stage("userspace", ["userspace"])
     .barrier("userspace-ready")
     .rule("hbtf")
