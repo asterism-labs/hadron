@@ -17,39 +17,39 @@ const HBTF_VERSION: u32 = 1;
 const HEADER_SIZE: u32 = 32;
 
 /// Size of a symbol entry in the HBTF binary.
-const SYM_ENTRY_SIZE: usize = 20;
+pub(crate) const SYM_ENTRY_SIZE: usize = 20;
 
 /// Size of a line entry in the HBTF binary.
-const LINE_ENTRY_SIZE: usize = 16;
+pub(crate) const LINE_ENTRY_SIZE: usize = 16;
 
 /// A function symbol extracted from the ELF.
-struct FuncSymbol {
+pub(crate) struct FuncSymbol {
     /// Offset from kernel virtual base.
-    addr: u64,
+    pub(crate) addr: u64,
     /// Symbol size in bytes.
-    size: u32,
+    pub(crate) size: u32,
     /// Demangled function name.
-    name: String,
+    pub(crate) name: String,
 }
 
 /// A line info entry extracted from DWARF.
-struct LineInfo {
+pub(crate) struct LineInfo {
     /// Offset from kernel virtual base.
-    addr: u64,
+    pub(crate) addr: u64,
     /// Source file path.
-    file: String,
+    pub(crate) file: String,
     /// Line number.
-    line: u32,
+    pub(crate) line: u32,
 }
 
 /// A deduplicated string pool for the HBTF binary.
-struct StringPool {
-    data: Vec<u8>,
+pub(crate) struct StringPool {
+    pub(crate) data: Vec<u8>,
     offsets: HashMap<String, u32>,
 }
 
 impl StringPool {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             data: Vec::new(),
             offsets: HashMap::new(),
@@ -57,7 +57,7 @@ impl StringPool {
     }
 
     /// Inserts a string into the pool, deduplicating. Returns the offset.
-    fn insert(&mut self, s: &str) -> u32 {
+    pub(crate) fn insert(&mut self, s: &str) -> u32 {
         if let Some(&offset) = self.offsets.get(s) {
             return offset;
         }
@@ -168,7 +168,7 @@ pub fn generate_hbtf(kernel_elf: &Path, output: &Path, include_lines: bool) -> R
 }
 
 /// Extract function symbols from the ELF symbol table.
-fn extract_symbols(elf: &hadron_elf::ElfFile<'_>, kernel_virt_base: u64) -> Vec<FuncSymbol> {
+pub(crate) fn extract_symbols(elf: &hadron_elf::ElfFile<'_>, kernel_virt_base: u64) -> Vec<FuncSymbol> {
     let symtab = match elf.find_section_by_type(hadron_elf::SHT_SYMTAB) {
         Some(s) => s,
         None => return Vec::new(),
@@ -220,7 +220,7 @@ fn extract_symbols(elf: &hadron_elf::ElfFile<'_>, kernel_virt_base: u64) -> Vec<
 }
 
 /// Extract line info from DWARF `.debug_line` section.
-fn extract_lines(elf: &hadron_elf::ElfFile<'_>, kernel_virt_base: u64) -> Vec<LineInfo> {
+pub(crate) fn extract_lines(elf: &hadron_elf::ElfFile<'_>, kernel_virt_base: u64) -> Vec<LineInfo> {
     let debug_line = match elf.find_section_by_name(".debug_line") {
         Some(s) => s,
         None => return Vec::new(),
@@ -274,7 +274,7 @@ fn extract_lines(elf: &hadron_elf::ElfFile<'_>, kernel_virt_base: u64) -> Vec<Li
 }
 
 /// Simplify a source file path by stripping everything before the crate directory.
-fn simplify_path(path: &str) -> String {
+pub(crate) fn simplify_path(path: &str) -> String {
     for marker in &["kernel/", "crates/"] {
         if let Some(pos) = path.find(marker) {
             return path[pos..].to_string();
