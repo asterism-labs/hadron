@@ -30,12 +30,9 @@ pub mod sdt;
 // Re-export key types at crate root for convenience.
 pub use fadt::Fadt;
 pub use hpet::HpetTable;
-pub use madt::{
-    InterruptSourceOverride, IoApic, LocalApic, LocalApicNmi, Madt, MadtEntry, MadtEntryIter,
-    NmiSource,
-};
-pub use mcfg::{Mcfg, McfgEntry, McfgEntryIter};
-pub use sdt::SdtHeader;
+pub use madt::{Madt, MadtEntry, MadtEntryIter};
+pub use mcfg::{Mcfg, McfgEntry};
+pub use sdt::{SdtHeader, ValidatedTable};
 
 /// Errors that can occur during ACPI table parsing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

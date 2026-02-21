@@ -9,7 +9,7 @@
 #![no_std]
 #![warn(missing_docs)]
 
-pub use hadron_binparse_macros::FromBytes;
+pub use hadron_binparse_macros::{FromBytes, TableEntries};
 
 /// Types that can be safely read from a raw byte buffer.
 ///
@@ -56,6 +56,51 @@ unsafe impl FromBytes for i64 {}
 
 // SAFETY: Fixed-size byte arrays have defined layout and accept all bit patterns.
 unsafe impl<const N: usize> FromBytes for [u8; N] {}
+
+/// Iterator over fixed-size [`FromBytes`] entries in a byte slice.
+///
+/// Sequentially reads `T`-sized values from the buffer, advancing by
+/// `size_of::<T>()` bytes per iteration. Useful for ACPI tables and other
+/// binary formats that contain arrays of uniform-sized entries.
+pub struct FixedEntryIter<'a, T: FromBytes> {
+    data: &'a [u8],
+    pos: usize,
+    remaining: usize,
+    _phantom: core::marker::PhantomData<T>,
+}
+
+impl<'a, T: FromBytes> FixedEntryIter<'a, T> {
+    /// Creates a new iterator over `count` entries in `data`.
+    #[must_use]
+    pub fn new(data: &'a [u8], count: usize) -> Self {
+        Self {
+            data,
+            pos: 0,
+            remaining: count,
+            _phantom: core::marker::PhantomData,
+        }
+    }
+}
+
+impl<T: FromBytes> Iterator for FixedEntryIter<'_, T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<T> {
+        if self.remaining == 0 {
+            return None;
+        }
+        let value = T::read_at(self.data, self.pos)?;
+        self.pos += core::mem::size_of::<T>();
+        self.remaining -= 1;
+        Some(value)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+}
+
+impl<T: FromBytes> ExactSizeIterator for FixedEntryIter<'_, T> {}
 
 /// A sequential cursor over a byte buffer for reading binary data.
 ///
@@ -131,6 +176,9 @@ impl<'a> BinaryReader<'a> {
 }
 
 #[cfg(test)]
+extern crate alloc;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -189,5 +237,41 @@ mod tests {
         let buf = [1u8, 2, 3, 4];
         let arr: [u8; 4] = <[u8; 4]>::read_from(&buf).unwrap();
         assert_eq!(arr, [1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn fixed_entry_iter_sequential() {
+        let mut buf = [0u8; 12];
+        buf[0..4].copy_from_slice(&10u32.to_ne_bytes());
+        buf[4..8].copy_from_slice(&20u32.to_ne_bytes());
+        buf[8..12].copy_from_slice(&30u32.to_ne_bytes());
+
+        let iter: FixedEntryIter<'_, u32> = FixedEntryIter::new(&buf, 3);
+        let values: alloc::vec::Vec<u32> = iter.collect();
+        assert_eq!(values, alloc::vec![10, 20, 30]);
+    }
+
+    #[test]
+    fn fixed_entry_iter_exact_size() {
+        let buf = [0u8; 16];
+        let iter: FixedEntryIter<'_, u32> = FixedEntryIter::new(&buf, 4);
+        assert_eq!(iter.len(), 4);
+    }
+
+    #[test]
+    fn fixed_entry_iter_empty() {
+        let buf = [0u8; 0];
+        let mut iter: FixedEntryIter<'_, u32> = FixedEntryIter::new(&buf, 0);
+        assert_eq!(iter.next(), None);
+    }
+
+    #[test]
+    fn fixed_entry_iter_truncated() {
+        // Buffer has 6 bytes but claims 2 u32 entries (needs 8 bytes).
+        let buf = [0u8; 6];
+        let iter: FixedEntryIter<'_, u32> = FixedEntryIter::new(&buf, 2);
+        let values: alloc::vec::Vec<u32> = iter.collect();
+        // Should get first entry, second should fail (not enough data).
+        assert_eq!(values.len(), 1);
     }
 }

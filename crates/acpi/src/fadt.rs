@@ -7,7 +7,6 @@
 
 use hadron_binparse::FromBytes;
 
-use crate::sdt::SdtHeader;
 use crate::{AcpiError, AcpiHandler};
 
 /// FADT table signature.
@@ -56,34 +55,15 @@ impl Fadt {
     /// Returns [`AcpiError::InvalidSignature`] if the table signature is not
     /// `FACP`, or [`AcpiError::InvalidChecksum`] if the checksum is invalid.
     pub fn parse(handler: &impl AcpiHandler, phys: u64) -> Result<Self, AcpiError> {
-        // Map the SDT header first.
-        // SAFETY: caller provides a valid physical address.
-        let header_data = unsafe { handler.map_physical_region(phys, SdtHeader::SIZE) };
-        let header = SdtHeader::read_from_bytes(header_data).ok_or(AcpiError::TruncatedData)?;
+        let table = crate::sdt::load_table(handler, phys, FADT_SIGNATURE)?;
 
-        if &header.signature() != FADT_SIGNATURE {
-            return Err(AcpiError::InvalidSignature);
+        // Older FADT revisions may be shorter; provide zero defaults for
+        // missing fields rather than failing outright.
+        if table.data.len() < Self::MIN_LENGTH {
+            return Ok(Self::parse_partial(table.data));
         }
 
-        let total_len = header.length() as usize;
-
-        // Map the full table.
-        // SAFETY: phys is valid, total_len comes from the header.
-        let table_data = unsafe { handler.map_physical_region(phys, total_len) };
-
-        // Validate checksum.
-        if !crate::sdt::validate_checksum(table_data) {
-            return Err(AcpiError::InvalidChecksum);
-        }
-
-        // Ensure the table is long enough for the fields we need.
-        if total_len < Self::MIN_LENGTH {
-            // Older FADT revisions may be shorter; provide zero defaults for
-            // missing fields rather than failing outright.
-            return Ok(Self::parse_partial(table_data));
-        }
-
-        Ok(Self::read_fields(table_data))
+        Ok(Self::read_fields(table.data))
     }
 
     /// Read all needed fields from a fully-sized FADT byte slice.

@@ -3,7 +3,7 @@
 //! The MCFG table describes the PCI Express Enhanced Configuration Access
 //! Mechanism (ECAM) base addresses for each PCI segment group.
 
-use hadron_binparse::FromBytes;
+use hadron_binparse::{FixedEntryIter, FromBytes};
 
 use crate::sdt::SdtHeader;
 use crate::{AcpiError, AcpiHandler};
@@ -54,28 +54,10 @@ impl Mcfg {
     /// Returns [`AcpiError::InvalidSignature`] if the table signature is not
     /// `MCFG`, or [`AcpiError::InvalidChecksum`] if the checksum is invalid.
     pub fn parse(handler: &impl AcpiHandler, phys: u64) -> Result<Self, AcpiError> {
-        // Map the SDT header.
-        // SAFETY: caller provides a valid physical address.
-        let header_data = unsafe { handler.map_physical_region(phys, SdtHeader::SIZE) };
-        let header = SdtHeader::read_from_bytes(header_data).ok_or(AcpiError::TruncatedData)?;
-
-        if &header.signature() != MCFG_SIGNATURE {
-            return Err(AcpiError::InvalidSignature);
-        }
-
-        let total_len = header.length() as usize;
-
-        // Map the entire table.
-        // SAFETY: phys is valid, total_len comes from the header.
-        let table_data = unsafe { handler.map_physical_region(phys, total_len) };
-
-        // Validate checksum.
-        if !crate::sdt::validate_checksum(table_data) {
-            return Err(AcpiError::InvalidChecksum);
-        }
+        let table = crate::sdt::load_table(handler, phys, MCFG_SIGNATURE)?;
 
         let entries_offset = SdtHeader::SIZE + Self::RESERVED_SIZE;
-        let entries_data = table_data.get(entries_offset..).unwrap_or(&[]);
+        let entries_data = table.data.get(entries_offset..).unwrap_or(&[]);
         let entry_count = entries_data.len() / McfgEntry::SIZE;
 
         Ok(Self {
@@ -86,12 +68,8 @@ impl Mcfg {
 
     /// Returns an iterator over the MCFG configuration space entries.
     #[must_use]
-    pub fn entries(&self) -> McfgEntryIter {
-        McfgEntryIter {
-            data: self.entries_data,
-            pos: 0,
-            remaining: self.entry_count,
-        }
+    pub fn entries(&self) -> FixedEntryIter<'_, McfgEntry> {
+        FixedEntryIter::new(self.entries_data, self.entry_count)
     }
 
     /// Returns the number of MCFG entries.
@@ -100,34 +78,3 @@ impl Mcfg {
         self.entry_count
     }
 }
-
-/// Iterator over MCFG configuration space entries.
-pub struct McfgEntryIter {
-    /// Byte slice covering the entry data.
-    data: &'static [u8],
-    /// Current byte offset.
-    pos: usize,
-    /// Number of entries remaining.
-    remaining: usize,
-}
-
-impl Iterator for McfgEntryIter {
-    type Item = McfgEntry;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.remaining == 0 {
-            return None;
-        }
-        self.remaining -= 1;
-
-        let entry = McfgEntry::read_at(self.data, self.pos)?;
-        self.pos += McfgEntry::SIZE;
-        Some(entry)
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.remaining, Some(self.remaining))
-    }
-}
-
-impl ExactSizeIterator for McfgEntryIter {}

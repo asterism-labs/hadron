@@ -1,8 +1,12 @@
-//! Proc-macro crate for `#[derive(FromBytes)]`.
+//! Proc-macro crate for `#[derive(FromBytes)]` and `#[derive(TableEntries)]`.
 //!
-//! Generates `unsafe impl hadron_binparse::FromBytes for T {}` with compile-time
-//! assertions verifying `#[repr(C)]` layout and that all field types implement
-//! `FromBytes`.
+//! - `FromBytes` generates `unsafe impl hadron_binparse::FromBytes for T {}`
+//!   with compile-time assertions verifying `#[repr(C)]` layout and that all
+//!   field types implement `FromBytes`.
+//! - `TableEntries` generates an iterator over variable-length TLV entries in
+//!   a byte buffer, as used by ACPI MADT and similar tables.
+
+mod table_entries;
 
 use proc_macro::TokenStream;
 use quote::quote;
@@ -30,6 +34,44 @@ use syn::{Data, DeriveInput, Fields, parse_macro_input};
 pub fn derive_from_bytes(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     match derive_impl(input) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+/// Derives a variable-length entry iterator for an enum.
+///
+/// Generates a `{EnumName}Iter` iterator struct and an `iter()` constructor
+/// method on the enum that parses TLV-style (type-length-value) entries from
+/// a byte slice.
+///
+/// # Attributes
+///
+/// - `#[table_entries(type_field = u8, length_field = u8)]` on the enum
+/// - `#[entry(type_id = N, min_length = M)]` on each known variant
+/// - `#[field(offset = N)]` on each field within a variant
+/// - `#[fallback]` on a variant to catch unknown entry types
+///
+/// # Example
+///
+/// ```ignore
+/// #[derive(TableEntries)]
+/// #[table_entries(type_field = u8, length_field = u8)]
+/// pub enum MadtEntry {
+///     #[entry(type_id = 0, min_length = 8)]
+///     LocalApic {
+///         #[field(offset = 2)] acpi_processor_id: u8,
+///         #[field(offset = 3)] apic_id: u8,
+///         #[field(offset = 4)] flags: u32,
+///     },
+///     #[fallback]
+///     Unknown { entry_type: u8, length: u8 },
+/// }
+/// ```
+#[proc_macro_derive(TableEntries, attributes(table_entries, entry, field, fallback))]
+pub fn derive_table_entries(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    match table_entries::derive(&input) {
         Ok(tokens) => tokens.into(),
         Err(err) => err.to_compile_error().into(),
     }

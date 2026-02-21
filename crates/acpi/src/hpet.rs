@@ -62,28 +62,9 @@ impl HpetTable {
     /// Returns [`AcpiError::InvalidSignature`] if the table signature is not
     /// `HPET`, or [`AcpiError::InvalidChecksum`] if the checksum is invalid.
     pub fn parse(handler: &impl AcpiHandler, phys: u64) -> Result<Self, AcpiError> {
-        // Map the SDT header to learn the total table length.
-        // SAFETY: caller provides a valid physical address.
-        let header_data = unsafe { handler.map_physical_region(phys, SdtHeader::SIZE) };
-        let header = SdtHeader::read_from_bytes(header_data).ok_or(AcpiError::TruncatedData)?;
+        let table = crate::sdt::load_table(handler, phys, HPET_SIGNATURE)?;
 
-        if &header.signature() != HPET_SIGNATURE {
-            return Err(AcpiError::InvalidSignature);
-        }
-
-        let total_len = header.length() as usize;
-
-        // Map the entire table.
-        // SAFETY: phys is valid, total_len comes from the header.
-        let table_data = unsafe { handler.map_physical_region(phys, total_len) };
-
-        // Validate checksum.
-        if !crate::sdt::validate_checksum(table_data) {
-            return Err(AcpiError::InvalidChecksum);
-        }
-
-        // Read the HPET-specific fields after the SDT header.
-        let raw = HpetRaw::read_at(table_data, SdtHeader::SIZE)
+        let raw = HpetRaw::read_at(table.data, SdtHeader::SIZE)
             .ok_or(AcpiError::TruncatedData)?;
 
         Ok(Self {

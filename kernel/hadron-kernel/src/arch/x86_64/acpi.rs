@@ -176,12 +176,12 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
             let mut io_apic_count = 0u32;
             for entry in m.entries() {
                 match entry {
-                    madt::MadtEntry::LocalApic(la) => {
-                        if la.flags & 1 != 0 {
+                    madt::MadtEntry::LocalApic { flags, .. } => {
+                        if flags & 1 != 0 {
                             cpu_count += 1;
                         }
                     }
-                    madt::MadtEntry::IoApic(_) => io_apic_count += 1,
+                    madt::MadtEntry::IoApic { .. } => io_apic_count += 1,
                     _ => {}
                 }
             }
@@ -263,20 +263,25 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
     let mut io_apic_gsi_base = 0u32;
 
     for entry in madt.entries() {
-        if let madt::MadtEntry::IoApic(ioapic_entry) = entry {
-            let ioapic_phys = PhysAddr::new(u64::from(ioapic_entry.io_apic_address));
+        if let madt::MadtEntry::IoApic {
+            io_apic_address,
+            gsi_base,
+            ..
+        } = entry
+        {
+            let ioapic_phys = PhysAddr::new(u64::from(io_apic_address));
 
             let ioapic_virt =
                 crate::mm::vmm::map_mmio_region(ioapic_phys, crate::mm::PAGE_SIZE as u64);
 
             // SAFETY: ioapic_virt was just mapped to the I/O APIC MMIO region.
-            let ioapic = unsafe { IoApic::new(ioapic_virt, ioapic_entry.gsi_base) };
+            let ioapic = unsafe { IoApic::new(ioapic_virt, gsi_base) };
             let max_entry = ioapic.max_redirection_entry();
 
             crate::kdebug!(
                 "I/O APIC: ID={}, GSI base={}, {} entries",
                 ioapic.id(),
-                ioapic_entry.gsi_base,
+                gsi_base,
                 max_entry + 1
             );
 
@@ -287,13 +292,13 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
 
             // Route ISA IRQs (0-15) to BSP with identity mapping (GSI = IRQ + 32)
             // but check for interrupt source overrides from MADT first.
-            if ioapic_entry.gsi_base == 0 {
+            if gsi_base == 0 {
                 setup_isa_irqs(&ioapic, &madt, apic_id);
             }
 
             // Remember the last I/O APIC for the consolidated state.
             io_apic_virt = ioapic_virt;
-            io_apic_gsi_base = ioapic_entry.gsi_base;
+            io_apic_gsi_base = gsi_base;
         }
     }
 
@@ -357,17 +362,23 @@ fn setup_isa_irqs(ioapic: &IoApic, madt_data: &hadron_acpi::madt::Madt, bsp_apic
 
         // Check for interrupt source overrides.
         for entry in madt_data.entries() {
-            if let madt::MadtEntry::InterruptSourceOverride(iso) = entry {
-                if iso.source == irq {
-                    gsi = iso.gsi;
+            if let madt::MadtEntry::InterruptSourceOverride {
+                source,
+                gsi: override_gsi,
+                flags: iso_flags,
+                ..
+            } = entry
+            {
+                if source == irq {
+                    gsi = override_gsi;
                     // Bits 0-1: polarity
-                    match iso.flags & ISO_POLARITY_MASK {
+                    match iso_flags & ISO_POLARITY_MASK {
                         ISO_ACTIVE_HIGH => polarity = Polarity::ActiveHigh,
                         ISO_ACTIVE_LOW => polarity = Polarity::ActiveLow,
                         _ => {} // Conforming or reserved — keep default
                     }
                     // Bits 2-3: trigger mode
-                    match (iso.flags >> ISO_TRIGGER_SHIFT) & ISO_TRIGGER_MASK {
+                    match (iso_flags >> ISO_TRIGGER_SHIFT) & ISO_TRIGGER_MASK {
                         ISO_EDGE_TRIGGERED => trigger = TriggerMode::Edge,
                         ISO_LEVEL_TRIGGERED => trigger = TriggerMode::Level,
                         _ => {} // Conforming or reserved — keep default

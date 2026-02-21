@@ -54,6 +54,56 @@ impl SdtHeader {
     }
 }
 
+/// Mapped ACPI table data with a validated header.
+///
+/// Returned by [`load_table`] after performing the standard map-header,
+/// verify-signature, map-full, validate-checksum sequence.
+pub struct ValidatedTable {
+    /// The validated SDT header.
+    pub header: SdtHeader,
+    /// The full table data (including header), checksum-validated.
+    pub data: &'static [u8],
+}
+
+/// Maps and validates an ACPI table at the given physical address.
+///
+/// Performs the standard 4-step ACPI table loading sequence:
+/// 1. Map the SDT header to learn the table length
+/// 2. Verify the 4-byte signature matches `expected_signature`
+/// 3. Map the full table
+/// 4. Validate the checksum
+///
+/// # Errors
+///
+/// Returns [`AcpiError::TruncatedData`] if the header cannot be read,
+/// [`AcpiError::InvalidSignature`] if the signature doesn't match,
+/// or [`AcpiError::InvalidChecksum`] if the checksum fails.
+pub fn load_table(
+    handler: &impl super::AcpiHandler,
+    phys: u64,
+    expected_signature: &[u8; 4],
+) -> Result<ValidatedTable, super::AcpiError> {
+    // SAFETY: Caller provides a valid table physical address.
+    let header_data = unsafe { handler.map_physical_region(phys, SdtHeader::SIZE) };
+    let header =
+        SdtHeader::read_from_bytes(header_data).ok_or(super::AcpiError::TruncatedData)?;
+
+    if &header.signature() != expected_signature {
+        return Err(super::AcpiError::InvalidSignature);
+    }
+
+    let total_len = header.length() as usize;
+
+    // SAFETY: phys is valid, total_len comes from the validated header.
+    let data = unsafe { handler.map_physical_region(phys, total_len) };
+
+    if !validate_checksum(data) {
+        return Err(super::AcpiError::InvalidChecksum);
+    }
+
+    Ok(ValidatedTable { header, data })
+}
+
 /// Validate the checksum of a byte slice.
 ///
 /// ACPI tables are designed so that the sum of all bytes in the table equals
