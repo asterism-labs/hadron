@@ -4,7 +4,7 @@
 //! including local APICs, I/O APICs, interrupt source overrides, and NMI
 //! sources.
 
-use core::ptr;
+use hadron_binparse::FromBytes;
 
 use crate::sdt::SdtHeader;
 use crate::{AcpiError, AcpiHandler};
@@ -13,7 +13,7 @@ use crate::{AcpiError, AcpiHandler};
 pub const MADT_SIGNATURE: &[u8; 4] = b"APIC";
 
 /// Raw MADT header fields that follow the SDT header.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, FromBytes)]
 #[repr(C, packed)]
 struct MadtHeaderFields {
     /// Physical address of the local APIC.
@@ -31,10 +31,8 @@ pub struct Madt {
     pub local_apic_address: u32,
     /// MADT flags (bit 0: dual 8259 PICs installed).
     pub flags: u32,
-    /// Pointer to the start of the entry array.
-    entries_ptr: *const u8,
-    /// Total length of the entry data in bytes.
-    entries_len: usize,
+    /// Byte slice covering the entry data.
+    entries_data: &'static [u8],
 }
 
 impl Madt {
@@ -50,9 +48,8 @@ impl Madt {
     pub fn parse(handler: &impl AcpiHandler, phys: u64) -> Result<Self, AcpiError> {
         // Map just the SDT header first to learn the total length.
         // SAFETY: caller provides a valid table physical address.
-        let header_ptr = unsafe { handler.map_physical_region(phys, SdtHeader::SIZE) };
-        // SAFETY: header_ptr is valid for SdtHeader::SIZE bytes.
-        let header = unsafe { SdtHeader::read_from(header_ptr) };
+        let header_data = unsafe { handler.map_physical_region(phys, SdtHeader::SIZE) };
+        let header = SdtHeader::read_from_bytes(header_data).ok_or(AcpiError::TruncatedData)?;
 
         if &header.signature() != MADT_SIGNATURE {
             return Err(AcpiError::InvalidSignature);
@@ -62,29 +59,26 @@ impl Madt {
 
         // Map the entire table.
         // SAFETY: phys is valid, total_len comes from the header.
-        let table_ptr = unsafe { handler.map_physical_region(phys, total_len) };
+        let table_data = unsafe { handler.map_physical_region(phys, total_len) };
 
         // Validate the checksum over the entire table.
-        // SAFETY: table_ptr is valid for total_len bytes.
-        if !unsafe { crate::sdt::validate_checksum(table_ptr, total_len) } {
+        if !crate::sdt::validate_checksum(table_data) {
             return Err(AcpiError::InvalidChecksum);
         }
 
         // Read the fixed MADT fields after the SDT header.
-        // SAFETY: table is at least SdtHeader::SIZE + FIELDS_SIZE bytes.
-        let fields: MadtHeaderFields =
-            unsafe { ptr::read_unaligned(table_ptr.add(SdtHeader::SIZE).cast()) };
+        let fields = MadtHeaderFields::read_at(table_data, SdtHeader::SIZE)
+            .ok_or(AcpiError::TruncatedData)?;
 
         let entries_offset = SdtHeader::SIZE + Self::FIELDS_SIZE;
-        let entries_len = total_len.saturating_sub(entries_offset);
-        // SAFETY: entries_offset < total_len as guaranteed by the table.
-        let entries_ptr = unsafe { table_ptr.add(entries_offset) };
+        let entries_data = table_data
+            .get(entries_offset..)
+            .unwrap_or(&[]);
 
         Ok(Self {
             local_apic_address: fields.local_apic_address,
             flags: fields.flags,
-            entries_ptr,
-            entries_len,
+            entries_data,
         })
     }
 
@@ -92,8 +86,8 @@ impl Madt {
     #[must_use]
     pub fn entries(&self) -> MadtEntryIter {
         MadtEntryIter {
-            ptr: self.entries_ptr,
-            remaining: self.entries_len,
+            data: self.entries_data,
+            pos: 0,
         }
     }
 }
@@ -177,90 +171,68 @@ pub struct LocalApicNmi {
 
 /// Iterator over MADT interrupt controller structure entries.
 pub struct MadtEntryIter {
-    /// Pointer to the current entry.
-    ptr: *const u8,
-    /// Remaining bytes in the entry region.
-    remaining: usize,
+    /// Byte slice covering the entry data.
+    data: &'static [u8],
+    /// Current position within `data`.
+    pos: usize,
 }
 
 impl Iterator for MadtEntryIter {
     type Item = MadtEntry;
 
     fn next(&mut self) -> Option<Self::Item> {
+        let remaining = &self.data[self.pos..];
+
         // Each entry has at least a 2-byte header: type (u8) + length (u8).
-        if self.remaining < 2 {
+        if remaining.len() < 2 {
             return None;
         }
 
-        // SAFETY: we have verified at least 2 bytes remain.
-        let entry_type = unsafe { self.ptr.read() };
-        let length = unsafe { self.ptr.add(1).read() } as usize;
+        let entry_type = remaining[0];
+        let length = remaining[1] as usize;
 
-        if length < 2 || length > self.remaining {
+        if length < 2 || length > remaining.len() {
             return None;
         }
+
+        let entry_data = &remaining[..length];
 
         let entry = match entry_type {
             // Type 0: Local APIC — 8 bytes total.
-            0 if length >= 8 => {
-                // SAFETY: we have verified the length.
-                unsafe {
-                    MadtEntry::LocalApic(LocalApic {
-                        acpi_processor_id: self.ptr.add(2).read(),
-                        apic_id: self.ptr.add(3).read(),
-                        flags: ptr::read_unaligned(self.ptr.add(4).cast::<u32>()),
-                    })
-                }
-            }
+            0 if length >= 8 => MadtEntry::LocalApic(LocalApic {
+                acpi_processor_id: entry_data[2],
+                apic_id: entry_data[3],
+                flags: u32::read_at(entry_data, 4).unwrap_or(0),
+            }),
 
             // Type 1: I/O APIC — 12 bytes total.
-            1 if length >= 12 => {
-                // SAFETY: we have verified the length.
-                unsafe {
-                    MadtEntry::IoApic(IoApic {
-                        io_apic_id: self.ptr.add(2).read(),
-                        // byte 3 is reserved
-                        io_apic_address: ptr::read_unaligned(self.ptr.add(4).cast::<u32>()),
-                        gsi_base: ptr::read_unaligned(self.ptr.add(8).cast::<u32>()),
-                    })
-                }
-            }
+            1 if length >= 12 => MadtEntry::IoApic(IoApic {
+                io_apic_id: entry_data[2],
+                // byte 3 is reserved
+                io_apic_address: u32::read_at(entry_data, 4).unwrap_or(0),
+                gsi_base: u32::read_at(entry_data, 8).unwrap_or(0),
+            }),
 
             // Type 2: Interrupt Source Override — 10 bytes total.
-            2 if length >= 10 => {
-                // SAFETY: we have verified the length.
-                unsafe {
-                    MadtEntry::InterruptSourceOverride(InterruptSourceOverride {
-                        bus: self.ptr.add(2).read(),
-                        source: self.ptr.add(3).read(),
-                        gsi: ptr::read_unaligned(self.ptr.add(4).cast::<u32>()),
-                        flags: ptr::read_unaligned(self.ptr.add(8).cast::<u16>()),
-                    })
-                }
-            }
+            2 if length >= 10 => MadtEntry::InterruptSourceOverride(InterruptSourceOverride {
+                bus: entry_data[2],
+                source: entry_data[3],
+                gsi: u32::read_at(entry_data, 4).unwrap_or(0),
+                flags: u16::read_at(entry_data, 8).unwrap_or(0),
+            }),
 
             // Type 4: NMI Source — 8 bytes total.
-            4 if length >= 8 => {
-                // SAFETY: we have verified the length.
-                unsafe {
-                    MadtEntry::NmiSource(NmiSource {
-                        flags: ptr::read_unaligned(self.ptr.add(2).cast::<u16>()),
-                        gsi: ptr::read_unaligned(self.ptr.add(4).cast::<u32>()),
-                    })
-                }
-            }
+            4 if length >= 8 => MadtEntry::NmiSource(NmiSource {
+                flags: u16::read_at(entry_data, 2).unwrap_or(0),
+                gsi: u32::read_at(entry_data, 4).unwrap_or(0),
+            }),
 
             // Type 5: Local APIC NMI — 6 bytes total.
-            5 if length >= 6 => {
-                // SAFETY: we have verified the length.
-                unsafe {
-                    MadtEntry::LocalApicNmi(LocalApicNmi {
-                        acpi_processor_id: self.ptr.add(2).read(),
-                        flags: ptr::read_unaligned(self.ptr.add(3).cast::<u16>()),
-                        lint: self.ptr.add(5).read(),
-                    })
-                }
-            }
+            5 if length >= 6 => MadtEntry::LocalApicNmi(LocalApicNmi {
+                acpi_processor_id: entry_data[2],
+                flags: u16::read_at(entry_data, 3).unwrap_or(0),
+                lint: entry_data[5],
+            }),
 
             // length is guaranteed <= 255 because it was read from a u8 field.
             #[expect(
@@ -273,10 +245,7 @@ impl Iterator for MadtEntryIter {
             },
         };
 
-        // Advance past this entry.
-        // SAFETY: length <= self.remaining, so the new pointer is within bounds.
-        self.ptr = unsafe { self.ptr.add(length) };
-        self.remaining -= length;
+        self.pos += length;
 
         Some(entry)
     }

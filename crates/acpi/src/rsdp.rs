@@ -4,12 +4,12 @@
 //! defines a 20-byte structure (`Rsdp`), while ACPI 2.0+ extends it to
 //! 36 bytes (`Rsdp2`) with an XSDT address.
 
-use core::ptr;
+use hadron_binparse::FromBytes;
 
 use crate::{AcpiError, AcpiHandler};
 
 /// ACPI 1.0 RSDP — 20 bytes.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, FromBytes)]
 #[repr(C, packed)]
 pub struct Rsdp {
     /// Must be `b"RSD PTR "` (8 bytes, note the trailing space).
@@ -36,7 +36,7 @@ impl Rsdp {
 ///
 /// The first 20 bytes are identical to [`Rsdp`]. The remaining 16 bytes
 /// provide the 64-bit XSDT address and an extended checksum.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, FromBytes)]
 #[repr(C, packed)]
 pub struct Rsdp2 {
     /// The ACPI 1.0 portion.
@@ -67,13 +67,11 @@ impl Rsdp2 {
 /// Returns [`AcpiError::InvalidRsdp`] when the signature or checksum is
 /// incorrect, or [`AcpiError::InvalidRevision`] for unrecognised revisions.
 pub fn parse_rsdp(handler: &impl AcpiHandler, phys: u64) -> Result<(u64, bool), AcpiError> {
-    // Map enough memory for the larger v2 structure. We always need at least
-    // 20 bytes, and at most 36. Map 36 to cover both cases.
+    // Map enough memory for the larger v2 structure.
     // SAFETY: we trust the handler to return a valid mapping.
-    let ptr = unsafe { handler.map_physical_region(phys, Rsdp2::SIZE) };
+    let data = unsafe { handler.map_physical_region(phys, Rsdp2::SIZE) };
 
-    // SAFETY: ptr is valid for at least Rsdp::SIZE bytes.
-    let v1: Rsdp = unsafe { ptr::read_unaligned(ptr.cast::<Rsdp>()) };
+    let v1 = Rsdp::read_from(data).ok_or(AcpiError::InvalidRsdp)?;
 
     // Validate signature.
     if &v1.signature != Rsdp::SIGNATURE {
@@ -81,8 +79,7 @@ pub fn parse_rsdp(handler: &impl AcpiHandler, phys: u64) -> Result<(u64, bool), 
     }
 
     // Validate v1 checksum (first 20 bytes).
-    // SAFETY: ptr is valid for 36 bytes, so 20 is fine.
-    if !unsafe { crate::sdt::validate_checksum(ptr, Rsdp::SIZE) } {
+    if !crate::sdt::validate_checksum(data.get(..Rsdp::SIZE).ok_or(AcpiError::InvalidRsdp)?) {
         return Err(AcpiError::InvalidChecksum);
     }
 
@@ -92,13 +89,13 @@ pub fn parse_rsdp(handler: &impl AcpiHandler, phys: u64) -> Result<(u64, bool), 
 
         // ACPI 2.0+ — validate extended checksum and use the XSDT address.
         2 => {
-            // SAFETY: ptr is valid for Rsdp2::SIZE bytes.
-            if !unsafe { crate::sdt::validate_checksum(ptr, Rsdp2::SIZE) } {
+            if !crate::sdt::validate_checksum(
+                data.get(..Rsdp2::SIZE).ok_or(AcpiError::InvalidChecksum)?,
+            ) {
                 return Err(AcpiError::InvalidChecksum);
             }
 
-            // SAFETY: ptr is valid and properly sized.
-            let v2: Rsdp2 = unsafe { ptr::read_unaligned(ptr.cast::<Rsdp2>()) };
+            let v2 = Rsdp2::read_from(data).ok_or(AcpiError::InvalidRsdp)?;
             Ok((v2.xsdt_address, true))
         }
 

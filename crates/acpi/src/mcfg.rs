@@ -3,7 +3,7 @@
 //! The MCFG table describes the PCI Express Enhanced Configuration Access
 //! Mechanism (ECAM) base addresses for each PCI segment group.
 
-use core::ptr;
+use hadron_binparse::FromBytes;
 
 use crate::sdt::SdtHeader;
 use crate::{AcpiError, AcpiHandler};
@@ -15,7 +15,7 @@ pub const MCFG_SIGNATURE: &[u8; 4] = b"MCFG";
 ///
 /// Each entry describes the ECAM base address for a PCI segment group and
 /// the range of bus numbers it covers.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, FromBytes)]
 #[repr(C, packed)]
 pub struct McfgEntry {
     /// Base physical address of the enhanced configuration mechanism.
@@ -37,8 +37,8 @@ impl McfgEntry {
 
 /// Parsed MCFG table.
 pub struct Mcfg {
-    /// Pointer to the first [`McfgEntry`] in the mapped table.
-    entries_ptr: *const u8,
+    /// Byte slice covering the entry data.
+    entries_data: &'static [u8],
     /// Number of entries.
     entry_count: usize,
 }
@@ -56,9 +56,8 @@ impl Mcfg {
     pub fn parse(handler: &impl AcpiHandler, phys: u64) -> Result<Self, AcpiError> {
         // Map the SDT header.
         // SAFETY: caller provides a valid physical address.
-        let header_ptr = unsafe { handler.map_physical_region(phys, SdtHeader::SIZE) };
-        // SAFETY: header_ptr is valid for SdtHeader::SIZE bytes.
-        let header = unsafe { SdtHeader::read_from(header_ptr) };
+        let header_data = unsafe { handler.map_physical_region(phys, SdtHeader::SIZE) };
+        let header = SdtHeader::read_from_bytes(header_data).ok_or(AcpiError::TruncatedData)?;
 
         if &header.signature() != MCFG_SIGNATURE {
             return Err(AcpiError::InvalidSignature);
@@ -68,23 +67,19 @@ impl Mcfg {
 
         // Map the entire table.
         // SAFETY: phys is valid, total_len comes from the header.
-        let table_ptr = unsafe { handler.map_physical_region(phys, total_len) };
+        let table_data = unsafe { handler.map_physical_region(phys, total_len) };
 
         // Validate checksum.
-        // SAFETY: table_ptr is valid for total_len bytes.
-        if !unsafe { crate::sdt::validate_checksum(table_ptr, total_len) } {
+        if !crate::sdt::validate_checksum(table_data) {
             return Err(AcpiError::InvalidChecksum);
         }
 
         let entries_offset = SdtHeader::SIZE + Self::RESERVED_SIZE;
-        let entries_len = total_len.saturating_sub(entries_offset);
-        let entry_count = entries_len / McfgEntry::SIZE;
-
-        // SAFETY: entries_offset is within the mapped region.
-        let entries_ptr = unsafe { table_ptr.add(entries_offset) };
+        let entries_data = table_data.get(entries_offset..).unwrap_or(&[]);
+        let entry_count = entries_data.len() / McfgEntry::SIZE;
 
         Ok(Self {
-            entries_ptr,
+            entries_data,
             entry_count,
         })
     }
@@ -93,7 +88,8 @@ impl Mcfg {
     #[must_use]
     pub fn entries(&self) -> McfgEntryIter {
         McfgEntryIter {
-            ptr: self.entries_ptr,
+            data: self.entries_data,
+            pos: 0,
             remaining: self.entry_count,
         }
     }
@@ -107,8 +103,10 @@ impl Mcfg {
 
 /// Iterator over MCFG configuration space entries.
 pub struct McfgEntryIter {
-    /// Pointer to the current entry.
-    ptr: *const u8,
+    /// Byte slice covering the entry data.
+    data: &'static [u8],
+    /// Current byte offset.
+    pos: usize,
     /// Number of entries remaining.
     remaining: usize,
 }
@@ -122,11 +120,8 @@ impl Iterator for McfgEntryIter {
         }
         self.remaining -= 1;
 
-        // SAFETY: the MCFG parser ensures the pointer region is valid for
-        // entry_count * McfgEntry::SIZE bytes.
-        let entry = unsafe { ptr::read_unaligned(self.ptr.cast::<McfgEntry>()) };
-        // SAFETY: advancing within the valid entry region.
-        self.ptr = unsafe { self.ptr.add(McfgEntry::SIZE) };
+        let entry = McfgEntry::read_at(self.data, self.pos)?;
+        self.pos += McfgEntry::SIZE;
         Some(entry)
     }
 

@@ -4,7 +4,7 @@
 //! the HPET hardware timer, which offers a higher-resolution alternative to
 //! the legacy 8254 PIT.
 
-use core::ptr;
+use hadron_binparse::FromBytes;
 
 use crate::sdt::SdtHeader;
 use crate::{AcpiError, AcpiHandler};
@@ -13,7 +13,7 @@ use crate::{AcpiError, AcpiHandler};
 pub const HPET_SIGNATURE: &[u8; 4] = b"HPET";
 
 /// Generic Address Structure used to describe the HPET base address.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, FromBytes)]
 #[repr(C, packed)]
 pub struct GenericAddress {
     /// Address space ID (0 = system memory, 1 = system I/O).
@@ -29,7 +29,7 @@ pub struct GenericAddress {
 }
 
 /// Raw HPET table fields following the SDT header.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, FromBytes)]
 #[repr(C, packed)]
 struct HpetRaw {
     event_timer_block_id: u32,
@@ -64,9 +64,8 @@ impl HpetTable {
     pub fn parse(handler: &impl AcpiHandler, phys: u64) -> Result<Self, AcpiError> {
         // Map the SDT header to learn the total table length.
         // SAFETY: caller provides a valid physical address.
-        let header_ptr = unsafe { handler.map_physical_region(phys, SdtHeader::SIZE) };
-        // SAFETY: header_ptr is valid for SdtHeader::SIZE bytes.
-        let header = unsafe { SdtHeader::read_from(header_ptr) };
+        let header_data = unsafe { handler.map_physical_region(phys, SdtHeader::SIZE) };
+        let header = SdtHeader::read_from_bytes(header_data).ok_or(AcpiError::TruncatedData)?;
 
         if &header.signature() != HPET_SIGNATURE {
             return Err(AcpiError::InvalidSignature);
@@ -76,17 +75,16 @@ impl HpetTable {
 
         // Map the entire table.
         // SAFETY: phys is valid, total_len comes from the header.
-        let table_ptr = unsafe { handler.map_physical_region(phys, total_len) };
+        let table_data = unsafe { handler.map_physical_region(phys, total_len) };
 
         // Validate checksum.
-        // SAFETY: table_ptr is valid for total_len bytes.
-        if !unsafe { crate::sdt::validate_checksum(table_ptr, total_len) } {
+        if !crate::sdt::validate_checksum(table_data) {
             return Err(AcpiError::InvalidChecksum);
         }
 
         // Read the HPET-specific fields after the SDT header.
-        // SAFETY: the table is large enough for the header + HPET fields.
-        let raw: HpetRaw = unsafe { ptr::read_unaligned(table_ptr.add(SdtHeader::SIZE).cast()) };
+        let raw = HpetRaw::read_at(table_data, SdtHeader::SIZE)
+            .ok_or(AcpiError::TruncatedData)?;
 
         Ok(Self {
             event_timer_block_id: raw.event_timer_block_id,

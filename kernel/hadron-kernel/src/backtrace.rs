@@ -78,12 +78,13 @@ struct HkifState {
 }
 
 // ---------------------------------------------------------------------------
-// Linker symbols
+// Linker section accessor
 // ---------------------------------------------------------------------------
 
-unsafe extern "C" {
-    static __hadron_hkif_start: u8;
-    static __hadron_hkif_end: u8;
+hadron_linkset::declare_linkset_blob! {
+    /// Returns the embedded HKIF data from the `.hadron_hkif` linker section.
+    fn hkif_data() -> &[u8],
+    section = "hadron_hkif"
 }
 
 // ---------------------------------------------------------------------------
@@ -98,24 +99,12 @@ unsafe extern "C" {
 /// Must be called once during boot. The `kernel_virt_base` is the lowest
 /// PT_LOAD virtual address of the kernel image.
 pub fn init_from_embedded(kernel_virt_base: u64) {
-    // SAFETY: These symbols are defined by the linker script and point to
-    // the start/end of the .hadron_hkif section in rodata. The section is
-    // part of the kernel image and remains valid for the kernel's lifetime.
-    let (start, end) = unsafe {
-        let s = core::ptr::addr_of!(__hadron_hkif_start) as usize;
-        let e = core::ptr::addr_of!(__hadron_hkif_end) as usize;
-        (s, e)
-    };
+    let data = hkif_data();
 
-    if end <= start {
+    if data.is_empty() {
         crate::kwarn!("HKIF: empty .hadron_hkif section, backtraces disabled");
         return;
     }
-
-    let size = end - start;
-    // SAFETY: The linker section is in rodata, contiguous, and immutable.
-    // It remains valid for the kernel's lifetime.
-    let data = unsafe { core::slice::from_raw_parts(start as *const u8, size) };
 
     if let Some(state) = parse_hkif(data) {
         let sym_count = state.sections.sym_count;
@@ -128,7 +117,7 @@ pub fn init_from_embedded(kernel_virt_base: u64) {
             "Backtrace: loaded HKIF ({} symbols, {} lines, {} bytes)",
             sym_count,
             line_count,
-            size,
+            data.len(),
         );
     }
 }

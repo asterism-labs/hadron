@@ -10,84 +10,34 @@ use crate::driver_api::registration::{
     BlockFsEntry, InitramFsEntry, PciDriverEntry, PlatformDriverEntry, VirtualFsEntry,
 };
 
-// Linker-defined section boundaries (set in the linker script).
-unsafe extern "C" {
-    static __hadron_pci_drivers_start: u8;
-    static __hadron_pci_drivers_end: u8;
-    static __hadron_platform_drivers_start: u8;
-    static __hadron_platform_drivers_end: u8;
-    static __hadron_block_fs_start: u8;
-    static __hadron_block_fs_end: u8;
-    static __hadron_virtual_fs_start: u8;
-    static __hadron_virtual_fs_end: u8;
-    static __hadron_initramfs_start: u8;
-    static __hadron_initramfs_end: u8;
+hadron_linkset::declare_linkset! {
+    /// Returns all PCI driver entries from the `.hadron_pci_drivers` linker section.
+    pub fn pci_driver_entries() -> [PciDriverEntry],
+    section = "hadron_pci_drivers"
 }
 
-/// Returns all PCI driver entries from the `.hadron_pci_drivers` linker section.
-pub fn pci_driver_entries() -> &'static [PciDriverEntry] {
-    unsafe {
-        let start = core::ptr::addr_of!(__hadron_pci_drivers_start).cast::<PciDriverEntry>();
-        let end = core::ptr::addr_of!(__hadron_pci_drivers_end).cast::<PciDriverEntry>();
-        let count = end.offset_from(start) as usize;
-        if count == 0 {
-            return &[];
-        }
-        core::slice::from_raw_parts(start, count)
-    }
+hadron_linkset::declare_linkset! {
+    /// Returns all platform driver entries from the `.hadron_platform_drivers` linker section.
+    pub fn platform_driver_entries() -> [PlatformDriverEntry],
+    section = "hadron_platform_drivers"
 }
 
-/// Returns all platform driver entries from the `.hadron_platform_drivers` linker section.
-pub fn platform_driver_entries() -> &'static [PlatformDriverEntry] {
-    unsafe {
-        let start =
-            core::ptr::addr_of!(__hadron_platform_drivers_start).cast::<PlatformDriverEntry>();
-        let end = core::ptr::addr_of!(__hadron_platform_drivers_end).cast::<PlatformDriverEntry>();
-        let count = end.offset_from(start) as usize;
-        if count == 0 {
-            return &[];
-        }
-        core::slice::from_raw_parts(start, count)
-    }
+hadron_linkset::declare_linkset! {
+    /// Returns all block filesystem entries from the `.hadron_block_fs` linker section.
+    pub fn block_fs_entries() -> [BlockFsEntry],
+    section = "hadron_block_fs"
 }
 
-/// Returns all block filesystem entries from the `.hadron_block_fs` linker section.
-pub fn block_fs_entries() -> &'static [BlockFsEntry] {
-    unsafe {
-        let start = core::ptr::addr_of!(__hadron_block_fs_start).cast::<BlockFsEntry>();
-        let end = core::ptr::addr_of!(__hadron_block_fs_end).cast::<BlockFsEntry>();
-        let count = end.offset_from(start) as usize;
-        if count == 0 {
-            return &[];
-        }
-        core::slice::from_raw_parts(start, count)
-    }
+hadron_linkset::declare_linkset! {
+    /// Returns all virtual filesystem entries from the `.hadron_virtual_fs` linker section.
+    pub fn virtual_fs_entries() -> [VirtualFsEntry],
+    section = "hadron_virtual_fs"
 }
 
-/// Returns all virtual filesystem entries from the `.hadron_virtual_fs` linker section.
-pub fn virtual_fs_entries() -> &'static [VirtualFsEntry] {
-    unsafe {
-        let start = core::ptr::addr_of!(__hadron_virtual_fs_start).cast::<VirtualFsEntry>();
-        let end = core::ptr::addr_of!(__hadron_virtual_fs_end).cast::<VirtualFsEntry>();
-        let count = end.offset_from(start) as usize;
-        if count == 0 {
-            return &[];
-        }
-        core::slice::from_raw_parts(start, count)
-    }
-}
-
-/// Returns all initramfs entries from the `.hadron_initramfs` linker section.
-pub fn initramfs_entries() -> &'static [InitramFsEntry] {
-    unsafe {
-        let start = core::ptr::addr_of!(__hadron_initramfs_start).cast::<InitramFsEntry>();
-        let end = core::ptr::addr_of!(__hadron_initramfs_end).cast::<InitramFsEntry>();
-        let count = end.offset_from(start) as usize;
-        if count == 0 {
-            return &[];
-        }
-        core::slice::from_raw_parts(start, count)
-    }
+hadron_linkset::declare_linkset! {
+    /// Returns all initramfs entries from the `.hadron_initramfs` linker section.
+    pub fn initramfs_entries() -> [InitramFsEntry],
+    section = "hadron_initramfs"
 }
 
 /// Matches discovered PCI devices against registered PCI drivers.

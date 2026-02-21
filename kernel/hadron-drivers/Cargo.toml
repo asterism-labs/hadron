@@ -19,6 +19,7 @@ hadris-fat = { workspace = true, features = [ "read", "write", "alloc", "lfn" ] 
 hadris-io = { workspace = true }
 hadris-iso = { workspace = true, features = [ "read", "alloc" ] }
 hadron-kernel = { workspace = true }
+hadron-linkset = { workspace = true }
 
 [lints]
 workspace = true

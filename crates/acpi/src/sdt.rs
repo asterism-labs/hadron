@@ -1,12 +1,12 @@
 //! System Description Table (SDT) header and checksum utilities.
 
-use core::ptr;
+use hadron_binparse::FromBytes;
 
 /// Standard ACPI System Description Table header.
 ///
 /// This 36-byte header is present at the start of every ACPI table
 /// (RSDT, XSDT, MADT, HPET, FADT, MCFG, etc.).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, FromBytes)]
 #[repr(C, packed)]
 pub struct SdtHeader {
     /// 4-byte ASCII signature identifying the table type.
@@ -33,16 +33,12 @@ impl SdtHeader {
     /// The size of an SDT header in bytes.
     pub const SIZE: usize = 36;
 
-    /// Read an [`SdtHeader`] from a raw pointer using an unaligned read.
+    /// Read an [`SdtHeader`] from a byte slice.
     ///
-    /// # Safety
-    ///
-    /// `ptr` must point to a valid, readable memory region of at least
-    /// [`SdtHeader::SIZE`] bytes.
+    /// Returns `None` if the slice is shorter than [`SdtHeader::SIZE`] bytes.
     #[must_use]
-    pub unsafe fn read_from(ptr: *const u8) -> Self {
-        // SAFETY: caller guarantees the pointer is valid and readable.
-        unsafe { ptr::read_unaligned(ptr.cast::<Self>()) }
+    pub fn read_from_bytes(data: &[u8]) -> Option<Self> {
+        Self::read_from(data)
     }
 
     /// Returns the 4-byte signature as a byte slice.
@@ -58,21 +54,16 @@ impl SdtHeader {
     }
 }
 
-/// Validate the checksum of a contiguous region of bytes.
+/// Validate the checksum of a byte slice.
 ///
 /// ACPI tables are designed so that the sum of all bytes in the table equals
 /// zero (mod 256). This function computes that sum and returns `true` when
 /// the checksum is valid.
-///
-/// # Safety
-///
-/// `ptr` must point to a readable memory region of at least `len` bytes.
 #[must_use]
-pub unsafe fn validate_checksum(ptr: *const u8, len: usize) -> bool {
+pub fn validate_checksum(data: &[u8]) -> bool {
     let mut sum: u8 = 0;
-    for i in 0..len {
-        // SAFETY: caller guarantees the region is readable for `len` bytes.
-        sum = sum.wrapping_add(unsafe { ptr.add(i).read() });
+    for &byte in data {
+        sum = sum.wrapping_add(byte);
     }
     sum == 0
 }

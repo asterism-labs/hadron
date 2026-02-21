@@ -5,7 +5,7 @@
 //! provides an iterator over those entries and a helper to locate a table by
 //! its 4-byte signature.
 
-use core::ptr;
+use hadron_binparse::FromBytes;
 
 use crate::AcpiHandler;
 use crate::sdt::SdtHeader;
@@ -17,29 +17,20 @@ const RSDT_ENTRY_SIZE: usize = 4;
 const XSDT_ENTRY_SIZE: usize = 8;
 
 /// Iterator over table entry physical addresses in an RSDT or XSDT.
-pub struct RsdtIterator {
-    /// Pointer to the first entry (immediately after the SDT header).
-    base: *const u8,
-    /// Number of entries remaining.
-    remaining: usize,
-    /// Current offset (in bytes) from `base`.
+pub struct RsdtIterator<'a> {
+    /// Byte slice covering all entries.
+    data: &'a [u8],
+    /// Current offset (in bytes) from the start of `data`.
     offset: usize,
     /// Size of each entry: 4 for RSDT, 8 for XSDT.
     entry_size: usize,
 }
 
-impl RsdtIterator {
+impl<'a> RsdtIterator<'a> {
     /// Create a new iterator over the entries of an RSDT or XSDT.
-    ///
-    /// # Safety
-    ///
-    /// `base` must point to the first entry byte of a mapped RSDT/XSDT (i.e.,
-    /// the address immediately after the [`SdtHeader`]). The region
-    /// `base..base + entry_count * entry_size` must be readable.
-    pub(crate) unsafe fn new(base: *const u8, entry_count: usize, is_xsdt: bool) -> Self {
+    pub(crate) fn new(data: &'a [u8], is_xsdt: bool) -> Self {
         Self {
-            base,
-            remaining: entry_count,
+            data,
             offset: 0,
             entry_size: if is_xsdt {
                 XSDT_ENTRY_SIZE
@@ -50,34 +41,31 @@ impl RsdtIterator {
     }
 }
 
-impl Iterator for RsdtIterator {
+impl Iterator for RsdtIterator<'_> {
     type Item = u64;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.remaining == 0 {
+        if self.offset + self.entry_size > self.data.len() {
             return None;
         }
-        self.remaining -= 1;
 
-        // SAFETY: the constructor guarantees readable memory for all entries.
-        let addr = unsafe {
-            let entry_ptr = self.base.add(self.offset);
-            if self.entry_size == XSDT_ENTRY_SIZE {
-                ptr::read_unaligned(entry_ptr.cast::<u64>())
-            } else {
-                u64::from(ptr::read_unaligned(entry_ptr.cast::<u32>()))
-            }
+        let entry_data = &self.data[self.offset..];
+        let addr = if self.entry_size == XSDT_ENTRY_SIZE {
+            u64::read_from(entry_data)?
+        } else {
+            u64::from(u32::read_from(entry_data)?)
         };
         self.offset += self.entry_size;
         Some(addr)
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.remaining, Some(self.remaining))
+        let remaining = (self.data.len() - self.offset) / self.entry_size;
+        (remaining, Some(remaining))
     }
 }
 
-impl ExactSizeIterator for RsdtIterator {}
+impl ExactSizeIterator for RsdtIterator<'_> {}
 
 /// Search the RSDT/XSDT for a table whose SDT header matches `signature`.
 ///
@@ -98,40 +86,28 @@ pub fn find_table_in_rsdt(
 ) -> Option<u64> {
     // Map the RSDT/XSDT header to learn the total table length.
     // SAFETY: caller provides a valid physical address.
-    let header_ptr = unsafe { handler.map_physical_region(rsdt_addr, SdtHeader::SIZE) };
-    // SAFETY: header_ptr is valid for SdtHeader::SIZE bytes.
-    let header = unsafe { SdtHeader::read_from(header_ptr) };
+    let header_data = unsafe { handler.map_physical_region(rsdt_addr, SdtHeader::SIZE) };
+    let header = SdtHeader::read_from_bytes(header_data)?;
 
     let total_len = header.length() as usize;
     let entries_len = total_len.saturating_sub(SdtHeader::SIZE);
-    let entry_size = if is_xsdt {
-        XSDT_ENTRY_SIZE
-    } else {
-        RSDT_ENTRY_SIZE
-    };
 
-    if entries_len == 0 || entry_size == 0 {
+    if entries_len == 0 {
         return None;
     }
 
-    let entry_count = entries_len / entry_size;
-
     // Map the entire table so we can iterate entries.
     // SAFETY: caller provides a valid physical address, total_len is from the header.
-    let table_ptr = unsafe { handler.map_physical_region(rsdt_addr, total_len) };
-    // SAFETY: table_ptr + SdtHeader::SIZE is the start of entries, and the
-    // region is valid for entry_count * entry_size bytes.
-    let entries_ptr = unsafe { table_ptr.add(SdtHeader::SIZE) };
+    let table_data = unsafe { handler.map_physical_region(rsdt_addr, total_len) };
+    let entries_data = table_data.get(SdtHeader::SIZE..)?;
 
-    // SAFETY: entries_ptr is valid and properly sized as shown above.
-    let iter = unsafe { RsdtIterator::new(entries_ptr, entry_count, is_xsdt) };
+    let iter = RsdtIterator::new(entries_data, is_xsdt);
 
     for entry_phys in iter {
         // Map just the header of the candidate table.
         // SAFETY: entry_phys is a physical address from the RSDT/XSDT.
-        let candidate_ptr = unsafe { handler.map_physical_region(entry_phys, SdtHeader::SIZE) };
-        // SAFETY: candidate_ptr is valid for SdtHeader::SIZE bytes.
-        let candidate = unsafe { SdtHeader::read_from(candidate_ptr) };
+        let candidate_data = unsafe { handler.map_physical_region(entry_phys, SdtHeader::SIZE) };
+        let candidate = SdtHeader::read_from_bytes(candidate_data)?;
         if &candidate.signature() == signature {
             return Some(entry_phys);
         }

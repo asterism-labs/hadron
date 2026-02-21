@@ -1,5 +1,5 @@
 [package]
-name = "hadron-acpi"
+name = "hadron-binparse"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,13 +9,8 @@ license.workspace = true
 readme.workspace = true
 publish.workspace = true
 
-[lib]
-bench = false
-test = false
-doctest = false
-
 [dependencies]
-hadron-binparse = { workspace = true }
+hadron-binparse-macros = { path = "../hadron-binparse-macros" }
 
 [lints]
 workspace = true

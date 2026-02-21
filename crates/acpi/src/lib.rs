@@ -3,7 +3,7 @@
 //! This crate provides types and functions for parsing the core ACPI tables
 //! that a kernel needs during early boot: RSDP, RSDT/XSDT, MADT, HPET,
 //! FADT, and MCFG. It does **not** depend on `alloc`; all table iteration
-//! is done through raw-pointer iterators backed by an [`AcpiHandler`] that
+//! is done through safe byte-slice iterators backed by an [`AcpiHandler`] that
 //! maps physical memory on demand.
 //!
 //! # Usage
@@ -50,30 +50,31 @@ pub enum AcpiError {
     TableNotFound,
     /// The RSDP structure was invalid (bad signature or checksum).
     InvalidRsdp,
+    /// A table or structure was too short to contain the expected data.
+    TruncatedData,
 }
 
 /// Trait for mapping physical memory regions so ACPI tables can be read.
 ///
-/// An implementation must return a pointer into a region that is readable for
-/// at least `size` bytes starting at physical address `phys`. The mapping may
-/// be an identity map, a higher-half direct map (HHDM), or a temporary mapping
-/// --- the crate is agnostic to the strategy.
+/// An implementation must return a byte slice covering at least `size` bytes
+/// starting at physical address `phys`. The mapping may be an identity map, a
+/// higher-half direct map (HHDM), or a temporary mapping --- the crate is
+/// agnostic to the strategy.
 ///
 /// # Safety
 ///
-/// Implementors must ensure that the returned pointer is valid and readable for
-/// the requested `size` bytes. The mapping must remain valid for the lifetime
-/// of any references derived from it.
+/// Implementors must ensure that the returned slice is valid and readable for
+/// the requested `size` bytes. The mapping must remain valid for `'static`.
 pub unsafe trait AcpiHandler {
-    /// Map a physical memory region and return a pointer to its virtual address.
+    /// Map a physical memory region and return a byte slice over it.
     ///
     /// # Safety
     ///
     /// The caller guarantees that `phys` is a valid ACPI-related physical
     /// address and `size` does not extend beyond the actual table. The
-    /// implementation must return a pointer that is valid and dereferenceable
-    /// for `size` bytes.
-    unsafe fn map_physical_region(&self, phys: u64, size: usize) -> *const u8;
+    /// implementation must return a slice that is valid and readable for
+    /// `size` bytes.
+    unsafe fn map_physical_region(&self, phys: u64, size: usize) -> &'static [u8];
 }
 
 /// Collection of ACPI tables discovered via the RSDP.

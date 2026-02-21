@@ -143,19 +143,19 @@ impl EarlyFramebuffer {
 
         let row_bytes = self.pitch as usize * GLYPH_HEIGHT as usize;
         let total_rows = self.rows as usize;
+        let copy_bytes = row_bytes * (total_rows - 1);
         let base = self.address.as_mut_ptr::<u8>();
-        let src = unsafe { base.add(row_bytes) } as *const u8;
-        let dst = base;
-        let count = row_bytes * (total_rows - 1);
 
+        // SAFETY: The framebuffer was mapped during init and spans at least
+        // `pitch * height` bytes. `copy_bytes + row_bytes` equals exactly
+        // `row_bytes * total_rows` which is within the framebuffer region.
+        // The source (one row in) and destination (start) regions overlap,
+        // so we use `ptr::copy` which handles overlap correctly.
         unsafe {
-            ptr::copy(src, dst, count);
-        }
-
-        // Clear the last row.
-        let last_row_start = unsafe { base.add(row_bytes * (total_rows - 1)) };
-        unsafe {
-            ptr::write_bytes(last_row_start, 0, row_bytes);
+            let src = base.add(row_bytes) as *const u8;
+            ptr::copy(src, base, copy_bytes);
+            // Clear the last row.
+            ptr::write_bytes(base.add(copy_bytes), 0, row_bytes);
         }
     }
 

@@ -196,9 +196,9 @@ unsafe impl Sync for InitramFsEntry {}
 #[macro_export]
 macro_rules! block_fs_entry {
     ($name:ident, $entry:expr) => {
-        #[used]
-        #[unsafe(link_section = ".hadron_block_fs")]
-        static $name: $crate::driver_api::registration::BlockFsEntry = $entry;
+        hadron_linkset::linkset_entry!("hadron_block_fs",
+            $name: $crate::driver_api::registration::BlockFsEntry = $entry
+        );
     };
 }
 
@@ -206,9 +206,9 @@ macro_rules! block_fs_entry {
 #[macro_export]
 macro_rules! virtual_fs_entry {
     ($name:ident, $entry:expr) => {
-        #[used]
-        #[unsafe(link_section = ".hadron_virtual_fs")]
-        static $name: $crate::driver_api::registration::VirtualFsEntry = $entry;
+        hadron_linkset::linkset_entry!("hadron_virtual_fs",
+            $name: $crate::driver_api::registration::VirtualFsEntry = $entry
+        );
     };
 }
 
@@ -216,8 +216,8 @@ macro_rules! virtual_fs_entry {
 #[macro_export]
 macro_rules! initramfs_entry {
     ($name:ident, $entry:expr) => {
-        #[used]
-        #[unsafe(link_section = ".hadron_initramfs")]
-        static $name: $crate::driver_api::registration::InitramFsEntry = $entry;
+        hadron_linkset::linkset_entry!("hadron_initramfs",
+            $name: $crate::driver_api::registration::InitramFsEntry = $entry
+        );
     };
 }

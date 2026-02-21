@@ -121,6 +121,11 @@ host.add("bytemuck_derive", "vendor/bytemuck_derive")
     .crate_type(PROC_MACRO)
     .deps(#{ syn: "syn", quote: "quote", proc_macro2: "proc-macro2" });
 
+host.add("hadron-binparse-macros", "crates/hadron-binparse-macros")
+    .edition("2024")
+    .crate_type(PROC_MACRO)
+    .deps(#{ syn: "syn", quote: "quote", proc_macro2: "proc-macro2" });
+
 // ===========================================================================
 // Project kernel library crates
 // ===========================================================================
@@ -128,9 +133,13 @@ host.add("bytemuck_derive", "vendor/bytemuck_derive")
 let kernel_libs = group("kernel-libs").target("x86_64-unknown-hadron").edition("2024").config(true);
 
 kernel_libs.add("noalloc", "crates/noalloc");
+kernel_libs.add("hadron-linkset", "crates/linkset");
+kernel_libs.add("hadron-binparse", "crates/binparse")
+    .deps(#{ hadron_binparse_macros: #{ "crate": "hadron-binparse-macros", proc_macro: true } });
 kernel_libs.add("hadron-elf", "crates/elf");
 kernel_libs.add("hadron-dwarf", "crates/dwarf");
-kernel_libs.add("hadron-acpi", "crates/acpi");
+kernel_libs.add("hadron-acpi", "crates/acpi")
+    .deps(#{ hadron_binparse: "hadron-binparse" });
 
 kernel_libs.add("limine", "crates/limine")
     .deps(#{ bitflags: "bitflags" });
@@ -157,6 +166,7 @@ kernel_drivers.add("hadron-drivers", "kernel/hadron-drivers")
         hadris_io: "hadris-io",
         hadris_iso: "hadris-iso",
         hadron_kernel: "hadron-kernel",
+        hadron_linkset: "hadron-linkset",
         hadron_driver_macros: #{ "crate": "hadron-driver-macros", proc_macro: true }
     });
 
@@ -182,6 +192,7 @@ kernel_main.add("hadron-kernel", "kernel/hadron-kernel")
         hadris_io: "hadris-io",
         hadron_acpi: "hadron-acpi",
         hadron_elf: "hadron-elf",
+        hadron_linkset: "hadron-linkset",
         hadron_syscall: "hadron-syscall",
         noalloc: "noalloc"
     })
@@ -294,6 +305,7 @@ image()
 
 tests()
     .host_testable([
+        "hadron-binparse",
         "hadron-dwarf",
         "hadron-elf",
         "noalloc",

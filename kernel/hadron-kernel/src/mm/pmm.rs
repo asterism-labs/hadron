@@ -5,8 +5,6 @@
 //! Word-level scanning with `trailing_zeros()` (compiles to TZCNT/BSF on
 //! x86_64) provides efficient allocation.
 
-use core::ptr;
-
 use crate::addr::PhysAddr;
 use crate::mm::{FrameAllocator, FrameDeallocator, PhysMemoryRegion, PmmError};
 use crate::paging::{PhysFrame, Size4KiB};
@@ -16,20 +14,15 @@ const FRAME_SIZE: u64 = 4096;
 const BITS_PER_WORD: usize = 64;
 
 struct BitmapAllocatorInner {
-    /// Pointer to the bitmap in HHDM-mapped memory (array of u64 words).
-    bitmap: *mut u64,
+    /// Bitmap stored as a static mutable slice of u64 words in HHDM-mapped memory.
+    bitmap: &'static mut [u64],
     /// Total number of frames tracked by the bitmap.
     total_frames: usize,
-    /// Number of u64 words in the bitmap.
-    bitmap_words: usize,
     /// Number of currently free frames.
     free_count: usize,
     /// Word index hint for next allocation search (amortized O(1)).
     search_hint: usize,
 }
-
-// SAFETY: The bitmap pointer is accessed only under the SpinLock.
-unsafe impl Send for BitmapAllocatorInner {}
 
 /// A bitmap-based physical frame allocator.
 ///
@@ -38,7 +31,8 @@ pub struct BitmapAllocator {
     inner: SpinLock<BitmapAllocatorInner>,
 }
 
-// SAFETY: Protected by SpinLock.
+// SAFETY: The mutable slice in BitmapAllocatorInner is only accessed under the
+// SpinLock, and u64 is Send. The SpinLock ensures mutual exclusion.
 unsafe impl Send for BitmapAllocator {}
 unsafe impl Sync for BitmapAllocator {}
 
@@ -78,13 +72,17 @@ impl BitmapAllocator {
             .next()
             .ok_or(PmmError::NoBitmapRegion)?;
 
-        // 3. Map bitmap via HHDM and zero it.
-        let bitmap_virt = (hhdm_offset + bitmap_phys_start.as_u64()) as *mut u64;
+        // 3. Map bitmap via HHDM and create a mutable slice.
+        // SAFETY: The HHDM offset is valid, and bitmap_phys_start points to a
+        // usable physical region large enough for bitmap_words * 8 bytes. The
+        // region is not aliased because we are the sole consumer during boot.
+        let bitmap = unsafe {
+            let ptr = (hhdm_offset + bitmap_phys_start.as_u64()) as *mut u64;
+            core::slice::from_raw_parts_mut(ptr, bitmap_words)
+        };
 
         // 4. Set ALL bits to 1 (all frames reserved by default).
-        unsafe {
-            ptr::write_bytes(bitmap_virt, 0xFF, bitmap_words);
-        }
+        bitmap.fill(u64::MAX);
 
         // 5. Clear bits for usable regions (mark them free).
         let mut free_count = 0usize;
@@ -97,10 +95,7 @@ impl BitmapAllocator {
                 if frame_idx < total_frames {
                     let word_idx = frame_idx / BITS_PER_WORD;
                     let bit_idx = frame_idx % BITS_PER_WORD;
-                    unsafe {
-                        let word = bitmap_virt.add(word_idx);
-                        *word &= !(1u64 << bit_idx);
-                    }
+                    bitmap[word_idx] &= !(1u64 << bit_idx);
                     free_count += 1;
                 }
             }
@@ -113,22 +108,18 @@ impl BitmapAllocator {
             if frame_idx < total_frames {
                 let word_idx = frame_idx / BITS_PER_WORD;
                 let bit_idx = frame_idx % BITS_PER_WORD;
-                unsafe {
-                    let word = bitmap_virt.add(word_idx);
-                    if *word & (1u64 << bit_idx) == 0 {
-                        // Was marked free, now mark used
-                        *word |= 1u64 << bit_idx;
-                        free_count -= 1;
-                    }
+                if bitmap[word_idx] & (1u64 << bit_idx) == 0 {
+                    // Was marked free, now mark used
+                    bitmap[word_idx] |= 1u64 << bit_idx;
+                    free_count -= 1;
                 }
             }
         }
 
         Ok(Self {
             inner: SpinLock::new(BitmapAllocatorInner {
-                bitmap: bitmap_virt,
+                bitmap,
                 total_frames,
-                bitmap_words,
                 free_count,
                 search_hint: 0,
             }),
@@ -144,11 +135,11 @@ impl BitmapAllocator {
 
         // Scan from search_hint, wrapping around if needed.
         let start = inner.search_hint;
-        let words = inner.bitmap_words;
+        let words = inner.bitmap.len();
 
         for offset in 0..words {
             let word_idx = (start + offset) % words;
-            let word = unsafe { *inner.bitmap.add(word_idx) };
+            let word = inner.bitmap[word_idx];
 
             // If all bits set, this word has no free frames.
             if word == u64::MAX {
@@ -164,9 +155,7 @@ impl BitmapAllocator {
             }
 
             // Mark as allocated.
-            unsafe {
-                *inner.bitmap.add(word_idx) |= 1u64 << bit_idx;
-            }
+            inner.bitmap[word_idx] |= 1u64 << bit_idx;
             inner.free_count -= 1;
             inner.search_hint = word_idx;
 
@@ -198,7 +187,7 @@ impl BitmapAllocator {
         let mut frame_idx = 0usize;
         while frame_idx < inner.total_frames {
             let word_idx = frame_idx / BITS_PER_WORD;
-            let word = unsafe { *inner.bitmap.add(word_idx) };
+            let word = inner.bitmap[word_idx];
 
             if word == u64::MAX {
                 // Entire word allocated, skip it.
@@ -260,9 +249,7 @@ impl BitmapAllocator {
             let fi = run_start + i;
             let word_idx = fi / BITS_PER_WORD;
             let bit_idx = fi % BITS_PER_WORD;
-            unsafe {
-                *inner.bitmap.add(word_idx) |= 1u64 << bit_idx;
-            }
+            inner.bitmap[word_idx] |= 1u64 << bit_idx;
         }
         inner.free_count -= count;
         inner.search_hint = (run_start + count) / BITS_PER_WORD;
@@ -288,15 +275,12 @@ impl BitmapAllocator {
         let word_idx = frame_idx / BITS_PER_WORD;
         let bit_idx = frame_idx % BITS_PER_WORD;
 
-        unsafe {
-            let word = inner.bitmap.add(word_idx);
-            debug_assert!(
-                *word & (1u64 << bit_idx) != 0,
-                "double free of frame {:#x}",
-                frame.start_address().as_u64()
-            );
-            *word &= !(1u64 << bit_idx);
-        }
+        debug_assert!(
+            inner.bitmap[word_idx] & (1u64 << bit_idx) != 0,
+            "double free of frame {:#x}",
+            frame.start_address().as_u64()
+        );
+        inner.bitmap[word_idx] &= !(1u64 << bit_idx);
         inner.free_count += 1;
 
         // Update hint to potentially speed up next allocation.
@@ -329,15 +313,12 @@ impl BitmapAllocator {
             let fi = start_idx + i;
             let word_idx = fi / BITS_PER_WORD;
             let bit_idx = fi % BITS_PER_WORD;
-            unsafe {
-                let word = inner.bitmap.add(word_idx);
-                debug_assert!(
-                    *word & (1u64 << bit_idx) != 0,
-                    "double free of frame {:#x}",
-                    (fi as u64) * FRAME_SIZE
-                );
-                *word &= !(1u64 << bit_idx);
-            }
+            debug_assert!(
+                inner.bitmap[word_idx] & (1u64 << bit_idx) != 0,
+                "double free of frame {:#x}",
+                (fi as u64) * FRAME_SIZE
+            );
+            inner.bitmap[word_idx] &= !(1u64 << bit_idx);
             inner.free_count += 1;
         }
 

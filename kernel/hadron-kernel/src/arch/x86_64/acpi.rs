@@ -22,9 +22,16 @@ use crate::arch::x86_64::interrupts::dispatch::vectors;
 struct HhdmAcpiHandler;
 
 // SAFETY: HHDM is initialized before ACPI parsing, so `phys_to_virt` is valid.
+// The HHDM maps all physical memory and the mapping is permanent ('static).
 unsafe impl AcpiHandler for HhdmAcpiHandler {
-    unsafe fn map_physical_region(&self, phys: u64, _size: usize) -> *const u8 {
-        hhdm::phys_to_virt(PhysAddr::new(phys)).as_ptr()
+    unsafe fn map_physical_region(&self, phys: u64, size: usize) -> &'static [u8] {
+        // SAFETY: The HHDM provides a permanent, identity-offset mapping of all
+        // physical memory. The caller guarantees `phys` and `size` describe a
+        // valid ACPI table region within physical memory.
+        unsafe {
+            let ptr = hhdm::phys_to_virt(PhysAddr::new(phys)).as_ptr::<u8>();
+            core::slice::from_raw_parts(ptr, size)
+        }
     }
 }
 

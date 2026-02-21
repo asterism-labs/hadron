@@ -1,5 +1,5 @@
 [package]
-name = "hadron-acpi"
+name = "hadron-linkset"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -15,7 +15,6 @@ test = false
 doctest = false
 
 [dependencies]
-hadron-binparse = { workspace = true }
 
 [lints]
 workspace = true
