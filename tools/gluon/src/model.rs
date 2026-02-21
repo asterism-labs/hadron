@@ -47,7 +47,7 @@ pub struct ProjectDef {
 /// A compilation target definition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TargetDef {
-    #[allow(dead_code)] // used by validation
+    /// Redundant with map key; kept for validation error messages.
     pub name: String,
     pub spec: String,
 }
@@ -79,7 +79,7 @@ impl CrateType {
 /// A typed configuration option (Kconfig-style).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfigOptionDef {
-    #[allow(dead_code)] // used by validation
+    /// Redundant with map key; kept for validation error messages.
     pub name: String,
     pub ty: ConfigType,
     pub default: ConfigValue,
@@ -144,7 +144,7 @@ impl Default for ConfigValue {
 /// A build profile definition.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProfileDef {
-    #[allow(dead_code)] // used by validation
+    /// Redundant with map key; kept for validation error messages.
     pub name: String,
     pub inherits: Option<String>,
     pub target: Option<String>,
@@ -162,7 +162,7 @@ pub struct ProfileDef {
 /// A crate definition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrateDef {
-    #[allow(dead_code)] // used by validation
+    /// Redundant with map key; kept for validation error messages.
     pub name: String,
     pub path: String,
     pub edition: String,
@@ -175,8 +175,8 @@ pub struct CrateDef {
     pub root: Option<String>,
     /// Per-crate linker script (e.g. for kernel binary crates).
     pub linker_script: Option<String>,
-    /// The group this crate belongs to.
-    #[allow(dead_code)] // used by future group-based queries
+    /// The group this crate belongs to (for future group-based queries).
+    #[allow(dead_code)] // Phase 9+: group-based queries
     pub group: Option<String>,
     /// Whether this crate is a project crate (for clippy linting).
     pub is_project_crate: bool,
@@ -189,10 +189,9 @@ pub struct CrateDef {
 /// A dependency specification within a crate definition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DepDef {
-    #[allow(dead_code)] // used by crate_graph resolution
     pub extern_name: String,
     pub crate_name: String,
-    #[allow(dead_code)] // used by future feature-gated compilation
+    #[allow(dead_code)] // Phase 9+: feature-gated compilation
     pub features: Vec<String>,
 }
 
@@ -234,13 +233,13 @@ pub struct ExternalDepDef {
 /// A group of crates with shared compilation behavior.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GroupDef {
-    #[allow(dead_code)] // used by validation
+    /// Redundant with map key; kept for validation error messages.
     pub name: String,
     /// Target for all crates in this group. `"host"` = host triple.
     pub target: String,
     pub default_edition: String,
     pub crates: Vec<String>,
-    #[allow(dead_code)] // used by future shared-flag compilation
+    #[allow(dead_code)] // Phase 9+: shared-flag compilation
     pub shared_flags: Vec<String>,
     /// Whether crates in this group are project crates (for clippy linting).
     pub is_project: bool,
@@ -265,7 +264,7 @@ impl Default for GroupDef {
 /// A rule for custom artifact generation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuleDef {
-    #[allow(dead_code)] // used by validation
+    /// Redundant with map key; kept for validation error messages.
     pub name: String,
     pub inputs: Vec<String>,
     pub outputs: Vec<String>,
@@ -279,7 +278,7 @@ pub enum RuleHandler {
     /// A built-in Rust function identified by name (e.g. "hbtf", "initrd", "config_crate").
     Builtin(String),
     /// A Rhai function name to call for user-defined rules.
-    #[allow(dead_code)] // used by future script rule handler
+    #[allow(dead_code)] // Phase 9+: user-defined script rules
     Script(String),
 }
 
@@ -295,7 +294,7 @@ pub enum PipelineStep {
     /// Compile groups of crates (DAG-scheduled within the stage).
     Stage { name: String, groups: Vec<String> },
     /// Synchronization barrier: wait for all preceding work.
-    #[allow(dead_code)] // barrier name used for logging
+    #[allow(dead_code)] // barrier name reserved for pipeline logging
     Barrier(String),
     /// Execute a named rule.
     Rule(String),

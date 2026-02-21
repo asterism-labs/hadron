@@ -222,6 +222,7 @@ fn execute_stage(
 ) -> Result<()> {
     // For each group, ensure sysroot and config are ready, then collect crates.
     let mut all_crates = Vec::new();
+    let mut seen_crate_names: HashSet<String> = HashSet::new();
     let mut group_config_map: HashMap<String, bool> = HashMap::new();
 
     for gname in group_names {
@@ -260,7 +261,7 @@ fn execute_stage(
             }
 
             // Avoid duplicates (a crate might be in multiple groups).
-            if !all_crates.iter().any(|k: &(ResolvedCrate, bool)| k.0.name == krate.name) {
+            if seen_crate_names.insert(krate.name.clone()) {
                 all_crates.push((krate, group.config));
             }
         }
@@ -431,7 +432,7 @@ fn execute_stage(
                         "host".as_ref(),
                         krate.name.as_ref(),
                         krate.edition.as_ref(),
-                        krate.crate_type.as_ref(),
+                        krate.crate_type.as_str().as_ref(),
                     ])
                 } else {
                     let target_spec = state.target_specs
@@ -442,7 +443,7 @@ fn execute_stage(
                         mode_tag.as_ref(),
                         krate.name.as_ref(),
                         krate.edition.as_ref(),
-                        krate.crate_type.as_ref(),
+                        krate.crate_type.as_str().as_ref(),
                         format!("{}", state.config.profile.opt_level).as_ref(),
                         target_spec.as_ref(),
                     ])

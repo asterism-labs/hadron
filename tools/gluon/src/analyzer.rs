@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use crate::compile;
 use crate::config::{ResolvedConfig, ResolvedValue};
 use crate::crate_graph::{self, ResolvedCrate};
-use crate::model::BuildModel;
+use crate::model::{BuildModel, CrateType};
 use crate::sysroot;
 
 /// Top-level rust-project.json structure.
@@ -156,7 +156,7 @@ pub fn generate_rust_project(
 
         let is_workspace = project_crate_names.contains(&krate.name);
 
-        let proc_macro_dylib = if krate.crate_type == "proc-macro" {
+        let proc_macro_dylib = if krate.crate_type == CrateType::ProcMacro {
             let ext = if cfg!(target_os = "macos") { "dylib" } else { "so" };
             let dylib = config.root.join(format!(
                 "build/host/lib{}.{ext}",
@@ -174,7 +174,7 @@ pub fn generate_rust_project(
             deps,
             cfg,
             target,
-            is_proc_macro: krate.crate_type == "proc-macro",
+            is_proc_macro: krate.crate_type == CrateType::ProcMacro,
             proc_macro_dylib_path: proc_macro_dylib,
             is_workspace_member: is_workspace,
         });

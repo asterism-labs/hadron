@@ -20,6 +20,7 @@ mod menuconfig;
 mod model;
 mod model_cache;
 mod run;
+mod rustc_cmd;
 mod rustc_info;
 mod scheduler;
 mod sysroot;
@@ -181,11 +182,11 @@ fn cmd_run(cli: &cli::Cli, extra_args: &[String]) -> Result<()> {
 /// Type-check all kernel crates without linking.
 fn cmd_check(cli: &cli::Cli) -> Result<()> {
     let (resolved, model) = resolve_config(cli)?;
-    let mut state = prepare_pipeline_state(&resolved, cli.force)?;
+    let mut state = prepare_pipeline_state(resolved, cli.force)?;
 
     println!("\nChecking crates...");
     scheduler::execute_pipeline(&model, &mut state, CompileMode::Check)?;
-    state.cache.save(&resolved.root)?;
+    state.cache.save(&state.config.root)?;
     println!(
         "\nCheck complete. ({} of {} crates checked)",
         state.recompiled_crates, state.total_crates
@@ -196,11 +197,11 @@ fn cmd_check(cli: &cli::Cli) -> Result<()> {
 /// Run clippy lints on project crates.
 fn cmd_clippy(cli: &cli::Cli) -> Result<()> {
     let (resolved, model) = resolve_config(cli)?;
-    let mut state = prepare_pipeline_state(&resolved, cli.force)?;
+    let mut state = prepare_pipeline_state(resolved, cli.force)?;
 
     println!("\nLinting crates with clippy...");
     scheduler::execute_pipeline(&model, &mut state, CompileMode::Clippy)?;
-    state.cache.save(&resolved.root)?;
+    state.cache.save(&state.config.root)?;
     println!(
         "\nClippy complete. ({} of {} crates linted)",
         state.recompiled_crates, state.total_crates
@@ -364,7 +365,8 @@ fn cmd_vendor(args: &cli::VendorArgs) -> Result<()> {
 
         let resolved = vendor::resolve_transitive(&model.dependencies, &vendor_dir, &mut version_cache)?;
 
-        let mut needed_fetch = false;
+        // Collect deps that need fetching.
+        let mut to_fetch: Vec<&vendor::ResolvedDep> = Vec::new();
         for dep in &resolved {
             let vendor_path = vendor::find_vendor_dir(&dep.name, &vendor_dir);
             if !vendor_path.join("Cargo.toml").exists() {
@@ -376,18 +378,47 @@ fn cmd_vendor(args: &cli::VendorArgs) -> Result<()> {
                                 dep.name
                             );
                         }
-                        vendor::fetch_crates_io(&dep.name, &dep.version, &vendor_dir)?;
-                        fetched += 1;
-                        needed_fetch = true;
+                        to_fetch.push(dep);
                     }
-                    vendor::ResolvedSource::Git { url, reference } => {
-                        vendor::fetch_git(&dep.name, url, reference, &vendor_dir)?;
-                        fetched += 1;
-                        needed_fetch = true;
+                    vendor::ResolvedSource::Git { .. } => {
+                        to_fetch.push(dep);
                     }
                     vendor::ResolvedSource::Path { .. } => {}
                 }
             }
+        }
+
+        let needed_fetch = !to_fetch.is_empty();
+        if needed_fetch {
+            // Fetch in parallel, 4 at a time to respect rate limits.
+            let batch_size = 4;
+            for chunk in to_fetch.chunks(batch_size) {
+                let results: Vec<Result<PathBuf>> = std::thread::scope(|s| {
+                    let handles: Vec<_> = chunk.iter().map(|dep| {
+                        let vdir = &vendor_dir;
+                        s.spawn(move || -> Result<PathBuf> {
+                            match &dep.source {
+                                vendor::ResolvedSource::CratesIo => {
+                                    vendor::fetch_crates_io(&dep.name, &dep.version, vdir)
+                                }
+                                vendor::ResolvedSource::Git { url, reference } => {
+                                    vendor::fetch_git(&dep.name, url, reference, vdir)
+                                }
+                                vendor::ResolvedSource::Path { .. } => {
+                                    Ok(vdir.join(&dep.name))
+                                }
+                            }
+                        })
+                    }).collect();
+
+                    handles.into_iter().map(|h| h.join().unwrap()).collect()
+                });
+
+                for result in results {
+                    result?;
+                }
+            }
+            fetched += to_fetch.len();
         }
 
         if !needed_fetch {
@@ -469,8 +500,10 @@ fn prune_vendor_dir(resolved: &[vendor::ResolvedDep], vendor_dir: &std::path::Pa
 // ===========================================================================
 
 /// Initialize pipeline state with empty per-target maps.
+///
+/// Takes `ResolvedConfig` by value to avoid a redundant field-by-field clone.
 fn prepare_pipeline_state(
-    resolved: &config::ResolvedConfig,
+    resolved: config::ResolvedConfig,
     force: bool,
 ) -> Result<scheduler::PipelineState> {
     use verbose::vprintln;
@@ -497,61 +530,7 @@ fn prepare_pipeline_state(
     };
 
     Ok(scheduler::PipelineState {
-        config: config::ResolvedConfig {
-            project: config::ProjectMeta {
-                name: resolved.project.name.clone(),
-                version: resolved.project.version.clone(),
-            },
-            root: resolved.root.clone(),
-            target_name: resolved.target_name.clone(),
-            target: config::TargetConfig {
-                spec: resolved.target.spec.clone(),
-            },
-            options: resolved.options.clone(),
-            bindings: resolved.bindings.clone(),
-            choices: resolved.choices.clone(),
-            profile: config::ResolvedProfile {
-                name: resolved.profile.name.clone(),
-                target: resolved.profile.target.clone(),
-                opt_level: resolved.profile.opt_level,
-                debug_info: resolved.profile.debug_info,
-                lto: resolved.profile.lto.clone(),
-                boot_binary: resolved.profile.boot_binary.clone(),
-                qemu_memory: resolved.profile.qemu_memory,
-                qemu_cores: resolved.profile.qemu_cores,
-                qemu_extra_args: resolved.profile.qemu_extra_args.clone(),
-                test_timeout: resolved.profile.test_timeout,
-            },
-            qemu: config::QemuConfig {
-                machine: resolved.qemu.machine.clone(),
-                memory: resolved.qemu.memory,
-                extra_args: resolved.qemu.extra_args.clone(),
-                test: config::QemuTestConfig {
-                    success_exit_code: resolved.qemu.test.success_exit_code,
-                    timeout: resolved.qemu.test.timeout,
-                    extra_args: resolved.qemu.test.extra_args.clone(),
-                },
-            },
-            bootloader: config::BootloaderConfig {
-                kind: resolved.bootloader.kind.clone(),
-                config_file: resolved.bootloader.config_file.clone(),
-            },
-            image: config::ImageConfig {
-                extra_files: resolved.image.extra_files.clone(),
-            },
-            tests: config::TestsConfig {
-                host_testable: resolved.tests.host_testable.clone(),
-                kernel_tests_dir: resolved.tests.kernel_tests_dir.clone(),
-                kernel_tests_crate: resolved.tests.kernel_tests_crate.clone(),
-                kernel_tests_linker_script: resolved.tests.kernel_tests_linker_script.clone(),
-                crash: resolved.tests.crash.iter().map(|ct| config::CrashTest {
-                    name: ct.name.clone(),
-                    source: ct.source.clone(),
-                    expected_exit: ct.expected_exit,
-                    expect_output: ct.expect_output.clone(),
-                }).collect(),
-            },
-        },
+        config: resolved,
         target_specs: HashMap::new(),
         sysroots: HashMap::new(),
         config_rlibs: HashMap::new(),
@@ -573,7 +552,7 @@ fn prepare_pipeline_state(
 fn do_build(cli: &cli::Cli) -> Result<(scheduler::PipelineState, model::BuildModel)> {
     let (resolved, model) = resolve_config(cli)?;
 
-    let mut state = prepare_pipeline_state(&resolved, cli.force)?;
+    let mut state = prepare_pipeline_state(resolved, cli.force)?;
 
     println!("\nCompiling crates...");
     scheduler::execute_pipeline(&model, &mut state, CompileMode::Build)?;

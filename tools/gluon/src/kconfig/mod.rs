@@ -220,4 +220,79 @@ mod tests {
         assert_eq!(opt.choices.as_ref().unwrap().len(), 5);
         assert_eq!(opt.bindings, vec![Binding::CfgCumulative, Binding::Const]);
     }
+
+    #[test]
+    fn convert_u32_with_range() {
+        let block = ConfigBlock {
+            name: "MAX_CPUS".to_string(),
+            ty: Some(TypeDecl {
+                kind: TypeKind::U32,
+                variants: Vec::new(),
+                prompt: Some("Max CPUs".to_string()),
+            }),
+            prompt: None,
+            default: Some(DefaultValue::Integer(128)),
+            depends_on: None,
+            selects: Vec::new(),
+            range: Some((1, 256)),
+            bindings: vec![Binding::Const],
+            help: None,
+        };
+
+        let opt = convert_config_block(&block, None).unwrap();
+        assert_eq!(opt.name, "MAX_CPUS");
+        assert_eq!(opt.ty, ConfigType::U32);
+        assert!(matches!(opt.default, ConfigValue::U32(128)));
+        assert_eq!(opt.range, Some((1, 256)));
+        assert_eq!(opt.menu, None);
+        assert_eq!(opt.bindings, vec![Binding::Const]);
+    }
+
+    #[test]
+    fn convert_u64_hex_default() {
+        let block = ConfigBlock {
+            name: "FRAMEBUFFER_ADDR".to_string(),
+            ty: Some(TypeDecl {
+                kind: TypeKind::U64,
+                variants: Vec::new(),
+                prompt: Some("Framebuffer address".to_string()),
+            }),
+            prompt: None,
+            default: Some(DefaultValue::Integer(0xFF0000)),
+            depends_on: None,
+            selects: Vec::new(),
+            range: None,
+            bindings: vec![Binding::Build],
+            help: None,
+        };
+
+        let opt = convert_config_block(&block, Some("Display")).unwrap();
+        assert_eq!(opt.name, "FRAMEBUFFER_ADDR");
+        assert_eq!(opt.ty, ConfigType::U64);
+        assert!(matches!(opt.default, ConfigValue::U64(0xFF0000)));
+        assert_eq!(opt.menu, Some("Display".to_string()));
+    }
+
+    #[test]
+    fn convert_no_type_error() {
+        let block = ConfigBlock {
+            name: "BROKEN".to_string(),
+            ty: None,
+            prompt: None,
+            default: None,
+            depends_on: None,
+            selects: Vec::new(),
+            range: None,
+            bindings: Vec::new(),
+            help: None,
+        };
+
+        let result = convert_config_block(&block, None);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("no type"),
+            "error message should mention 'no type', got: {err}"
+        );
+    }
 }

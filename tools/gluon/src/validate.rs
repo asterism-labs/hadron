@@ -431,3 +431,489 @@ fn validate_dependencies(model: &BuildModel) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{
+        BuildModel, ConfigOptionDef, ConfigType, ConfigValue, CrateDef, CrateType, DepDef,
+        DepSource, ExternalDepDef, GitRef, GroupDef, PipelineStep, ProfileDef, RuleDef,
+        RuleHandler, TargetDef,
+    };
+    use std::collections::BTreeMap;
+
+    /// Build a minimal valid `BuildModel` that passes all validation checks.
+    fn minimal_model() -> BuildModel {
+        let mut model = BuildModel::default();
+        model.project.name = "test".into();
+        model.project.version = "0.1.0".into();
+        model.targets.insert(
+            "x86_64".into(),
+            TargetDef {
+                name: "x86_64".into(),
+                spec: "x86_64-unknown-hadron".into(),
+            },
+        );
+        model.profiles.insert(
+            "default".into(),
+            ProfileDef {
+                name: "default".into(),
+                target: Some("x86_64".into()),
+                ..Default::default()
+            },
+        );
+        model
+            .pipeline
+            .steps
+            .push(PipelineStep::Barrier("init".into()));
+        model
+    }
+
+    /// Construct a `ConfigOptionDef` with `Bool` type.
+    fn bool_opt(name: &str, default: bool) -> ConfigOptionDef {
+        ConfigOptionDef {
+            name: name.into(),
+            ty: ConfigType::Bool,
+            default: ConfigValue::Bool(default),
+            help: None,
+            depends_on: vec![],
+            selects: vec![],
+            range: None,
+            choices: None,
+            menu: None,
+            bindings: Vec::new(),
+        }
+    }
+
+    /// Construct a minimal `CrateDef`.
+    fn make_crate(name: &str, target: &str) -> CrateDef {
+        CrateDef {
+            name: name.into(),
+            path: format!("crates/{name}"),
+            edition: "2024".into(),
+            crate_type: CrateType::Lib,
+            target: target.into(),
+            deps: BTreeMap::new(),
+            dev_deps: BTreeMap::new(),
+            features: Vec::new(),
+            root: None,
+            linker_script: None,
+            group: None,
+            is_project_crate: true,
+            cfg_flags: Vec::new(),
+            requires_config: Vec::new(),
+        }
+    }
+
+    /// Construct a `DepDef` referencing a crate by name.
+    fn make_dep(crate_name: &str) -> DepDef {
+        DepDef {
+            extern_name: crate_name.into(),
+            crate_name: crate_name.into(),
+            features: Vec::new(),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // 1. valid_minimal_model_passes
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn valid_minimal_model_passes() {
+        let model = minimal_model();
+        validate_model(&model).expect("minimal model should pass validation");
+    }
+
+    // -----------------------------------------------------------------------
+    // 2. missing_project_name_fails
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn missing_project_name_fails() {
+        let mut model = minimal_model();
+        model.project.name = String::new();
+        let err = validate_model(&model).unwrap_err();
+        assert!(
+            err.to_string().contains("project name is required"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // 3. missing_project_version_fails
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn missing_project_version_fails() {
+        let mut model = minimal_model();
+        model.project.version = String::new();
+        let err = validate_model(&model).unwrap_err();
+        assert!(
+            err.to_string().contains("project version is required"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // 4. missing_default_profile_fails
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn missing_default_profile_fails() {
+        let mut model = minimal_model();
+        model.profiles.remove("default");
+        let err = validate_model(&model).unwrap_err();
+        assert!(
+            err.to_string().contains("'default' profile is required"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // 5. profile_inheritance_cycle_detected
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn profile_inheritance_cycle_detected() {
+        let mut model = minimal_model();
+
+        // A inherits B, B inherits A.
+        model.profiles.insert(
+            "a".into(),
+            ProfileDef {
+                name: "a".into(),
+                inherits: Some("b".into()),
+                ..Default::default()
+            },
+        );
+        model.profiles.insert(
+            "b".into(),
+            ProfileDef {
+                name: "b".into(),
+                inherits: Some("a".into()),
+                ..Default::default()
+            },
+        );
+
+        let err = validate_model(&model).unwrap_err();
+        assert!(
+            err.to_string().contains("cycle"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // 6. config_type_mismatch_fails
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn config_type_mismatch_fails() {
+        let mut model = minimal_model();
+        model.config_options.insert(
+            "bad_opt".into(),
+            ConfigOptionDef {
+                name: "bad_opt".into(),
+                ty: ConfigType::Bool,
+                default: ConfigValue::U32(1),
+                help: None,
+                depends_on: vec![],
+                selects: vec![],
+                range: None,
+                choices: None,
+                menu: None,
+                bindings: Vec::new(),
+            },
+        );
+
+        let err = validate_model(&model).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("does not match declared type"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // 7. config_range_min_gt_max_fails
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn config_range_min_gt_max_fails() {
+        let mut model = minimal_model();
+        model.config_options.insert(
+            "num_opt".into(),
+            ConfigOptionDef {
+                name: "num_opt".into(),
+                ty: ConfigType::U32,
+                default: ConfigValue::U32(50),
+                help: None,
+                depends_on: vec![],
+                selects: vec![],
+                range: Some((100, 1)),
+                choices: None,
+                menu: None,
+                bindings: Vec::new(),
+            },
+        );
+
+        let err = validate_model(&model).unwrap_err();
+        assert!(
+            err.to_string().contains("range min"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // 8. config_choice_missing_variants_fails
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn config_choice_missing_variants_fails() {
+        let mut model = minimal_model();
+        model.config_options.insert(
+            "choice_opt".into(),
+            ConfigOptionDef {
+                name: "choice_opt".into(),
+                ty: ConfigType::Choice,
+                default: ConfigValue::Choice("a".into()),
+                help: None,
+                depends_on: vec![],
+                selects: vec![],
+                range: None,
+                choices: Some(vec![]),
+                menu: None,
+                bindings: Vec::new(),
+            },
+        );
+
+        let err = validate_model(&model).unwrap_err();
+        assert!(
+            err.to_string().contains("no variants"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // 9. pipeline_undefined_group_fails
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn pipeline_undefined_group_fails() {
+        let mut model = minimal_model();
+        model.pipeline.steps.push(PipelineStep::Stage {
+            name: "s1".into(),
+            groups: vec!["nonexistent".into()],
+        });
+
+        let err = validate_model(&model).unwrap_err();
+        assert!(
+            err.to_string().contains("not defined"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // 10. crate_undefined_dep_fails
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn crate_undefined_dep_fails() {
+        let mut model = minimal_model();
+
+        // Add a crate that depends on "nonexistent", which is neither in
+        // model.crates nor model.dependencies.
+        let mut krate = make_crate("my_crate", "x86_64");
+        krate.deps.insert("nonexistent".into(), make_dep("nonexistent"));
+        model.crates.insert("my_crate".into(), krate);
+
+        // The crate must also be in a group for group validation to pass,
+        // and the group must be in the pipeline.
+        model.groups.insert(
+            "grp".into(),
+            GroupDef {
+                name: "grp".into(),
+                target: "x86_64".into(),
+                crates: vec!["my_crate".into()],
+                ..Default::default()
+            },
+        );
+        model.pipeline.steps.push(PipelineStep::Stage {
+            name: "s1".into(),
+            groups: vec!["grp".into()],
+        });
+
+        let err = validate_model(&model).unwrap_err();
+        assert!(
+            err.to_string().contains("not defined"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // 11. dependency_crates_io_no_version_fails
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn dependency_crates_io_no_version_fails() {
+        let mut model = minimal_model();
+        model.dependencies.insert(
+            "some_dep".into(),
+            ExternalDepDef {
+                name: "some_dep".into(),
+                source: DepSource::CratesIo {
+                    version: String::new(),
+                },
+                features: Vec::new(),
+                default_features: true,
+                cfg_flags: Vec::new(),
+            },
+        );
+
+        let err = validate_model(&model).unwrap_err();
+        assert!(
+            err.to_string().contains("no version"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // 12. dependency_git_empty_url_fails
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn dependency_git_empty_url_fails() {
+        let mut model = minimal_model();
+        model.dependencies.insert(
+            "git_dep".into(),
+            ExternalDepDef {
+                name: "git_dep".into(),
+                source: DepSource::Git {
+                    url: String::new(),
+                    reference: GitRef::Default,
+                },
+                features: Vec::new(),
+                default_features: true,
+                cfg_flags: Vec::new(),
+            },
+        );
+
+        let err = validate_model(&model).unwrap_err();
+        assert!(
+            err.to_string().contains("no URL"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // 13. valid_model_with_all_features
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn valid_model_with_all_features() {
+        let mut model = minimal_model();
+
+        // -- Config options --
+        model
+            .config_options
+            .insert("enable_serial".into(), bool_opt("enable_serial", true));
+        model.config_options.insert(
+            "log_level".into(),
+            ConfigOptionDef {
+                name: "log_level".into(),
+                ty: ConfigType::Choice,
+                default: ConfigValue::Choice("info".into()),
+                help: Some("Kernel log level".into()),
+                depends_on: vec![],
+                selects: vec![],
+                range: None,
+                choices: Some(vec![
+                    "error".into(),
+                    "warn".into(),
+                    "info".into(),
+                    "debug".into(),
+                ]),
+                menu: None,
+                bindings: Vec::new(),
+            },
+        );
+        model.config_options.insert(
+            "heap_size".into(),
+            ConfigOptionDef {
+                name: "heap_size".into(),
+                ty: ConfigType::U64,
+                default: ConfigValue::U64(1024),
+                help: None,
+                depends_on: vec![],
+                selects: vec![],
+                range: Some((256, 65536)),
+                choices: None,
+                menu: None,
+                bindings: Vec::new(),
+            },
+        );
+
+        // -- External dependencies --
+        model.dependencies.insert(
+            "bitflags".into(),
+            ExternalDepDef {
+                name: "bitflags".into(),
+                source: DepSource::CratesIo {
+                    version: "2.6.0".into(),
+                },
+                features: Vec::new(),
+                default_features: true,
+                cfg_flags: Vec::new(),
+            },
+        );
+
+        // -- Crates --
+        let mut kernel = make_crate("hadron-kernel", "x86_64");
+        kernel.deps.insert("bitflags".into(), make_dep("bitflags"));
+        model.crates.insert("hadron-kernel".into(), kernel);
+
+        let mut drivers = make_crate("hadron-drivers", "x86_64");
+        drivers
+            .deps
+            .insert("hadron-kernel".into(), make_dep("hadron-kernel"));
+        model.crates.insert("hadron-drivers".into(), drivers);
+
+        // -- Groups --
+        model.groups.insert(
+            "kernel".into(),
+            GroupDef {
+                name: "kernel".into(),
+                target: "x86_64".into(),
+                crates: vec!["hadron-kernel".into(), "hadron-drivers".into()],
+                ..Default::default()
+            },
+        );
+
+        // -- Rules --
+        model.rules.insert(
+            "link_kernel".into(),
+            RuleDef {
+                name: "link_kernel".into(),
+                inputs: vec!["hadron-kernel".into()],
+                outputs: vec!["kernel.elf".into()],
+                depends_on: vec![],
+                handler: RuleHandler::Builtin("hbtf".into()),
+            },
+        );
+
+        // -- Pipeline --
+        model.pipeline.steps.push(PipelineStep::Stage {
+            name: "compile".into(),
+            groups: vec!["kernel".into()],
+        });
+        model
+            .pipeline
+            .steps
+            .push(PipelineStep::Barrier("link_barrier".into()));
+        model
+            .pipeline
+            .steps
+            .push(PipelineStep::Rule("link_kernel".into()));
+
+        validate_model(&model).expect("full-featured model should pass validation");
+    }
+}

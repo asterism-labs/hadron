@@ -284,9 +284,9 @@ impl CrateEntry {
             // Slow path: hash the file contents.
             let current_hash = match hash_file(path) {
                 Ok(h) => h,
-                Err(_) => {
+                Err(e) => {
                     return FreshResult::Stale(format!(
-                        "failed to hash: {}",
+                        "failed to hash {}: {e}",
                         path.display()
                     ));
                 }
@@ -442,4 +442,374 @@ fn hash_bytes(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(data);
     format!("{:x}", hasher.finalize())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+
+    /// Create a unique temporary directory for a test, using the test name
+    /// and process ID to avoid collisions.
+    fn make_test_dir(test_name: &str) -> PathBuf {
+        let dir = std::env::temp_dir()
+            .join(format!("gluon_cache_test_{}_{}", std::process::id(), test_name));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("failed to create test temp dir");
+        dir
+    }
+
+    // ---------------------------------------------------------------
+    // split_dep_tokens tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn split_dep_tokens_empty_input() {
+        assert_eq!(split_dep_tokens(""), Vec::<String>::new());
+    }
+
+    #[test]
+    fn split_dep_tokens_simple_tokens() {
+        assert_eq!(
+            split_dep_tokens("foo.rs bar.rs"),
+            vec!["foo.rs", "bar.rs"],
+        );
+    }
+
+    #[test]
+    fn split_dep_tokens_escaped_spaces() {
+        assert_eq!(
+            split_dep_tokens("path\\ with\\ spaces.rs other.rs"),
+            vec!["path with spaces.rs", "other.rs"],
+        );
+    }
+
+    #[test]
+    fn split_dep_tokens_consecutive_whitespace() {
+        assert_eq!(
+            split_dep_tokens("a.rs    b.rs"),
+            vec!["a.rs", "b.rs"],
+        );
+    }
+
+    #[test]
+    fn split_dep_tokens_trailing_whitespace() {
+        assert_eq!(
+            split_dep_tokens("a.rs "),
+            vec!["a.rs"],
+        );
+    }
+
+    #[test]
+    fn split_dep_tokens_backslash_not_before_space() {
+        // A backslash followed by 'n' is NOT an escape — keep the backslash.
+        assert_eq!(
+            split_dep_tokens("path\\nfoo.rs"),
+            vec!["path\\nfoo.rs"],
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // parse_dep_info tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn parse_dep_info_standard_colon_target() {
+        let dir = make_test_dir("dep_info_standard");
+        let dep_file = dir.join("test.d");
+        fs::write(&dep_file, "target.rlib: foo.rs bar.rs\n")
+            .expect("failed to write dep file");
+
+        let result = parse_dep_info(&dep_file).expect("parse_dep_info failed");
+        assert_eq!(result, vec![PathBuf::from("foo.rs"), PathBuf::from("bar.rs")]);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parse_dep_info_backslash_continuations() {
+        let dir = make_test_dir("dep_info_continuations");
+        let dep_file = dir.join("test.d");
+        fs::write(&dep_file, "target.rlib: foo.rs \\\n bar.rs\n")
+            .expect("failed to write dep file");
+
+        let result = parse_dep_info(&dep_file).expect("parse_dep_info failed");
+        assert_eq!(result, vec![PathBuf::from("foo.rs"), PathBuf::from("bar.rs")]);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parse_dep_info_no_colon_line_still_parsed() {
+        let dir = make_test_dir("dep_info_no_colon");
+        let dep_file = dir.join("test.d");
+        // A line without a colon should still have its tokens parsed as paths.
+        fs::write(&dep_file, "src/main.rs src/lib.rs\n")
+            .expect("failed to write dep file");
+
+        let result = parse_dep_info(&dep_file).expect("parse_dep_info failed");
+        assert_eq!(
+            result,
+            vec![PathBuf::from("src/main.rs"), PathBuf::from("src/lib.rs")],
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parse_dep_info_extension_filtering() {
+        let dir = make_test_dir("dep_info_ext_filter");
+        let dep_file = dir.join("test.d");
+        // Paths without extensions (e.g. bare directory names) are excluded.
+        fs::write(&dep_file, "target.rlib: foo.rs /usr/lib bar.rs\n")
+            .expect("failed to write dep file");
+
+        let result = parse_dep_info(&dep_file).expect("parse_dep_info failed");
+        assert_eq!(result, vec![PathBuf::from("foo.rs"), PathBuf::from("bar.rs")]);
+        // `/usr/lib` has no extension so it must NOT appear.
+        assert!(!result.contains(&PathBuf::from("/usr/lib")));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // ---------------------------------------------------------------
+    // FreshResult tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn fresh_result_fresh_is_fresh() {
+        assert!(FreshResult::Fresh.is_fresh());
+    }
+
+    #[test]
+    fn fresh_result_stale_is_not_fresh() {
+        assert!(!FreshResult::Stale("reason".into()).is_fresh());
+    }
+
+    // ---------------------------------------------------------------
+    // CrateEntry::is_fresh tests
+    // ---------------------------------------------------------------
+
+    /// Helper: compute the SHA-256 hex hash of `data`.
+    fn sha256_hex(data: &[u8]) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(data);
+        format!("{:x}", hasher.finalize())
+    }
+
+    /// Helper: build a `CrateEntry` with one source file and the given artifact.
+    fn make_entry(
+        flags_hash: &str,
+        artifact: &Path,
+        sources: Vec<(PathBuf, i64, String)>,
+    ) -> CrateEntry {
+        let artifact_mtime = file_mtime_secs(artifact).unwrap_or(0);
+        let mut src_map = HashMap::new();
+        for (path, mtime, hash) in sources {
+            src_map.insert(path, SourceRecord {
+                mtime_secs: mtime,
+                content_hash: hash,
+            });
+        }
+        CrateEntry {
+            flags_hash: flags_hash.to_string(),
+            artifact_path: artifact.to_path_buf(),
+            artifact_mtime_secs: artifact_mtime,
+            sources: src_map,
+        }
+    }
+
+    #[test]
+    fn crate_entry_flags_changed_is_stale() {
+        let dir = make_test_dir("ce_flags");
+        let artifact = dir.join("lib.rlib");
+        fs::write(&artifact, b"artifact").unwrap();
+
+        let mut entry = make_entry("old_hash", &artifact, vec![]);
+        let result = entry.is_fresh("new_hash", &HashSet::new(), &[]);
+        assert!(!result.is_fresh());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn crate_entry_artifact_missing_is_stale() {
+        let dir = make_test_dir("ce_artifact_missing");
+        let artifact = dir.join("lib.rlib");
+        // Create the artifact so we can record its mtime, then delete it.
+        fs::write(&artifact, b"artifact").unwrap();
+        let mut entry = make_entry("hash", &artifact, vec![]);
+        fs::remove_file(&artifact).unwrap();
+
+        let result = entry.is_fresh("hash", &HashSet::new(), &[]);
+        assert!(!result.is_fresh());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn crate_entry_dependency_rebuilt_is_stale() {
+        let dir = make_test_dir("ce_dep_rebuilt");
+        let artifact = dir.join("lib.rlib");
+        fs::write(&artifact, b"artifact").unwrap();
+
+        let mut entry = make_entry("hash", &artifact, vec![]);
+        let mut rebuilt = HashSet::new();
+        rebuilt.insert("some_dep".to_string());
+
+        let deps = vec!["some_dep".to_string()];
+        let result = entry.is_fresh("hash", &rebuilt, &deps);
+        assert!(!result.is_fresh());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn crate_entry_everything_matches_is_fresh() {
+        let dir = make_test_dir("ce_fresh");
+        let artifact = dir.join("lib.rlib");
+        fs::write(&artifact, b"artifact").unwrap();
+
+        let src = dir.join("main.rs");
+        let src_content = b"fn main() {}";
+        fs::write(&src, src_content).unwrap();
+        let src_mtime = file_mtime_secs(&src).unwrap();
+        let src_hash = sha256_hex(src_content);
+
+        let mut entry = make_entry(
+            "hash",
+            &artifact,
+            vec![(src.clone(), src_mtime, src_hash)],
+        );
+
+        let result = entry.is_fresh("hash", &HashSet::new(), &[]);
+        assert!(result.is_fresh());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn crate_entry_mtime_changed_but_content_same_is_fresh_and_updates_record() {
+        let dir = make_test_dir("ce_mtime_content");
+        let artifact = dir.join("lib.rlib");
+        fs::write(&artifact, b"artifact").unwrap();
+
+        let src = dir.join("main.rs");
+        let src_content = b"fn main() {}";
+        fs::write(&src, src_content).unwrap();
+        let src_hash = sha256_hex(src_content);
+
+        // Record with a stale mtime (0), but the content hash still matches
+        // the file on disk.
+        let old_mtime: i64 = 0;
+        let mut entry = make_entry(
+            "hash",
+            &artifact,
+            vec![(src.clone(), old_mtime, src_hash)],
+        );
+
+        let result = entry.is_fresh("hash", &HashSet::new(), &[]);
+        assert!(result.is_fresh(), "should be fresh because content hash matches");
+
+        // The stored mtime should have been updated to the real file mtime.
+        let updated_mtime = entry.sources.get(&src).unwrap().mtime_secs;
+        let actual_mtime = file_mtime_secs(&src).unwrap();
+        assert_eq!(
+            updated_mtime, actual_mtime,
+            "stored mtime should be updated to current file mtime"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // ---------------------------------------------------------------
+    // CacheManifest::is_sysroot_fresh tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn sysroot_fresh_no_cached_entry_is_stale() {
+        let manifest = CacheManifest::new("rustc_hash".into());
+        let result = manifest.is_sysroot_fresh("x86_64-unknown-hadron", 2);
+        assert!(!result.is_fresh());
+    }
+
+    #[test]
+    fn sysroot_fresh_opt_level_changed_is_stale() {
+        let dir = make_test_dir("sysroot_opt");
+        let core_rlib = dir.join("libcore.rlib");
+        let cb_rlib = dir.join("libcompiler_builtins.rlib");
+        let alloc_rlib = dir.join("liballoc.rlib");
+        fs::write(&core_rlib, b"core").unwrap();
+        fs::write(&cb_rlib, b"cb").unwrap();
+        fs::write(&alloc_rlib, b"alloc").unwrap();
+
+        let mut manifest = CacheManifest::new("rustc_hash".into());
+        manifest.record_sysroot(
+            "x86_64-unknown-hadron",
+            1,
+            core_rlib,
+            cb_rlib,
+            alloc_rlib,
+        );
+
+        // Ask for opt-level 2, but recorded 1.
+        let result = manifest.is_sysroot_fresh("x86_64-unknown-hadron", 2);
+        assert!(!result.is_fresh());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sysroot_fresh_rlib_missing_is_stale() {
+        let dir = make_test_dir("sysroot_missing");
+        let core_rlib = dir.join("libcore.rlib");
+        let cb_rlib = dir.join("libcompiler_builtins.rlib");
+        let alloc_rlib = dir.join("liballoc.rlib");
+        fs::write(&core_rlib, b"core").unwrap();
+        fs::write(&cb_rlib, b"cb").unwrap();
+        fs::write(&alloc_rlib, b"alloc").unwrap();
+
+        let mut manifest = CacheManifest::new("rustc_hash".into());
+        manifest.record_sysroot(
+            "x86_64-unknown-hadron",
+            2,
+            core_rlib.clone(),
+            cb_rlib,
+            alloc_rlib,
+        );
+
+        // Remove one rlib.
+        fs::remove_file(&core_rlib).unwrap();
+
+        let result = manifest.is_sysroot_fresh("x86_64-unknown-hadron", 2);
+        assert!(!result.is_fresh());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sysroot_fresh_all_present_and_matching_is_fresh() {
+        let dir = make_test_dir("sysroot_fresh");
+        let core_rlib = dir.join("libcore.rlib");
+        let cb_rlib = dir.join("libcompiler_builtins.rlib");
+        let alloc_rlib = dir.join("liballoc.rlib");
+        fs::write(&core_rlib, b"core").unwrap();
+        fs::write(&cb_rlib, b"cb").unwrap();
+        fs::write(&alloc_rlib, b"alloc").unwrap();
+
+        let mut manifest = CacheManifest::new("rustc_hash".into());
+        manifest.record_sysroot(
+            "x86_64-unknown-hadron",
+            2,
+            core_rlib,
+            cb_rlib,
+            alloc_rlib,
+        );
+
+        let result = manifest.is_sysroot_fresh("x86_64-unknown-hadron", 2);
+        assert!(result.is_fresh());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

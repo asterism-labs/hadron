@@ -559,4 +559,108 @@ config LOG_LEVEL
             panic!("expected Config item");
         }
     }
+
+    #[test]
+    fn parse_compound_depends() {
+        let file = parse_str(r#"
+config TEST
+    bool "Test"
+    depends on A && (B || C)
+    default y
+"#);
+        if let KconfigItem::Config(ref block) = file.items[0] {
+            let dep = block.depends_on.as_ref().expect("expected depends_on");
+            // Should be And(Symbol("A"), Or(Symbol("B"), Symbol("C")))
+            match dep {
+                DependsExpr::And(left, right) => {
+                    assert!(matches!(left.as_ref(), DependsExpr::Symbol(s) if s == "A"));
+                    match right.as_ref() {
+                        DependsExpr::Or(b, c) => {
+                            assert!(matches!(b.as_ref(), DependsExpr::Symbol(s) if s == "B"));
+                            assert!(matches!(c.as_ref(), DependsExpr::Symbol(s) if s == "C"));
+                        }
+                        other => panic!("expected Or, got {other:?}"),
+                    }
+                }
+                other => panic!("expected And, got {other:?}"),
+            }
+        } else {
+            panic!("expected Config item");
+        }
+    }
+
+    #[test]
+    fn parse_not_expression() {
+        let file = parse_str(r#"
+config RELEASE
+    bool "Release mode"
+    depends on !DEBUG
+    default n
+"#);
+        if let KconfigItem::Config(ref block) = file.items[0] {
+            let dep = block.depends_on.as_ref().expect("expected depends_on");
+            // Should be Not(Symbol("DEBUG"))
+            match dep {
+                DependsExpr::Not(inner) => {
+                    assert!(matches!(inner.as_ref(), DependsExpr::Symbol(s) if s == "DEBUG"));
+                }
+                other => panic!("expected Not, got {other:?}"),
+            }
+        } else {
+            panic!("expected Config item");
+        }
+    }
+
+    #[test]
+    fn parse_missing_endmenu_eof() {
+        // The parser treats EOF as an implicit endmenu, so a menu without
+        // an explicit endmenu should parse successfully.
+        let file = parse_str(
+            "menu \"Foo\"\nconfig X\n    bool \"X\"\n    default y\n",
+        );
+        assert_eq!(file.items.len(), 1);
+        if let KconfigItem::Menu(ref menu) = file.items[0] {
+            assert_eq!(menu.title, "Foo");
+            assert_eq!(menu.items.len(), 1);
+            if let KconfigItem::Config(ref block) = menu.items[0] {
+                assert_eq!(block.name, "X");
+                assert_eq!(block.ty.as_ref().unwrap().kind, TypeKind::Bool);
+                assert!(matches!(block.default, Some(DefaultValue::Bool(true))));
+            } else {
+                panic!("expected Config item inside menu");
+            }
+        } else {
+            panic!("expected Menu item");
+        }
+    }
+
+    #[test]
+    fn parse_multiple_config_blocks() {
+        let file = parse_str(r#"
+config FIRST
+    bool "First option"
+    default y
+
+config SECOND
+    u64 "Second option"
+    default 42
+"#);
+        assert_eq!(file.items.len(), 2);
+
+        if let KconfigItem::Config(ref block) = file.items[0] {
+            assert_eq!(block.name, "FIRST");
+            assert_eq!(block.ty.as_ref().unwrap().kind, TypeKind::Bool);
+            assert!(matches!(block.default, Some(DefaultValue::Bool(true))));
+        } else {
+            panic!("expected Config item for FIRST");
+        }
+
+        if let KconfigItem::Config(ref block) = file.items[1] {
+            assert_eq!(block.name, "SECOND");
+            assert_eq!(block.ty.as_ref().unwrap().kind, TypeKind::U64);
+            assert!(matches!(block.default, Some(DefaultValue::Integer(42))));
+        } else {
+            panic!("expected Config item for SECOND");
+        }
+    }
 }

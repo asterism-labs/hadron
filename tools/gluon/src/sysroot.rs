@@ -4,9 +4,9 @@
 //! source into `build/sysroot/lib/rustlib/<target>/lib/`. Downstream crates
 //! use `--sysroot build/sysroot` to link against these.
 
+use crate::rustc_cmd::RustcCommandBuilder;
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 
 /// Paths to the compiled sysroot rlibs.
@@ -97,7 +97,6 @@ pub fn build_sysroot(
     std::fs::create_dir_all(&lib_dir)
         .context("failed to create sysroot output directory")?;
 
-    let opt_flag = format!("-Copt-level={opt_level}");
     let target_flag = target_spec
         .to_str()
         .context("non-UTF-8 target spec path")?;
@@ -111,9 +110,10 @@ pub fn build_sysroot(
         &core_edition,
         &lib_dir,
         target_flag,
-        &opt_flag,
+        opt_level,
         &[],
-        &["--cfg", "no_fp_fmt_parse"],
+        &["no_fp_fmt_parse"],
+        &[],
     )?;
 
     // Step 2: Compile compiler_builtins.
@@ -126,16 +126,10 @@ pub fn build_sysroot(
         &cb_edition,
         &lib_dir,
         target_flag,
-        &opt_flag,
+        opt_level,
         &[("core", &core_rlib)],
-        &[
-            "--cfg",
-            "feature=\"compiler-builtins\"",
-            "--cfg",
-            "feature=\"mem\"",
-            "--cfg",
-            "feature=\"rustc-dep-of-std\"",
-        ],
+        &[],
+        &["compiler-builtins", "mem", "rustc-dep-of-std"],
     )?;
 
     // Step 3: Compile alloc.
@@ -147,12 +141,13 @@ pub fn build_sysroot(
         &alloc_edition,
         &lib_dir,
         target_flag,
-        &opt_flag,
+        opt_level,
         &[
             ("core", &core_rlib),
             ("compiler_builtins", &compiler_builtins_rlib),
         ],
-        &["--cfg", "no_fp_fmt_parse"],
+        &["no_fp_fmt_parse"],
+        &[],
     )?;
 
     Ok(SysrootOutput {
@@ -171,49 +166,39 @@ fn compile_sysroot_crate(
     edition: &str,
     out_dir: &Path,
     target: &str,
-    opt_flag: &str,
+    opt_level: u32,
     externs: &[(&str, &Path)],
-    extra_args: &[&str],
+    cfgs: &[&str],
+    features: &[&str],
 ) -> Result<PathBuf> {
-    let mut cmd = Command::new("rustc");
-    cmd.arg("--crate-name")
-        .arg(crate_name)
-        .arg(format!("--edition={edition}"))
-        .arg("--crate-type")
-        .arg("rlib")
-        .arg("-Zunstable-options")
+    let mut cmd = RustcCommandBuilder::new("rustc");
+    cmd.crate_name(crate_name)
+        .edition(edition)
+        .crate_type("rlib")
+        .unstable_options()
         .arg("-Zforce-unstable-if-unmarked")
-        .arg("--allow")
-        .arg("internal_features")
-        .arg("-Cpanic=abort")
-        .arg(opt_flag)
-        .arg("--target")
-        .arg(target)
-        .arg("--out-dir")
-        .arg(out_dir)
-        .arg("--emit=metadata,link");
+        .allow("internal_features")
+        .panic_abort()
+        .opt_level(opt_level)
+        .target(target)
+        .out_dir(out_dir)
+        .emit("metadata,link");
 
     for (name, path) in externs {
-        cmd.arg("--extern").arg(format!(
-            "{name}={}",
-            path.display()
-        ));
+        cmd.add_extern(name, path);
     }
 
-    for arg in extra_args {
-        cmd.arg(arg);
+    for flag in cfgs {
+        cmd.cfg(flag);
     }
 
-    cmd.arg(source);
-
-    let output = cmd
-        .output()
-        .with_context(|| format!("failed to run rustc for {crate_name}"))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("failed to compile sysroot crate '{crate_name}':\n{stderr}");
+    for feat in features {
+        cmd.feature(feat);
     }
+
+    cmd.source(source);
+
+    cmd.run_checked("compile")?;
 
     let rlib = out_dir.join(format!("lib{crate_name}.rlib"));
     if !rlib.exists() {

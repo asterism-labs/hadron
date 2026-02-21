@@ -8,12 +8,14 @@ use anyhow::{Context, Result, bail};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 
+use crate::model::CrateType;
+
 /// A resolved crate ready for compilation.
 #[derive(Debug)]
 pub struct ResolvedCrate {
     pub name: String,
     pub edition: String,
-    pub crate_type: String,
+    pub crate_type: CrateType,
     /// Target for this crate. `"host"` = host triple.
     pub target: String,
     pub deps: Vec<ResolvedDep>,
@@ -119,7 +121,7 @@ pub fn resolve_group_from_model(
         let def = model.crates.get(name).unwrap();
         let crate_path = resolve_path(&def.path, root, sysroot_src);
         let rf = def.root_file(&crate_path);
-        let crate_type = def.crate_type.as_str().to_string();
+        let crate_type = def.crate_type;
 
         let deps: Vec<ResolvedDep> = def
             .deps
@@ -145,4 +147,260 @@ pub fn resolve_group_from_model(
     }
 
     Ok(resolved)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{BuildModel, CrateDef, CrateType, DepDef, GroupDef};
+    use std::collections::BTreeMap;
+
+    const GROUP: &str = "test-group";
+
+    /// Build a minimal `BuildModel` from a list of (name, [dep_names]) pairs.
+    ///
+    /// All crates are `Lib` type with edition 2024 targeting `"host"`, placed in
+    /// a single group called [`GROUP`].
+    fn make_model(crates: &[(&str, &[&str])]) -> BuildModel {
+        let mut model = BuildModel::default();
+        model.project.name = "test".into();
+        model.project.version = "0.1.0".into();
+
+        let mut group = GroupDef::default();
+        group.name = GROUP.into();
+
+        for &(name, deps) in crates {
+            group.crates.push(name.to_string());
+
+            let mut dep_map = BTreeMap::new();
+            for &dep in deps {
+                dep_map.insert(
+                    dep.to_string(),
+                    DepDef {
+                        extern_name: dep.to_string(),
+                        crate_name: dep.to_string(),
+                        features: vec![],
+                    },
+                );
+            }
+
+            model.crates.insert(
+                name.to_string(),
+                CrateDef {
+                    name: name.to_string(),
+                    path: format!("crates/{name}"),
+                    edition: "2024".into(),
+                    crate_type: CrateType::Lib,
+                    target: "host".into(),
+                    deps: dep_map,
+                    dev_deps: BTreeMap::new(),
+                    features: vec![],
+                    root: None,
+                    linker_script: None,
+                    group: Some(GROUP.into()),
+                    is_project_crate: true,
+                    cfg_flags: vec![],
+                    requires_config: vec![],
+                },
+            );
+        }
+
+        model.groups.insert(GROUP.into(), group);
+        model
+    }
+
+    /// Helper: resolve the test group and return names in sorted order.
+    fn resolve_names(model: &BuildModel) -> Result<Vec<String>> {
+        let root = Path::new("/fake/root");
+        let sysroot = Path::new("/fake/sysroot");
+        let resolved = resolve_group_from_model(model, GROUP, root, sysroot)?;
+        Ok(resolved.iter().map(|c| c.name.clone()).collect())
+    }
+
+    /// Helper: return the position of `name` in the resolved order.
+    fn position_of(names: &[String], name: &str) -> usize {
+        names.iter().position(|n| n == name)
+            .unwrap_or_else(|| panic!("crate '{name}' not found in resolved list"))
+    }
+
+    // ---- Test cases ----
+
+    #[test]
+    fn single_crate_no_deps() {
+        let model = make_model(&[("foo", &[])]);
+        let names = resolve_names(&model).expect("resolution should succeed");
+        assert_eq!(names, vec!["foo"]);
+    }
+
+    #[test]
+    fn linear_chain_sorted_correctly() {
+        // A depends on B, B depends on C. Expected order: C, B, A.
+        let model = make_model(&[
+            ("a", &["b"]),
+            ("b", &["c"]),
+            ("c", &[]),
+        ]);
+        let names = resolve_names(&model).expect("resolution should succeed");
+        assert_eq!(names.len(), 3);
+        // C must come before B, B must come before A.
+        assert!(
+            position_of(&names, "c") < position_of(&names, "b"),
+            "c must precede b, got: {names:?}",
+        );
+        assert!(
+            position_of(&names, "b") < position_of(&names, "a"),
+            "b must precede a, got: {names:?}",
+        );
+    }
+
+    #[test]
+    fn diamond_dependency() {
+        // A depends on B and C; both B and C depend on D.
+        let model = make_model(&[
+            ("a", &["b", "c"]),
+            ("b", &["d"]),
+            ("c", &["d"]),
+            ("d", &[]),
+        ]);
+        let names = resolve_names(&model).expect("resolution should succeed");
+        assert_eq!(names.len(), 4);
+
+        let pos_d = position_of(&names, "d");
+        let pos_b = position_of(&names, "b");
+        let pos_c = position_of(&names, "c");
+        let pos_a = position_of(&names, "a");
+
+        // D must come before both B and C, which must come before A.
+        assert!(pos_d < pos_b, "d must precede b, got: {names:?}");
+        assert!(pos_d < pos_c, "d must precede c, got: {names:?}");
+        assert!(pos_b < pos_a, "b must precede a, got: {names:?}");
+        assert!(pos_c < pos_a, "c must precede a, got: {names:?}");
+    }
+
+    #[test]
+    fn independent_crates() {
+        let model = make_model(&[("alpha", &[]), ("beta", &[])]);
+        let names = resolve_names(&model).expect("resolution should succeed");
+        assert_eq!(names.len(), 2);
+        // Both must be present; order between them is unspecified.
+        assert!(names.contains(&"alpha".to_string()));
+        assert!(names.contains(&"beta".to_string()));
+    }
+
+    #[test]
+    fn cycle_detection() {
+        // A depends on B, B depends on A.
+        let model = make_model(&[("a", &["b"]), ("b", &["a"])]);
+        let err = resolve_names(&model).expect_err("cycle should produce an error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("cycle"),
+            "error message should mention 'cycle', got: {msg}",
+        );
+    }
+
+    #[test]
+    fn missing_group_returns_error() {
+        let model = BuildModel::default();
+        let root = Path::new("/fake/root");
+        let sysroot = Path::new("/fake/sysroot");
+        let err = resolve_group_from_model(&model, "nonexistent", root, sysroot)
+            .expect_err("missing group should produce an error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("not found"),
+            "error message should mention 'not found', got: {msg}",
+        );
+    }
+
+    #[test]
+    fn resolved_crate_fields_are_correct() {
+        let model = make_model(&[("foo", &[])]);
+        let root = Path::new("/fake/root");
+        let sysroot = Path::new("/fake/sysroot");
+        let resolved = resolve_group_from_model(&model, GROUP, root, sysroot)
+            .expect("resolution should succeed");
+
+        assert_eq!(resolved.len(), 1);
+        let rc = &resolved[0];
+        assert_eq!(rc.name, "foo");
+        assert_eq!(rc.edition, "2024");
+        assert_eq!(rc.crate_type, CrateType::Lib);
+        assert_eq!(rc.target, "host");
+        assert!(rc.deps.is_empty());
+        assert!(rc.features.is_empty());
+        assert_eq!(rc.root_file, PathBuf::from("/fake/root/crates/foo/src/lib.rs"));
+        assert!(rc.linker_script.is_none());
+        assert!(rc.is_project_crate);
+        assert!(rc.cfg_flags.is_empty());
+    }
+
+    #[test]
+    fn resolved_deps_are_populated() {
+        let model = make_model(&[("app", &["lib"]), ("lib", &[])]);
+        let root = Path::new("/fake/root");
+        let sysroot = Path::new("/fake/sysroot");
+        let resolved = resolve_group_from_model(&model, GROUP, root, sysroot)
+            .expect("resolution should succeed");
+
+        // "app" should have one resolved dependency pointing to "lib".
+        let app = resolved.iter().find(|c| c.name == "app")
+            .expect("app crate should be present");
+        assert_eq!(app.deps.len(), 1);
+        assert_eq!(app.deps[0].extern_name, "lib");
+        assert_eq!(app.deps[0].crate_name, "lib");
+    }
+
+    #[test]
+    fn external_deps_do_not_affect_in_degree() {
+        // "a" depends on "ext" which is NOT in the group. The external dep
+        // should be ignored for topological ordering but still appear in
+        // the resolved deps list.
+        let mut model = make_model(&[("a", &["ext"])]);
+        // "ext" is intentionally not added to the group or model crates.
+        // But DepDef references it. Since resolve_group_from_model filters
+        // by name_set membership, "ext" should be skipped in graph building.
+        // However, the model needs "a" to list it as a dep. Let's add ext
+        // as a crate in the model (but NOT in the group) to match a real
+        // scenario where a crate depends on something outside its group.
+        model.crates.insert(
+            "ext".to_string(),
+            CrateDef {
+                name: "ext".into(),
+                path: "vendor/ext".into(),
+                edition: "2024".into(),
+                crate_type: CrateType::Lib,
+                target: "host".into(),
+                deps: BTreeMap::new(),
+                dev_deps: BTreeMap::new(),
+                features: vec![],
+                root: None,
+                linker_script: None,
+                group: None,
+                is_project_crate: false,
+                cfg_flags: vec![],
+                requires_config: vec![],
+            },
+        );
+
+        let names = resolve_names(&model).expect("resolution should succeed");
+        // Only "a" is in the group.
+        assert_eq!(names, vec!["a"]);
+    }
+
+    #[test]
+    fn three_node_cycle_detected() {
+        // A -> B -> C -> A: a three-node cycle.
+        let model = make_model(&[
+            ("a", &["b"]),
+            ("b", &["c"]),
+            ("c", &["a"]),
+        ]);
+        let err = resolve_names(&model).expect_err("cycle should produce an error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("cycle"),
+            "error message should mention 'cycle', got: {msg}",
+        );
+    }
 }

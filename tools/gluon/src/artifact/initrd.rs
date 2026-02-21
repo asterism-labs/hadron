@@ -80,7 +80,9 @@ pub fn build_initrd(
     println!("  Initrd: /tmp/ (empty directory)");
     tree.add(FileNode::dir("tmp", vec![], 0o1777));
 
-    std::fs::create_dir_all(output_path.parent().unwrap())?;
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     let mut file = std::fs::File::create(&output_path)
         .with_context(|| format!("creating {}", output_path.display()))?;
 

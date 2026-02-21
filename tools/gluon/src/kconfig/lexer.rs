@@ -372,4 +372,63 @@ config SMP
         assert!(kinds.contains(&&TokenKind::String("SMP".to_string())));
         assert!(kinds.contains(&&TokenKind::EndMenu));
     }
+
+    #[test]
+    fn tokenize_depends_expression() {
+        let src = "depends on A && B || !C";
+        let tokens = tokenize(src, PathBuf::from("test")).unwrap();
+        let kinds: Vec<_> = tokens.iter().map(|t| &t.kind).collect();
+
+        assert!(kinds.contains(&&TokenKind::DependsOn));
+        assert!(kinds.contains(&&TokenKind::Ident("A".to_string())));
+        assert!(kinds.contains(&&TokenKind::And));
+        assert!(kinds.contains(&&TokenKind::Ident("B".to_string())));
+        assert!(kinds.contains(&&TokenKind::Or));
+        assert!(kinds.contains(&&TokenKind::Not));
+        assert!(kinds.contains(&&TokenKind::Ident("C".to_string())));
+
+        // Verify exact ordering of the significant tokens (excluding Newline/Eof)
+        let significant: Vec<_> = tokens.iter()
+            .map(|t| &t.kind)
+            .filter(|k| !matches!(k, TokenKind::Newline | TokenKind::Eof))
+            .collect();
+        assert_eq!(significant, vec![
+            &TokenKind::DependsOn,
+            &TokenKind::Ident("A".to_string()),
+            &TokenKind::And,
+            &TokenKind::Ident("B".to_string()),
+            &TokenKind::Or,
+            &TokenKind::Not,
+            &TokenKind::Ident("C".to_string()),
+        ]);
+    }
+
+    #[test]
+    fn tokenize_escape_sequences() {
+        let src = r#""hello\nworld""#;
+        let tokens = tokenize(src, PathBuf::from("test")).unwrap();
+        // The \n in the source should be converted to an actual newline character
+        assert!(tokens.iter().any(|t| t.kind == TokenKind::String("hello\nworld".to_string())));
+    }
+
+    #[test]
+    fn tokenize_brackets_and_commas() {
+        let src = r#"choice "Foo" [a, b, c]"#;
+        let tokens = tokenize(src, PathBuf::from("test")).unwrap();
+        let significant: Vec<_> = tokens.iter()
+            .map(|t| &t.kind)
+            .filter(|k| !matches!(k, TokenKind::Newline | TokenKind::Eof))
+            .collect();
+        assert_eq!(significant, vec![
+            &TokenKind::Choice,
+            &TokenKind::String("Foo".to_string()),
+            &TokenKind::LBracket,
+            &TokenKind::Ident("a".to_string()),
+            &TokenKind::Comma,
+            &TokenKind::Ident("b".to_string()),
+            &TokenKind::Comma,
+            &TokenKind::Ident("c".to_string()),
+            &TokenKind::RBracket,
+        ]);
+    }
 }

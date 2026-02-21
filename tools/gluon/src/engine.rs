@@ -20,6 +20,45 @@ use crate::model::{
 /// Shared model state passed to all builder types.
 type SharedModel = Arc<Mutex<BuildModel>>;
 
+/// Register a builder method on the Rhai engine.
+///
+/// Eliminates the repeated `builder.model.lock().unwrap()` + `builder.clone()`
+/// boilerplate in builder method registrations. The macro locks the shared model
+/// into `$model`, executes `$body`, and returns `builder.clone()`.
+///
+/// # Variants
+///
+/// - No extra arguments: `builder_method!(engine, "name", Ty, |b, model| { ... })`
+/// - With arguments: `builder_method!(engine, "name", Ty, |b, model, arg: Type| { ... })`
+macro_rules! builder_method {
+    // No extra arguments beyond the builder itself.
+    ($engine:expr, $name:expr, $builder_ty:ty,
+     |$builder:ident, $model:ident| $body:block) => {
+        $engine.register_fn(
+            $name,
+            |$builder: &mut $builder_ty| -> $builder_ty {
+                #[allow(unused_mut)]
+                let mut $model = $builder.model.lock().unwrap();
+                $body
+                $builder.clone()
+            },
+        );
+    };
+    // One or more extra arguments.
+    ($engine:expr, $name:expr, $builder_ty:ty,
+     |$builder:ident, $model:ident, $($arg:ident : $arg_ty:ty),+| $body:block) => {
+        $engine.register_fn(
+            $name,
+            |$builder: &mut $builder_ty, $($arg: $arg_ty),+| -> $builder_ty {
+                #[allow(unused_mut)]
+                let mut $model = $builder.model.lock().unwrap();
+                $body
+                $builder.clone()
+            },
+        );
+    };
+}
+
 /// Evaluate `gluon.rhai` from the project root and return the populated model.
 pub fn evaluate_script(root: &Path) -> Result<BuildModel> {
     let model = Arc::new(Mutex::new(BuildModel::default()));
@@ -371,9 +410,8 @@ fn register_config_api(engine: &mut Engine, model: SharedModel) {
     );
 
     // ConfigGroupBuilder methods
-    engine.register_fn(
-        "field",
-        |builder: &mut ConfigGroupBuilder, name: &str, value: Dynamic| -> ConfigGroupBuilder {
+    builder_method!(engine, "field", ConfigGroupBuilder,
+        |builder, model, name: &str, value: Dynamic| {
             let dotted_key = format!("{}.{name}", builder.group_name);
             let config_val = dynamic_to_config_value(&value);
             let ty = match &config_val {
@@ -384,7 +422,6 @@ fn register_config_api(engine: &mut Engine, model: SharedModel) {
                 ConfigValue::Choice(_) => ConfigType::Choice,
                 ConfigValue::List(_) => ConfigType::List,
             };
-            let mut model = builder.model.lock().unwrap();
             // Inherit menu from group marker.
             let menu = model
                 .config_options
@@ -405,25 +442,19 @@ fn register_config_api(engine: &mut Engine, model: SharedModel) {
                     bindings: Vec::new(),
                 },
             );
-            builder.clone()
-        },
+        }
     );
 
-    engine.register_fn(
-        "help",
-        |builder: &mut ConfigGroupBuilder, help: &str| -> ConfigGroupBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "help", ConfigGroupBuilder,
+        |builder, model, help: &str| {
             if let Some(opt) = model.config_options.get_mut(&builder.group_name) {
                 opt.help = Some(help.into());
             }
-            builder.clone()
-        },
+        }
     );
 
-    engine.register_fn(
-        "menu",
-        |builder: &mut ConfigGroupBuilder, menu: &str| -> ConfigGroupBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "menu", ConfigGroupBuilder,
+        |builder, model, menu: &str| {
             if let Some(opt) = model.config_options.get_mut(&builder.group_name) {
                 opt.menu = Some(menu.into());
             }
@@ -431,54 +462,42 @@ fn register_config_api(engine: &mut Engine, model: SharedModel) {
             if !model.menu_order.iter().any(|m| m == menu) {
                 model.menu_order.push(menu.into());
             }
-            builder.clone()
-        },
+        }
     );
 
     // ConfigBuilder methods
-    engine.register_fn(
-        "depends_on",
-        |builder: &mut ConfigBuilder, deps: rhai::Array| -> ConfigBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "depends_on", ConfigBuilder,
+        |builder, model, deps: rhai::Array| {
             if let Some(opt) = model.config_options.get_mut(&builder.name) {
                 opt.depends_on = deps
                     .into_iter()
                     .filter_map(|v| v.into_string().ok())
                     .collect();
             }
-            builder.clone()
-        },
+        }
     );
 
-    engine.register_fn(
-        "selects",
-        |builder: &mut ConfigBuilder, sels: rhai::Array| -> ConfigBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "selects", ConfigBuilder,
+        |builder, model, sels: rhai::Array| {
             if let Some(opt) = model.config_options.get_mut(&builder.name) {
                 opt.selects = sels
                     .into_iter()
                     .filter_map(|v| v.into_string().ok())
                     .collect();
             }
-            builder.clone()
-        },
+        }
     );
 
-    engine.register_fn(
-        "range",
-        |builder: &mut ConfigBuilder, min: i64, max: i64| -> ConfigBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "range", ConfigBuilder,
+        |builder, model, min: i64, max: i64| {
             if let Some(opt) = model.config_options.get_mut(&builder.name) {
                 opt.range = Some((min as u64, max as u64));
             }
-            builder.clone()
-        },
+        }
     );
 
-    engine.register_fn(
-        "choices",
-        |builder: &mut ConfigBuilder, choices: rhai::Array| -> ConfigBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "choices", ConfigBuilder,
+        |builder, model, choices: rhai::Array| {
             if let Some(opt) = model.config_options.get_mut(&builder.name) {
                 opt.choices = Some(
                     choices
@@ -487,25 +506,19 @@ fn register_config_api(engine: &mut Engine, model: SharedModel) {
                         .collect(),
                 );
             }
-            builder.clone()
-        },
+        }
     );
 
-    engine.register_fn(
-        "help",
-        |builder: &mut ConfigBuilder, help: &str| -> ConfigBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "help", ConfigBuilder,
+        |builder, model, help: &str| {
             if let Some(opt) = model.config_options.get_mut(&builder.name) {
                 opt.help = Some(help.into());
             }
-            builder.clone()
-        },
+        }
     );
 
-    engine.register_fn(
-        "menu",
-        |builder: &mut ConfigBuilder, menu: &str| -> ConfigBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "menu", ConfigBuilder,
+        |builder, model, menu: &str| {
             if let Some(opt) = model.config_options.get_mut(&builder.name) {
                 opt.menu = Some(menu.into());
             }
@@ -513,8 +526,7 @@ fn register_config_api(engine: &mut Engine, model: SharedModel) {
             if !model.menu_order.iter().any(|m| m == menu) {
                 model.menu_order.push(menu.into());
             }
-            builder.clone()
-        },
+        }
     );
 }
 
@@ -542,112 +554,83 @@ fn register_profile_api(engine: &mut Engine, model: SharedModel) {
         }
     });
 
-    engine.register_fn(
-        "inherits",
-        |builder: &mut ProfileBuilder, parent: &str| -> ProfileBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "inherits", ProfileBuilder,
+        |builder, model, parent: &str| {
             if let Some(p) = model.profiles.get_mut(&builder.name) {
                 p.inherits = Some(parent.into());
             }
-            builder.clone()
-        },
+        }
     );
 
-    engine.register_fn(
-        "target",
-        |builder: &mut ProfileBuilder, target: &str| -> ProfileBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "target", ProfileBuilder,
+        |builder, model, target: &str| {
             if let Some(p) = model.profiles.get_mut(&builder.name) {
                 p.target = Some(target.into());
             }
-            builder.clone()
-        },
+        }
     );
 
-    engine.register_fn(
-        "opt_level",
-        |builder: &mut ProfileBuilder, level: i64| -> ProfileBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "opt_level", ProfileBuilder,
+        |builder, model, level: i64| {
             if let Some(p) = model.profiles.get_mut(&builder.name) {
                 p.opt_level = Some(level as u32);
             }
-            builder.clone()
-        },
+        }
     );
 
-    engine.register_fn(
-        "debug_info",
-        |builder: &mut ProfileBuilder, enabled: bool| -> ProfileBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "debug_info", ProfileBuilder,
+        |builder, model, enabled: bool| {
             if let Some(p) = model.profiles.get_mut(&builder.name) {
                 p.debug_info = Some(enabled);
             }
-            builder.clone()
-        },
+        }
     );
 
-    engine.register_fn(
-        "lto",
-        |builder: &mut ProfileBuilder, lto: &str| -> ProfileBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "lto", ProfileBuilder,
+        |builder, model, lto: &str| {
             if let Some(p) = model.profiles.get_mut(&builder.name) {
                 p.lto = Some(lto.into());
             }
-            builder.clone()
-        },
+        }
     );
 
-    engine.register_fn(
-        "boot_binary",
-        |builder: &mut ProfileBuilder, bin: &str| -> ProfileBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "boot_binary", ProfileBuilder,
+        |builder, model, bin: &str| {
             if let Some(p) = model.profiles.get_mut(&builder.name) {
                 p.boot_binary = Some(bin.into());
             }
-            builder.clone()
-        },
+        }
     );
 
-    engine.register_fn(
-        "config",
-        |builder: &mut ProfileBuilder, overrides: Map| -> ProfileBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "config", ProfileBuilder,
+        |builder, model, overrides: Map| {
             if let Some(p) = model.profiles.get_mut(&builder.name) {
                 for (key, val) in overrides {
                     let config_val = dynamic_to_config_value(&val);
                     p.config.insert(key.to_string(), config_val);
                 }
             }
-            builder.clone()
-        },
+        }
     );
 
-    engine.register_fn(
-        "qemu_memory",
-        |builder: &mut ProfileBuilder, mem: i64| -> ProfileBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "qemu_memory", ProfileBuilder,
+        |builder, model, mem: i64| {
             if let Some(p) = model.profiles.get_mut(&builder.name) {
                 p.qemu_memory = Some(mem as u32);
             }
-            builder.clone()
-        },
+        }
     );
 
-    engine.register_fn(
-        "qemu_cores",
-        |builder: &mut ProfileBuilder, cores: i64| -> ProfileBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "qemu_cores", ProfileBuilder,
+        |builder, model, cores: i64| {
             if let Some(p) = model.profiles.get_mut(&builder.name) {
                 p.qemu_cores = Some(cores as u32);
             }
-            builder.clone()
-        },
+        }
     );
 
-    engine.register_fn(
-        "qemu_extra_args",
-        |builder: &mut ProfileBuilder, args: rhai::Array| -> ProfileBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "qemu_extra_args", ProfileBuilder,
+        |builder, model, args: rhai::Array| {
             if let Some(p) = model.profiles.get_mut(&builder.name) {
                 p.qemu_extra_args = Some(
                     args.into_iter()
@@ -655,19 +638,15 @@ fn register_profile_api(engine: &mut Engine, model: SharedModel) {
                         .collect(),
                 );
             }
-            builder.clone()
-        },
+        }
     );
 
-    engine.register_fn(
-        "test_timeout",
-        |builder: &mut ProfileBuilder, timeout: i64| -> ProfileBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "test_timeout", ProfileBuilder,
+        |builder, model, timeout: i64| {
             if let Some(p) = model.profiles.get_mut(&builder.name) {
                 p.test_timeout = Some(timeout as u32);
             }
-            builder.clone()
-        },
+        }
     );
 }
 
@@ -701,51 +680,39 @@ fn register_group_api(engine: &mut Engine, model: SharedModel) {
         }
     });
 
-    engine.register_fn(
-        "target",
-        |builder: &mut GroupBuilder, target: &str| -> GroupBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "target", GroupBuilder,
+        |builder, model, target: &str| {
             if let Some(g) = model.groups.get_mut(&builder.name) {
                 g.target = target.into();
             }
-            builder.clone()
-        },
+        }
     );
 
-    engine.register_fn(
-        "config",
-        |builder: &mut GroupBuilder, has_config: bool| -> GroupBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "config", GroupBuilder,
+        |builder, model, has_config: bool| {
             if let Some(g) = model.groups.get_mut(&builder.name) {
                 g.config = has_config;
             }
-            builder.clone()
-        },
+        }
     );
 
-    engine.register_fn(
-        "edition",
-        |builder: &mut GroupBuilder, ed: &str| -> GroupBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "edition", GroupBuilder,
+        |builder, model, ed: &str| {
             if let Some(g) = model.groups.get_mut(&builder.name) {
                 g.default_edition = ed.into();
             }
-            builder.clone()
-        },
+        }
     );
 
-    engine.register_fn(
-        "project",
-        |builder: &mut GroupBuilder, is_proj: bool| -> GroupBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "project", GroupBuilder,
+        |builder, model, is_proj: bool| {
             if let Some(g) = model.groups.get_mut(&builder.name) {
                 g.is_project = is_proj;
             }
-            builder.clone()
-        },
+        }
     );
 
-    // group.add(name, path) -> CrateBuilder
+    // group.add(name, path) -> CrateBuilder (returns a different type, not macro-eligible)
     engine.register_fn(
         "add",
         |builder: &mut GroupBuilder, name: &str, path: &str| -> CrateBuilder {
@@ -783,101 +750,77 @@ fn register_group_api(engine: &mut Engine, model: SharedModel) {
     );
 
     // CrateBuilder methods.
-    engine.register_fn(
-        "deps",
-        |builder: &mut CrateBuilder, deps: Map| -> CrateBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "deps", CrateBuilder,
+        |builder, model, deps: Map| {
             if let Some(krate) = model.crates.get_mut(&builder.name) {
                 for (extern_name, val) in deps {
                     let dep = parse_dep_value(&extern_name, &val);
                     krate.deps.insert(extern_name.to_string(), dep);
                 }
             }
-            builder.clone()
-        },
+        }
     );
 
-    engine.register_fn(
-        "dev_deps",
-        |builder: &mut CrateBuilder, deps: Map| -> CrateBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "dev_deps", CrateBuilder,
+        |builder, model, deps: Map| {
             if let Some(krate) = model.crates.get_mut(&builder.name) {
                 for (extern_name, val) in deps {
                     let dep = parse_dep_value(&extern_name, &val);
                     krate.dev_deps.insert(extern_name.to_string(), dep);
                 }
             }
-            builder.clone()
-        },
+        }
     );
 
-    engine.register_fn(
-        "features",
-        |builder: &mut CrateBuilder, feats: rhai::Array| -> CrateBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "features", CrateBuilder,
+        |builder, model, feats: rhai::Array| {
             if let Some(krate) = model.crates.get_mut(&builder.name) {
                 krate.features = feats
                     .into_iter()
                     .filter_map(|v| v.into_string().ok())
                     .collect();
             }
-            builder.clone()
-        },
+        }
     );
 
-    engine.register_fn(
-        "crate_type",
-        |builder: &mut CrateBuilder, ty: i64| -> CrateBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "crate_type", CrateBuilder,
+        |builder, model, ty: i64| {
             if let Some(krate) = model.crates.get_mut(&builder.name) {
                 krate.crate_type = crate_type_from_i64(ty);
             }
-            builder.clone()
-        },
+        }
     );
 
-    engine.register_fn(
-        "root",
-        |builder: &mut CrateBuilder, root: &str| -> CrateBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "root", CrateBuilder,
+        |builder, model, root: &str| {
             if let Some(krate) = model.crates.get_mut(&builder.name) {
                 krate.root = Some(root.into());
             }
-            builder.clone()
-        },
+        }
     );
 
-    engine.register_fn(
-        "edition",
-        |builder: &mut CrateBuilder, ed: &str| -> CrateBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "edition", CrateBuilder,
+        |builder, model, ed: &str| {
             if let Some(krate) = model.crates.get_mut(&builder.name) {
                 krate.edition = ed.into();
             }
-            builder.clone()
-        },
+        }
     );
 
-    engine.register_fn(
-        "linker_script",
-        |builder: &mut CrateBuilder, script: &str| -> CrateBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "linker_script", CrateBuilder,
+        |builder, model, script: &str| {
             if let Some(krate) = model.crates.get_mut(&builder.name) {
                 krate.linker_script = Some(script.into());
             }
-            builder.clone()
-        },
+        }
     );
 
-    engine.register_fn(
-        "requires_config",
-        |builder: &mut CrateBuilder, config_name: &str| -> CrateBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "requires_config", CrateBuilder,
+        |builder, model, config_name: &str| {
             if let Some(krate) = model.crates.get_mut(&builder.name) {
                 krate.requires_config.push(config_name.into());
             }
-            builder.clone()
-        },
+        }
     );
 }
 
@@ -908,68 +851,53 @@ fn register_rule_api(engine: &mut Engine, model: SharedModel) {
         }
     });
 
-    engine.register_fn(
-        "inputs",
-        |builder: &mut RuleBuilder, inputs: rhai::Array| -> RuleBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "inputs", RuleBuilder,
+        |builder, model, inputs: rhai::Array| {
             if let Some(rule) = model.rules.get_mut(&builder.name) {
                 rule.inputs = inputs
                     .into_iter()
                     .filter_map(|v| v.into_string().ok())
                     .collect();
             }
-            builder.clone()
-        },
+        }
     );
 
-    engine.register_fn(
-        "output",
-        |builder: &mut RuleBuilder, output: &str| -> RuleBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "output", RuleBuilder,
+        |builder, model, output: &str| {
             if let Some(rule) = model.rules.get_mut(&builder.name) {
                 rule.outputs = vec![output.into()];
             }
-            builder.clone()
-        },
+        }
     );
 
-    engine.register_fn(
-        "outputs",
-        |builder: &mut RuleBuilder, outputs: rhai::Array| -> RuleBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "outputs", RuleBuilder,
+        |builder, model, outputs: rhai::Array| {
             if let Some(rule) = model.rules.get_mut(&builder.name) {
                 rule.outputs = outputs
                     .into_iter()
                     .filter_map(|v| v.into_string().ok())
                     .collect();
             }
-            builder.clone()
-        },
+        }
     );
 
-    engine.register_fn(
-        "depends_on",
-        |builder: &mut RuleBuilder, deps: rhai::Array| -> RuleBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "depends_on", RuleBuilder,
+        |builder, model, deps: rhai::Array| {
             if let Some(rule) = model.rules.get_mut(&builder.name) {
                 rule.depends_on = deps
                     .into_iter()
                     .filter_map(|v| v.into_string().ok())
                     .collect();
             }
-            builder.clone()
-        },
+        }
     );
 
-    engine.register_fn(
-        "handler",
-        |builder: &mut RuleBuilder, handler: &str| -> RuleBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "handler", RuleBuilder,
+        |builder, model, handler: &str| {
             if let Some(rule) = model.rules.get_mut(&builder.name) {
                 rule.handler = RuleHandler::Builtin(handler.into());
             }
-            builder.clone()
-        },
+        }
     );
 }
 
@@ -988,10 +916,8 @@ fn register_pipeline_api(engine: &mut Engine, model: SharedModel) {
         PipelineBuilder { model: m.clone() }
     });
 
-    engine.register_fn(
-        "stage",
-        |builder: &mut PipelineBuilder, name: &str, groups: rhai::Array| -> PipelineBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "stage", PipelineBuilder,
+        |builder, model, name: &str, groups: rhai::Array| {
             model.pipeline.steps.push(PipelineStep::Stage {
                 name: name.into(),
                 groups: groups
@@ -999,26 +925,19 @@ fn register_pipeline_api(engine: &mut Engine, model: SharedModel) {
                     .filter_map(|v| v.into_string().ok())
                     .collect(),
             });
-            builder.clone()
-        },
+        }
     );
 
-    engine.register_fn(
-        "barrier",
-        |builder: &mut PipelineBuilder, name: &str| -> PipelineBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "barrier", PipelineBuilder,
+        |builder, model, name: &str| {
             model.pipeline.steps.push(PipelineStep::Barrier(name.into()));
-            builder.clone()
-        },
+        }
     );
 
-    engine.register_fn(
-        "rule",
-        |builder: &mut PipelineBuilder, name: &str| -> PipelineBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "rule", PipelineBuilder,
+        |builder, model, name: &str| {
             model.pipeline.steps.push(PipelineStep::Rule(name.into()));
-            builder.clone()
-        },
+        }
     );
 }
 
@@ -1035,46 +954,34 @@ fn register_qemu_api(engine: &mut Engine, model: SharedModel) {
         QemuBuilder { model: m.clone() }
     });
 
-    engine.register_fn(
-        "extra_args",
-        |builder: &mut QemuBuilder, args: rhai::Array| -> QemuBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "extra_args", QemuBuilder,
+        |builder, model, args: rhai::Array| {
             model.qemu.extra_args = args
                 .into_iter()
                 .filter_map(|v| v.into_string().ok())
                 .collect();
-            builder.clone()
-        },
+        }
     );
 
-    engine.register_fn(
-        "test_success_code",
-        |builder: &mut QemuBuilder, code: i64| -> QemuBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "test_success_code", QemuBuilder,
+        |builder, model, code: i64| {
             model.qemu.test.success_exit_code = code as u32;
-            builder.clone()
-        },
+        }
     );
 
-    engine.register_fn(
-        "test_timeout",
-        |builder: &mut QemuBuilder, timeout: i64| -> QemuBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "test_timeout", QemuBuilder,
+        |builder, model, timeout: i64| {
             model.qemu.test.timeout = timeout as u32;
-            builder.clone()
-        },
+        }
     );
 
-    engine.register_fn(
-        "test_extra_args",
-        |builder: &mut QemuBuilder, args: rhai::Array| -> QemuBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "test_extra_args", QemuBuilder,
+        |builder, model, args: rhai::Array| {
             model.qemu.test.extra_args = args
                 .into_iter()
                 .filter_map(|v| v.into_string().ok())
                 .collect();
-            builder.clone()
-        },
+        }
     );
 }
 
@@ -1095,13 +1002,10 @@ fn register_bootloader_api(engine: &mut Engine, model: SharedModel) {
         BootloaderBuilder { model: m.clone() }
     });
 
-    engine.register_fn(
-        "config_file",
-        |builder: &mut BootloaderBuilder, file: &str| -> BootloaderBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "config_file", BootloaderBuilder,
+        |builder, model, file: &str| {
             model.bootloader.config_file = Some(file.into());
-            builder.clone()
-        },
+        }
     );
 }
 
@@ -1120,17 +1024,14 @@ fn register_image_api(engine: &mut Engine, model: SharedModel) {
         ImageBuilder { model: m.clone() }
     });
 
-    engine.register_fn(
-        "extra_files",
-        |builder: &mut ImageBuilder, files: Map| -> ImageBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "extra_files", ImageBuilder,
+        |builder, model, files: Map| {
             for (key, val) in files {
                 if let Ok(v) = val.into_string() {
                     model.image.extra_files.insert(key.to_string(), v);
                 }
             }
-            builder.clone()
-        },
+        }
     );
 }
 
@@ -1149,43 +1050,31 @@ fn register_tests_api(engine: &mut Engine, model: SharedModel) {
         TestsBuilder { model: m.clone() }
     });
 
-    engine.register_fn(
-        "host_testable",
-        |builder: &mut TestsBuilder, crates: rhai::Array| -> TestsBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "host_testable", TestsBuilder,
+        |builder, model, crates: rhai::Array| {
             model.tests.host_testable = crates
                 .into_iter()
                 .filter_map(|v| v.into_string().ok())
                 .collect();
-            builder.clone()
-        },
+        }
     );
 
-    engine.register_fn(
-        "kernel_tests_dir",
-        |builder: &mut TestsBuilder, dir: &str| -> TestsBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "kernel_tests_dir", TestsBuilder,
+        |builder, model, dir: &str| {
             model.tests.kernel_tests_dir = Some(dir.into());
-            builder.clone()
-        },
+        }
     );
 
-    engine.register_fn(
-        "kernel_tests_crate",
-        |builder: &mut TestsBuilder, name: &str| -> TestsBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "kernel_tests_crate", TestsBuilder,
+        |builder, model, name: &str| {
             model.tests.kernel_tests_crate = Some(name.into());
-            builder.clone()
-        },
+        }
     );
 
-    engine.register_fn(
-        "kernel_tests_linker_script",
-        |builder: &mut TestsBuilder, path: &str| -> TestsBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "kernel_tests_linker_script", TestsBuilder,
+        |builder, model, path: &str| {
             model.tests.kernel_tests_linker_script = Some(path.into());
-            builder.clone()
-        },
+        }
     );
 }
 
@@ -1223,126 +1112,99 @@ fn register_dependency_api(engine: &mut Engine, model: SharedModel) {
     });
 
     // .version(str) — sets crates.io source
-    engine.register_fn(
-        "version",
-        |builder: &mut DependencyBuilder, version: &str| -> DependencyBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "version", DependencyBuilder,
+        |builder, model, version: &str| {
             if let Some(dep) = model.dependencies.get_mut(&builder.name) {
                 dep.source = DepSource::CratesIo { version: version.into() };
             }
-            builder.clone()
-        },
+        }
     );
 
     // .git(url) — sets git source with default ref
-    engine.register_fn(
-        "git",
-        |builder: &mut DependencyBuilder, url: &str| -> DependencyBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "git", DependencyBuilder,
+        |builder, model, url: &str| {
             if let Some(dep) = model.dependencies.get_mut(&builder.name) {
                 dep.source = DepSource::Git {
                     url: url.into(),
                     reference: GitRef::Default,
                 };
             }
-            builder.clone()
-        },
+        }
     );
 
     // .path(path) — sets local path source
-    engine.register_fn(
-        "path",
-        |builder: &mut DependencyBuilder, path: &str| -> DependencyBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "path", DependencyBuilder,
+        |builder, model, path: &str| {
             if let Some(dep) = model.dependencies.get_mut(&builder.name) {
                 dep.source = DepSource::Path { path: path.into() };
             }
-            builder.clone()
-        },
+        }
     );
 
     // .rev(str) — refine git reference to a specific commit
-    engine.register_fn(
-        "rev",
-        |builder: &mut DependencyBuilder, rev: &str| -> DependencyBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "rev", DependencyBuilder,
+        |builder, model, rev: &str| {
             if let Some(dep) = model.dependencies.get_mut(&builder.name) {
                 if let DepSource::Git { ref mut reference, .. } = dep.source {
                     *reference = GitRef::Rev(rev.into());
                 }
             }
-            builder.clone()
-        },
+        }
     );
 
     // .tag(str) — refine git reference to a tag
-    engine.register_fn(
-        "tag",
-        |builder: &mut DependencyBuilder, tag: &str| -> DependencyBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "tag", DependencyBuilder,
+        |builder, model, tag: &str| {
             if let Some(dep) = model.dependencies.get_mut(&builder.name) {
                 if let DepSource::Git { ref mut reference, .. } = dep.source {
                     *reference = GitRef::Tag(tag.into());
                 }
             }
-            builder.clone()
-        },
+        }
     );
 
     // .branch(str) — refine git reference to a branch
-    engine.register_fn(
-        "branch",
-        |builder: &mut DependencyBuilder, branch: &str| -> DependencyBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "branch", DependencyBuilder,
+        |builder, model, branch: &str| {
             if let Some(dep) = model.dependencies.get_mut(&builder.name) {
                 if let DepSource::Git { ref mut reference, .. } = dep.source {
                     *reference = GitRef::Branch(branch.into());
                 }
             }
-            builder.clone()
-        },
+        }
     );
 
     // .features([...]) — add extra features
-    engine.register_fn(
-        "features",
-        |builder: &mut DependencyBuilder, feats: rhai::Array| -> DependencyBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "features", DependencyBuilder,
+        |builder, model, feats: rhai::Array| {
             if let Some(dep) = model.dependencies.get_mut(&builder.name) {
                 dep.features = feats
                     .into_iter()
                     .filter_map(|v| v.into_string().ok())
                     .collect();
             }
-            builder.clone()
-        },
+        }
     );
 
     // .no_default_features() — disable default features
-    engine.register_fn(
-        "no_default_features",
-        |builder: &mut DependencyBuilder| -> DependencyBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "no_default_features", DependencyBuilder,
+        |builder, model| {
             if let Some(dep) = model.dependencies.get_mut(&builder.name) {
                 dep.default_features = false;
             }
-            builder.clone()
-        },
+        }
     );
 
     // .cfg_flags([...]) — extra --cfg flags for compilation
-    engine.register_fn(
-        "cfg_flags",
-        |builder: &mut DependencyBuilder, flags: rhai::Array| -> DependencyBuilder {
-            let mut model = builder.model.lock().unwrap();
+    builder_method!(engine, "cfg_flags", DependencyBuilder,
+        |builder, model, flags: rhai::Array| {
             if let Some(dep) = model.dependencies.get_mut(&builder.name) {
                 dep.cfg_flags = flags
                     .into_iter()
                     .filter_map(|v| v.into_string().ok())
                     .collect();
             }
-            builder.clone()
-        },
+        }
     );
 }
 

@@ -16,20 +16,20 @@ use crate::model::{BuildModel, ConfigType, ConfigValue};
 // ===========================================================================
 
 /// Project metadata.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ProjectMeta {
     pub name: String,
     pub version: String,
 }
 
 /// A compilation target definition.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TargetConfig {
     pub spec: String,
 }
 
 /// QEMU configuration.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct QemuConfig {
     pub machine: String,
     pub memory: u32,
@@ -38,7 +38,7 @@ pub struct QemuConfig {
 }
 
 /// QEMU test configuration.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct QemuTestConfig {
     pub success_exit_code: u32,
     pub timeout: u32,
@@ -46,20 +46,21 @@ pub struct QemuTestConfig {
 }
 
 /// Bootloader configuration.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BootloaderConfig {
+    #[allow(dead_code)] // Phase 9+: image generation
     pub kind: String,
     pub config_file: Option<String>,
 }
 
 /// Image configuration.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct ImageConfig {
     pub extra_files: BTreeMap<String, String>,
 }
 
 /// Test configuration.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct TestsConfig {
     pub host_testable: Vec<String>,
     pub kernel_tests_dir: Option<String>,
@@ -67,11 +68,13 @@ pub struct TestsConfig {
     pub kernel_tests_crate: Option<String>,
     /// Linker script for kernel test binaries.
     pub kernel_tests_linker_script: Option<String>,
+    #[allow(dead_code)] // Phase 9+: crash test execution
     pub crash: Vec<CrashTest>,
 }
 
 /// A crash test definition.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // Phase 9+: crash test execution
 pub struct CrashTest {
     pub name: String,
     pub source: String,
@@ -80,7 +83,7 @@ pub struct CrashTest {
 }
 
 /// Resolved configuration after validation and dependency resolution.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ResolvedConfig {
     pub project: ProjectMeta,
     pub root: PathBuf,
@@ -101,7 +104,7 @@ pub struct ResolvedConfig {
 }
 
 /// A fully resolved build profile.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ResolvedProfile {
     pub name: String,
     pub target: String,
@@ -684,5 +687,270 @@ mod tests {
 
         let result = apply_selects_and_validate(options, &defs);
         assert!(result.is_err());
+    }
+
+    // -- Helper to build a bool ConfigOptionDef concisely --
+
+    fn bool_opt(name: &str, default: bool) -> ConfigOptionDef {
+        ConfigOptionDef {
+            name: name.into(),
+            ty: ConfigType::Bool,
+            default: ConfigValue::Bool(default),
+            help: None,
+            depends_on: vec![],
+            selects: vec![],
+            range: None,
+            choices: None,
+            menu: None,
+            bindings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn transitive_select() {
+        // A selects B, B selects C. Start A=true, B=false, C=false.
+        let mut options = BTreeMap::new();
+        options.insert("a".into(), ResolvedValue::Bool(true));
+        options.insert("b".into(), ResolvedValue::Bool(false));
+        options.insert("c".into(), ResolvedValue::Bool(false));
+
+        let mut defs = BTreeMap::new();
+        let mut a_def = bool_opt("a", false);
+        a_def.selects = vec!["b".into()];
+        defs.insert("a".into(), a_def);
+
+        let mut b_def = bool_opt("b", false);
+        b_def.selects = vec!["c".into()];
+        defs.insert("b".into(), b_def);
+
+        defs.insert("c".into(), bool_opt("c", false));
+
+        let result = apply_selects_and_validate(options, &defs).unwrap();
+        assert!(matches!(result.get("b"), Some(ResolvedValue::Bool(true))));
+        assert!(matches!(result.get("c"), Some(ResolvedValue::Bool(true))));
+    }
+
+    #[test]
+    fn multi_level_profile_inheritance() {
+        use crate::model::{BuildModel, TargetDef, ProfileDef};
+
+        let mut model = BuildModel::default();
+        model.targets.insert("x86_64".into(), TargetDef {
+            name: "x86_64".into(),
+            spec: "x86_64-unknown-hadron".into(),
+        });
+        model.profiles.insert("base".into(), ProfileDef {
+            name: "base".into(),
+            opt_level: Some(0),
+            debug_info: Some(true),
+            target: Some("x86_64".into()),
+            ..Default::default()
+        });
+        model.profiles.insert("child".into(), ProfileDef {
+            name: "child".into(),
+            inherits: Some("base".into()),
+            opt_level: Some(2),
+            ..Default::default()
+        });
+        model.profiles.insert("grandchild".into(), ProfileDef {
+            name: "grandchild".into(),
+            inherits: Some("child".into()),
+            debug_info: Some(false),
+            ..Default::default()
+        });
+
+        let profile = resolve_profile(&model, "grandchild").unwrap();
+        assert_eq!(profile.opt_level, 2);
+        assert!(!profile.debug_info);
+    }
+
+    #[test]
+    fn u32_range_validation_pass() {
+        let mut defs = BTreeMap::new();
+        defs.insert("timer_hz".into(), ConfigOptionDef {
+            name: "timer_hz".into(),
+            ty: ConfigType::U32,
+            default: ConfigValue::U32(50),
+            help: None,
+            depends_on: vec![],
+            selects: vec![],
+            range: Some((1, 100)),
+            choices: None,
+            menu: None,
+            bindings: Vec::new(),
+        });
+
+        let overrides = BTreeMap::new();
+        let result = resolve_options(&defs, &overrides);
+        assert!(result.is_ok());
+        let resolved = result.unwrap();
+        assert!(matches!(resolved.get("timer_hz"), Some(ResolvedValue::U32(50))));
+    }
+
+    #[test]
+    fn u32_range_validation_fail() {
+        let mut defs = BTreeMap::new();
+        defs.insert("timer_hz".into(), ConfigOptionDef {
+            name: "timer_hz".into(),
+            ty: ConfigType::U32,
+            default: ConfigValue::U32(200),
+            help: None,
+            depends_on: vec![],
+            selects: vec![],
+            range: Some((1, 100)),
+            choices: None,
+            menu: None,
+            bindings: Vec::new(),
+        });
+
+        let overrides = BTreeMap::new();
+        let result = resolve_options(&defs, &overrides);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("outside range"), "expected 'outside range' in error, got: {err_msg}");
+    }
+
+    #[test]
+    fn choice_validation_pass() {
+        let mut defs = BTreeMap::new();
+        defs.insert("arch".into(), ConfigOptionDef {
+            name: "arch".into(),
+            ty: ConfigType::Choice,
+            default: ConfigValue::Choice("x86_64".into()),
+            help: None,
+            depends_on: vec![],
+            selects: vec![],
+            range: None,
+            choices: Some(vec!["x86_64".into(), "aarch64".into()]),
+            menu: None,
+            bindings: Vec::new(),
+        });
+
+        let overrides = BTreeMap::new();
+        let result = resolve_options(&defs, &overrides);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn choice_validation_fail() {
+        let mut defs = BTreeMap::new();
+        defs.insert("arch".into(), ConfigOptionDef {
+            name: "arch".into(),
+            ty: ConfigType::Choice,
+            default: ConfigValue::Choice("riscv".into()),
+            help: None,
+            depends_on: vec![],
+            selects: vec![],
+            range: None,
+            choices: Some(vec!["x86_64".into(), "aarch64".into()]),
+            menu: None,
+            bindings: Vec::new(),
+        });
+
+        let overrides = BTreeMap::new();
+        let result = resolve_options(&defs, &overrides);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("not in choices"), "expected 'not in choices' in error, got: {err_msg}");
+    }
+
+    #[test]
+    fn coerce_str_to_choice() {
+        let mut defs = BTreeMap::new();
+        defs.insert("arch".into(), ConfigOptionDef {
+            name: "arch".into(),
+            ty: ConfigType::Choice,
+            default: ConfigValue::Choice("x86_64".into()),
+            help: None,
+            depends_on: vec![],
+            selects: vec![],
+            range: None,
+            choices: Some(vec!["x86_64".into(), "aarch64".into()]),
+            menu: None,
+            bindings: Vec::new(),
+        });
+
+        let mut overrides = BTreeMap::new();
+        overrides.insert("arch".into(), ConfigValue::Str("x86_64".into()));
+
+        coerce_overrides(&mut overrides, &defs);
+
+        assert!(
+            matches!(overrides.get("arch"), Some(ConfigValue::Choice(v)) if v == "x86_64"),
+            "expected Str to be coerced to Choice"
+        );
+    }
+
+    #[test]
+    fn load_config_overrides_parses_types() {
+        let tmp_dir = std::env::temp_dir().join("gluon_test_load_config_overrides");
+        let _ = std::fs::create_dir_all(&tmp_dir);
+        let config_path = tmp_dir.join(".hadron-config");
+
+        std::fs::write(&config_path, "\
+bool_opt = true
+u32_opt = 42
+hex_opt = 0xFF
+str_opt = hello
+list_opt = [\"a\", \"b\"]
+").unwrap();
+
+        let result = load_config_overrides(&tmp_dir).unwrap();
+
+        assert!(
+            matches!(result.get("bool_opt"), Some(ConfigValue::Bool(true))),
+            "expected Bool(true), got {:?}", result.get("bool_opt")
+        );
+        assert!(
+            matches!(result.get("u32_opt"), Some(ConfigValue::U32(42))),
+            "expected U32(42), got {:?}", result.get("u32_opt")
+        );
+        assert!(
+            matches!(result.get("hex_opt"), Some(ConfigValue::U64(0xFF))),
+            "expected U64(0xFF), got {:?}", result.get("hex_opt")
+        );
+        assert!(
+            matches!(result.get("str_opt"), Some(ConfigValue::Str(s)) if s == "hello"),
+            "expected Str(\"hello\"), got {:?}", result.get("str_opt")
+        );
+        match result.get("list_opt") {
+            Some(ConfigValue::List(items)) => {
+                assert_eq!(items.len(), 2);
+                assert_eq!(items[0], "a");
+                assert_eq!(items[1], "b");
+            }
+            other => panic!("expected List([\"a\", \"b\"]), got {other:?}"),
+        }
+
+        // Clean up temp files.
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+    }
+
+    #[test]
+    fn resolve_options_type_mismatch() {
+        let mut defs = BTreeMap::new();
+        defs.insert("debug".into(), ConfigOptionDef {
+            name: "debug".into(),
+            ty: ConfigType::Bool,
+            default: ConfigValue::Bool(false),
+            help: None,
+            depends_on: vec![],
+            selects: vec![],
+            range: None,
+            choices: None,
+            menu: None,
+            bindings: Vec::new(),
+        });
+
+        let mut overrides = BTreeMap::new();
+        overrides.insert("debug".into(), ConfigValue::U32(1));
+
+        let result = resolve_options(&defs, &overrides);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("does not match declared type"),
+            "expected type mismatch error, got: {err_msg}"
+        );
     }
 }

@@ -1,7 +1,7 @@
 //! Dependency vendoring: Cargo.toml parsing, transitive resolution, fetching,
 //! lock file management, and auto-registration into the build model.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
@@ -271,6 +271,8 @@ pub fn resolve_transitive(
     version_cache: &mut VersionCache,
 ) -> Result<Vec<ResolvedDep>> {
     let mut resolved: BTreeMap<String, ResolvedDep> = BTreeMap::new();
+    // Parallel HashSet per dep for O(1) feature containment checks.
+    let mut feature_sets: HashMap<String, HashSet<String>> = HashMap::new();
     let mut queue: std::collections::VecDeque<QueueEntry> = std::collections::VecDeque::new();
 
     // Seed the queue with root dependencies.
@@ -310,19 +312,23 @@ pub fn resolve_transitive(
     // BFS resolution.
     while let Some(entry) = queue.pop_front() {
         if let Some(existing) = resolved.get_mut(&entry.name) {
-            // Already resolved — unify features.
-            let old_len = existing.features.len();
+            // Already resolved — unify features using HashSet for O(1) checks.
+            let feat_set = feature_sets.get_mut(&entry.name).unwrap();
+            let mut changed = false;
             for feat in &entry.requested_features {
-                if !existing.features.contains(feat) {
+                if feat_set.insert(feat.clone()) {
                     existing.features.push(feat.clone());
+                    changed = true;
                 }
             }
-            if existing.features.len() == old_len {
+            if !changed {
                 // No new features to propagate.
                 continue;
             }
             // Features changed — need to re-process this dep's transitive deps.
         } else {
+            let feat_set: HashSet<String> = entry.requested_features.iter().cloned().collect();
+            feature_sets.insert(entry.name.clone(), feat_set);
             resolved.insert(entry.name.clone(), ResolvedDep {
                 name: entry.name.clone(),
                 version: entry.version.clone(),
@@ -373,16 +379,23 @@ pub fn resolve_transitive(
 
             // Determine features to pass to this transitive dep.
             let mut trans_features = Vec::new();
+            let mut trans_feat_set = HashSet::new();
             if cargo_dep.default_features {
+                trans_feat_set.insert("__default__".to_string());
                 trans_features.push("__default__".to_string());
             }
-            trans_features.extend(cargo_dep.features.clone());
+            for feat in &cargo_dep.features {
+                if trans_feat_set.insert(feat.clone()) {
+                    trans_features.push(feat.clone());
+                }
+            }
 
             // Propagate features from parent feature specs (e.g. "dep/feature").
             for feat_spec in &activated {
                 if let Some(rest) = feat_spec.strip_prefix(&format!("{}/", cargo_dep.key)) {
-                    if !trans_features.contains(&rest.to_string()) {
-                        trans_features.push(rest.to_string());
+                    let rest_owned = rest.to_string();
+                    if trans_feat_set.insert(rest_owned.clone()) {
+                        trans_features.push(rest_owned);
                     }
                 }
             }
@@ -427,7 +440,7 @@ pub fn resolve_transitive(
                     }
                 }
                 // Dedup while preserving order.
-                let mut seen = std::collections::HashSet::new();
+                let mut seen = HashSet::new();
                 expanded.retain(|f| seen.insert(f.clone()));
                 dep.features = expanded;
             }
@@ -465,7 +478,7 @@ fn compute_activated_features(
         }
     }
 
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = HashSet::new();
     while let Some(feat) = work.pop() {
         if !seen.insert(feat.clone()) {
             continue;
@@ -1232,4 +1245,250 @@ fn is_transitive_proc_macro_dep(name: &str, _resolved: &[ResolvedDep]) -> bool {
     //
     // For now, use a simpler approach: known proc-macro ecosystem crates.
     matches!(name, "proc-macro2" | "quote" | "syn" | "unicode-ident")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn make_test_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir()
+            .join(format!("gluon_vendor_test_{}_{}", std::process::id(), name));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_cargo_toml_str tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_minimal_cargo_toml() {
+        let content = r#"
+[package]
+name = "foo"
+version = "1.0.0"
+"#;
+        let parsed = parse_cargo_toml_str(content, Path::new("test/Cargo.toml")).unwrap();
+        assert_eq!(parsed.package.name, "foo");
+        assert_eq!(parsed.package.version, "1.0.0");
+        assert_eq!(parsed.package.edition, "2021");
+        assert_eq!(parsed.crate_type, CargoCrateType::Lib);
+        assert!(parsed.dependencies.is_empty());
+        assert!(parsed.features.is_empty());
+        assert!(parsed.default_features.is_empty());
+        assert!(parsed.lib_name.is_none());
+    }
+
+    #[test]
+    fn parse_proc_macro_crate() {
+        let content = r#"
+[package]
+name = "my-derive"
+version = "0.1.0"
+
+[lib]
+proc-macro = true
+"#;
+        let parsed = parse_cargo_toml_str(content, Path::new("test/Cargo.toml")).unwrap();
+        assert_eq!(parsed.crate_type, CargoCrateType::ProcMacro);
+    }
+
+    #[test]
+    fn parse_optional_dep() {
+        let content = r#"
+[package]
+name = "bar"
+version = "2.0.0"
+
+[dependencies]
+foo = { version = "1.0", optional = true }
+"#;
+        let parsed = parse_cargo_toml_str(content, Path::new("test/Cargo.toml")).unwrap();
+        assert_eq!(parsed.dependencies.len(), 1);
+        let dep = &parsed.dependencies[0];
+        assert_eq!(dep.name, "foo");
+        assert_eq!(dep.key, "foo");
+        assert_eq!(dep.version.as_deref(), Some("1.0"));
+        assert!(dep.optional);
+        assert!(dep.default_features);
+    }
+
+    #[test]
+    fn parse_features_section() {
+        let content = r#"
+[package]
+name = "baz"
+version = "0.1.0"
+
+[features]
+default = ["std"]
+std = ["alloc"]
+alloc = []
+"#;
+        let parsed = parse_cargo_toml_str(content, Path::new("test/Cargo.toml")).unwrap();
+        assert_eq!(parsed.default_features, vec!["std".to_string()]);
+        assert_eq!(
+            parsed.features.get("std").unwrap(),
+            &vec!["alloc".to_string()]
+        );
+        assert!(parsed.features.get("alloc").unwrap().is_empty());
+        assert_eq!(
+            parsed.features.get("default").unwrap(),
+            &vec!["std".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_dep_with_package_rename() {
+        let content = r#"
+[package]
+name = "consumer"
+version = "0.1.0"
+
+[dependencies]
+my_foo = { package = "foo", version = "1.0" }
+"#;
+        let parsed = parse_cargo_toml_str(content, Path::new("test/Cargo.toml")).unwrap();
+        assert_eq!(parsed.dependencies.len(), 1);
+        let dep = &parsed.dependencies[0];
+        assert_eq!(dep.key, "my_foo");
+        assert_eq!(dep.name, "foo");
+        assert_eq!(dep.version.as_deref(), Some("1.0"));
+    }
+
+    // -----------------------------------------------------------------------
+    // compute_activated_features tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn default_features_expanded() {
+        let requested = vec!["__default__".to_string()];
+        let mut feature_table = BTreeMap::new();
+        feature_table.insert("std".to_string(), vec!["alloc".to_string()]);
+        feature_table.insert("alloc".to_string(), vec![]);
+        let default_features = vec!["std".to_string()];
+
+        let activated = compute_activated_features(&requested, &feature_table, &default_features);
+
+        assert!(activated.contains(&"std".to_string()));
+        assert!(activated.contains(&"alloc".to_string()));
+    }
+
+    #[test]
+    fn no_default_marker() {
+        let requested = vec!["serde".to_string()];
+        let mut feature_table = BTreeMap::new();
+        feature_table.insert("default".to_string(), vec!["std".to_string()]);
+        feature_table.insert("std".to_string(), vec![]);
+        feature_table.insert("serde".to_string(), vec!["dep:serde".to_string()]);
+        let default_features = vec!["std".to_string()];
+
+        let activated = compute_activated_features(&requested, &feature_table, &default_features);
+
+        assert!(activated.contains(&"serde".to_string()));
+        assert!(activated.contains(&"dep:serde".to_string()));
+        // No "__default__" was requested, so default features should NOT be activated.
+        assert!(!activated.contains(&"std".to_string()));
+    }
+
+    #[test]
+    fn transitive_features() {
+        let requested = vec!["full".to_string()];
+        let mut feature_table = BTreeMap::new();
+        feature_table.insert("full".to_string(), vec!["a".to_string(), "b".to_string()]);
+        feature_table.insert("a".to_string(), vec!["c".to_string()]);
+        feature_table.insert("b".to_string(), vec![]);
+        feature_table.insert("c".to_string(), vec![]);
+        let default_features = vec![];
+
+        let activated = compute_activated_features(&requested, &feature_table, &default_features);
+
+        assert!(activated.contains(&"full".to_string()));
+        assert!(activated.contains(&"a".to_string()));
+        assert!(activated.contains(&"b".to_string()));
+        assert!(activated.contains(&"c".to_string()));
+    }
+
+    #[test]
+    fn duplicate_features_not_repeated() {
+        let requested = vec!["a".to_string(), "a".to_string()];
+        let feature_table = BTreeMap::new();
+        let default_features = vec![];
+
+        let activated = compute_activated_features(&requested, &feature_table, &default_features);
+
+        let count = activated.iter().filter(|f| f.as_str() == "a").count();
+        assert_eq!(count, 1, "feature 'a' should appear exactly once");
+    }
+
+    // -----------------------------------------------------------------------
+    // is_workspace_inherited tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn workspace_true() {
+        let mut table = toml::Table::new();
+        table.insert("workspace".to_string(), toml::Value::Boolean(true));
+        let value = toml::Value::Table(table);
+        assert!(is_workspace_inherited(&value));
+    }
+
+    #[test]
+    fn workspace_false() {
+        let mut table = toml::Table::new();
+        table.insert("workspace".to_string(), toml::Value::Boolean(false));
+        let value = toml::Value::Table(table);
+        assert!(!is_workspace_inherited(&value));
+    }
+
+    #[test]
+    fn not_a_table() {
+        let value = toml::Value::String("1.0".to_string());
+        assert!(!is_workspace_inherited(&value));
+    }
+
+    // -----------------------------------------------------------------------
+    // find_vendor_dir tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn find_versioned_vendor_dir() {
+        let dir = make_test_dir("find_versioned");
+        let versioned = dir.join("foo-1.0.0");
+        std::fs::create_dir_all(&versioned).unwrap();
+
+        let result = find_vendor_dir("foo", &dir);
+        assert_eq!(result, versioned);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn find_unversioned_vendor_dir() {
+        let dir = make_test_dir("find_unversioned");
+        let unversioned = dir.join("foo");
+        std::fs::create_dir_all(&unversioned).unwrap();
+
+        let result = find_vendor_dir("foo", &dir);
+        assert_eq!(result, unversioned);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn versioned_preferred_over_unversioned() {
+        let dir = make_test_dir("find_versioned_preferred");
+        let versioned = dir.join("foo-1.0.0");
+        let unversioned = dir.join("foo");
+        std::fs::create_dir_all(&versioned).unwrap();
+        std::fs::create_dir_all(&unversioned).unwrap();
+
+        let result = find_vendor_dir("foo", &dir);
+        assert_eq!(result, versioned);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

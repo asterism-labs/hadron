@@ -5,6 +5,8 @@
 
 use crate::config::{ResolvedConfig, ResolvedValue};
 use crate::crate_graph::ResolvedCrate;
+use crate::model::CrateType;
+use crate::rustc_cmd::RustcCommandBuilder;
 use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
@@ -129,28 +131,20 @@ pub fn build_config_crate(
         .join("debug");
     std::fs::create_dir_all(&out_dir)?;
 
-    let mut cmd = Command::new("rustc");
-    cmd.arg("--crate-name")
-        .arg("hadron_config")
-        .arg("--edition=2024")
-        .arg("--crate-type=rlib")
-        .arg("-Zunstable-options")
-        .arg("-Cpanic=abort")
-        .arg(format!("-Copt-level={}", config.profile.opt_level))
-        .arg("--target")
-        .arg(target_spec)
-        .arg("--sysroot")
-        .arg(sysroot_dir)
-        .arg("--out-dir")
-        .arg(&out_dir)
-        .arg("--emit=dep-info,metadata,link")
-        .arg(&src_path);
+    let mut cmd = RustcCommandBuilder::new("rustc");
+    cmd.crate_name("hadron_config")
+        .edition("2024")
+        .crate_type("rlib")
+        .unstable_options()
+        .panic_abort()
+        .opt_level(config.profile.opt_level)
+        .target(target_spec)
+        .sysroot(sysroot_dir)
+        .out_dir(&out_dir)
+        .emit("dep-info,metadata,link")
+        .source(&src_path);
 
-    let output = cmd.output().context("failed to run rustc for hadron_config")?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("failed to compile hadron_config:\n{stderr}");
-    }
+    cmd.run_checked("compile")?;
 
     let rlib = out_dir.join("libhadron_config.rlib");
     if !rlib.exists() {
@@ -275,12 +269,10 @@ fn compile_crate_cross(
 
     let is_check = mode == CompileMode::Check || mode == CompileMode::Clippy;
 
-    let crate_type = if krate.crate_type == "proc-macro" {
-        "proc-macro"
-    } else if krate.crate_type == "bin" {
-        if is_check { "lib" } else { "bin" }
-    } else {
-        "rlib"
+    let crate_type = match krate.crate_type {
+        CrateType::ProcMacro => "proc-macro",
+        CrateType::Bin => if is_check { "lib" } else { "bin" },
+        CrateType::Lib => "rlib",
     };
 
     // Use clippy-driver for Clippy mode on project crates.
@@ -290,52 +282,48 @@ fn compile_crate_cross(
         "rustc"
     };
 
-    let mut cmd = Command::new(binary);
-    cmd.arg("--crate-name")
-        .arg(crate_name_sanitized(&krate.name))
-        .arg(format!("--edition={}", krate.edition))
-        .arg(format!("--crate-type={crate_type}"))
-        .arg("-Zunstable-options")
-        .arg("-Cpanic=abort")
-        .arg(format!("-Copt-level={}", config.profile.opt_level))
-        .arg("-Cforce-frame-pointers=yes");
+    let mut cmd = RustcCommandBuilder::new(binary);
+    cmd.crate_name(&crate_name_sanitized(&krate.name))
+        .edition(&krate.edition)
+        .crate_type(crate_type)
+        .unstable_options()
+        .panic_abort()
+        .opt_level(config.profile.opt_level)
+        .force_frame_pointers();
 
     if config.profile.debug_info {
-        cmd.arg("-Cdebuginfo=2");
+        cmd.debug_info(2);
     }
 
     // Clippy lint flags for project crates.
     if mode == CompileMode::Clippy && krate.is_project_crate {
-        cmd.arg("-Wclippy::all").arg("-Wclippy::pedantic");
+        cmd.warn("clippy::all").warn("clippy::pedantic");
     }
 
     // Target and sysroot.
-    cmd.arg("--target")
-        .arg(target_spec)
-        .arg("--sysroot")
-        .arg(sysroot_dir);
+    cmd.target(target_spec).sysroot(sysroot_dir);
 
     // Search paths for transitive deps and host proc-macros.
-    cmd.arg("-L").arg(&out_dir);
-    cmd.arg("-L").arg(config.root.join("build/host"));
+    cmd.search_path(&out_dir)
+        .search_path(&config.root.join("build/host"));
 
     // Linker args for binary crates (only in Build mode).
-    if !is_check && krate.crate_type == "bin" {
+    if !is_check && krate.crate_type == CrateType::Bin {
         if let Some(ref ld_script) = krate.linker_script {
             let ld_path = config.root.join(ld_script);
-            cmd.arg(format!("-Clink-arg=-T{}", ld_path.display()));
+            cmd.link_arg(&format!("-T{}", ld_path.display()));
         }
-        cmd.arg("-Clink-arg=--gc-sections");
+        cmd.link_arg("--gc-sections");
 
         // Extra object files (e.g., HKIF blob for pass-2 link).
         for obj in extra_link_objects {
-            cmd.arg(format!("-Clink-arg={}", obj.display()));
+            cmd.link_arg(&obj.display().to_string());
         }
     }
 
     // Features as --cfg.
     for feat in &krate.features {
-        cmd.arg("--cfg").arg(format!("feature=\"{feat}\""));
+        cmd.feature(feat);
     }
 
     // Config cfgs for options with Binding::Cfg or Binding::CfgCumulative.
@@ -353,23 +341,23 @@ fn compile_crate_cross(
             if has_cfg {
                 match value {
                     ResolvedValue::Bool(true) => {
-                        cmd.arg("--cfg").arg(format!("hadron_{name}"));
+                        cmd.cfg(&format!("hadron_{name}"));
                     }
                     ResolvedValue::Choice(v) | ResolvedValue::Str(v) => {
-                        cmd.arg("--cfg").arg(format!("hadron_{name}=\"{v}\""));
+                        cmd.cfg(&format!("hadron_{name}=\"{v}\""));
                     }
                     _ => {}
                 }
             } else if has_cfg_cumulative {
                 // Emit cfg for all choice values up to and including the selected one.
                 if let ResolvedValue::Choice(selected) = value {
-                    cmd.arg("--cfg").arg(format!("hadron_{name}=\"{selected}\""));
+                    cmd.cfg(&format!("hadron_{name}=\"{selected}\""));
 
                     // Use the choice variants from the config definition for ordering.
                     if let Some(variants) = config.choices.get(name) {
                         if let Some(selected_idx) = variants.iter().position(|v| v == selected) {
                             for variant in &variants[..=selected_idx] {
-                                cmd.arg("--cfg").arg(format!("hadron_{name}_{variant}"));
+                                cmd.cfg(&format!("hadron_{name}_{variant}"));
                             }
                         }
                     }
@@ -377,7 +365,7 @@ fn compile_crate_cross(
             } else if is_legacy {
                 // Backwards compatibility: emit hadron_<name> for Bool(true).
                 if let ResolvedValue::Bool(true) = value {
-                    cmd.arg("--cfg").arg(format!("hadron_{name}"));
+                    cmd.cfg(&format!("hadron_{name}"));
                 }
             }
         }
@@ -386,15 +374,13 @@ fn compile_crate_cross(
     // Extern deps.
     for dep in &krate.deps {
         if let Some(path) = artifacts.get(&dep.crate_name) {
-            cmd.arg("--extern")
-                .arg(format!("{}={}", dep.extern_name, path.display()));
+            cmd.add_extern(&dep.extern_name, path);
         }
     }
 
     // Link config crate if provided.
     if let Some(config_path) = config_rlib {
-        cmd.arg("--extern")
-            .arg(format!("hadron_config={}", config_path.display()));
+        cmd.add_extern("hadron_config", config_path);
     }
 
     // Incremental compilation.
@@ -403,33 +389,26 @@ fn compile_crate_cross(
         .join("build/incremental")
         .join(crate_name_sanitized(&krate.name));
     std::fs::create_dir_all(&inc_dir)?;
-    cmd.arg(format!("-Cincremental={}", inc_dir.display()));
+    cmd.incremental(&inc_dir);
 
     // Output.
-    cmd.arg("--out-dir").arg(&out_dir);
+    cmd.out_dir(&out_dir);
     if is_check {
-        cmd.arg("--emit=dep-info,metadata");
+        cmd.emit("dep-info,metadata");
     } else if crate_type == "bin" {
-        cmd.arg("--emit=dep-info,link");
+        cmd.emit("dep-info,link");
     } else {
-        cmd.arg("--emit=dep-info,metadata,link");
+        cmd.emit("dep-info,metadata,link");
     }
 
     // Source file.
-    cmd.arg(&krate.root_file);
+    cmd.source(&krate.root_file);
 
-    let output = cmd
-        .output()
-        .with_context(|| format!("failed to run {binary} for {}", krate.name))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let verb = if mode == CompileMode::Clippy { "lint" } else { "compile" };
-        bail!("failed to {verb} '{}':\n{stderr}", krate.name);
-    }
+    let verb = if mode == CompileMode::Clippy { "lint" } else { "compile" };
+    cmd.run_checked(verb)?;
 
     // Determine output artifact path.
-    let artifact = if !is_check && krate.crate_type == "bin" {
+    let artifact = if !is_check && krate.crate_type == CrateType::Bin {
         out_dir.join(crate_name_sanitized(&krate.name))
     } else if is_check {
         out_dir.join(format!(
@@ -458,60 +437,48 @@ fn compile_crate_host(
     // Locate host sysroot lib dir for proc_macro and std.
     let host_sysroot_lib = host_sysroot_lib_dir()?;
 
-    let crate_type = if krate.crate_type == "proc-macro" {
-        "proc-macro"
-    } else {
-        "lib"
+    let crate_type = match krate.crate_type {
+        CrateType::ProcMacro => "proc-macro",
+        _ => "lib",
     };
 
-    let mut cmd = Command::new("rustc");
-    cmd.arg("--crate-name")
-        .arg(crate_name_sanitized(&krate.name))
-        .arg(format!("--edition={}", krate.edition))
-        .arg(format!("--crate-type={crate_type}"));
+    let mut cmd = RustcCommandBuilder::new("rustc");
+    cmd.crate_name(&crate_name_sanitized(&krate.name))
+        .edition(&krate.edition)
+        .crate_type(crate_type);
 
     // Add search paths for transitive deps and host sysroot (proc_macro, std).
-    cmd.arg("-L").arg(&out_dir);
-    cmd.arg("-L").arg(&host_sysroot_lib);
+    cmd.search_path(&out_dir).search_path(&host_sysroot_lib);
 
     // For proc-macro crates, inject the compiler's proc_macro crate via
     // `--extern proc_macro` (no path) + `-C prefer-dynamic`. This is how
     // cargo provides the proc_macro bridge to proc-macro crates.
     if crate_type == "proc-macro" {
-        cmd.arg("-C").arg("prefer-dynamic");
-        cmd.arg("--extern").arg("proc_macro");
+        cmd.prefer_dynamic().add_extern_no_path("proc_macro");
     }
 
     // Per-crate cfg flags (e.g. proc-macro2 needs `wrap_proc_macro`).
     for flag in &krate.cfg_flags {
-        cmd.arg("--cfg").arg(flag);
+        cmd.cfg(flag);
     }
 
     // Features.
     for feat in &krate.features {
-        cmd.arg("--cfg").arg(format!("feature=\"{feat}\""));
+        cmd.feature(feat);
     }
 
     // Extern deps.
     for dep in &krate.deps {
         if let Some(path) = artifacts.get(&dep.crate_name) {
-            cmd.arg("--extern")
-                .arg(format!("{}={}", dep.extern_name, path.display()));
+            cmd.add_extern(&dep.extern_name, path);
         }
     }
 
-    cmd.arg("--out-dir").arg(&out_dir);
-    cmd.arg("--emit=dep-info,metadata,link");
-    cmd.arg(&krate.root_file);
+    cmd.out_dir(&out_dir)
+        .emit("dep-info,metadata,link")
+        .source(&krate.root_file);
 
-    let output = cmd
-        .output()
-        .with_context(|| format!("failed to run rustc for host crate {}", krate.name))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("failed to compile host crate '{}':\n{stderr}", krate.name);
-    }
+    cmd.run_checked("compile")?;
 
     // Determine artifact path. For proc-macros it's a dylib.
     let artifact = if crate_type == "proc-macro" {
@@ -604,13 +571,13 @@ pub fn crate_artifact_path(
 
     if krate.target == "host" {
         // Host crates: proc-macros are dylibs, others are rlibs.
-        if krate.crate_type == "proc-macro" {
+        if krate.crate_type == CrateType::ProcMacro {
             let ext = if cfg!(target_os = "macos") { "dylib" } else { "so" };
             out_dir.join(format!("lib{sanitized}.{ext}"))
         } else {
             out_dir.join(format!("lib{sanitized}.rlib"))
         }
-    } else if !is_check && krate.crate_type == "bin" {
+    } else if !is_check && krate.crate_type == CrateType::Bin {
         out_dir.join(&sanitized)
     } else if is_check {
         out_dir.join(format!("lib{sanitized}.rmeta"))
