@@ -213,10 +213,11 @@ fn validate_crates(model: &BuildModel) -> Result<()> {
             "crate '{name}' has no path"
         );
 
-        // All dependency references must resolve.
+        // All dependency references must resolve to a project crate or external dependency.
         for (extern_name, dep) in &krate.deps {
             ensure!(
-                model.crates.contains_key(&dep.crate_name),
+                model.crates.contains_key(&dep.crate_name)
+                    || model.dependencies.contains_key(&dep.crate_name),
                 "crate '{name}' depends on '{ext}' (crate '{dep_name}'), which is not defined",
                 ext = extern_name,
                 dep_name = dep.crate_name
@@ -226,7 +227,8 @@ fn validate_crates(model: &BuildModel) -> Result<()> {
         // All dev dependency references must resolve.
         for (extern_name, dep) in &krate.dev_deps {
             ensure!(
-                model.crates.contains_key(&dep.crate_name),
+                model.crates.contains_key(&dep.crate_name)
+                    || model.dependencies.contains_key(&dep.crate_name),
                 "crate '{name}' dev-depends on '{ext}' (crate '{dep_name}'), which is not defined",
                 ext = extern_name,
                 dep_name = dep.crate_name
