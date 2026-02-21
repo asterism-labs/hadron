@@ -114,5 +114,6 @@ extern "C" fn syscall_dispatch(
     a3: usize,
     a4: usize,
 ) -> isize {
+    crate::ktrace_subsys!(syscall, "syscall nr={} a0={:#x} a1={:#x}", nr, a0, a1);
     dispatch(&DISPATCH, nr, a0, a1, a2, a3, a4)
 }

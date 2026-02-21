@@ -861,4 +861,251 @@ mod tests {
             }
         });
     }
+
+    // -----------------------------------------------------------------------
+    // Poison module tests
+    // -----------------------------------------------------------------------
+
+    /// Allocates a buffer for poison testing with the given user_size and align.
+    /// Returns (raw_buf, front_pad, total_size).
+    fn alloc_poison_buf(user_size: usize, align: usize) -> (*mut u8, usize, usize) {
+        let front_pad = align_up(poison::REDZONE_SIZE, align);
+        let total = front_pad + user_size + poison::REDZONE_SIZE;
+        let layout = Layout::from_size_align(total, align).unwrap();
+        let buf = unsafe { std::alloc::alloc_zeroed(layout) };
+        assert!(!buf.is_null());
+        (buf, front_pad, total)
+    }
+
+    /// Frees a poison test buffer.
+    unsafe fn free_poison_buf(buf: *mut u8, total: usize, align: usize) {
+        let layout = Layout::from_size_align(total, align).unwrap();
+        unsafe { std::alloc::dealloc(buf, layout) };
+    }
+
+    #[test]
+    fn test_redzone_header_size() {
+        assert_eq!(
+            core::mem::size_of::<poison::RedZoneHeader>(),
+            poison::REDZONE_SIZE,
+            "RedZoneHeader must be exactly REDZONE_SIZE bytes"
+        );
+    }
+
+    #[test]
+    fn test_fill_alloc_patterns_align16() {
+        let user_size = 64;
+        let align = 16;
+        let (buf, front_pad, total) = alloc_poison_buf(user_size, align);
+
+        // front_pad should be 16 (align_up(16, 16) = 16).
+        assert_eq!(front_pad, 16);
+
+        let user_ptr = unsafe { poison::fill_alloc(buf as usize, user_size, front_pad) };
+        assert_eq!(user_ptr as usize, buf as usize + front_pad);
+
+        // Check header at [buf..buf+16].
+        let header = unsafe { &*((user_ptr as usize - poison::REDZONE_SIZE) as *const poison::RedZoneHeader) };
+        assert_eq!(header.magic, poison::REDZONE_MAGIC);
+        assert_eq!(header.alloc_size, user_size);
+        assert_eq!(header._pad, [poison::REDZONE_FILL; 4]);
+
+        // User region should be all ALLOC_FILL.
+        let user_slice = unsafe { core::slice::from_raw_parts(user_ptr, user_size) };
+        assert!(user_slice.iter().all(|&b| b == poison::ALLOC_FILL));
+
+        // Back redzone should be all REDZONE_FILL.
+        let back = unsafe { core::slice::from_raw_parts(user_ptr.add(user_size), poison::REDZONE_SIZE) };
+        assert!(back.iter().all(|&b| b == poison::REDZONE_FILL));
+
+        unsafe { free_poison_buf(buf, total, align) };
+    }
+
+    #[test]
+    fn test_fill_alloc_patterns_align256() {
+        let user_size = 64;
+        let align = 256;
+        let (buf, front_pad, total) = alloc_poison_buf(user_size, align);
+
+        // front_pad should be 256 (align_up(16, 256) = 256).
+        assert_eq!(front_pad, 256);
+
+        let user_ptr = unsafe { poison::fill_alloc(buf as usize, user_size, front_pad) };
+        assert_eq!(user_ptr as usize, buf as usize + front_pad);
+
+        // Extended front fill [0..240] should be all REDZONE_FILL.
+        let front_fill_len = front_pad - poison::REDZONE_SIZE; // 240
+        let front_fill = unsafe { core::slice::from_raw_parts(buf, front_fill_len) };
+        assert!(front_fill.iter().all(|&b| b == poison::REDZONE_FILL));
+
+        // Header at [240..256].
+        let header = unsafe { &*((user_ptr as usize - poison::REDZONE_SIZE) as *const poison::RedZoneHeader) };
+        assert_eq!(header.magic, poison::REDZONE_MAGIC);
+        assert_eq!(header.alloc_size, user_size);
+
+        // User and back zones.
+        let user_slice = unsafe { core::slice::from_raw_parts(user_ptr, user_size) };
+        assert!(user_slice.iter().all(|&b| b == poison::ALLOC_FILL));
+        let back = unsafe { core::slice::from_raw_parts(user_ptr.add(user_size), poison::REDZONE_SIZE) };
+        assert!(back.iter().all(|&b| b == poison::REDZONE_FILL));
+
+        unsafe { free_poison_buf(buf, total, align) };
+    }
+
+    #[test]
+    fn test_check_dealloc_clean_roundtrip() {
+        let user_size = 64;
+        let align = 16;
+        let (buf, front_pad, total) = alloc_poison_buf(user_size, align);
+
+        let user_ptr = unsafe { poison::fill_alloc(buf as usize, user_size, front_pad) };
+        // Should not panic — all zones are intact.
+        unsafe { poison::check_and_fill_dealloc(user_ptr, user_size, front_pad) };
+
+        // User region should now be all FREE_FILL.
+        let user_slice = unsafe { core::slice::from_raw_parts(user_ptr, user_size) };
+        assert!(user_slice.iter().all(|&b| b == poison::FREE_FILL));
+
+        unsafe { free_poison_buf(buf, total, align) };
+    }
+
+    #[test]
+    #[should_panic(expected = "front red zone magic mismatch")]
+    fn test_check_dealloc_detects_magic_corruption() {
+        let user_size = 64;
+        let align = 16;
+        let (buf, front_pad, total) = alloc_poison_buf(user_size, align);
+
+        let user_ptr = unsafe { poison::fill_alloc(buf as usize, user_size, front_pad) };
+
+        // Corrupt the magic field in the header.
+        let header = (user_ptr as usize - poison::REDZONE_SIZE) as *mut poison::RedZoneHeader;
+        unsafe { (*header).magic = 0xDEADBEEF };
+
+        // Should panic.
+        unsafe { poison::check_and_fill_dealloc(user_ptr, user_size, front_pad) };
+
+        unsafe { free_poison_buf(buf, total, align) };
+    }
+
+    #[test]
+    #[should_panic(expected = "back red zone byte")]
+    fn test_check_dealloc_detects_back_corruption() {
+        let user_size = 64;
+        let align = 16;
+        let (buf, front_pad, total) = alloc_poison_buf(user_size, align);
+
+        let user_ptr = unsafe { poison::fill_alloc(buf as usize, user_size, front_pad) };
+
+        // Write one byte past the user region (into back redzone).
+        unsafe { *user_ptr.add(user_size) = 0x42 };
+
+        // Should panic.
+        unsafe { poison::check_and_fill_dealloc(user_ptr, user_size, front_pad) };
+
+        unsafe { free_poison_buf(buf, total, align) };
+    }
+
+    #[test]
+    #[should_panic(expected = "front red zone byte")]
+    fn test_check_dealloc_detects_front_pad_corruption() {
+        let user_size = 64;
+        let align = 256;
+        let (buf, front_pad, total) = alloc_poison_buf(user_size, align);
+
+        let user_ptr = unsafe { poison::fill_alloc(buf as usize, user_size, front_pad) };
+
+        // Corrupt a byte in the extended front fill region.
+        unsafe { *buf.add(10) = 0x42 };
+
+        // Should panic.
+        unsafe { poison::check_and_fill_dealloc(user_ptr, user_size, front_pad) };
+
+        unsafe { free_poison_buf(buf, total, align) };
+    }
+
+    #[test]
+    #[should_panic(expected = "front red zone padding corrupted")]
+    fn test_check_dealloc_detects_padding_corruption() {
+        let user_size = 64;
+        let align = 16;
+        let (buf, front_pad, total) = alloc_poison_buf(user_size, align);
+
+        let user_ptr = unsafe { poison::fill_alloc(buf as usize, user_size, front_pad) };
+
+        // Corrupt the _pad field in the header.
+        let header = (user_ptr as usize - poison::REDZONE_SIZE) as *mut poison::RedZoneHeader;
+        unsafe { (*header)._pad[0] = 0x42 };
+
+        // Should panic.
+        unsafe { poison::check_and_fill_dealloc(user_ptr, user_size, front_pad) };
+
+        unsafe { free_poison_buf(buf, total, align) };
+    }
+
+    // -----------------------------------------------------------------------
+    // AllocStats tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_alloc_stats_initial() {
+        let stats = AllocStats::new();
+        assert_eq!(stats.total_allocs, 0);
+        assert_eq!(stats.total_frees, 0);
+        assert_eq!(stats.current_live, 0);
+        assert_eq!(stats.current_bytes, 0);
+        assert_eq!(stats.peak_live, 0);
+        assert_eq!(stats.peak_bytes, 0);
+    }
+
+    #[test]
+    fn test_alloc_stats_record_alloc() {
+        let mut stats = AllocStats::new();
+        stats.record_alloc(100);
+        assert_eq!(stats.total_allocs, 1);
+        assert_eq!(stats.current_live, 1);
+        assert_eq!(stats.current_bytes, 100);
+        assert_eq!(stats.peak_live, 1);
+        assert_eq!(stats.peak_bytes, 100);
+    }
+
+    #[test]
+    fn test_alloc_stats_record_free() {
+        let mut stats = AllocStats::new();
+        stats.record_alloc(100);
+        stats.record_free(100);
+        assert_eq!(stats.total_frees, 1);
+        assert_eq!(stats.current_live, 0);
+        assert_eq!(stats.current_bytes, 0);
+        assert_eq!(stats.peak_live, 1);
+        assert_eq!(stats.peak_bytes, 100);
+    }
+
+    #[test]
+    fn test_alloc_stats_peak_tracking() {
+        let mut stats = AllocStats::new();
+        stats.record_alloc(64);   // live=1, bytes=64
+        stats.record_alloc(128);  // live=2, bytes=192
+        stats.record_free(64);    // live=1, bytes=128
+        stats.record_alloc(256);  // live=2, bytes=384
+        assert_eq!(stats.peak_live, 2);
+        assert_eq!(stats.peak_bytes, 384);
+        assert_eq!(stats.current_live, 2);
+        assert_eq!(stats.current_bytes, 384);
+    }
+
+    #[test]
+    fn test_alloc_stats_many_cycles() {
+        let mut stats = AllocStats::new();
+        for _ in 0..100 {
+            stats.record_alloc(64);
+            stats.record_free(64);
+        }
+        assert_eq!(stats.total_allocs, 100);
+        assert_eq!(stats.total_frees, 100);
+        assert_eq!(stats.current_live, 0);
+        assert_eq!(stats.current_bytes, 0);
+        assert_eq!(stats.peak_live, 1);
+        assert_eq!(stats.peak_bytes, 64);
+    }
 }

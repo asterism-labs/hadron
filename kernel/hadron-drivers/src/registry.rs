@@ -64,6 +64,7 @@ pub fn match_pci_drivers(devices: &[PciDeviceInfo]) {
                     match (entry.probe)(ctx) {
                         Ok(registration) => {
                             hadron_kernel::kprintln!("PCI: driver '{}' probe OK", entry.name);
+                            hadron_kernel::ktrace_subsys!(drivers, "PCI driver '{}' probed for {}", entry.name, device.address);
                             hadron_kernel::drivers::device_registry::with_device_registry_mut(
                                 |dr| {
                                     dr.register_driver(
@@ -80,6 +81,7 @@ pub fn match_pci_drivers(devices: &[PciDeviceInfo]) {
                                 entry.name,
                                 e,
                             );
+                            hadron_kernel::ktrace_subsys!(drivers, "PCI driver '{}' probe failed: {}", entry.name, e);
                         }
                     }
                     break;
@@ -109,6 +111,7 @@ pub fn match_platform_drivers(devices: &[(&str, &str)]) {
                 match (entry.init)(ctx) {
                     Ok(registration) => {
                         hadron_kernel::kprintln!("Platform: driver '{}' init OK", entry.name);
+                        hadron_kernel::ktrace_subsys!(drivers, "platform driver '{}' probed for {}", entry.name, compatible);
                         hadron_kernel::drivers::device_registry::with_device_registry_mut(|dr| {
                             dr.register_driver(
                                 entry.name,

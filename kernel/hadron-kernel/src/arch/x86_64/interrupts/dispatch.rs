@@ -65,7 +65,10 @@ pub fn register_handler(vector: u8, handler: InterruptHandler) -> Result<(), Int
     );
 
     match old {
-        Ok(_) => Ok(()),
+        Ok(_) => {
+            crate::ktrace_subsys!(irq, "registered handler for vector {}", vector);
+            Ok(())
+        }
         Err(_) => Err(InterruptError::AlreadyRegistered),
     }
 }
@@ -76,6 +79,7 @@ pub fn unregister_handler(vector: u8) {
         let idx = (vector - 32) as usize;
         if idx < NUM_VECTORS {
             HANDLERS[idx].store(core::ptr::null_mut(), Ordering::Release);
+            crate::ktrace_subsys!(irq, "unregistered handler for vector {}", vector);
         }
     }
 }

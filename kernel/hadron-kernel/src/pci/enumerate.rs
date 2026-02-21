@@ -31,6 +31,7 @@ pub fn enumerate() -> Vec<PciDeviceInfo> {
         }
     }
 
+    crate::ktrace_subsys!(pci, "PCI: enumerated {} devices", devices.len());
     devices
 }
 
@@ -55,10 +56,12 @@ fn enumerate_device(bus: u8, device: u8, devices: &mut Vec<PciDeviceInfo>) {
     if info.class == 0x06 && info.subclass == 0x04 {
         let secondary = unsafe { PciCam::read_u8(bus, device, 0, regs::SECONDARY_BUS) };
         if secondary != 0 {
+            crate::ktrace_subsys!(pci, "PCI bridge {:02x}:{:02x}.0 -> secondary bus {}", bus, device, secondary);
             enumerate_bus(secondary, devices);
         }
     }
 
+    crate::ktrace_subsys!(pci, "PCI {:02x}:{:02x}.0: vendor={:#06x} device={:#06x} class={:02x}.{:02x}", bus, device, info.vendor_id, info.device_id, info.class, info.subclass);
     devices.push(info);
 
     // Scan remaining functions if multi-function device.

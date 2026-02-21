@@ -423,6 +423,7 @@ pub fn map_initial_heap() -> (usize, usize) {
         let (base, size) = vmm
             .map_initial_heap(&mut alloc)
             .expect("failed to map initial heap");
+        crate::ktrace_subsys!(mm, "VMM: mapped initial heap at {:#x}, size {:#x}", base.as_u64(), size);
         (base.as_u64() as usize, size as usize)
     })
 }
@@ -437,6 +438,7 @@ pub fn grow_heap(min_bytes: usize) -> Option<(*mut u8, usize)> {
     super::pmm::with_pmm(|pmm| {
         let mut alloc = BitmapFrameAllocRef(pmm);
         let (base, size) = vmm.grow_heap(min_bytes as u64, &mut alloc).ok()?;
+        crate::ktrace_subsys!(mm, "VMM: grew heap by {:#x} bytes at {:#x}", size, base.as_u64());
         Some((base.as_mut_ptr::<u8>(), size as usize))
     })
 }
@@ -458,7 +460,9 @@ pub fn map_mmio_region(phys: PhysAddr, size: u64) -> VirtAddr {
             let mapping = vmm
                 .map_mmio(phys, size, &mut alloc, None)
                 .expect("failed to map MMIO region");
-            mapping.virt_base()
+            let virt = mapping.virt_base();
+            crate::ktrace_subsys!(mm, "VMM: mapped MMIO phys={:#x} size={:#x} -> virt={:#x}", phys.as_u64(), size, virt.as_u64());
+            virt
         })
     })
 }

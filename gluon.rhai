@@ -53,6 +53,15 @@ profile("debug-gdb")
     .qemu_extra_args(["-s", "-S"])
     .test_timeout(3600);
 
+profile("debug-sanitizers")
+    .inherits("default")
+    .config(#{
+        debug_heap_poison: true,
+        debug_pmm_poison: true,
+        debug_alloc_track: true,
+        trace_mm: true,
+    });
+
 // ===========================================================================
 // Sysroot crates (built first, for kernel target)
 // ===========================================================================

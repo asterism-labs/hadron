@@ -503,3 +503,81 @@ pub fn try_with_pmm<R>(f: impl FnOnce(&BitmapAllocator) -> R) -> Option<R> {
     let pmm = PMM.try_lock()?;
     Some(f(pmm.as_ref()?))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::alloc::Layout;
+
+    const PAGE_SIZE: usize = FRAME_SIZE as usize;
+
+    fn alloc_page() -> *mut u8 {
+        let layout = Layout::from_size_align(PAGE_SIZE, PAGE_SIZE).unwrap();
+        // SAFETY: layout is valid, non-zero size.
+        let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+        assert!(!ptr.is_null());
+        ptr
+    }
+
+    unsafe fn free_page(ptr: *mut u8) {
+        let layout = Layout::from_size_align(PAGE_SIZE, PAGE_SIZE).unwrap();
+        unsafe { std::alloc::dealloc(ptr, layout) };
+    }
+
+    #[test]
+    fn test_poison_page_writes_pattern() {
+        let buf = alloc_page();
+        // poison_page expects a physical address and hhdm_offset such that
+        // hhdm_offset + phys_addr = virtual address. We set phys=0, hhdm=buf.
+        poison_page(0, buf as u64);
+
+        let words = unsafe { core::slice::from_raw_parts(buf as *const u32, PAGE_SIZE / 4) };
+        assert!(words.iter().all(|&w| w == PAGE_POISON_PATTERN));
+
+        unsafe { free_page(buf) };
+    }
+
+    #[test]
+    fn test_check_page_poison_intact() {
+        let buf = alloc_page();
+        poison_page(0, buf as u64);
+        assert!(check_page_poison(0, buf as u64));
+        unsafe { free_page(buf) };
+    }
+
+    #[test]
+    fn test_check_page_poison_never_poisoned() {
+        let buf = alloc_page();
+        // Zero-filled page: first word is 0, not the poison pattern.
+        // Heuristic returns true (assumes never-poisoned).
+        assert!(check_page_poison(0, buf as u64));
+        unsafe { free_page(buf) };
+    }
+
+    #[test]
+    fn test_check_page_poison_partial_corruption() {
+        let buf = alloc_page();
+        poison_page(0, buf as u64);
+
+        // Corrupt a word in the middle of the page.
+        let words = buf as *mut u32;
+        unsafe { words.add(512).write_volatile(0x0) };
+
+        assert!(!check_page_poison(0, buf as u64));
+        unsafe { free_page(buf) };
+    }
+
+    #[test]
+    fn test_check_page_poison_first_word_zero() {
+        let buf = alloc_page();
+        poison_page(0, buf as u64);
+
+        // Overwrite first word with 0 — heuristic thinks page was never
+        // poisoned, so it returns true (skip verification).
+        let words = buf as *mut u32;
+        unsafe { words.write_volatile(0x0) };
+
+        assert!(check_page_poison(0, buf as u64));
+        unsafe { free_page(buf) };
+    }
+}

@@ -34,6 +34,7 @@ impl Vfs {
 
     /// Mount a filesystem at the given path.
     pub fn mount(&mut self, path: &str, fs: Arc<dyn FileSystem>) {
+        crate::ktrace_subsys!(vfs, "mount {} at {}", fs.name(), path);
         crate::kinfo!("VFS: Mounted {} at {}", fs.name(), path);
         self.mounts.insert(path.to_string(), fs);
     }
@@ -53,6 +54,7 @@ impl Vfs {
     /// [`FsError::NotFound`] if the path cannot be resolved, or
     /// [`FsError::SymlinkLoop`] if symlink depth exceeds the limit.
     pub fn resolve(&self, abs_path: &str) -> Result<Arc<dyn Inode>, FsError> {
+        crate::ktrace_subsys!(vfs, "resolving path: {}", abs_path);
         self.resolve_with_depth(abs_path, 0)
     }
 

@@ -211,6 +211,7 @@ impl Executor {
             },
         );
         self.ready_queues.lock().push(priority, id);
+        crate::ktrace_subsys!(sched, "spawned task id={} priority={:?}", id.0, priority);
         id
     }
 
