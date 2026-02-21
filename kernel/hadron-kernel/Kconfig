@@ -150,4 +150,48 @@ config debug_alloc_track
 
 endmenu
 
+menu "Profiling"
+
+config profile_sample
+    bool "Sampling profiler"
+    default n
+    depends on acpi
+    binding cfg
+
+config PROFILE_SAMPLE_RATE
+    u32 "Sample rate (Hz, max 1000)"
+    default 100
+    range 1 1000
+    depends on profile_sample
+    binding const
+
+config PROFILE_SAMPLE_DEPTH
+    u32 "Max stack depth per sample"
+    default 16
+    range 1 64
+    depends on profile_sample
+    binding const
+
+config PROFILE_SAMPLE_BUFFER
+    u32 "Per-CPU sample buffer entries"
+    default 1024
+    range 128 16384
+    depends on profile_sample
+    binding const
+
+config profile_ftrace
+    bool "Function tracing (mcount)"
+    default n
+    binding cfg
+    binding build
+
+config PROFILE_FTRACE_BUFFER_KB
+    u32 "Per-CPU ftrace buffer (KB)"
+    default 64
+    range 16 1024
+    depends on profile_ftrace
+    binding const
+
+endmenu
+
 endmenu

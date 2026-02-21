@@ -24,6 +24,7 @@ hadron-syscall = { workspace = true, features = [ "kernel" ] }
 noalloc = { workspace = true }
 
 [dev-dependencies]
+hadron-bench = { workspace = true, features = [ "limine" ] }
 hadron-test = { workspace = true, features = [ "limine" ] }
 limine = { workspace = true }
 noalloc = { workspace = true }

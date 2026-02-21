@@ -29,6 +29,10 @@ run *args: bootstrap
 test *args: bootstrap
     {{hb}} test {{args}}
 
+# Run kernel benchmarks
+bench *args: bootstrap
+    {{hb}} bench {{args}}
+
 # Type-check without linking
 check *args: bootstrap
     {{hb}} check {{args}}

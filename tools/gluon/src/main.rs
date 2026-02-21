@@ -8,6 +8,7 @@
 
 mod analyzer;
 mod artifact;
+mod bench;
 mod cache;
 mod cli;
 mod compile;
@@ -19,6 +20,7 @@ mod kconfig;
 mod menuconfig;
 mod model;
 mod model_cache;
+mod perf;
 mod run;
 mod rustc_cmd;
 mod rustc_info;
@@ -47,6 +49,7 @@ fn main() -> Result<()> {
         cli::Command::Build(ref _args) => cmd_build(&cli),
         cli::Command::Run(ref args) => cmd_run(&cli, &args.extra_args),
         cli::Command::Test(ref args) => cmd_test(&cli, args),
+        cli::Command::Bench(ref args) => cmd_bench(&cli, args),
         cli::Command::Check => cmd_check(&cli),
         cli::Command::Clippy => cmd_clippy(&cli),
         cli::Command::Fmt(ref args) => fmt::cmd_fmt(args),
@@ -493,6 +496,12 @@ fn prune_vendor_dir(resolved: &[vendor::ResolvedDep], vendor_dir: &std::path::Pa
     }
 
     Ok(())
+}
+
+/// Run kernel benchmarks.
+fn cmd_bench(cli: &cli::Cli, args: &cli::BenchArgs) -> Result<()> {
+    let (mut state, model) = do_build(cli)?;
+    bench::run_benchmarks(&model, &mut state, args)
 }
 
 // ===========================================================================

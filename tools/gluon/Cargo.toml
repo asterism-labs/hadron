@@ -16,6 +16,7 @@ flate2 = "1"
 hadris-cpio = { version = "1.0.1", default-features = false, features = ["std", "write"] }
 hadron-dwarf = { path = "../../crates/dwarf" }
 hadron-elf = { path = "../../crates/elf" }
+inferno = { version = "0.12", default-features = false, features = ["nameattr"] }
 ratatui = "0.29"
 rhai = { version = "1", features = ["sync"] }
 rustc-demangle = "0.1"

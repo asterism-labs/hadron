@@ -23,13 +23,13 @@ pub(crate) const SYM_ENTRY_SIZE: usize = 20;
 pub(crate) const LINE_ENTRY_SIZE: usize = 16;
 
 /// A function symbol extracted from the ELF.
-pub(crate) struct FuncSymbol {
+pub struct FuncSymbol {
     /// Offset from kernel virtual base.
-    pub(crate) addr: u64,
+    pub addr: u64,
     /// Symbol size in bytes.
-    pub(crate) size: u32,
+    pub size: u32,
     /// Demangled function name.
-    pub(crate) name: String,
+    pub name: String,
 }
 
 /// A line info entry extracted from DWARF.
@@ -168,7 +168,7 @@ pub fn generate_hbtf(kernel_elf: &Path, output: &Path, include_lines: bool) -> R
 }
 
 /// Extract function symbols from the ELF symbol table.
-pub(crate) fn extract_symbols(elf: &hadron_elf::ElfFile<'_>, kernel_virt_base: u64) -> Vec<FuncSymbol> {
+pub fn extract_symbols(elf: &hadron_elf::ElfFile<'_>, kernel_virt_base: u64) -> Vec<FuncSymbol> {
     let symtab = match elf.find_section_by_type(hadron_elf::SHT_SYMTAB) {
         Some(s) => s,
         None => return Vec::new(),

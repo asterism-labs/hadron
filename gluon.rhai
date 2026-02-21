@@ -192,6 +192,16 @@ test_deps.add("hadron-test", "crates/hadron-test")
     .deps(#{ limine: "limine" });
 
 // ===========================================================================
+// Benchmark dependency crates (compiled on-demand during benchmarks)
+// ===========================================================================
+
+let bench_deps = group("bench-deps").target("x86_64-unknown-hadron").edition("2024").project(false);
+
+bench_deps.add("hadron-bench", "crates/hadron-bench")
+    .features(["limine"])
+    .deps(#{ limine: "limine" });
+
+// ===========================================================================
 // Kernel main (hadron-kernel + boot stub)
 // ===========================================================================
 
@@ -209,6 +219,7 @@ kernel_main.add("hadron-kernel", "kernel/hadron-kernel")
         noalloc: "noalloc"
     })
     .dev_deps(#{
+        hadron_bench: "hadron-bench",
         hadron_test: "hadron-test",
         limine: "limine",
         noalloc: "noalloc"
@@ -314,6 +325,11 @@ image()
 // ===========================================================================
 // Tests
 // ===========================================================================
+
+benchmarks()
+    .benches_dir("kernel/hadron-kernel/benches")
+    .benches_crate("hadron-kernel")
+    .benches_linker_script("targets/x86_64-unknown-hadron.ld");
 
 tests()
     .host_testable([

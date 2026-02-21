@@ -48,6 +48,8 @@ pub enum Command {
     Menuconfig,
     /// Remove build artifacts.
     Clean,
+    /// Run kernel benchmarks.
+    Bench(BenchArgs),
     /// Vendor external dependencies into vendor/.
     Vendor(VendorArgs),
 }
@@ -84,6 +86,34 @@ pub struct TestArgs {
     pub crash_only: bool,
 
     /// Extra arguments passed to the test harness after `--`.
+    #[arg(last = true)]
+    pub extra_args: Vec<String>,
+}
+
+/// Arguments for the `bench` subcommand.
+#[derive(Parser)]
+pub struct BenchArgs {
+    /// Filter benchmarks by name substring.
+    #[arg(long)]
+    pub filter: Option<String>,
+
+    /// Save benchmark results as a baseline JSON file.
+    #[arg(long)]
+    pub save_baseline: Option<String>,
+
+    /// Compare against a baseline JSON file and flag regressions.
+    #[arg(long)]
+    pub baseline: Option<String>,
+
+    /// Regression threshold as a percentage (default: 5).
+    #[arg(long, default_value = "5")]
+    pub threshold: u32,
+
+    /// Output format for benchmark results.
+    #[arg(long, default_value = "table")]
+    pub format: String,
+
+    /// Extra arguments passed to the benchmark harness after `--`.
     #[arg(last = true)]
     pub extra_args: Vec<String>,
 }

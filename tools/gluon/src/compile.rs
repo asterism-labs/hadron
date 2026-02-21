@@ -295,6 +295,13 @@ fn compile_crate_cross(
         cmd.debug_info(2);
     }
 
+    // Function tracing instrumentation for project crates.
+    if krate.is_project_crate {
+        if let Some(ResolvedValue::Bool(true)) = config.options.get("profile_ftrace") {
+            cmd.arg("-Zinstrument-mcount");
+        }
+    }
+
     // Clippy lint flags for project crates.
     if mode == CompileMode::Clippy && krate.is_project_crate {
         cmd.warn("clippy::all").warn("clippy::pedantic");

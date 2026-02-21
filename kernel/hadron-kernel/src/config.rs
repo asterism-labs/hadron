@@ -25,6 +25,22 @@ pub const MAX_CPUS: usize = hadron_config::MAX_CPUS as usize;
 /// Kernel heap size in bytes.
 pub const KERNEL_HEAP_SIZE: u64 = hadron_config::KERNEL_HEAP_SIZE;
 
+/// Sampling profiler: sample rate in Hz (Kconfig default: 100).
+#[cfg(hadron_profile_sample)]
+pub const PROFILE_SAMPLE_RATE: u32 = hadron_config::PROFILE_SAMPLE_RATE;
+
+/// Sampling profiler: max stack depth per sample (Kconfig default: 16).
+#[cfg(hadron_profile_sample)]
+pub const PROFILE_SAMPLE_DEPTH: u32 = hadron_config::PROFILE_SAMPLE_DEPTH;
+
+/// Sampling profiler: per-CPU ring buffer entries (Kconfig default: 1024).
+#[cfg(hadron_profile_sample)]
+pub const PROFILE_SAMPLE_BUFFER: u32 = hadron_config::PROFILE_SAMPLE_BUFFER;
+
+/// Function tracing: per-CPU buffer size in KB (Kconfig default: 64).
+#[cfg(hadron_profile_ftrace)]
+pub const PROFILE_FTRACE_BUFFER_KB: u32 = hadron_config::PROFILE_FTRACE_BUFFER_KB;
+
 /// Build target name.
 pub const TARGET: &str = hadron_config::TARGET;
 

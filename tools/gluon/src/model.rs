@@ -29,6 +29,7 @@ pub struct BuildModel {
     pub bootloader: BootloaderDef,
     pub image: ImageDef,
     pub tests: TestsDef,
+    pub benchmarks: BenchmarksDef,
     /// External dependency declarations from `dependency()` calls in gluon.rhai.
     pub dependencies: BTreeMap<String, ExternalDepDef>,
     /// Paths to input files discovered during evaluation (Kconfig files, etc.).
@@ -379,6 +380,17 @@ pub struct CrashTestDef {
     pub source: String,
     pub expected_exit: u32,
     pub expect_output: Option<String>,
+}
+
+/// Benchmark configuration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BenchmarksDef {
+    /// Directory containing benchmark `.rs` files.
+    pub benches_dir: Option<String>,
+    /// Which crate owns the benchmarks (provides deps).
+    pub benches_crate: Option<String>,
+    /// Linker script for benchmark binaries.
+    pub benches_linker_script: Option<String>,
 }
 
 // --- Conversion helpers ---

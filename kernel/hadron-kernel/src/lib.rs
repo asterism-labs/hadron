@@ -60,6 +60,8 @@ pub mod sched;
 pub mod syscall;
 #[cfg(target_os = "none")]
 pub mod time;
+#[cfg(all(target_os = "none", any(hadron_profile_sample, hadron_profile_ftrace)))]
+pub mod profiling;
 
 #[cfg(target_os = "none")]
 pub use boot::kernel_init;

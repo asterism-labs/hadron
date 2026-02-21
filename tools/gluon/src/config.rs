@@ -82,6 +82,17 @@ pub struct CrashTest {
     pub expect_output: Option<String>,
 }
 
+/// Benchmark configuration.
+#[derive(Debug, Default, Clone)]
+pub struct BenchmarksConfig {
+    /// Directory containing benchmark `.rs` files.
+    pub benches_dir: Option<String>,
+    /// Which crate owns the benchmarks (provides deps).
+    pub benches_crate: Option<String>,
+    /// Linker script for benchmark binaries.
+    pub benches_linker_script: Option<String>,
+}
+
 /// Resolved configuration after validation and dependency resolution.
 #[derive(Debug, Clone)]
 pub struct ResolvedConfig {
@@ -101,6 +112,7 @@ pub struct ResolvedConfig {
     #[allow(dead_code)] // used by image generation
     pub image: ImageConfig,
     pub tests: TestsConfig,
+    pub benchmarks: BenchmarksConfig,
 }
 
 /// A fully resolved build profile.
@@ -251,6 +263,12 @@ pub fn resolve_from_model(
         }).collect(),
     };
 
+    let benchmarks = BenchmarksConfig {
+        benches_dir: model.benchmarks.benches_dir.clone(),
+        benches_crate: model.benchmarks.benches_crate.clone(),
+        benches_linker_script: model.benchmarks.benches_linker_script.clone(),
+    };
+
     // Collect per-option bindings from the model definitions.
     let bindings: BTreeMap<String, Vec<crate::model::Binding>> = model.config_options.iter()
         .filter(|(_, opt)| !opt.bindings.is_empty())
@@ -280,6 +298,7 @@ pub fn resolve_from_model(
         bootloader,
         image,
         tests,
+        benchmarks,
     })
 }
 

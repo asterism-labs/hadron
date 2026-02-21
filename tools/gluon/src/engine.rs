@@ -87,6 +87,7 @@ pub fn evaluate_script(root: &Path) -> Result<BuildModel> {
     register_bootloader_api(&mut engine, model.clone());
     register_image_api(&mut engine, model.clone());
     register_tests_api(&mut engine, model.clone());
+    register_benchmarks_api(&mut engine, model.clone());
     register_dependency_api(&mut engine, model.clone());
     register_kconfig_api(&mut engine, model.clone(), &root_path);
     register_helpers(&mut engine, &root_path);
@@ -1080,6 +1081,40 @@ fn register_tests_api(engine: &mut Engine, model: SharedModel) {
 
 #[derive(Debug, Clone)]
 struct TestsBuilder {
+    model: SharedModel,
+}
+
+// ---------------------------------------------------------------------------
+// benchmarks()
+// ---------------------------------------------------------------------------
+
+fn register_benchmarks_api(engine: &mut Engine, model: SharedModel) {
+    let m = model.clone();
+    engine.register_fn("benchmarks", move || -> BenchmarksBuilder {
+        BenchmarksBuilder { model: m.clone() }
+    });
+
+    builder_method!(engine, "benches_dir", BenchmarksBuilder,
+        |builder, model, dir: &str| {
+            model.benchmarks.benches_dir = Some(dir.into());
+        }
+    );
+
+    builder_method!(engine, "benches_crate", BenchmarksBuilder,
+        |builder, model, name: &str| {
+            model.benchmarks.benches_crate = Some(name.into());
+        }
+    );
+
+    builder_method!(engine, "benches_linker_script", BenchmarksBuilder,
+        |builder, model, path: &str| {
+            model.benchmarks.benches_linker_script = Some(path.into());
+        }
+    );
+}
+
+#[derive(Debug, Clone)]
+struct BenchmarksBuilder {
     model: SharedModel,
 }
 
