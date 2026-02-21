@@ -226,11 +226,6 @@ userspace.add("lepton-coreutils", "userspace/coreutils")
 // Rules (custom artifact generation)
 // ===========================================================================
 
-rule("hbtf")
-    .inputs(["hadron-boot-limine"])
-    .output("build/backtrace.hbtf")
-    .handler("hbtf");
-
 rule("hkif")
     .inputs(["hadron-boot-limine"])
     .output("build/hkif.bin")
@@ -255,7 +250,6 @@ pipeline()
     .rule("hkif")
     .stage("userspace", ["userspace"])
     .barrier("userspace-ready")
-    .rule("hbtf")
     .rule("initrd");
 
 // ===========================================================================
@@ -285,8 +279,7 @@ bootloader("limine")
 
 image()
     .extra_files(#{
-        "boot/initrd.cpio": "build/initrd.cpio",
-        "boot/backtrace.hbtf": "build/backtrace.hbtf"
+        "boot/initrd.cpio": "build/initrd.cpio"
     });
 
 // ===========================================================================
