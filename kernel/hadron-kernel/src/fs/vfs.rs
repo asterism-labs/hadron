@@ -16,7 +16,7 @@ use super::path;
 use super::{FileSystem, FsError, Inode, InodeType, poll_immediate};
 
 /// Global VFS instance.
-static VFS: SpinLock<Option<Vfs>> = SpinLock::new(None);
+static VFS: SpinLock<Option<Vfs>> = SpinLock::named("VFS", None); // Lock level 3
 
 /// The virtual filesystem mount table.
 pub struct Vfs {

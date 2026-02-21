@@ -8,6 +8,8 @@
 mod heap_waitqueue;
 mod irq_spinlock;
 mod lazy;
+#[cfg(hadron_lockdep)]
+pub mod lockdep;
 mod mutex;
 mod rwlock;
 mod spinlock;

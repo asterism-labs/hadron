@@ -472,7 +472,7 @@ fn scroll_up_fb(
 // ---------------------------------------------------------------------------
 
 /// Wrapper around [`EarlySerial`] that implements `fmt::Write`.
-struct SerialWriter(EarlySerial);
+pub(crate) struct SerialWriter(pub(crate) EarlySerial);
 
 impl fmt::Write for SerialWriter {
     fn write_str(&mut self, s: &str) -> fmt::Result {
@@ -538,7 +538,7 @@ struct LoggerInner {
 /// to every registered sink. Construct with [`Logger::new`] (const) and store
 /// in a `static`.
 pub struct Logger {
-    inner: SpinLock<Option<LoggerInner>>,
+    inner: SpinLock<Option<LoggerInner>>, // Lock level 4
 }
 
 impl Logger {
@@ -546,7 +546,7 @@ impl Logger {
     /// [`init_with_serial`](Self::init_with_serial) is called.
     const fn new() -> Self {
         Self {
-            inner: SpinLock::new(None),
+            inner: SpinLock::named("LOGGER", None),
         }
     }
 

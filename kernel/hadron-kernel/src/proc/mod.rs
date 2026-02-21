@@ -167,7 +167,7 @@ pub fn foreground_pid() -> u32 {
 /// Global process table mapping PID → `Arc<Process>`.
 ///
 /// Processes are inserted on spawn and removed after exit + reaping.
-static PROCESS_TABLE: SpinLock<BTreeMap<u32, Arc<Process>>> = SpinLock::new(BTreeMap::new());
+static PROCESS_TABLE: SpinLock<BTreeMap<u32, Arc<Process>>> = SpinLock::named("PROCESS_TABLE", BTreeMap::new()); // Lock level 3
 
 /// Registers a process in the global table.
 pub fn register_process(process: &Arc<Process>) {

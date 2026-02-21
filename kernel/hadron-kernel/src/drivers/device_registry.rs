@@ -163,7 +163,7 @@ impl DeviceRegistry {
 }
 
 /// Global device registry instance.
-static DEVICE_REGISTRY: SpinLock<Option<DeviceRegistry>> = SpinLock::new(None);
+static DEVICE_REGISTRY: SpinLock<Option<DeviceRegistry>> = SpinLock::named("DEVICE_REGISTRY", None); // Lock level 3
 
 /// Initializes the global device registry.
 ///

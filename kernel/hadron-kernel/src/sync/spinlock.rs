@@ -6,12 +6,17 @@ use core::cell::UnsafeCell;
 use core::ops::{Deref, DerefMut};
 use core::sync::atomic::{AtomicBool, Ordering};
 
+#[cfg(hadron_lockdep)]
+use super::lockdep::LockClassId;
+
 /// A spin-based mutual exclusion lock.
 ///
 /// Uses test-and-test-and-set (TTAS) to reduce cache-line contention.
 /// Const-constructable so it can be placed in `static` items.
 pub struct SpinLock<T> {
     locked: AtomicBool,
+    #[cfg(hadron_lockdep)]
+    name: &'static str,
     data: UnsafeCell<T>,
 }
 
@@ -25,6 +30,18 @@ impl<T> SpinLock<T> {
     pub const fn new(value: T) -> Self {
         Self {
             locked: AtomicBool::new(false),
+            #[cfg(hadron_lockdep)]
+            name: "<unnamed>",
+            data: UnsafeCell::new(value),
+        }
+    }
+
+    /// Creates a new unlocked `SpinLock` with a name for lockdep diagnostics.
+    pub const fn named(name: &'static str, value: T) -> Self {
+        Self {
+            locked: AtomicBool::new(false),
+            #[cfg(hadron_lockdep)]
+            name,
             data: UnsafeCell::new(value),
         }
     }
@@ -33,6 +50,13 @@ impl<T> SpinLock<T> {
     ///
     /// Returns a [`SpinLockGuard`] that releases the lock when dropped.
     pub fn lock(&self) -> SpinLockGuard<'_, T> {
+        #[cfg(all(hadron_lock_debug, target_os = "none"))]
+        debug_assert!(
+            crate::arch::x86_64::instructions::interrupts::are_enabled(),
+            "SpinLock::lock() called with interrupts disabled — \
+             nesting inside an IrqSpinLock risks ABBA deadlock"
+        );
+
         loop {
             // Fast path: try to acquire directly.
             if self
@@ -40,7 +64,14 @@ impl<T> SpinLock<T> {
                 .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
                 .is_ok()
             {
-                return SpinLockGuard { lock: self };
+                #[cfg(hadron_lockdep)]
+                let class = self.lockdep_acquire();
+
+                return SpinLockGuard {
+                    lock: self,
+                    #[cfg(hadron_lockdep)]
+                    class,
+                };
             }
 
             // TTAS: spin on a read (shared cache line) until it looks free.
@@ -60,9 +91,41 @@ impl<T> SpinLock<T> {
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
             .is_ok()
         {
-            Some(SpinLockGuard { lock: self })
+            #[cfg(hadron_lockdep)]
+            let class = self.lockdep_acquire();
+
+            Some(SpinLockGuard {
+                lock: self,
+                #[cfg(hadron_lockdep)]
+                class,
+            })
         } else {
             None
+        }
+    }
+
+    /// Acquires the lock without the IRQ-context assertion.
+    ///
+    /// Only for locks known-safe to hold with interrupts disabled — specifically
+    /// the heap allocator, which may be entered from any context including
+    /// `IrqSpinLock` critical sections that allocate.
+    pub(crate) fn lock_unchecked(&self) -> SpinLockGuard<'_, T> {
+        loop {
+            if self
+                .locked
+                .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+                .is_ok()
+            {
+                return SpinLockGuard {
+                    lock: self,
+                    #[cfg(hadron_lockdep)]
+                    class: LockClassId::NONE,
+                };
+            }
+
+            while self.locked.load(Ordering::Relaxed) {
+                core::hint::spin_loop();
+            }
         }
     }
 
@@ -75,11 +138,22 @@ impl<T> SpinLock<T> {
     pub unsafe fn force_get(&self) -> &mut T {
         unsafe { &mut *self.data.get() }
     }
+
+    /// Registers this lock with lockdep and records the acquisition.
+    #[cfg(hadron_lockdep)]
+    fn lockdep_acquire(&self) -> LockClassId {
+        let class =
+            super::lockdep::get_or_register(self as *const _ as usize, self.name, false);
+        super::lockdep::lock_acquired(class);
+        class
+    }
 }
 
 /// RAII guard that releases the [`SpinLock`] when dropped.
 pub struct SpinLockGuard<'a, T> {
     lock: &'a SpinLock<T>,
+    #[cfg(hadron_lockdep)]
+    class: LockClassId,
 }
 
 impl<T> Deref for SpinLockGuard<'_, T> {
@@ -101,6 +175,11 @@ impl<T> DerefMut for SpinLockGuard<'_, T> {
 impl<T> Drop for SpinLockGuard<'_, T> {
     fn drop(&mut self) {
         self.lock.locked.store(false, Ordering::Release);
+
+        #[cfg(hadron_lockdep)]
+        if self.class != LockClassId::NONE {
+            super::lockdep::lock_released(self.class);
+        }
     }
 }
 
@@ -175,5 +254,12 @@ mod tests {
         }
         let guard = lock.lock();
         assert_eq!(&*guard, "hello world");
+    }
+
+    #[test]
+    fn named_constructor() {
+        let lock = SpinLock::named("test_lock", 42);
+        let guard = lock.lock();
+        assert_eq!(*guard, 42);
     }
 }

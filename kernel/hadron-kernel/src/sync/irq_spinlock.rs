@@ -8,9 +8,14 @@ use core::cell::UnsafeCell;
 use core::ops::{Deref, DerefMut};
 use core::sync::atomic::{AtomicBool, Ordering};
 
+#[cfg(hadron_lockdep)]
+use super::lockdep::LockClassId;
+
 /// A spin lock that disables interrupts while held.
 pub struct IrqSpinLock<T> {
     locked: AtomicBool,
+    #[cfg(hadron_lockdep)]
+    name: &'static str,
     data: UnsafeCell<T>,
 }
 
@@ -23,6 +28,18 @@ impl<T> IrqSpinLock<T> {
     pub const fn new(value: T) -> Self {
         Self {
             locked: AtomicBool::new(false),
+            #[cfg(hadron_lockdep)]
+            name: "<unnamed>",
+            data: UnsafeCell::new(value),
+        }
+    }
+
+    /// Creates a new unlocked `IrqSpinLock` with a name for lockdep diagnostics.
+    pub const fn named(name: &'static str, value: T) -> Self {
+        Self {
+            locked: AtomicBool::new(false),
+            #[cfg(hadron_lockdep)]
+            name,
             data: UnsafeCell::new(value),
         }
     }
@@ -39,9 +56,14 @@ impl<T> IrqSpinLock<T> {
                 .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
                 .is_ok()
             {
+                #[cfg(hadron_lockdep)]
+                let class = self.lockdep_acquire();
+
                 return IrqSpinLockGuard {
                     lock: self,
                     saved_flags,
+                    #[cfg(hadron_lockdep)]
+                    class,
                 };
             }
             while self.locked.load(Ordering::Relaxed) {
@@ -58,9 +80,14 @@ impl<T> IrqSpinLock<T> {
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
             .is_ok()
         {
+            #[cfg(hadron_lockdep)]
+            let class = self.lockdep_acquire();
+
             Some(IrqSpinLockGuard {
                 lock: self,
                 saved_flags,
+                #[cfg(hadron_lockdep)]
+                class,
             })
         } else {
             // Failed — restore flags.
@@ -68,12 +95,23 @@ impl<T> IrqSpinLock<T> {
             None
         }
     }
+
+    /// Registers this lock with lockdep and records the acquisition.
+    #[cfg(hadron_lockdep)]
+    fn lockdep_acquire(&self) -> LockClassId {
+        let class =
+            super::lockdep::get_or_register(self as *const _ as usize, self.name, true);
+        super::lockdep::lock_acquired(class);
+        class
+    }
 }
 
 /// RAII guard that restores interrupt state on drop.
 pub struct IrqSpinLockGuard<'a, T> {
     lock: &'a IrqSpinLock<T>,
     saved_flags: u64,
+    #[cfg(hadron_lockdep)]
+    class: LockClassId,
 }
 
 impl<T> Deref for IrqSpinLockGuard<'_, T> {
@@ -94,6 +132,12 @@ impl<T> DerefMut for IrqSpinLockGuard<'_, T> {
 impl<T> Drop for IrqSpinLockGuard<'_, T> {
     fn drop(&mut self) {
         self.lock.locked.store(false, Ordering::Release);
+
+        #[cfg(hadron_lockdep)]
+        if self.class != LockClassId::NONE {
+            super::lockdep::lock_released(self.class);
+        }
+
         restore_flags(self.saved_flags);
     }
 }

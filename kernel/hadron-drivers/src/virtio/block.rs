@@ -253,7 +253,7 @@ impl BlockDevice for VirtioBlkDisk {
 }
 
 /// Counter for assigning unique device names to discovered disks.
-static DISK_INDEX: SpinLock<usize> = SpinLock::new(0);
+static DISK_INDEX: SpinLock<usize> = SpinLock::named("VIRTIO_DISK_INDEX", 0);
 
 // ---------------------------------------------------------------------------
 // PCI registration

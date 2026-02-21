@@ -374,3 +374,35 @@ tables.
    globals.** `LazyLock` expresses the "initialize exactly once" pattern
    more clearly and avoids the runtime cost of checking `Option::is_some`
    on every access after initialization.
+
+## Lock Ordering
+
+All kernel locks have an assigned ordering level. Locks must be acquired
+in increasing level order to prevent deadlock. The `lock_debug` Kconfig
+option enables a runtime assertion that catches the most common
+violation (acquiring a `SpinLock` inside an `IrqSpinLock` critical
+section). The `lockdep` option enables full dependency-graph tracking
+with cycle detection.
+
+| Level | Lock | Type | Location |
+|-------|------|------|----------|
+| 0 | `HEAP.inner` | SpinLock | `mm/heap.rs` |
+| 1 | `PMM` | SpinLock | `mm/pmm.rs` |
+| 2 | `VMM` | SpinLock | `mm/vmm.rs` |
+| 3 | `HKIF_STATE`, `HPET_DRIVER`, `VFS`, `DEVICE_REGISTRY`, `PROCESS_TABLE`, `CURSOR` | SpinLock | various |
+| 4 | `LOGGER.inner` | SpinLock | `log.rs` |
+| 5 | `DISK_INDEX` (×2) | SpinLock | `hadron-drivers` |
+| IRQ-0 | `SCANCODE_BUF`, `STATE` | IrqSpinLock | `fs/console_input.rs` |
+| IRQ-1 | `PLATFORM` | IrqSpinLock | `arch/x86_64/acpi.rs` |
+| IRQ-2 | `SLEEP_QUEUE` | IrqSpinLock | `sched/timer.rs` |
+| IRQ-3 | `Executor.tasks`, `Executor.ready_queues` | IrqSpinLock | `sched/executor.rs` |
+
+### Rules
+
+1. **IrqSpinLock before SpinLock**: Never acquire a SpinLock inside an
+   IrqSpinLock critical section (`lock_debug` asserts this).
+2. **HEAP is level 0**: Any lock holder may allocate. Heap must never
+   acquire other locks.
+3. **LOGGER is high-level**: All lower-level locks may log. Never hold
+   LOGGER and acquire another lock.
+4. **`try_lock()` is always safe**: Cannot deadlock regardless of ordering.

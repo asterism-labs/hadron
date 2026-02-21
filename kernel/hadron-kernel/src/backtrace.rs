@@ -66,7 +66,7 @@ struct HkifSections {
 // ---------------------------------------------------------------------------
 
 /// The raw HKIF data slice and parsed section info, set once at boot.
-static HKIF_STATE: SpinLock<Option<HkifState>> = SpinLock::new(None);
+static HKIF_STATE: SpinLock<Option<HkifState>> = SpinLock::named("HKIF_STATE", None); // Lock level 3
 
 /// Kernel virtual base address for offset-to-address conversion.
 static KERNEL_VIRT_BASE: AtomicU64 = AtomicU64::new(0);
@@ -111,7 +111,9 @@ pub fn init_from_embedded(kernel_virt_base: u64) {
         let line_count = state.sections.line_count;
 
         KERNEL_VIRT_BASE.store(kernel_virt_base, Ordering::Relaxed);
-        *HKIF_STATE.lock() = Some(state);
+        // lock_unchecked: runs during single-threaded early boot (step 2b)
+        // before interrupts are enabled (step 11). No contention possible.
+        *HKIF_STATE.lock_unchecked() = Some(state);
 
         crate::kinfo!(
             "Backtrace: loaded HKIF ({} symbols, {} lines, {} bytes)",

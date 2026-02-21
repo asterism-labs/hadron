@@ -52,3 +52,17 @@ config apic
     binding cfg
 
 endmenu
+
+menu "Debugging"
+
+config lock_debug
+    bool "IRQ-context spinlock assertion"
+    default y
+    binding cfg
+
+config lockdep
+    bool "Lock dependency tracking"
+    default n
+    binding cfg
+
+endmenu

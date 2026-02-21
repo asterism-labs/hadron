@@ -46,7 +46,8 @@ struct AcpiPlatformState {
 }
 
 /// APIC platform state: `None` before init, `Some` after.
-static PLATFORM: IrqSpinLock<Option<AcpiPlatformState>> = IrqSpinLock::new(None);
+// Lock level IRQ-1
+static PLATFORM: IrqSpinLock<Option<AcpiPlatformState>> = IrqSpinLock::named("PLATFORM", None);
 
 /// Timer tick counter, incremented by the LAPIC timer handler.
 /// Kept separate from `PLATFORM` because it is on the hot path (every ISR).

@@ -46,7 +46,7 @@ unsafe impl Send for LinkedListAllocatorInner {}
 /// Uses first-fit allocation with address-sorted free list and immediate
 /// coalescing on dealloc.
 pub struct LinkedListAllocator {
-    inner: SpinLock<LinkedListAllocatorInner>,
+    inner: SpinLock<LinkedListAllocatorInner>, // Lock level 0
 }
 
 // SAFETY: Protected by SpinLock.
@@ -57,7 +57,7 @@ impl LinkedListAllocator {
     /// Creates a new, uninitialized allocator. Must call `init()` before use.
     pub const fn new() -> Self {
         Self {
-            inner: SpinLock::new(LinkedListAllocatorInner {
+            inner: SpinLock::named("HEAP", LinkedListAllocatorInner {
                 head: ptr::null_mut(),
                 heap_start: 0,
                 heap_end: 0,
@@ -75,7 +75,7 @@ impl LinkedListAllocator {
     /// - `heap_size` must be the exact size of the mapped region.
     /// - Must be called exactly once.
     pub unsafe fn init(&self, heap_start: usize, heap_size: usize) {
-        let mut inner = self.inner.lock();
+        let mut inner = self.inner.lock_unchecked();
         debug_assert!(inner.head.is_null(), "heap already initialized");
         debug_assert!(heap_size >= MIN_BLOCK_SIZE, "heap too small");
 
@@ -93,7 +93,7 @@ impl LinkedListAllocator {
 
     /// Registers a callback that the allocator uses to request more heap pages.
     pub fn register_grow_fn(&self, f: fn(usize) -> Option<(*mut u8, usize)>) {
-        let mut inner = self.inner.lock();
+        let mut inner = self.inner.lock_unchecked();
         inner.grow_fn = Some(f);
     }
 
@@ -252,7 +252,7 @@ unsafe impl GlobalAlloc for LinkedListAllocator {
         let size = layout.size().max(MIN_BLOCK_SIZE);
         let align = layout.align().max(BLOCK_ALIGN);
 
-        let mut inner = self.inner.lock();
+        let mut inner = self.inner.lock_unchecked();
 
         // Try allocation.
         if let Some((addr, alloc_size)) = Self::find_first_fit(&mut inner, size, align) {
@@ -267,7 +267,7 @@ unsafe impl GlobalAlloc for LinkedListAllocator {
             drop(inner); // Release lock before calling grow_fn (it may need the PMM lock).
 
             if let Some((ptr, actual_size)) = grow(min_grow) {
-                let mut inner = self.inner.lock();
+                let mut inner = self.inner.lock_unchecked();
                 unsafe {
                     Self::add_free_region(&mut inner, ptr as usize, actual_size);
                 }
@@ -287,7 +287,7 @@ unsafe impl GlobalAlloc for LinkedListAllocator {
         let size = layout.size().max(MIN_BLOCK_SIZE);
         let addr = ptr as usize;
 
-        let mut inner = self.inner.lock();
+        let mut inner = self.inner.lock_unchecked();
         inner.allocated_bytes -= size;
 
         unsafe {

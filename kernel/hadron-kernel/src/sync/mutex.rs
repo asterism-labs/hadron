@@ -13,6 +13,9 @@ use core::task::{Context, Poll};
 
 use crate::sync::WaitQueue;
 
+#[cfg(hadron_lockdep)]
+use super::lockdep::LockClassId;
+
 /// An async-aware mutual exclusion lock.
 ///
 /// When contended, waiting tasks yield to the executor and are woken via
@@ -32,6 +35,8 @@ use crate::sync::WaitQueue;
 pub struct Mutex<T> {
     locked: AtomicBool,
     waiters: WaitQueue,
+    #[cfg(hadron_lockdep)]
+    name: &'static str,
     data: UnsafeCell<T>,
 }
 
@@ -46,6 +51,19 @@ impl<T> Mutex<T> {
         Self {
             locked: AtomicBool::new(false),
             waiters: WaitQueue::new(),
+            #[cfg(hadron_lockdep)]
+            name: "<unnamed>",
+            data: UnsafeCell::new(value),
+        }
+    }
+
+    /// Creates a new unlocked `Mutex` with a name for lockdep diagnostics.
+    pub const fn named(name: &'static str, value: T) -> Self {
+        Self {
+            locked: AtomicBool::new(false),
+            waiters: WaitQueue::new(),
+            #[cfg(hadron_lockdep)]
+            name,
             data: UnsafeCell::new(value),
         }
     }
@@ -69,7 +87,14 @@ impl<T> Mutex<T> {
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
             .is_ok()
         {
-            Some(MutexGuard { mutex: self })
+            #[cfg(hadron_lockdep)]
+            let class = self.lockdep_acquire();
+
+            Some(MutexGuard {
+                mutex: self,
+                #[cfg(hadron_lockdep)]
+                class,
+            })
         } else {
             None
         }
@@ -86,6 +111,15 @@ impl<T> Mutex<T> {
             }
             core::hint::spin_loop();
         }
+    }
+
+    /// Registers this lock with lockdep and records the acquisition.
+    #[cfg(hadron_lockdep)]
+    fn lockdep_acquire(&self) -> LockClassId {
+        let class =
+            super::lockdep::get_or_register(self as *const _ as usize, self.name, false);
+        super::lockdep::lock_acquired(class);
+        class
     }
 }
 
@@ -105,7 +139,14 @@ impl<'a, T> Future for MutexLockFuture<'a, T> {
             .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
             .is_ok()
         {
-            return Poll::Ready(MutexGuard { mutex: self.mutex });
+            #[cfg(hadron_lockdep)]
+            let class = self.mutex.lockdep_acquire();
+
+            return Poll::Ready(MutexGuard {
+                mutex: self.mutex,
+                #[cfg(hadron_lockdep)]
+                class,
+            });
         }
 
         // Register waker BEFORE retry to avoid lost wakeup.
@@ -119,7 +160,14 @@ impl<'a, T> Future for MutexLockFuture<'a, T> {
             .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
             .is_ok()
         {
-            return Poll::Ready(MutexGuard { mutex: self.mutex });
+            #[cfg(hadron_lockdep)]
+            let class = self.mutex.lockdep_acquire();
+
+            return Poll::Ready(MutexGuard {
+                mutex: self.mutex,
+                #[cfg(hadron_lockdep)]
+                class,
+            });
         }
 
         // If WaitQueue was full, self-wake to degrade to spin-poll.
@@ -134,6 +182,8 @@ impl<'a, T> Future for MutexLockFuture<'a, T> {
 /// RAII guard that releases the [`Mutex`] when dropped.
 pub struct MutexGuard<'a, T> {
     mutex: &'a Mutex<T>,
+    #[cfg(hadron_lockdep)]
+    class: LockClassId,
 }
 
 impl<T> Deref for MutexGuard<'_, T> {
@@ -155,6 +205,12 @@ impl<T> DerefMut for MutexGuard<'_, T> {
 impl<T> Drop for MutexGuard<'_, T> {
     fn drop(&mut self) {
         self.mutex.locked.store(false, Ordering::Release);
+
+        #[cfg(hadron_lockdep)]
+        if self.class != LockClassId::NONE {
+            super::lockdep::lock_released(self.class);
+        }
+
         self.mutex.waiters.wake_one();
     }
 }

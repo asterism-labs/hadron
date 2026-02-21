@@ -26,7 +26,7 @@ pub(crate) struct CursorState {
     pub(crate) row: u32,
 }
 
-pub(crate) static CURSOR: SpinLock<CursorState> = SpinLock::new(CursorState { col: 0, row: 0 });
+pub(crate) static CURSOR: SpinLock<CursorState> = SpinLock::named("CURSOR", CursorState { col: 0, row: 0 }); // Lock level 3
 
 /// A simple text console backed by a linear framebuffer.
 ///

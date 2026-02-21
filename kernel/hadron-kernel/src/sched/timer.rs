@@ -35,8 +35,9 @@ impl Ord for SleepEntry {
     }
 }
 
+// Lock level IRQ-2
 static SLEEP_QUEUE: IrqSpinLock<BinaryHeap<Reverse<SleepEntry>>> =
-    IrqSpinLock::new(BinaryHeap::new());
+    IrqSpinLock::named("SLEEP_QUEUE", BinaryHeap::new());
 
 /// Registers a waker to be called when `deadline` tick is reached.
 pub fn register_sleep_waker(deadline: u64, waker: Waker) {

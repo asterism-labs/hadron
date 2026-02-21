@@ -386,7 +386,7 @@ type KernelMapper = crate::arch::aarch64::paging::AArch64PageMapper;
 pub type KernelVmm = Vmm<KernelMapper>;
 
 /// Global virtual memory manager.
-static VMM: SpinLock<Option<KernelVmm>> = SpinLock::new(None);
+static VMM: SpinLock<Option<KernelVmm>> = SpinLock::named("VMM", None); // Lock level 2
 
 /// Initializes the VMM from boot info and the PMM.
 ///

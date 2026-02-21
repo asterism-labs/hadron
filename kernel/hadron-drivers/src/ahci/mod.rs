@@ -124,7 +124,7 @@ impl BlockDevice for AhciDisk {
 }
 
 /// Counter for assigning unique device names to discovered AHCI disks.
-static DISK_INDEX: SpinLock<usize> = SpinLock::new(0);
+static DISK_INDEX: SpinLock<usize> = SpinLock::named("AHCI_DISK_INDEX", 0);
 
 // ---------------------------------------------------------------------------
 // PCI registration

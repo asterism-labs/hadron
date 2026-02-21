@@ -154,8 +154,8 @@ impl Executor {
     /// Creates a new executor with no tasks.
     pub fn new() -> Self {
         Self {
-            tasks: IrqSpinLock::new(BTreeMap::new()),
-            ready_queues: IrqSpinLock::new(ReadyQueues::new()),
+            tasks: IrqSpinLock::named("Executor.tasks", BTreeMap::new()),         // Lock level IRQ-3
+            ready_queues: IrqSpinLock::named("Executor.ready_queues", ReadyQueues::new()), // Lock level IRQ-3
             next_id: AtomicU64::new(0),
         }
     }

@@ -8,6 +8,9 @@ use core::cell::UnsafeCell;
 use core::ops::{Deref, DerefMut};
 use core::sync::atomic::{AtomicU32, Ordering};
 
+#[cfg(hadron_lockdep)]
+use super::lockdep::LockClassId;
+
 /// Sentinel value indicating the lock is held exclusively for writing.
 const WRITE_LOCKED: u32 = u32::MAX;
 
@@ -16,6 +19,8 @@ const WRITE_LOCKED: u32 = u32::MAX;
 /// Const-constructable and suitable for `static` items.
 pub struct RwLock<T> {
     state: AtomicU32,
+    #[cfg(hadron_lockdep)]
+    name: &'static str,
     data: UnsafeCell<T>,
 }
 
@@ -30,6 +35,18 @@ impl<T> RwLock<T> {
     pub const fn new(value: T) -> Self {
         Self {
             state: AtomicU32::new(0),
+            #[cfg(hadron_lockdep)]
+            name: "<unnamed>",
+            data: UnsafeCell::new(value),
+        }
+    }
+
+    /// Creates a new unlocked `RwLock` with a name for lockdep diagnostics.
+    pub const fn named(name: &'static str, value: T) -> Self {
+        Self {
+            state: AtomicU32::new(0),
+            #[cfg(hadron_lockdep)]
+            name,
             data: UnsafeCell::new(value),
         }
     }
@@ -44,7 +61,14 @@ impl<T> RwLock<T> {
                     .compare_exchange_weak(s, s + 1, Ordering::Acquire, Ordering::Relaxed)
                     .is_ok()
                 {
-                    return RwLockReadGuard { lock: self };
+                    #[cfg(hadron_lockdep)]
+                    let class = self.lockdep_acquire();
+
+                    return RwLockReadGuard {
+                        lock: self,
+                        #[cfg(hadron_lockdep)]
+                        class,
+                    };
                 }
             }
             core::hint::spin_loop();
@@ -60,7 +84,14 @@ impl<T> RwLock<T> {
                 .compare_exchange_weak(0, WRITE_LOCKED, Ordering::Acquire, Ordering::Relaxed)
                 .is_ok()
             {
-                return RwLockWriteGuard { lock: self };
+                #[cfg(hadron_lockdep)]
+                let class = self.lockdep_acquire();
+
+                return RwLockWriteGuard {
+                    lock: self,
+                    #[cfg(hadron_lockdep)]
+                    class,
+                };
             }
             core::hint::spin_loop();
         }
@@ -75,7 +106,14 @@ impl<T> RwLock<T> {
                 .compare_exchange(s, s + 1, Ordering::Acquire, Ordering::Relaxed)
                 .is_ok()
             {
-                return Some(RwLockReadGuard { lock: self });
+                #[cfg(hadron_lockdep)]
+                let class = self.lockdep_acquire();
+
+                return Some(RwLockReadGuard {
+                    lock: self,
+                    #[cfg(hadron_lockdep)]
+                    class,
+                });
             }
         }
         None
@@ -88,16 +126,34 @@ impl<T> RwLock<T> {
             .compare_exchange(0, WRITE_LOCKED, Ordering::Acquire, Ordering::Relaxed)
             .is_ok()
         {
-            Some(RwLockWriteGuard { lock: self })
+            #[cfg(hadron_lockdep)]
+            let class = self.lockdep_acquire();
+
+            Some(RwLockWriteGuard {
+                lock: self,
+                #[cfg(hadron_lockdep)]
+                class,
+            })
         } else {
             None
         }
+    }
+
+    /// Registers this lock with lockdep and records the acquisition.
+    #[cfg(hadron_lockdep)]
+    fn lockdep_acquire(&self) -> LockClassId {
+        let class =
+            super::lockdep::get_or_register(self as *const _ as usize, self.name, false);
+        super::lockdep::lock_acquired(class);
+        class
     }
 }
 
 /// RAII guard for a shared read lock on an [`RwLock`].
 pub struct RwLockReadGuard<'a, T> {
     lock: &'a RwLock<T>,
+    #[cfg(hadron_lockdep)]
+    class: LockClassId,
 }
 
 impl<T> Deref for RwLockReadGuard<'_, T> {
@@ -112,12 +168,19 @@ impl<T> Deref for RwLockReadGuard<'_, T> {
 impl<T> Drop for RwLockReadGuard<'_, T> {
     fn drop(&mut self) {
         self.lock.state.fetch_sub(1, Ordering::Release);
+
+        #[cfg(hadron_lockdep)]
+        if self.class != LockClassId::NONE {
+            super::lockdep::lock_released(self.class);
+        }
     }
 }
 
 /// RAII guard for an exclusive write lock on an [`RwLock`].
 pub struct RwLockWriteGuard<'a, T> {
     lock: &'a RwLock<T>,
+    #[cfg(hadron_lockdep)]
+    class: LockClassId,
 }
 
 impl<T> Deref for RwLockWriteGuard<'_, T> {
@@ -139,6 +202,11 @@ impl<T> DerefMut for RwLockWriteGuard<'_, T> {
 impl<T> Drop for RwLockWriteGuard<'_, T> {
     fn drop(&mut self) {
         self.lock.state.store(0, Ordering::Release);
+
+        #[cfg(hadron_lockdep)]
+        if self.class != LockClassId::NONE {
+            super::lockdep::lock_released(self.class);
+        }
     }
 }
 
