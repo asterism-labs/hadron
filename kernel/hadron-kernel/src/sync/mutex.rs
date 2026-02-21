@@ -82,6 +82,17 @@ impl<T> Mutex<T> {
     /// Returns `Some(guard)` if the lock was acquired, `None` if it was
     /// already held.
     pub fn try_lock(&self) -> Option<MutexGuard<'_, T>> {
+        #[cfg(hadron_lock_debug)]
+        {
+            let depth = super::irq_spinlock::irq_lock_depth();
+            if depth != 0 {
+                panic!(
+                    "Mutex::try_lock() called while holding {} IrqSpinLock(s)",
+                    depth
+                );
+            }
+        }
+
         if self
             .locked
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
@@ -105,6 +116,17 @@ impl<T> Mutex<T> {
     /// Intended for use during initialization or in contexts where async is
     /// not available. Prefer [`lock`](Mutex::lock) in async contexts.
     pub fn lock_sync(&self) -> MutexGuard<'_, T> {
+        #[cfg(hadron_lock_debug)]
+        {
+            let depth = super::irq_spinlock::irq_lock_depth();
+            if depth != 0 {
+                panic!(
+                    "Mutex::lock_sync() called while holding {} IrqSpinLock(s)",
+                    depth
+                );
+            }
+        }
+
         loop {
             if let Some(guard) = self.try_lock() {
                 return guard;
@@ -116,8 +138,11 @@ impl<T> Mutex<T> {
     /// Registers this lock with lockdep and records the acquisition.
     #[cfg(hadron_lockdep)]
     fn lockdep_acquire(&self) -> LockClassId {
-        let class =
-            super::lockdep::get_or_register(self as *const _ as usize, self.name, false);
+        let class = super::lockdep::get_or_register(
+            self as *const _ as usize,
+            self.name,
+            super::lockdep::LockKind::Mutex,
+        );
         super::lockdep::lock_acquired(class);
         class
     }
@@ -132,6 +157,17 @@ impl<'a, T> Future for MutexLockFuture<'a, T> {
     type Output = MutexGuard<'a, T>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        #[cfg(hadron_lock_debug)]
+        {
+            let depth = super::irq_spinlock::irq_lock_depth();
+            if depth != 0 {
+                panic!(
+                    "Mutex::lock() polled while holding {} IrqSpinLock(s)",
+                    depth
+                );
+            }
+        }
+
         // Fast path: try to acquire directly.
         if self
             .mutex

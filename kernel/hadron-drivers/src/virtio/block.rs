@@ -353,7 +353,7 @@ impl VirtioBlkDriver {
 
         let disk = VirtioBlkDisk {
             device,
-            queue: SpinLock::new(vq),
+            queue: SpinLock::named("VirtioBlk.queue", vq),
             irq,
             dma: *dma,
             capacity,

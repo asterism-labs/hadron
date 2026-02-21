@@ -142,8 +142,11 @@ impl<T> RwLock<T> {
     /// Registers this lock with lockdep and records the acquisition.
     #[cfg(hadron_lockdep)]
     fn lockdep_acquire(&self) -> LockClassId {
-        let class =
-            super::lockdep::get_or_register(self as *const _ as usize, self.name, false);
+        let class = super::lockdep::get_or_register(
+            self as *const _ as usize,
+            self.name,
+            super::lockdep::LockKind::RwLock,
+        );
         super::lockdep::lock_acquired(class);
         class
     }

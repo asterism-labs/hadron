@@ -37,8 +37,8 @@ impl RamFs {
         Self {
             root: Arc::new(RamInode {
                 itype: InodeType::Directory,
-                data: SpinLock::new(Vec::new()),
-                children: SpinLock::new(BTreeMap::new()),
+                data: SpinLock::named("RamInode.data", Vec::new()),
+                children: SpinLock::named("RamInode.children", BTreeMap::new()),
                 permissions: Permissions::all(),
             }),
         }
@@ -171,8 +171,8 @@ impl Inode for RamInode {
             }
             let new_inode = Arc::new(RamInode {
                 itype,
-                data: SpinLock::new(Vec::new()),
-                children: SpinLock::new(BTreeMap::new()),
+                data: SpinLock::named("RamInode.data", Vec::new()),
+                children: SpinLock::named("RamInode.children", BTreeMap::new()),
                 permissions: perms,
             });
             children.insert(name.to_string(), new_inode.clone());
@@ -217,8 +217,8 @@ impl Inode for RamInode {
         }
         let new_inode = Arc::new(RamInode {
             itype: InodeType::Symlink,
-            data: SpinLock::new(target.as_bytes().to_vec()),
-            children: SpinLock::new(BTreeMap::new()),
+            data: SpinLock::named("RamInode.data", target.as_bytes().to_vec()),
+            children: SpinLock::named("RamInode.children", BTreeMap::new()),
             permissions: perms,
         });
         children.insert(name.to_string(), new_inode.clone());

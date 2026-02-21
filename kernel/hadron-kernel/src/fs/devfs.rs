@@ -265,14 +265,18 @@ pub struct DevConsole;
 
 /// Future for reading from `/dev/console`.
 ///
-/// Uses check-register-recheck to avoid the race between
-/// "no data available" and "waker registered":
-/// 1. Poll keyboard + check buffer
-/// 2. Register waker with IRQ wait queue
-/// 3. Re-check buffer (catches IRQs between steps 1 and 2)
-/// 4. Return Pending — next IRQ wake will re-poll this future
+/// Uses a two-phase poll strategy to avoid registering noop wakers:
+/// - **First poll**: check for data only — no waker subscription. Self-wake
+///   ensures the `.await` path re-polls immediately.
+/// - **Subsequent polls**: subscribe the real waker, then check-subscribe-recheck
+///   to avoid the race between "no data available" and "waker registered".
+///
+/// This prevents `try_poll_immediate` (which uses a noop waker) from polluting
+/// the `INPUT_READY` wait queue with a waker that silently drops events.
 struct ConsoleReadFuture<'a> {
     buf: &'a mut [u8],
+    /// Whether we have already subscribed a waker with the input wait queue.
+    subscribed: bool,
 }
 
 impl Future for ConsoleReadFuture<'_> {
@@ -281,25 +285,33 @@ impl Future for ConsoleReadFuture<'_> {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
 
-        // 1. Process any pending scancodes and try to read.
+        // Always poll hardware and check for data first.
         super::console_input::poll_keyboard_hardware();
         let n = super::console_input::try_read(this.buf);
         if n > 0 {
             return Poll::Ready(Ok(n));
         }
 
-        // 2. Register waker for keyboard IRQ notification.
+        if !this.subscribed {
+            // First poll: skip subscribe to avoid registering a noop waker
+            // from try_poll_immediate. Self-wake ensures the .await path
+            // re-polls us immediately so we can subscribe with the real waker.
+            this.subscribed = true;
+            cx.waker().wake_by_ref();
+            return Poll::Pending;
+        }
+
+        // Subsequent polls: register waker for IRQ notification.
         super::console_input::subscribe(cx.waker());
 
-        // 3. Re-check after registration (catches IRQs between steps 1 and 2).
+        // Re-check after registration (catches IRQs between check and subscribe).
         super::console_input::poll_keyboard_hardware();
         let n = super::console_input::try_read(this.buf);
         if n > 0 {
             return Poll::Ready(Ok(n));
         }
 
-        // 4. Check if the foreground process has a pending signal.
-        //    If so, return Interrupted to unblock the TRAP_IO handler.
+        // Check for pending signals.
         let fg_pid = crate::proc::foreground_pid();
         if fg_pid != 0 {
             if let Some(proc) = crate::proc::lookup_process(fg_pid) {
@@ -309,7 +321,6 @@ impl Future for ConsoleReadFuture<'_> {
             }
         }
 
-        // 5. No data — yield to executor until keyboard IRQ fires.
         Poll::Pending
     }
 }
@@ -332,7 +343,7 @@ impl Inode for DevConsole {
         _offset: usize,
         buf: &'a mut [u8],
     ) -> Pin<Box<dyn Future<Output = Result<usize, FsError>> + Send + 'a>> {
-        Box::pin(ConsoleReadFuture { buf })
+        Box::pin(ConsoleReadFuture { buf, subscribed: false })
     }
 
     fn write<'a>(

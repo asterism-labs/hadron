@@ -24,6 +24,34 @@ const MAX_HELD: usize = 16;
 const MAX_EDGES: usize = 256;
 
 // ---------------------------------------------------------------------------
+// Lock kind
+// ---------------------------------------------------------------------------
+
+/// The kind of lock (for diagnostic messages).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum LockKind {
+    /// A non-IRQ spinning lock.
+    SpinLock,
+    /// An interrupt-safe spinning lock.
+    IrqSpinLock,
+    /// An async-aware mutual exclusion lock.
+    Mutex,
+    /// A spinning reader-writer lock.
+    RwLock,
+}
+
+impl LockKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            LockKind::SpinLock => "SpinLock",
+            LockKind::IrqSpinLock => "IrqSpinLock",
+            LockKind::Mutex => "Mutex",
+            LockKind::RwLock => "RwLock",
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Lock class identification
 // ---------------------------------------------------------------------------
 
@@ -46,8 +74,8 @@ struct LockClassEntry {
     addr: AtomicUsize,
     /// Human-readable name (e.g. `"PMM"`).
     name: &'static str,
-    /// `true` for `IrqSpinLock` classes.
-    is_irq: bool,
+    /// The kind of lock this class represents.
+    kind: LockKind,
 }
 
 impl LockClassEntry {
@@ -55,7 +83,7 @@ impl LockClassEntry {
         Self {
             addr: AtomicUsize::new(0),
             name: "",
-            is_irq: false,
+            kind: LockKind::SpinLock,
         }
     }
 }
@@ -198,7 +226,7 @@ fn should_skip() -> bool {
 // ---------------------------------------------------------------------------
 
 /// Registers a lock class by address. Returns the class ID. Idempotent.
-pub fn get_or_register(addr: usize, name: &'static str, is_irq: bool) -> LockClassId {
+pub fn get_or_register(addr: usize, name: &'static str, kind: LockKind) -> LockClassId {
     // Fast path: look for existing entry with same address.
     let count = CLASS_COUNT.load(Ordering::Acquire) as usize;
     for i in 0..count {
@@ -225,7 +253,7 @@ pub fn get_or_register(addr: usize, name: &'static str, is_irq: bool) -> LockCla
         return LockClassId::NONE;
     }
 
-    // Write the entry. The `name` and `is_irq` fields are only written once
+    // Write the entry. The `name` and `kind` fields are only written once
     // per slot, so we cast away the shared reference to write them.
     CLASSES[count].addr.store(addr, Ordering::Relaxed);
     // SAFETY: This slot is being initialized for the first time, and we hold
@@ -234,7 +262,7 @@ pub fn get_or_register(addr: usize, name: &'static str, is_irq: bool) -> LockCla
     unsafe {
         let entry = &CLASSES[count] as *const LockClassEntry as *mut LockClassEntry;
         (*entry).name = name;
-        (*entry).is_irq = is_irq;
+        (*entry).kind = kind;
     }
 
     // Publish the new class.
@@ -390,16 +418,13 @@ fn report_cycle(held: LockClassId, acquiring: LockClassId) {
         let mut w = SerialWriter(EarlySerial::new(COM1));
 
         let held_name = class_name(held);
-        let held_irq = class_is_irq(held);
+        let held_kind = class_kind(held);
         let acq_name = class_name(acquiring);
-        let acq_irq = class_is_irq(acquiring);
-
-        let held_type = if held_irq { "IrqSpinLock" } else { "SpinLock" };
-        let acq_type = if acq_irq { "IrqSpinLock" } else { "SpinLock" };
+        let acq_kind = class_kind(acquiring);
 
         let _ = write!(w, "\n!!! LOCKDEP: potential deadlock detected !!!\n");
-        let _ = write!(w, "  Holding: \"{}\" ({})\n", held_name, held_type);
-        let _ = write!(w, "  Acquiring: \"{}\" ({})\n", acq_name, acq_type);
+        let _ = write!(w, "  Holding: \"{}\" ({})\n", held_name, held_kind.as_str());
+        let _ = write!(w, "  Acquiring: \"{}\" ({})\n", acq_name, acq_kind.as_str());
 
         // Print the cycle path.
         let _ = write!(w, "  Cycle: \"{}\"", acq_name);
@@ -476,12 +501,12 @@ fn class_name(id: LockClassId) -> &'static str {
     }
 }
 
-/// Returns whether a lock class is an IrqSpinLock.
-fn class_is_irq(id: LockClassId) -> bool {
+/// Returns the kind of a lock class.
+fn class_kind(id: LockClassId) -> LockKind {
     let idx = id.index();
     if idx < CLASS_COUNT.load(Ordering::Acquire) as usize {
-        CLASSES[idx].is_irq
+        CLASSES[idx].kind
     } else {
-        false
+        LockKind::SpinLock
     }
 }

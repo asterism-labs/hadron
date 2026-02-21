@@ -8,8 +8,55 @@ use core::cell::UnsafeCell;
 use core::ops::{Deref, DerefMut};
 use core::sync::atomic::{AtomicBool, Ordering};
 
+#[cfg(hadron_lock_debug)]
+use core::sync::atomic::AtomicU32;
+
 #[cfg(hadron_lockdep)]
 use super::lockdep::LockClassId;
+
+// ---------------------------------------------------------------------------
+// IrqSpinLock nesting depth (per-CPU)
+// ---------------------------------------------------------------------------
+
+/// Per-CPU counter of currently held `IrqSpinLock`s. Used by `SpinLock` and
+/// `Mutex` to assert they are not acquired inside an `IrqSpinLock` critical
+/// section, which could cause deadlocks with interrupt handlers.
+#[cfg(all(hadron_lock_debug, target_os = "none"))]
+static IRQ_LOCK_DEPTH: crate::percpu::CpuLocal<AtomicU32> = crate::percpu::CpuLocal::new(
+    [const { AtomicU32::new(0) }; crate::percpu::MAX_CPUS],
+);
+
+/// Returns the number of `IrqSpinLock`s held by the current CPU.
+#[cfg(hadron_lock_debug)]
+pub(super) fn irq_lock_depth() -> u32 {
+    #[cfg(target_os = "none")]
+    {
+        if !crate::percpu::current_cpu().is_initialized() {
+            return 0;
+        }
+        IRQ_LOCK_DEPTH.get().load(Ordering::Relaxed)
+    }
+    #[cfg(not(target_os = "none"))]
+    {
+        0
+    }
+}
+
+#[cfg(all(hadron_lock_debug, target_os = "none"))]
+fn increment_irq_depth() {
+    if !crate::percpu::current_cpu().is_initialized() {
+        return;
+    }
+    IRQ_LOCK_DEPTH.get().fetch_add(1, Ordering::Relaxed);
+}
+
+#[cfg(all(hadron_lock_debug, target_os = "none"))]
+fn decrement_irq_depth() {
+    if !crate::percpu::current_cpu().is_initialized() {
+        return;
+    }
+    IRQ_LOCK_DEPTH.get().fetch_sub(1, Ordering::Relaxed);
+}
 
 /// A spin lock that disables interrupts while held.
 pub struct IrqSpinLock<T> {
@@ -56,6 +103,9 @@ impl<T> IrqSpinLock<T> {
                 .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
                 .is_ok()
             {
+                #[cfg(all(hadron_lock_debug, target_os = "none"))]
+                increment_irq_depth();
+
                 #[cfg(hadron_lockdep)]
                 let class = self.lockdep_acquire();
 
@@ -80,6 +130,9 @@ impl<T> IrqSpinLock<T> {
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
             .is_ok()
         {
+            #[cfg(all(hadron_lock_debug, target_os = "none"))]
+            increment_irq_depth();
+
             #[cfg(hadron_lockdep)]
             let class = self.lockdep_acquire();
 
@@ -99,8 +152,11 @@ impl<T> IrqSpinLock<T> {
     /// Registers this lock with lockdep and records the acquisition.
     #[cfg(hadron_lockdep)]
     fn lockdep_acquire(&self) -> LockClassId {
-        let class =
-            super::lockdep::get_or_register(self as *const _ as usize, self.name, true);
+        let class = super::lockdep::get_or_register(
+            self as *const _ as usize,
+            self.name,
+            super::lockdep::LockKind::IrqSpinLock,
+        );
         super::lockdep::lock_acquired(class);
         class
     }
@@ -137,6 +193,9 @@ impl<T> Drop for IrqSpinLockGuard<'_, T> {
         if self.class != LockClassId::NONE {
             super::lockdep::lock_released(self.class);
         }
+
+        #[cfg(all(hadron_lock_debug, target_os = "none"))]
+        decrement_irq_depth();
 
         restore_flags(self.saved_flags);
     }
