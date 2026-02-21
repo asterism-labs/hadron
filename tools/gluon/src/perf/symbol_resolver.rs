@@ -53,6 +53,7 @@ impl SymbolResolver {
     }
 
     /// Create an empty resolver (no symbols available).
+    #[allow(dead_code)] // useful for tests and when no kernel ELF is available
     pub fn empty() -> Self {
         Self { symbols: Vec::new() }
     }

@@ -108,10 +108,13 @@ pub fn parse_hbench(data: &[u8]) -> Result<HBenchResults> {
 #[derive(Debug)]
 pub struct HPrfResults {
     /// HPRF version.
+    #[allow(dead_code)] // used by future per-version format handling
     pub version: u16,
     /// Flags: bit0=samples, bit1=ftrace.
+    #[allow(dead_code)] // used by future format validation
     pub flags: u16,
     /// TSC frequency in Hz.
+    #[allow(dead_code)] // used by future time-domain analysis
     pub tsc_freq_hz: u64,
     /// Kernel virtual base address.
     pub kernel_vbase: u64,
@@ -127,10 +130,13 @@ pub struct HPrfResults {
 #[derive(Debug)]
 pub struct SampleRecord {
     /// CPU that took the sample.
+    #[allow(dead_code)] // used by future per-CPU filtering
     pub cpu_id: u8,
     /// Stack depth.
+    #[allow(dead_code)] // kept for diagnostic/validation use
     pub depth: u16,
     /// TSC timestamp.
+    #[allow(dead_code)] // used by future time-range analysis
     pub tsc: u64,
     /// Stack addresses (instruction pointers).
     pub stack: Vec<u64>,
@@ -138,6 +144,7 @@ pub struct SampleRecord {
 
 /// An ftrace entry record.
 #[derive(Debug)]
+#[allow(dead_code)] // parsed for future `perf ftrace` report mode
 pub struct FtraceRecord {
     /// CPU ID.
     pub cpu_id: u8,

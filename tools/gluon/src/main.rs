@@ -21,6 +21,7 @@ mod menuconfig;
 mod model;
 mod model_cache;
 mod perf;
+mod perf_cmd;
 mod run;
 mod rustc_cmd;
 mod rustc_info;
@@ -55,6 +56,7 @@ fn main() -> Result<()> {
         cli::Command::Fmt(ref args) => fmt::cmd_fmt(args),
         cli::Command::Menuconfig => cmd_menuconfig(&cli),
         cli::Command::Vendor(ref args) => cmd_vendor(args),
+        cli::Command::Perf(ref args) => perf_cmd::cmd_perf(args),
     }
 }
 

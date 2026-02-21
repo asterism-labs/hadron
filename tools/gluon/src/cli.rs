@@ -52,6 +52,8 @@ pub enum Command {
     Bench(BenchArgs),
     /// Vendor external dependencies into vendor/.
     Vendor(VendorArgs),
+    /// Analyze profiling data captured from kernel serial output.
+    Perf(PerfArgs),
 }
 
 /// Arguments for the `build` subcommand.
@@ -136,4 +138,39 @@ pub struct FmtArgs {
     /// Check formatting without modifying files.
     #[arg(long)]
     pub check: bool,
+}
+
+/// Arguments for the `perf` subcommand.
+#[derive(Parser)]
+pub struct PerfArgs {
+    /// Perf subcommand to execute.
+    #[command(subcommand)]
+    pub command: PerfCommand,
+}
+
+/// Perf analysis subcommands.
+#[derive(Subcommand)]
+pub enum PerfCommand {
+    /// Analyze HPRF profiling data and generate reports.
+    Report(PerfReportArgs),
+}
+
+/// Arguments for `perf report`.
+#[derive(Parser)]
+pub struct PerfReportArgs {
+    /// Path to captured serial binary containing HPRF data.
+    #[arg(long)]
+    pub input: String,
+
+    /// Path to kernel ELF binary for symbol resolution.
+    #[arg(long)]
+    pub kernel: String,
+
+    /// Report mode: flat (default), flamegraph, or folded.
+    #[arg(long, default_value = "flat")]
+    pub mode: String,
+
+    /// Output file path (required for flamegraph and folded modes).
+    #[arg(short = 'o', long)]
+    pub output: Option<String>,
 }

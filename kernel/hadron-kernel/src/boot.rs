@@ -386,6 +386,10 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
     // 8. Arch-specific platform init (ACPI, PCI, drivers, etc.).
     crate::arch::platform_init(boot_info);
 
+    // 8a. Auto-start profiling if configured (sampling profiler / ftrace).
+    #[cfg(any(hadron_profile_sample, hadron_profile_ftrace))]
+    crate::profiling::init();
+
     // 9. Switch framebuffer sink to a device-registry framebuffer if one was
     //    registered during driver probing (e.g., Bochs VGA). The early FB sink
     //    wrote to the same physical framebuffer (via HHDM) but the driver may

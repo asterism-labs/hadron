@@ -41,6 +41,10 @@ pub const PROFILE_SAMPLE_BUFFER: u32 = hadron_config::PROFILE_SAMPLE_BUFFER;
 #[cfg(hadron_profile_ftrace)]
 pub const PROFILE_FTRACE_BUFFER_KB: u32 = hadron_config::PROFILE_FTRACE_BUFFER_KB;
 
+/// Profiling auto-stop duration in seconds (Kconfig default: 10).
+#[cfg(any(hadron_profile_sample, hadron_profile_ftrace))]
+pub const PROFILE_DURATION_SECS: u32 = hadron_config::PROFILE_DURATION_SECS;
+
 /// Build target name.
 pub const TARGET: &str = hadron_config::TARGET;
 

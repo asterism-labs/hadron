@@ -192,6 +192,13 @@ config PROFILE_FTRACE_BUFFER_KB
     depends on profile_ftrace
     binding const
 
+config PROFILE_DURATION_SECS
+    u32 "Profiling duration (seconds)"
+    default 10
+    range 1 300
+    depends on profile_sample || profile_ftrace
+    binding const
+
 endmenu
 
 endmenu

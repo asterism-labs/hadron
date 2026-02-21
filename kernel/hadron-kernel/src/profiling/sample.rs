@@ -127,7 +127,7 @@ pub unsafe fn sample_capture(interrupted_rip: u64, _interrupted_rsp: u64, interr
     *counter = 0;
 
     // Capture the sample.
-    let (tsc_val, _) = tsc::read_tscp();
+    let tsc_val = tsc::read_tsc();
     let cpu = current_cpu();
     let cpu_id = cpu.get_cpu_id();
 

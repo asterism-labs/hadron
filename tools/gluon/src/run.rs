@@ -7,7 +7,7 @@
 //! runner result.
 
 use anyhow::{Context, Result, bail};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use cargo_image_runner::{BootType, BootloaderKind, ImageFormat};
 
@@ -105,6 +105,42 @@ pub fn run_kernel(
         .context("failed to run kernel in QEMU")
 }
 
+/// Build an ISO image and runner config for a kernel binary.
+///
+/// Factors out the ISO-building step from [`run_kernel_tests`] so that
+/// callers (e.g. benchmarks) can reuse the ISO without going through the
+/// runner's QEMU path.
+///
+/// Returns `(iso_path, runner_config)`.
+pub fn build_test_iso(
+    config: &ResolvedConfig,
+    kernel_binary: &Path,
+    extra_args: &[String],
+) -> Result<(PathBuf, cargo_image_runner::Config)> {
+    let mut cfg = build_runner_config(config, true);
+
+    // Extra args from the caller go into runner.qemu.extra_args since
+    // cli_extra_args aren't forwarded in test mode.
+    cfg.runner
+        .qemu
+        .extra_args
+        .extend(extra_args.iter().cloned());
+
+    // Build the ISO image via the builder pipeline.
+    let runner = cargo_image_runner::builder()
+        .with_config(cfg.clone())
+        .workspace_root(config.root.clone())
+        .executable(kernel_binary.to_path_buf())
+        .limine()
+        .iso_image()
+        .qemu()
+        .build()
+        .context("failed to build image runner")?;
+    let image_path = runner.build_image().context("failed to build ISO image")?;
+
+    Ok((image_path, cfg))
+}
+
 /// Run a kernel integration test in QEMU.
 ///
 /// Builds an ISO image, then runs QEMU with test configuration (isa-debug-exit
@@ -118,28 +154,9 @@ pub fn run_kernel_tests(
     kernel_binary: &Path,
     extra_args: &[String],
 ) -> Result<()> {
-    let mut cfg = build_runner_config(config, true);
+    let (image_path, cfg) = build_test_iso(config, kernel_binary, extra_args)?;
 
-    // Extra args from the caller go into runner.qemu.extra_args since
-    // cli_extra_args aren't forwarded in test mode.
-    cfg.runner
-        .qemu
-        .extra_args
-        .extend(extra_args.iter().cloned());
-
-    // Step 1: Build the ISO image via the builder pipeline.
-    let runner = cargo_image_runner::builder()
-        .with_config(cfg.clone())
-        .workspace_root(config.root.clone())
-        .executable(kernel_binary.to_path_buf())
-        .limine()
-        .iso_image()
-        .qemu()
-        .build()
-        .context("failed to build image runner")?;
-    let image_path = runner.build_image().context("failed to build ISO image")?;
-
-    // Step 2: Create context with is_test = true to enable test-specific
+    // Create context with is_test = true to enable test-specific
     // behavior (timeout enforcement, exit code checking).
     let mut ctx = cargo_image_runner::core::Context::new(
         cfg,
@@ -149,13 +166,13 @@ pub fn run_kernel_tests(
     .context("failed to create runner context")?;
     ctx.is_test = true;
 
-    // Step 3: Run QEMU and get the result.
+    // Run QEMU and get the result.
     use cargo_image_runner::runner::Runner;
     let result = cargo_image_runner::runner::qemu::QemuRunner::new()
         .run(&ctx, &image_path)
         .context("failed to run QEMU")?;
 
-    // Step 4: Check result.
+    // Check result.
     if result.timed_out {
         bail!("kernel test timed out");
     }

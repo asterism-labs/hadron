@@ -62,6 +62,16 @@ profile("debug-sanitizers")
         trace_mm: true,
     });
 
+profile("profile")
+    .inherits("default")
+    .config(#{
+        profile_sample: true,
+        PROFILE_SAMPLE_RATE: 100,
+        PROFILE_SAMPLE_DEPTH: 16,
+        PROFILE_SAMPLE_BUFFER: 1024,
+        PROFILE_DURATION_SECS: 10,
+    });
+
 // ===========================================================================
 // Sysroot crates (built first, for kernel target)
 // ===========================================================================
