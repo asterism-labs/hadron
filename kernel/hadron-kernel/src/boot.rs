@@ -119,15 +119,6 @@ pub struct InitrdInfo {
     pub size: u64,
 }
 
-/// Information about the backtrace data module loaded by the bootloader.
-#[derive(Debug, Clone, Copy)]
-pub struct BacktraceInfo {
-    /// Physical address of the HBTF data in memory.
-    pub phys_addr: PhysAddr,
-    /// Size of the HBTF data in bytes.
-    pub size: u64,
-}
-
 /// Maximum number of memory regions the kernel can store.
 pub const MAX_MEMORY_REGIONS: usize = 256;
 
@@ -221,9 +212,6 @@ pub trait BootInfo {
     /// Initial ramdisk (CPIO archive), if loaded by the bootloader.
     fn initrd(&self) -> Option<InitrdInfo>;
 
-    /// Backtrace data (HBTF format), if loaded by the bootloader.
-    fn backtrace(&self) -> Option<BacktraceInfo>;
-
     /// SMP CPU entries for AP bootstrap. Empty if single-processor.
     fn smp_cpus(&self) -> &[SmpCpuEntry];
 
@@ -257,8 +245,6 @@ pub struct BootInfoData {
     pub page_table_root: PhysAddr,
     /// Initial ramdisk information, if loaded by the bootloader.
     pub initrd: Option<InitrdInfo>,
-    /// Backtrace data (HBTF format), if loaded by the bootloader.
-    pub backtrace: Option<BacktraceInfo>,
     /// SMP CPU entries for AP bootstrap.
     pub smp_cpus: ArrayVec<SmpCpuEntry, MAX_SMP_CPUS>,
     /// BSP Local APIC ID.
@@ -310,10 +296,6 @@ impl BootInfo for BootInfoData {
         self.initrd
     }
 
-    fn backtrace(&self) -> Option<BacktraceInfo> {
-        self.backtrace
-    }
-
     fn smp_cpus(&self) -> &[SmpCpuEntry] {
         self.smp_cpus.as_slice()
     }
@@ -335,21 +317,8 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
     crate::mm::hhdm::init(boot_info.hhdm_offset());
     crate::kinfo!("HHDM initialized at offset {:#x}", boot_info.hhdm_offset());
 
-    // 2b. Initialize backtrace support (must be after HHDM so we can access the module data).
-    if let Some(bt) = boot_info.backtrace() {
-        let virt = crate::mm::hhdm::phys_to_virt(bt.phys_addr);
-        // SAFETY: The bootloader loaded the HBTF data into contiguous physical memory
-        // covered by the HHDM. The slice remains valid for the kernel's lifetime
-        // because the module memory region is marked KernelAndModules and is never
-        // reclaimed.
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "x86_64: u64 and usize are the same width"
-        )]
-        let data =
-            unsafe { core::slice::from_raw_parts(virt.as_u64() as *const u8, bt.size as usize) };
-        crate::backtrace::init(data, boot_info.kernel_address().virtual_base.as_u64());
-    }
+    // 2b. Initialize backtrace support from embedded HKIF data.
+    crate::backtrace::init_from_embedded(boot_info.kernel_address().virtual_base.as_u64());
 
     // 3. Initialize PMM (bitmap from memory map).
     crate::mm::pmm::init(boot_info);

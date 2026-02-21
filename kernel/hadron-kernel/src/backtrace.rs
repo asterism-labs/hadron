@@ -1,13 +1,12 @@
 //! Kernel panic backtrace support.
 //!
 //! Provides symbolic backtraces on panic by walking the RBP frame pointer chain
-//! and resolving addresses against an HBTF (Hadron Backtrace Format) table loaded
-//! at boot time as a Limine module.
+//! and resolving addresses against HKIF (Hadron Kernel Image Format) data
+//! embedded in the kernel binary at link time.
 //!
-//! # HBTF Format
-//!
-//! The HBTF binary contains sorted symbol and line tables for binary search lookup.
-//! See `xtask/src/hbtf.rs` for the format specification.
+//! The HKIF blob is placed in the `.hadron_hkif` linker section by the two-pass
+//! build. It contains a section directory pointing to sorted symbol and line
+//! tables for binary search lookup.
 
 use core::fmt::Write;
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -17,78 +16,126 @@ use crate::sync::SpinLock;
 /// Maximum number of frames to capture in a backtrace.
 const MAX_FRAMES: usize = 32;
 
-/// HBTF file magic bytes.
-const HBTF_MAGIC: [u8; 4] = *b"HBTF";
+/// HKIF magic bytes.
+const HKIF_MAGIC: [u8; 4] = *b"HKIF";
 
-/// HBTF format version we support.
-const HBTF_VERSION: u32 = 1;
+/// HKIF format version we support.
+const HKIF_VERSION: u16 = 1;
 
-/// Size of the HBTF file header.
-const HBTF_HEADER_SIZE: usize = 32;
+/// HKIF header size in bytes.
+const HKIF_HEADER_SIZE: usize = 64;
 
-/// Size of a symbol entry in the HBTF binary.
+/// HKIF section directory entry size in bytes.
+const DIR_ENTRY_SIZE: usize = 16;
+
+/// Section type: symbols (20 bytes per entry).
+const SECTION_SYMBOLS: u32 = 2;
+
+/// Section type: lines (16 bytes per entry).
+const SECTION_LINES: u32 = 3;
+
+/// Section type: string pool.
+const SECTION_STRINGS: u32 = 4;
+
+/// Size of a symbol entry.
 const SYM_ENTRY_SIZE: usize = 20;
 
-/// Size of a line entry in the HBTF binary.
+/// Size of a line entry.
 const LINE_ENTRY_SIZE: usize = 16;
+
+// ---------------------------------------------------------------------------
+// Parsed HKIF section locations
+// ---------------------------------------------------------------------------
+
+/// Offsets and sizes of backtrace-relevant sections within the HKIF blob.
+struct HkifSections {
+    /// Offset of symbol table from HKIF start.
+    sym_offset: usize,
+    /// Number of symbol entries (sym_size / SYM_ENTRY_SIZE).
+    sym_count: usize,
+    /// Offset of line table from HKIF start.
+    line_offset: usize,
+    /// Number of line entries (line_size / LINE_ENTRY_SIZE).
+    line_count: usize,
+    /// Offset of string pool from HKIF start.
+    strings_offset: usize,
+}
 
 // ---------------------------------------------------------------------------
 // Global state
 // ---------------------------------------------------------------------------
 
-/// The raw HBTF data slice, set once at boot.
-static HBTF_DATA: SpinLock<Option<&'static [u8]>> = SpinLock::new(None);
+/// The raw HKIF data slice and parsed section info, set once at boot.
+static HKIF_STATE: SpinLock<Option<HkifState>> = SpinLock::new(None);
 
 /// Kernel virtual base address for offset-to-address conversion.
 static KERNEL_VIRT_BASE: AtomicU64 = AtomicU64::new(0);
+
+/// Combined state for the HKIF backtrace system.
+struct HkifState {
+    data: &'static [u8],
+    sections: HkifSections,
+}
+
+// ---------------------------------------------------------------------------
+// Linker symbols
+// ---------------------------------------------------------------------------
+
+unsafe extern "C" {
+    static __hadron_hkif_start: u8;
+    static __hadron_hkif_end: u8;
+}
 
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Initialize the backtrace system with HBTF data and the kernel virtual base.
+/// Initialize the backtrace system from the embedded HKIF section.
 ///
-/// Must be called once during boot, before any panic could benefit from backtraces.
-/// After this call, the global state is read-only.
-pub fn init(hbtf_data: &'static [u8], kernel_virt_base: u64) {
-    // Validate the HBTF header
-    if hbtf_data.len() < HBTF_HEADER_SIZE {
-        crate::kwarn!(
-            "HBTF: data too short ({} bytes), backtraces disabled",
-            hbtf_data.len()
+/// Reads the `.hadron_hkif` linker section, validates the HKIF header,
+/// and parses the section directory to locate symbol/line/string data.
+///
+/// Must be called once during boot. The `kernel_virt_base` is the lowest
+/// PT_LOAD virtual address of the kernel image.
+pub fn init_from_embedded(kernel_virt_base: u64) {
+    // SAFETY: These symbols are defined by the linker script and point to
+    // the start/end of the .hadron_hkif section in rodata. The section is
+    // part of the kernel image and remains valid for the kernel's lifetime.
+    let (start, end) = unsafe {
+        let s = core::ptr::addr_of!(__hadron_hkif_start) as usize;
+        let e = core::ptr::addr_of!(__hadron_hkif_end) as usize;
+        (s, e)
+    };
+
+    if end <= start {
+        crate::kwarn!("HKIF: empty .hadron_hkif section, backtraces disabled");
+        return;
+    }
+
+    let size = end - start;
+    // SAFETY: The linker section is in rodata, contiguous, and immutable.
+    // It remains valid for the kernel's lifetime.
+    let data = unsafe { core::slice::from_raw_parts(start as *const u8, size) };
+
+    if let Some(state) = parse_hkif(data) {
+        let sym_count = state.sections.sym_count;
+        let line_count = state.sections.line_count;
+
+        KERNEL_VIRT_BASE.store(kernel_virt_base, Ordering::Relaxed);
+        *HKIF_STATE.lock() = Some(state);
+
+        crate::kinfo!(
+            "Backtrace: loaded HKIF ({} symbols, {} lines, {} bytes)",
+            sym_count,
+            line_count,
+            size,
         );
-        return;
     }
-
-    if hbtf_data[..4] != HBTF_MAGIC {
-        crate::kwarn!("HBTF: invalid magic, backtraces disabled");
-        return;
-    }
-
-    let version = u32::from_le_bytes([hbtf_data[4], hbtf_data[5], hbtf_data[6], hbtf_data[7]]);
-    if version != HBTF_VERSION {
-        crate::kwarn!("HBTF: unsupported version {version}, backtraces disabled");
-        return;
-    }
-
-    let sym_count = u32::from_le_bytes([hbtf_data[8], hbtf_data[9], hbtf_data[10], hbtf_data[11]]);
-    let line_count =
-        u32::from_le_bytes([hbtf_data[16], hbtf_data[17], hbtf_data[18], hbtf_data[19]]);
-
-    KERNEL_VIRT_BASE.store(kernel_virt_base, Ordering::Relaxed);
-    *HBTF_DATA.lock() = Some(hbtf_data);
-
-    crate::kinfo!(
-        "Backtrace: loaded HBTF ({} symbols, {} lines)",
-        sym_count,
-        line_count
-    );
 }
 
 /// Print a backtrace to the given writer. Safe to call from panic context.
 ///
-/// If HBTF data is not available, prints raw hex addresses.
-/// If addresses can't be resolved, prints them without symbol info.
+/// If HKIF data is not available, prints raw hex addresses.
 pub fn panic_backtrace(writer: &mut impl Write) {
     let frames = capture_backtrace();
     let frame_count = frames.len();
@@ -100,20 +147,106 @@ pub fn panic_backtrace(writer: &mut impl Write) {
 
     let _ = write!(writer, "Backtrace ({frame_count} frames):\n");
 
-    // Try to lock HBTF data — if we can't (e.g., panic while holding the lock),
+    // Try to lock HKIF state — if we can't (e.g., panic while holding the lock),
     // fall back to raw addresses.
-    let hbtf_guard = HBTF_DATA.try_lock();
-    let hbtf_data = hbtf_guard.as_ref().and_then(|g| g.as_ref().copied());
-
+    let guard = HKIF_STATE.try_lock();
     let kernel_base = KERNEL_VIRT_BASE.load(Ordering::Relaxed);
 
     for (i, &addr) in frames.iter().enumerate() {
-        if let Some(hbtf) = hbtf_data {
-            print_frame_symbolicated(writer, i, addr, hbtf, kernel_base);
+        if let Some(Some(state)) = guard.as_deref() {
+            print_frame_symbolicated(writer, i, addr, state, kernel_base);
         } else {
             let _ = write!(writer, "  #{i}: {addr:#018x}\n");
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// HKIF parsing
+// ---------------------------------------------------------------------------
+
+/// Parse and validate the HKIF header and section directory.
+fn parse_hkif(data: &'static [u8]) -> Option<HkifState> {
+    if data.len() < HKIF_HEADER_SIZE {
+        crate::kwarn!(
+            "HKIF: data too short ({} bytes), backtraces disabled",
+            data.len()
+        );
+        return None;
+    }
+
+    if data[..4] != HKIF_MAGIC {
+        crate::kwarn!("HKIF: invalid magic, backtraces disabled");
+        return None;
+    }
+
+    let version = u16::from_le_bytes([data[4], data[5]]);
+    if version != HKIF_VERSION {
+        crate::kwarn!("HKIF: unsupported version {version}, backtraces disabled");
+        return None;
+    }
+
+    let section_count = u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize;
+    let dir_offset = u32::from_le_bytes([data[12], data[13], data[14], data[15]]) as usize;
+
+    // Parse section directory.
+    let mut sym_offset = 0usize;
+    let mut sym_size = 0usize;
+    let mut line_offset = 0usize;
+    let mut line_size = 0usize;
+    let mut strings_offset = 0usize;
+
+    for i in 0..section_count {
+        let entry_start = dir_offset + i * DIR_ENTRY_SIZE;
+        if entry_start + DIR_ENTRY_SIZE > data.len() {
+            break;
+        }
+
+        let sec_type = u32::from_le_bytes([
+            data[entry_start],
+            data[entry_start + 1],
+            data[entry_start + 2],
+            data[entry_start + 3],
+        ]);
+        let sec_offset = u32::from_le_bytes([
+            data[entry_start + 4],
+            data[entry_start + 5],
+            data[entry_start + 6],
+            data[entry_start + 7],
+        ]) as usize;
+        let sec_size = u32::from_le_bytes([
+            data[entry_start + 8],
+            data[entry_start + 9],
+            data[entry_start + 10],
+            data[entry_start + 11],
+        ]) as usize;
+
+        match sec_type {
+            SECTION_SYMBOLS => {
+                sym_offset = sec_offset;
+                sym_size = sec_size;
+            }
+            SECTION_LINES => {
+                line_offset = sec_offset;
+                line_size = sec_size;
+            }
+            SECTION_STRINGS => {
+                strings_offset = sec_offset;
+            }
+            _ => {} // Unknown section types are skipped (forward compat).
+        }
+    }
+
+    Some(HkifState {
+        data,
+        sections: HkifSections {
+            sym_offset,
+            sym_count: sym_size / SYM_ENTRY_SIZE,
+            line_offset,
+            line_count: line_size / LINE_ENTRY_SIZE,
+            strings_offset,
+        },
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -197,24 +330,21 @@ fn capture_backtrace() -> FrameBuffer {
 }
 
 // ---------------------------------------------------------------------------
-// HBTF lookup and formatting
+// HKIF lookup and formatting
 // ---------------------------------------------------------------------------
 
-/// Print a single frame with symbol and line info from HBTF data.
+/// Print a single frame with symbol and line info from HKIF data.
 fn print_frame_symbolicated(
     writer: &mut impl Write,
     index: usize,
     addr: u64,
-    hbtf: &[u8],
+    state: &HkifState,
     kernel_base: u64,
 ) {
     let offset = addr.wrapping_sub(kernel_base);
 
-    // Look up symbol
-    let sym = lookup_symbol(hbtf, offset);
-
-    // Look up line info
-    let line = lookup_line(hbtf, offset);
+    let sym = lookup_symbol(state, offset);
+    let line = lookup_line(state, offset);
 
     let _ = write!(writer, "  #{index}: {addr:#018x}");
 
@@ -229,36 +359,35 @@ fn print_frame_symbolicated(
     let _ = write!(writer, "\n");
 }
 
-/// Binary search the HBTF symbol table for a function containing `offset`.
+/// Binary search the symbol table for a function containing `offset`.
 ///
 /// Returns `(name, offset_within_function)` if found.
-fn lookup_symbol<'a>(hbtf: &'a [u8], offset: u64) -> Option<(&'a str, u64)> {
-    let sym_count = u32::from_le_bytes([hbtf[8], hbtf[9], hbtf[10], hbtf[11]]) as usize;
-    let sym_offset = u32::from_le_bytes([hbtf[12], hbtf[13], hbtf[14], hbtf[15]]) as usize;
-    let strings_offset = u32::from_le_bytes([hbtf[24], hbtf[25], hbtf[26], hbtf[27]]) as usize;
+fn lookup_symbol<'a>(state: &'a HkifState, offset: u64) -> Option<(&'a str, u64)> {
+    let s = &state.sections;
+    let data = state.data;
 
-    if sym_count == 0 {
+    if s.sym_count == 0 {
         return None;
     }
 
-    // Binary search: find the last symbol with addr <= offset
+    // Binary search: find the last symbol with addr <= offset.
     let mut lo = 0usize;
-    let mut hi = sym_count;
+    let mut hi = s.sym_count;
     while lo < hi {
         let mid = lo + (hi - lo) / 2;
-        let entry_off = sym_offset + mid * SYM_ENTRY_SIZE;
-        if entry_off + SYM_ENTRY_SIZE > hbtf.len() {
+        let entry_off = s.sym_offset + mid * SYM_ENTRY_SIZE;
+        if entry_off + SYM_ENTRY_SIZE > data.len() {
             return None;
         }
         let sym_addr = u64::from_le_bytes([
-            hbtf[entry_off],
-            hbtf[entry_off + 1],
-            hbtf[entry_off + 2],
-            hbtf[entry_off + 3],
-            hbtf[entry_off + 4],
-            hbtf[entry_off + 5],
-            hbtf[entry_off + 6],
-            hbtf[entry_off + 7],
+            data[entry_off],
+            data[entry_off + 1],
+            data[entry_off + 2],
+            data[entry_off + 3],
+            data[entry_off + 4],
+            data[entry_off + 5],
+            data[entry_off + 6],
+            data[entry_off + 7],
         ]);
         if sym_addr <= offset {
             lo = mid + 1;
@@ -271,79 +400,74 @@ fn lookup_symbol<'a>(hbtf: &'a [u8], offset: u64) -> Option<(&'a str, u64)> {
         return None;
     }
 
-    // The candidate is at lo - 1
     let idx = lo - 1;
-    let entry_off = sym_offset + idx * SYM_ENTRY_SIZE;
-    if entry_off + SYM_ENTRY_SIZE > hbtf.len() {
+    let entry_off = s.sym_offset + idx * SYM_ENTRY_SIZE;
+    if entry_off + SYM_ENTRY_SIZE > data.len() {
         return None;
     }
 
     let sym_addr = u64::from_le_bytes([
-        hbtf[entry_off],
-        hbtf[entry_off + 1],
-        hbtf[entry_off + 2],
-        hbtf[entry_off + 3],
-        hbtf[entry_off + 4],
-        hbtf[entry_off + 5],
-        hbtf[entry_off + 6],
-        hbtf[entry_off + 7],
+        data[entry_off],
+        data[entry_off + 1],
+        data[entry_off + 2],
+        data[entry_off + 3],
+        data[entry_off + 4],
+        data[entry_off + 5],
+        data[entry_off + 6],
+        data[entry_off + 7],
     ]);
     let sym_size = u32::from_le_bytes([
-        hbtf[entry_off + 8],
-        hbtf[entry_off + 9],
-        hbtf[entry_off + 10],
-        hbtf[entry_off + 11],
+        data[entry_off + 8],
+        data[entry_off + 9],
+        data[entry_off + 10],
+        data[entry_off + 11],
     ]);
     let name_off = u32::from_le_bytes([
-        hbtf[entry_off + 12],
-        hbtf[entry_off + 13],
-        hbtf[entry_off + 14],
-        hbtf[entry_off + 15],
+        data[entry_off + 12],
+        data[entry_off + 13],
+        data[entry_off + 14],
+        data[entry_off + 15],
     ]) as usize;
 
-    // Check if offset falls within the symbol's range
     let func_offset = offset - sym_addr;
     if sym_size > 0 && func_offset >= u64::from(sym_size) {
         return None;
     }
 
-    // Read NUL-terminated name from string pool
-    let name_start = strings_offset + name_off;
-    let name = read_nul_str(hbtf, name_start)?;
+    let name_start = s.strings_offset + name_off;
+    let name = read_nul_str(data, name_start)?;
 
     Some((name, func_offset))
 }
 
-/// Binary search the HBTF line table for the entry at or before `offset`.
+/// Binary search the line table for the entry at or before `offset`.
 ///
 /// Returns `(file, line)` if found.
-fn lookup_line<'a>(hbtf: &'a [u8], offset: u64) -> Option<(&'a str, u32)> {
-    let line_count = u32::from_le_bytes([hbtf[16], hbtf[17], hbtf[18], hbtf[19]]) as usize;
-    let line_offset = u32::from_le_bytes([hbtf[20], hbtf[21], hbtf[22], hbtf[23]]) as usize;
-    let strings_offset = u32::from_le_bytes([hbtf[24], hbtf[25], hbtf[26], hbtf[27]]) as usize;
+fn lookup_line<'a>(state: &'a HkifState, offset: u64) -> Option<(&'a str, u32)> {
+    let s = &state.sections;
+    let data = state.data;
 
-    if line_count == 0 {
+    if s.line_count == 0 {
         return None;
     }
 
-    // Binary search: find the last line entry with addr <= offset
     let mut lo = 0usize;
-    let mut hi = line_count;
+    let mut hi = s.line_count;
     while lo < hi {
         let mid = lo + (hi - lo) / 2;
-        let entry_off = line_offset + mid * LINE_ENTRY_SIZE;
-        if entry_off + LINE_ENTRY_SIZE > hbtf.len() {
+        let entry_off = s.line_offset + mid * LINE_ENTRY_SIZE;
+        if entry_off + LINE_ENTRY_SIZE > data.len() {
             return None;
         }
         let line_addr = u64::from_le_bytes([
-            hbtf[entry_off],
-            hbtf[entry_off + 1],
-            hbtf[entry_off + 2],
-            hbtf[entry_off + 3],
-            hbtf[entry_off + 4],
-            hbtf[entry_off + 5],
-            hbtf[entry_off + 6],
-            hbtf[entry_off + 7],
+            data[entry_off],
+            data[entry_off + 1],
+            data[entry_off + 2],
+            data[entry_off + 3],
+            data[entry_off + 4],
+            data[entry_off + 5],
+            data[entry_off + 6],
+            data[entry_off + 7],
         ]);
         if line_addr <= offset {
             lo = mid + 1;
@@ -357,31 +481,31 @@ fn lookup_line<'a>(hbtf: &'a [u8], offset: u64) -> Option<(&'a str, u32)> {
     }
 
     let idx = lo - 1;
-    let entry_off = line_offset + idx * LINE_ENTRY_SIZE;
-    if entry_off + LINE_ENTRY_SIZE > hbtf.len() {
+    let entry_off = s.line_offset + idx * LINE_ENTRY_SIZE;
+    if entry_off + LINE_ENTRY_SIZE > data.len() {
         return None;
     }
 
     let file_off = u32::from_le_bytes([
-        hbtf[entry_off + 8],
-        hbtf[entry_off + 9],
-        hbtf[entry_off + 10],
-        hbtf[entry_off + 11],
+        data[entry_off + 8],
+        data[entry_off + 9],
+        data[entry_off + 10],
+        data[entry_off + 11],
     ]) as usize;
     let line_num = u32::from_le_bytes([
-        hbtf[entry_off + 12],
-        hbtf[entry_off + 13],
-        hbtf[entry_off + 14],
-        hbtf[entry_off + 15],
+        data[entry_off + 12],
+        data[entry_off + 13],
+        data[entry_off + 14],
+        data[entry_off + 15],
     ]);
 
-    let file_start = strings_offset + file_off;
-    let file = read_nul_str(hbtf, file_start)?;
+    let file_start = s.strings_offset + file_off;
+    let file = read_nul_str(data, file_start)?;
 
     Some((file, line_num))
 }
 
-/// Read a NUL-terminated string from the HBTF data at the given offset.
+/// Read a NUL-terminated string from the data at the given offset.
 fn read_nul_str(data: &[u8], offset: usize) -> Option<&str> {
     if offset >= data.len() {
         return None;

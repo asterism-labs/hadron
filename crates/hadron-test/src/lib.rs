@@ -487,7 +487,6 @@ macro_rules! test_entry_point_with_init {
                     page_table_root & 0x000F_FFFF_FFFF_F000,
                 ),
                 initrd: None,
-                backtrace: None,
                 smp_cpus: ::noalloc::vec::ArrayVec::new(),
                 bsp_lapic_id: 0,
             };

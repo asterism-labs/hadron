@@ -17,7 +17,7 @@ use hadron_kernel::arch::x86_64::structures::paging::{PageTable, PageTableEntry,
 use hadron_kernel::paging::{PhysFrame, Size4KiB};
 use hadron_kernel::arch::x86_64::paging::PageTableMapper;
 use hadron_kernel::boot::{
-    BacktraceInfo, BootInfoData, FramebufferInfo, InitrdInfo, KernelAddressInfo, MAX_FRAMEBUFFERS,
+    BootInfoData, FramebufferInfo, InitrdInfo, KernelAddressInfo, MAX_FRAMEBUFFERS,
     MAX_MEMORY_REGIONS, MAX_SMP_CPUS, MemoryRegion, MemoryRegionKind, PagingMode, PixelFormat,
     SmpCpuEntry,
 };
@@ -150,9 +150,8 @@ extern "C" fn _start() -> ! {
 
     hadron_kernel::kdebug!("CR3 switched to kernel-owned page tables");
 
-    // 10. Extract boot modules by cmdline string (initrd, backtrace).
+    // 10. Extract boot modules by cmdline string.
     let mut initrd = None;
-    let mut backtrace = None;
     if let Some(resp) = REQUESTS.modules.response() {
         for file in resp.modules() {
             let module_name = file.name();
@@ -161,12 +160,6 @@ extern "C" fn _start() -> ! {
             match module_name {
                 "initrd" => {
                     initrd = Some(InitrdInfo {
-                        phys_addr,
-                        size: file.size,
-                    });
-                }
-                "backtrace" => {
-                    backtrace = Some(BacktraceInfo {
                         phys_addr,
                         size: file.size,
                     });
@@ -198,7 +191,6 @@ extern "C" fn _start() -> ! {
         largest_size,
         frames_used,
         initrd,
-        backtrace,
         smp_cpus,
         bsp_lapic_id,
     );
@@ -472,7 +464,6 @@ fn build_boot_info(
     alloc_region_size: u64,
     frames_used: u64,
     initrd: Option<InitrdInfo>,
-    backtrace: Option<BacktraceInfo>,
     smp_cpus: ArrayVec<SmpCpuEntry, MAX_SMP_CPUS>,
     bsp_lapic_id: u32,
 ) -> BootInfoData {
@@ -532,7 +523,6 @@ fn build_boot_info(
         smbios_64,
         page_table_root,
         initrd,
-        backtrace,
         smp_cpus,
         bsp_lapic_id,
     }
