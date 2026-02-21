@@ -8,6 +8,7 @@ use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::artifact::hkif;
 use crate::compile::{self, CompileMode};
 use crate::config::ResolvedConfig;
 use crate::crate_graph;
@@ -153,7 +154,8 @@ pub fn compile_kernel_tests(
             .to_string_lossy()
             .to_string();
 
-        println!("  Compiling test {test_name}...");
+        // Pass 1: compile test binary without HKIF.
+        println!("  Compiling test {test_name} (pass 1)...");
         let binary = compile_test_binary(
             test_file,
             &test_name,
@@ -166,7 +168,36 @@ pub fn compile_kernel_tests(
             &out_dir,
             &test_out_dir,
             &linker_script,
+            &[],
         )?;
+
+        // HKIF generation: extract symbols from pass-1 ELF and build HKIF object.
+        println!("  Generating HKIF for {test_name}...");
+        let hkif_bin = test_out_dir.join(format!("{test_name}.hkif.bin"));
+        let hkif_asm = test_out_dir.join(format!("{test_name}.hkif.S"));
+        let hkif_obj = test_out_dir.join(format!("{test_name}.hkif.o"));
+
+        hkif::generate_hkif(&binary, &hkif_bin, state.config.profile.debug_info)?;
+        hkif::generate_hkif_asm(&hkif_bin, &hkif_asm)?;
+        hkif::assemble_hkif(&hkif_asm, &hkif_obj)?;
+
+        // Pass 2: relink test binary with embedded HKIF.
+        println!("  Re-linking {test_name} with HKIF...");
+        let binary = compile_test_binary(
+            test_file,
+            &test_name,
+            krate_def,
+            &state.config,
+            &target_spec,
+            &sysroot_dir,
+            &state.artifacts,
+            config_rlib.as_deref(),
+            &out_dir,
+            &test_out_dir,
+            &linker_script,
+            &[hkif_obj],
+        )?;
+
         test_binaries.push((test_name, binary));
     }
 
@@ -187,6 +218,7 @@ fn compile_test_binary(
     lib_dir: &Path,
     out_dir: &Path,
     linker_script: &str,
+    extra_link_objects: &[PathBuf],
 ) -> Result<PathBuf> {
     let mut cmd = Command::new("rustc");
     cmd.arg("--test");
@@ -250,6 +282,11 @@ fn compile_test_binary(
     let ld_path = config.root.join(linker_script);
     cmd.arg(format!("-Clink-arg=-T{}", ld_path.display()));
     cmd.arg("-Clink-arg=--gc-sections");
+
+    // Extra object files (e.g., HKIF blob for pass-2 link).
+    for obj in extra_link_objects {
+        cmd.arg(format!("-Clink-arg={}", obj.display()));
+    }
 
     // Output.
     cmd.arg("--out-dir").arg(out_dir);

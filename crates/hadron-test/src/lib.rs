@@ -462,7 +462,7 @@ macro_rules! test_entry_point_with_init {
                     }
                 };
                 memory_map.push(::hadron_kernel::boot::MemoryRegion {
-                    start: ::hadron_core::addr::PhysAddr::new(entry.base),
+                    start: ::hadron_kernel::addr::PhysAddr::new(entry.base),
                     size: entry.length,
                     kind,
                 });
@@ -473,8 +473,8 @@ macro_rules! test_entry_point_with_init {
                 memory_map,
                 hhdm_offset,
                 kernel_address: ::hadron_kernel::boot::KernelAddressInfo {
-                    physical_base: ::hadron_core::addr::PhysAddr::new(exec_addr.phys_base),
-                    virtual_base: ::hadron_core::addr::VirtAddr::new(exec_addr.virt_base),
+                    physical_base: ::hadron_kernel::addr::PhysAddr::new(exec_addr.phys_base),
+                    virtual_base: ::hadron_kernel::addr::VirtAddr::new(exec_addr.virt_base),
                 },
                 paging_mode: ::hadron_kernel::boot::PagingMode::Level4,
                 framebuffers: ::noalloc::vec::ArrayVec::new(),
@@ -483,7 +483,7 @@ macro_rules! test_entry_point_with_init {
                 command_line: _CMDLINE_REQUEST.response().map(|r| r.cmdline()),
                 smbios_32: None,
                 smbios_64: None,
-                page_table_root: ::hadron_core::addr::PhysAddr::new(
+                page_table_root: ::hadron_kernel::addr::PhysAddr::new(
                     page_table_root & 0x000F_FFFF_FFFF_F000,
                 ),
                 initrd: None,

@@ -83,11 +83,8 @@ Bootloader (Limine/UEFI)
 Boot Stub (kernel/boot/limine or kernel/boot/uefi)
     │  Constructs InitInfo from bootloader data
     ▼
-hadron_core::kernel_entry(InitState)
-    │  Initializes frame: GDT, IDT, PMM, VMM
-    ▼
-hadron_kernel::kernel_main()
-    │  Initializes services: scheduler, VFS, drivers
+hadron_kernel::kernel_init(boot_info)
+    │  Initializes: GDT, IDT, PMM, VMM, services
     ▼
 Idle loop / Init process
 ```

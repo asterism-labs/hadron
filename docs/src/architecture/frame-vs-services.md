@@ -86,7 +86,7 @@ impl core::fmt::Write for SerialPort {
 
 ```rust
 // console/serial.rs — safe serial console (no unsafe!)
-use hadron_core::log::writer;
+use hadron_kernel::log::writer;
 
 pub fn init() {
     // Serial port already initialized by frame during boot

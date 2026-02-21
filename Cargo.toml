@@ -72,7 +72,6 @@ version = "v10.7.0-binary"
 
 [workspace.metadata.image-runner.extra-files]
 "boot/initrd.cpio" = "target/initrd.cpio"
-"boot/backtrace.hbtf" = "target/backtrace.hbtf"
 
 [workspace.metadata.image-runner.image]
 format = "iso"

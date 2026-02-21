@@ -3,8 +3,9 @@
 //! Exercises `panic_backtrace()` as a regular function (not via panic) to
 //! validate frame-pointer stack walking and HKIF symbolication in QEMU.
 //!
-//! The backtrace system is initialized during boot via `init_from_embedded()`,
-//! which reads the `.hadron_hkif` linker section populated by the two-pass build.
+//! Each test binary gets its own HKIF data via the two-pass link process:
+//! pass 1 produces the ELF, HKIF is generated from its symbols, then pass 2
+//! relinks with the HKIF object embedded in `.hadron_hkif`.
 
 #![no_std]
 #![no_main]
@@ -33,9 +34,6 @@ fn test_backtrace_captures_frames() {
 
 #[test_case]
 fn test_backtrace_symbolicated() {
-    // The two-pass build embeds HKIF data in the kernel binary, which is
-    // loaded during boot by init_from_embedded(). Verify that backtraces
-    // include symbolicated output (function name after " - ").
     let mut output = String::new();
     hadron_kernel::backtrace::panic_backtrace(&mut output);
     assert!(

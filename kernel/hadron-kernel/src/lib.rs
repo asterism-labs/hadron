@@ -64,12 +64,14 @@ pub use log::LogLevel;
 
 /// Lightweight kernel initialization for integration tests.
 ///
-/// Performs CPU init, HHDM, PMM, VMM, and heap initialization without
-/// starting ACPI, PCI enumeration, or the async executor.
+/// Performs CPU init, HHDM, backtrace (HKIF), PMM, VMM, and heap
+/// initialization without starting ACPI, PCI enumeration, or the async
+/// executor.
 #[cfg(target_os = "none")]
 pub fn test_init(boot_info: &impl boot::BootInfo) {
     crate::arch::cpu_init();
     crate::mm::hhdm::init(boot_info.hhdm_offset());
+    crate::backtrace::init_from_embedded(boot_info.kernel_address().virtual_base.as_u64());
     crate::mm::pmm::init(boot_info);
     crate::mm::vmm::init(boot_info);
     crate::mm::heap::init();
