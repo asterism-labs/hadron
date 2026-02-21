@@ -105,6 +105,28 @@ hadron_syscall_macros::define_syscalls! {
             len: usize,
         }
 
+        /// Extended spawn information for [`task_spawn`].
+        ///
+        /// Passed by pointer so that the ABI can be extended with new fields
+        /// without changing the syscall argument count. The kernel validates
+        /// `info_len >= size_of::<SpawnInfo>()`.
+        #[derive(Debug, Clone, Copy)]
+        struct SpawnInfo {
+            /// Pointer to the path string bytes.
+            path_ptr: usize,
+            /// Length of the path string.
+            path_len: usize,
+            /// Pointer to an array of [`SpawnArg`] descriptors for argv.
+            argv_ptr: usize,
+            /// Number of argv entries.
+            argv_count: usize,
+            /// Pointer to an array of [`SpawnArg`] descriptors for envp.
+            /// Each envp entry is a `KEY=value` string.
+            envp_ptr: usize,
+            /// Number of envp entries.
+            envp_count: usize,
+        }
+
         /// A single directory entry returned by `vnode_readdir`.
         #[derive(Debug, Clone, Copy)]
         struct DirEntryInfo {
@@ -151,11 +173,12 @@ hadron_syscall_macros::define_syscalls! {
         /// Terminate the current task.
         fn task_exit(status: usize) = 0x00;
 
-        /// Spawn a new task from an ELF binary at the given path.
+        /// Spawn a new task from an ELF binary.
         ///
-        /// If `argv_ptr` and `argv_count` are both 0, no arguments are passed.
-        /// Otherwise `argv_ptr` points to an array of [`SpawnArg`] descriptors.
-        fn task_spawn(path_ptr: usize, path_len: usize, argv_ptr: usize, argv_count: usize) = 0x01;
+        /// `info_ptr` points to a [`SpawnInfo`] struct. `info_len` must be
+        /// at least `size_of::<SpawnInfo>()`. The struct contains path, argv,
+        /// and envp descriptors.
+        fn task_spawn(info_ptr: usize, info_len: usize) = 0x01;
 
         /// Wait for a child task to exit. Returns child PID on success.
         fn task_wait(pid: usize, status_ptr: usize) = 0x02;

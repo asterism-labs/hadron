@@ -49,102 +49,159 @@ const MAX_SPAWN_ARGS: usize = 32;
 /// Maximum total bytes for all argument strings combined.
 const MAX_ARGV_TOTAL_BYTES: usize = 4096;
 
-/// `sys_task_spawn` — creates a new process from an ELF binary at the given path.
+/// Maximum number of environment variables that can be passed.
+const MAX_SPAWN_ENVS: usize = 64;
+
+/// Maximum total bytes for all environment strings combined.
+const MAX_ENVP_TOTAL_BYTES: usize = 8192;
+
+/// Read an array of `SpawnArg` descriptors from user memory and copy their
+/// string data into a kernel buffer. Returns the number of entries copied.
 ///
-/// If `argv_ptr` and `argv_count` are both 0, no arguments are passed.
-/// Otherwise reads `SpawnArg` descriptors from the parent's address space and
-/// passes the argument strings to the child process.
+/// Returns a negative errno on validation failure.
+fn read_spawn_args(
+    descs_ptr: usize,
+    descs_count: usize,
+    max_entries: usize,
+    storage: &mut [u8],
+    offsets: &mut [(usize, usize)],
+) -> Result<(usize, usize), isize> {
+    if descs_ptr == 0 || descs_count == 0 {
+        return Ok((0, 0));
+    }
+    if descs_count > max_entries {
+        return Err(-(crate::syscall::EINVAL));
+    }
+
+    let desc_size = core::mem::size_of::<hadron_syscall::SpawnArg>() * descs_count;
+    let desc_slice = UserSlice::new(descs_ptr, desc_size).map_err(|e| e)?;
+
+    // SAFETY: The user slice was validated; user CR3 is still active.
+    let desc_bytes = unsafe { desc_slice.as_slice() };
+    // SAFETY: SpawnArg is repr(C) with only usize fields; any bit pattern is valid.
+    let descs = unsafe {
+        core::slice::from_raw_parts(
+            desc_bytes.as_ptr().cast::<hadron_syscall::SpawnArg>(),
+            descs_count,
+        )
+    };
+
+    let mut count = 0usize;
+    let mut total_bytes = 0usize;
+
+    for desc in descs {
+        if desc.len == 0 {
+            offsets[count] = (total_bytes, 0);
+            count += 1;
+            continue;
+        }
+        if total_bytes + desc.len > storage.len() {
+            return Err(-(crate::syscall::EINVAL));
+        }
+        let arg_slice = UserSlice::new(desc.ptr, desc.len).map_err(|e| e)?;
+        // SAFETY: Validated by UserSlice; user CR3 still active.
+        let arg_bytes = unsafe { arg_slice.as_slice() };
+        if core::str::from_utf8(arg_bytes).is_err() {
+            return Err(-(crate::syscall::EINVAL));
+        }
+        storage[total_bytes..total_bytes + desc.len].copy_from_slice(arg_bytes);
+        offsets[count] = (total_bytes, desc.len);
+        total_bytes += desc.len;
+        count += 1;
+    }
+
+    Ok((count, total_bytes))
+}
+
+/// Build a `&[&str]` from copied argument data.
+fn build_str_slice<'a>(
+    storage: &'a [u8],
+    offsets: &[(usize, usize)],
+    count: usize,
+    out: &mut [&'a str],
+) {
+    for i in 0..count {
+        let (offset, len) = offsets[i];
+        // SAFETY: We validated UTF-8 when copying from userspace.
+        out[i] = unsafe { core::str::from_utf8_unchecked(&storage[offset..offset + len]) };
+    }
+}
+
+/// `sys_task_spawn` — creates a new process from an ELF binary.
 ///
-/// Returns the child PID on success, or a negated errno on failure.
+/// Reads a [`SpawnInfo`] from user memory, extracts path/argv/envp, and
+/// spawns a child process. Returns the child PID on success.
 #[expect(
     clippy::cast_possible_wrap,
     reason = "PIDs are small u32 values, wrap is impossible"
 )]
-pub(super) fn sys_task_spawn(
-    path_ptr: usize,
-    path_len: usize,
-    argv_ptr: usize,
-    argv_count: usize,
-) -> isize {
-    let uslice = match UserSlice::new(path_ptr, path_len) {
+pub(super) fn sys_task_spawn(info_ptr: usize, info_len: usize) -> isize {
+    let expected_size = core::mem::size_of::<hadron_syscall::SpawnInfo>();
+    if info_len < expected_size {
+        return -(crate::syscall::EINVAL);
+    }
+
+    let info_slice = match UserSlice::new(info_ptr, expected_size) {
         Ok(s) => s,
         Err(e) => return e,
     };
 
-    // SAFETY: The user slice was validated above. We're in a syscall context
-    // with the user address space still mapped. The path bytes are read-only.
-    let path_bytes = unsafe { uslice.as_slice() };
+    // SAFETY: UserSlice validated the pointer; SpawnInfo is repr(C) with only
+    // usize fields so any bit pattern is valid.
+    let info: hadron_syscall::SpawnInfo = unsafe {
+        core::ptr::read_unaligned(info_slice.addr() as *const hadron_syscall::SpawnInfo)
+    };
+
+    // Read path.
+    let path_uslice = match UserSlice::new(info.path_ptr, info.path_len) {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    let path_bytes = unsafe { path_uslice.as_slice() };
     let path = match core::str::from_utf8(path_bytes) {
         Ok(s) => s,
         Err(_) => return -(crate::syscall::EINVAL),
     };
 
-    // Read argv from parent address space.
+    // Read argv.
     let mut arg_storage = [0u8; MAX_ARGV_TOTAL_BYTES];
-    let mut arg_offsets = [(0usize, 0usize); MAX_SPAWN_ARGS]; // (offset, len)
-    let mut arg_count = 0usize;
-    let mut total_bytes = 0usize;
+    let mut arg_offsets = [(0usize, 0usize); MAX_SPAWN_ARGS];
+    let (arg_count, _) = match read_spawn_args(
+        info.argv_ptr,
+        info.argv_count,
+        MAX_SPAWN_ARGS,
+        &mut arg_storage,
+        &mut arg_offsets,
+    ) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
 
-    if argv_ptr != 0 && argv_count != 0 {
-        if argv_count > MAX_SPAWN_ARGS {
-            return -(crate::syscall::EINVAL);
-        }
-
-        let desc_size = core::mem::size_of::<hadron_syscall::SpawnArg>() * argv_count;
-        let desc_slice = match UserSlice::new(argv_ptr, desc_size) {
-            Ok(s) => s,
-            Err(e) => return e,
-        };
-
-        // SAFETY: The user slice was validated; user CR3 is still active.
-        let desc_bytes = unsafe { desc_slice.as_slice() };
-        // SAFETY: SpawnArg is repr(C) with only usize fields; any bit pattern is valid.
-        let descs = unsafe {
-            core::slice::from_raw_parts(
-                desc_bytes.as_ptr().cast::<hadron_syscall::SpawnArg>(),
-                argv_count,
-            )
-        };
-
-        for desc in descs {
-            if desc.len == 0 {
-                arg_offsets[arg_count] = (total_bytes, 0);
-                arg_count += 1;
-                continue;
-            }
-            if total_bytes + desc.len > MAX_ARGV_TOTAL_BYTES {
-                return -(crate::syscall::EINVAL);
-            }
-            let arg_slice = match UserSlice::new(desc.ptr, desc.len) {
-                Ok(s) => s,
-                Err(e) => return e,
-            };
-            // SAFETY: Validated by UserSlice; user CR3 still active.
-            let arg_bytes = unsafe { arg_slice.as_slice() };
-            // Validate UTF-8.
-            if core::str::from_utf8(arg_bytes).is_err() {
-                return -(crate::syscall::EINVAL);
-            }
-            arg_storage[total_bytes..total_bytes + desc.len].copy_from_slice(arg_bytes);
-            arg_offsets[arg_count] = (total_bytes, desc.len);
-            total_bytes += desc.len;
-            arg_count += 1;
-        }
-    }
-
-    // Build &[&str] from the copied argument data.
-    // This is safe because we validated UTF-8 above.
     let mut arg_strs: [&str; MAX_SPAWN_ARGS] = [""; MAX_SPAWN_ARGS];
-    for i in 0..arg_count {
-        let (offset, len) = arg_offsets[i];
-        // SAFETY: We validated UTF-8 when copying from userspace.
-        arg_strs[i] = unsafe { core::str::from_utf8_unchecked(&arg_storage[offset..offset + len]) };
-    }
+    build_str_slice(&arg_storage, &arg_offsets, arg_count, &mut arg_strs);
     let args = &arg_strs[..arg_count];
+
+    // Read envp.
+    let mut env_storage = [0u8; MAX_ENVP_TOTAL_BYTES];
+    let mut env_offsets = [(0usize, 0usize); MAX_SPAWN_ENVS];
+    let (env_count, _) = match read_spawn_args(
+        info.envp_ptr,
+        info.envp_count,
+        MAX_SPAWN_ENVS,
+        &mut env_storage,
+        &mut env_offsets,
+    ) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+
+    let mut env_strs: [&str; MAX_SPAWN_ENVS] = [""; MAX_SPAWN_ENVS];
+    build_str_slice(&env_storage, &env_offsets, env_count, &mut env_strs);
+    let envs = &env_strs[..env_count];
 
     let parent_pid = crate::proc::with_current_process(|p| p.pid);
 
-    match crate::proc::exec::spawn_process(path, parent_pid, args) {
+    match crate::proc::exec::spawn_process(path, parent_pid, args, envs) {
         Ok(child) => child.pid as isize,
         Err(_) => -(crate::syscall::ENOENT),
     }

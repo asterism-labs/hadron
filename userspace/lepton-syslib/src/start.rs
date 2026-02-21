@@ -1,25 +1,25 @@
 //! Entry point and panic handler for userspace binaries.
 //!
-//! Provides `_start` which reads argc/argv from the stack (placed by the kernel),
-//! constructs a `&[&str]` argument slice, and calls the user-defined
-//! `main(args: &[&str]) -> i32`.
+//! Provides `_start` which reads argc/envc/argv/envp from the stack (placed
+//! by the kernel), constructs argument and environment slices, initializes
+//! the environment module, and calls the user-defined `main(args: &[&str]) -> i32`.
 
-/// Naked entry point: reads argc and argv base from the stack, then calls
-/// `_start_rust`.
+/// Naked entry point: reads argc, envc, and data base from the stack,
+/// then calls `_start_rust`.
 ///
 /// The kernel writes the following layout at RSP:
 /// ```text
-///   RSP + 0  → argc: usize
-///   RSP + 8  → (ptr₀, len₀), (ptr₁, len₁), ...  ← &str pairs
+///   RSP + 0   → argc: usize
+///   RSP + 8   → envc: usize
+///   RSP + 16  → argv (ptr, len) pairs, then envp (ptr, len) pairs
 /// ```
 #[unsafe(no_mangle)]
 #[unsafe(naked)]
 pub extern "C" fn _start() -> ! {
-    // RSP points to argc. Argv (ptr,len) pairs start at RSP+8.
-    // Load argc into RDI, argv pointer into RSI, call _start_rust.
     core::arch::naked_asm!(
-        "mov rdi, [rsp]",
-        "lea rsi, [rsp + 8]",
+        "mov rdi, [rsp]",        // argc
+        "mov rsi, [rsp + 8]",    // envc
+        "lea rdx, [rsp + 16]",   // data_base (argv then envp)
         "call {start_rust}",
         start_rust = sym _start_rust,
     );
@@ -27,15 +27,21 @@ pub extern "C" fn _start() -> ! {
 
 /// Rust entry point called from the naked `_start`.
 ///
-/// Constructs a `&[&str]` from the raw argc/argv data and calls the
-/// user-defined `main`.
-extern "C" fn _start_rust(argc: usize, argv_base: *const [u8; 16]) -> ! {
-    // Each (ptr, len) pair is 16 bytes on x86_64, matching Rust's &str layout.
-    // SAFETY: The kernel wrote valid (ptr, len) pairs and argc count.
+/// Constructs `&[&str]` slices for argv and envp from the raw stack data,
+/// initializes the environment, and calls the user-defined `main`.
+extern "C" fn _start_rust(argc: usize, envc: usize, data_base: *const [u8; 16]) -> ! {
+    // argv starts at data_base, envp starts at data_base + argc.
+    // SAFETY: The kernel wrote valid (ptr, len) pairs and argc/envc counts.
     // The pointer is non-null and properly aligned (set up by the kernel on
-    // a 16-byte aligned stack). The slice is valid for the lifetime of the
+    // a 16-byte aligned stack). The slices are valid for the lifetime of the
     // process.
-    let args: &[&str] = unsafe { core::slice::from_raw_parts(argv_base.cast::<&str>(), argc) };
+    let args: &[&str] =
+        unsafe { core::slice::from_raw_parts(data_base.cast::<&str>(), argc) };
+    let envp: &[&str] =
+        unsafe { core::slice::from_raw_parts(data_base.cast::<&str>().add(argc), envc) };
+
+    // Initialize the environment variable map from envp.
+    crate::env::init(envp);
 
     unsafe extern "C" {
         fn main(args: &[&str]) -> i32;

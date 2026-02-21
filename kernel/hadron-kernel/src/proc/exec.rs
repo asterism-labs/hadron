@@ -237,18 +237,19 @@ fn map_user_stack<
     }
 }
 
-/// Writes argv data onto the child's user stack via HHDM translation.
+/// Writes argv and envp data onto the child's user stack via HHDM translation.
 ///
 /// Stack layout (Rust-native `&str` = `(ptr, len)` in memory):
 /// ```text
 /// HIGH ADDRESS (USER_STACK_TOP = 0x7FFF_FFFF_F000)
 ///   ┌────────────────────────────────┐
+///   │ env string bytes (contiguous)  │
 ///   │ arg string bytes (contiguous)  │  ← packed UTF-8, NOT NUL-terminated
 ///   ├────────────────────────────────┤
-///   │ (ptr₀, len₀)  16 bytes        │  ← directly castable to &[&str]
-///   │ (ptr₁, len₁)  16 bytes        │
-///   │ ...                            │
+///   │ envp (ptr, len) pairs          │
+///   │ argv (ptr, len) pairs          │  ← directly castable to &[&str]
 ///   ├────────────────────────────────┤
+///   │ envc: usize                    │
 ///   │ argc: usize                    │  ← RSP points here
 ///   └────────────────────────────────┘    (16-byte aligned)
 /// ```
@@ -258,51 +259,71 @@ fn map_user_stack<
     clippy::cast_possible_truncation,
     reason = "x86_64: u64 and usize are the same width"
 )]
-fn write_argv_to_stack<M: PageMapper<Size4KiB> + PageTranslator>(
+fn write_startup_data<M: PageMapper<Size4KiB> + PageTranslator>(
     address_space: &AddressSpace<M>,
     args: &[&str],
+    envs: &[&str],
     hhdm_offset: u64,
 ) -> Result<u64, BinaryError> {
-    if args.is_empty() {
-        // Write just argc=0 at the top of the stack, 16-byte aligned.
-        let argc_addr = USER_STACK_TOP - 16; // 16-byte aligned
-        write_usize_to_user(address_space, argc_addr, 0, hhdm_offset)?;
-        return Ok(argc_addr);
+    if args.is_empty() && envs.is_empty() {
+        // Write argc=0, envc=0 at the top of the stack, 16-byte aligned.
+        let base = USER_STACK_TOP - 16; // 16-byte aligned
+        write_usize_to_user(address_space, base, 0, hhdm_offset)?; // argc
+        write_usize_to_user(
+            address_space,
+            base + core::mem::size_of::<usize>() as u64,
+            0,
+            hhdm_offset,
+        )?; // envc
+        return Ok(base);
     }
 
     let mut cursor = USER_STACK_TOP;
 
-    // 1. Write string bytes at the top of the stack (growing downward).
-    //    Track the user-space virtual address of each string.
-    let mut string_addrs = [(0u64, 0usize); 32]; // (vaddr, len), max 32 args
+    // Maximum combined entries for strings.
+    const MAX_STRINGS: usize = 96; // 32 args + 64 envs
+    let mut string_addrs = [(0u64, 0usize); MAX_STRINGS];
+
+    // 1. Write env string bytes first (higher addresses).
+    for (i, env) in envs.iter().enumerate().rev() {
+        let idx = args.len() + i;
+        cursor -= env.len() as u64;
+        let str_vaddr = cursor;
+        write_string_bytes(address_space, str_vaddr, env, hhdm_offset)?;
+        string_addrs[idx] = (str_vaddr, env.len());
+    }
+
+    // 2. Write arg string bytes.
     for (i, arg) in args.iter().enumerate().rev() {
         cursor -= arg.len() as u64;
         let str_vaddr = cursor;
-        // Write string bytes via HHDM.
-        for (j, &byte) in arg.as_bytes().iter().enumerate() {
-            let vaddr = str_vaddr + j as u64;
-            let phys = address_space
-                .translate(VirtAddr::new(vaddr))
-                .ok_or(BinaryError::ParseError("argv string address not mapped"))?;
-            let hhdm_ptr = (hhdm_offset + phys.as_u64()) as *mut u8;
-            // SAFETY: The page was allocated by map_user_stack and zeroed.
-            // Writing via HHDM before the address space is in CR3 is safe.
-            unsafe {
-                core::ptr::write(hhdm_ptr, byte);
-            }
-        }
+        write_string_bytes(address_space, str_vaddr, arg, hhdm_offset)?;
         string_addrs[i] = (str_vaddr, arg.len());
     }
 
-    // 2. Compute layout so that RSP is 16-byte aligned with:
-    //    [RSP]     = argc  (8 bytes)
-    //    [RSP + 8] = start of (ptr, len) pairs
+    // 3. Compute layout:
+    //    [RSP]      = argc (8 bytes)
+    //    [RSP + 8]  = envc (8 bytes)
+    //    [RSP + 16] = argv (ptr, len) pairs
+    //    [RSP + 16 + argc * 16] = envp (ptr, len) pairs
     let pair_size = 2 * core::mem::size_of::<usize>() as u64; // 16 bytes on x86_64
-    let total_below = core::mem::size_of::<usize>() as u64 + pair_size * args.len() as u64;
+    let header_size = 2 * core::mem::size_of::<usize>() as u64; // argc + envc
+    let total_below = header_size
+        + pair_size * args.len() as u64
+        + pair_size * envs.len() as u64;
     let rsp = (cursor - total_below) & !0xF; // 16-byte aligned
-    let argv_base = rsp + core::mem::size_of::<usize>() as u64;
 
-    // 3. Write (ptr, len) pairs at argv_base.
+    // 4. Write argc and envc.
+    write_usize_to_user(address_space, rsp, args.len(), hhdm_offset)?;
+    write_usize_to_user(
+        address_space,
+        rsp + core::mem::size_of::<usize>() as u64,
+        envs.len(),
+        hhdm_offset,
+    )?;
+
+    // 5. Write argv (ptr, len) pairs.
+    let argv_base = rsp + header_size;
     for (i, &(vaddr, len)) in string_addrs[..args.len()].iter().enumerate() {
         let pair_addr = argv_base + (i as u64) * pair_size;
         write_usize_to_user(address_space, pair_addr, vaddr as usize, hhdm_offset)?;
@@ -314,10 +335,45 @@ fn write_argv_to_stack<M: PageMapper<Size4KiB> + PageTranslator>(
         )?;
     }
 
-    // 4. Write argc at RSP.
-    write_usize_to_user(address_space, rsp, args.len(), hhdm_offset)?;
+    // 6. Write envp (ptr, len) pairs.
+    let envp_base = argv_base + pair_size * args.len() as u64;
+    for (i, &(vaddr, len)) in string_addrs[args.len()..args.len() + envs.len()]
+        .iter()
+        .enumerate()
+    {
+        let pair_addr = envp_base + (i as u64) * pair_size;
+        write_usize_to_user(address_space, pair_addr, vaddr as usize, hhdm_offset)?;
+        write_usize_to_user(
+            address_space,
+            pair_addr + core::mem::size_of::<usize>() as u64,
+            len,
+            hhdm_offset,
+        )?;
+    }
 
     Ok(rsp)
+}
+
+/// Write a UTF-8 string's bytes to the user address space via HHDM.
+fn write_string_bytes<M: PageMapper<Size4KiB> + PageTranslator>(
+    address_space: &AddressSpace<M>,
+    vaddr: u64,
+    s: &str,
+    hhdm_offset: u64,
+) -> Result<(), BinaryError> {
+    for (j, &byte) in s.as_bytes().iter().enumerate() {
+        let addr = vaddr + j as u64;
+        let phys = address_space
+            .translate(VirtAddr::new(addr))
+            .ok_or(BinaryError::ParseError("string address not mapped"))?;
+        let hhdm_ptr = (hhdm_offset + phys.as_u64()) as *mut u8;
+        // SAFETY: The page was allocated by map_user_stack and zeroed.
+        // Writing via HHDM before the address space is in CR3 is safe.
+        unsafe {
+            core::ptr::write(hhdm_ptr, byte);
+        }
+    }
+    Ok(())
 }
 
 /// Writes a `usize` value to a virtual address in the child's address space via HHDM.
@@ -339,7 +395,7 @@ fn write_usize_to_user<M: PageMapper<Size4KiB> + PageTranslator>(
     Ok(())
 }
 
-/// Writes argv for the init process: `["/init"]`.
+/// Writes startup data for the init process: argv=`["/init"]`, no envp.
 ///
 /// This is a separate entry point for `spawn_init` which doesn't go through
 /// the full `spawn_process` flow.
@@ -351,14 +407,14 @@ pub fn write_argv_to_init_stack<M: PageMapper<Size4KiB> + PageTranslator>(
     address_space: &AddressSpace<M>,
     hhdm_offset: u64,
 ) -> Result<u64, BinaryError> {
-    write_argv_to_stack(address_space, &["/init"], hhdm_offset)
+    write_startup_data(address_space, &["/init"], &[], hhdm_offset)
 }
 
 /// Spawns a new process from an ELF binary at the given VFS path.
 ///
 /// Reads the binary from the VFS, creates a process with inherited fd 0/1/2
-/// from the parent, writes argv onto the child stack, registers it in the
-/// global process table, and spawns its async task on the executor.
+/// from the parent, writes argv and envp onto the child stack, registers it
+/// in the global process table, and spawns its async task on the executor.
 ///
 /// Returns the child process `Arc` on success.
 ///
@@ -370,6 +426,7 @@ pub fn spawn_process(
     path: &str,
     parent_pid: u32,
     args: &[&str],
+    envs: &[&str],
 ) -> Result<Arc<Process>, BinaryError> {
     use crate::fs::file::OpenFlags;
     use crate::fs::{poll_immediate, vfs};
@@ -385,9 +442,9 @@ pub fn spawn_process(
 
     let (process, entry, _stack_top) = create_process_from_binary(&buf, Some(parent_pid))?;
 
-    // Write argv onto the child's user stack.
+    // Write argv and envp onto the child's user stack.
     let hhdm_offset = crate::mm::hhdm::offset();
-    let stack_top = write_argv_to_stack(process.address_space(), args, hhdm_offset)?;
+    let stack_top = write_startup_data(process.address_space(), args, envs, hhdm_offset)?;
 
     // Inherit fd 0/1/2 from parent, or fall back to /dev/console.
     {

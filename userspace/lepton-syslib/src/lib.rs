@@ -10,6 +10,7 @@ extern crate alloc;
 
 pub use hadron_syscall;
 
+pub mod env;
 pub mod heap;
 pub mod io;
 pub mod start;

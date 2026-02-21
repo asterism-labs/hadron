@@ -23,14 +23,8 @@ impl SyscallHandler for HadronDispatch {
         process::sys_task_exit(status)
     }
 
-    fn sys_task_spawn(
-        &self,
-        path_ptr: usize,
-        path_len: usize,
-        argv_ptr: usize,
-        argv_count: usize,
-    ) -> isize {
-        process::sys_task_spawn(path_ptr, path_len, argv_ptr, argv_count)
+    fn sys_task_spawn(&self, info_ptr: usize, info_len: usize) -> isize {
+        process::sys_task_spawn(info_ptr, info_len)
     }
 
     fn sys_task_wait(&self, pid: usize, status_ptr: usize) -> isize {

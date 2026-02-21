@@ -32,31 +32,62 @@ pub fn getpid() -> u32 {
 
 /// Spawn a new process from an ELF binary at the given path.
 ///
-/// `argv` is passed to the child process. If empty, no arguments are passed.
-///
-/// Returns the child PID on success, or a negative errno on failure.
+/// `argv` is passed to the child process. The current environment is
+/// automatically inherited. Returns the child PID on success, or a
+/// negative errno on failure.
 pub fn spawn(path: &str, argv: &[&str]) -> isize {
-    if argv.is_empty() {
-        return syscall4(SYS_TASK_SPAWN, path.as_ptr() as usize, path.len(), 0, 0);
-    }
+    // Build the env block from the current environment.
+    let env_block = crate::env::build_env_block();
+    let env_refs: alloc::vec::Vec<&str> = env_block.iter().map(|s| s.as_str()).collect();
+    spawn_with_env(path, argv, &env_refs)
+}
 
-    // Build SpawnArg descriptors on the stack.
-    // Max 32 args to match the kernel limit.
-    let mut descs = [SpawnArg { ptr: 0, len: 0 }; 32];
-    let count = argv.len().min(32);
-    for (i, arg) in argv[..count].iter().enumerate() {
-        descs[i] = SpawnArg {
+/// Spawn a new process with explicit environment variables.
+///
+/// Each entry in `envp` should be a `KEY=value` string.
+/// Returns the child PID on success, or a negative errno on failure.
+pub fn spawn_with_env(path: &str, argv: &[&str], envp: &[&str]) -> isize {
+    // Build SpawnArg descriptors for argv.
+    let mut argv_descs = [SpawnArg { ptr: 0, len: 0 }; 32];
+    let argv_count = argv.len().min(32);
+    for (i, arg) in argv[..argv_count].iter().enumerate() {
+        argv_descs[i] = SpawnArg {
             ptr: arg.as_ptr() as usize,
             len: arg.len(),
         };
     }
 
-    syscall4(
+    // Build SpawnArg descriptors for envp.
+    let mut envp_descs = [SpawnArg { ptr: 0, len: 0 }; 64];
+    let envp_count = envp.len().min(64);
+    for (i, env) in envp[..envp_count].iter().enumerate() {
+        envp_descs[i] = SpawnArg {
+            ptr: env.as_ptr() as usize,
+            len: env.len(),
+        };
+    }
+
+    let info = hadron_syscall::SpawnInfo {
+        path_ptr: path.as_ptr() as usize,
+        path_len: path.len(),
+        argv_ptr: if argv_count > 0 {
+            argv_descs.as_ptr() as usize
+        } else {
+            0
+        },
+        argv_count,
+        envp_ptr: if envp_count > 0 {
+            envp_descs.as_ptr() as usize
+        } else {
+            0
+        },
+        envp_count,
+    };
+
+    syscall2(
         SYS_TASK_SPAWN,
-        path.as_ptr() as usize,
-        path.len(),
-        descs.as_ptr() as usize,
-        count,
+        &info as *const hadron_syscall::SpawnInfo as usize,
+        core::mem::size_of::<hadron_syscall::SpawnInfo>(),
     )
 }
 
