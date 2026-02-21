@@ -31,6 +31,8 @@ hadron_syscall_macros::define_syscalls! {
         EISDIR = 21;
         /// `EINVAL` — invalid argument.
         EINVAL = 22;
+        /// `EINTR` — interrupted system call.
+        EINTR = 4;
         /// `ENOSYS` — function not implemented.
         ENOSYS = 38;
         /// `ELOOP` — too many levels of symbolic links.
@@ -166,6 +168,18 @@ hadron_syscall_macros::define_syscalls! {
         PROT_EXEC: usize = 0x4;
         /// Memory mapping flag: anonymous (not file-backed).
         MAP_ANONYMOUS: usize = 0x1;
+        /// Signal: interrupt (Ctrl+C).
+        SIGINT: usize = 2;
+        /// Signal: kill (cannot be caught).
+        SIGKILL: usize = 9;
+        /// Signal: segmentation fault.
+        SIGSEGV: usize = 11;
+        /// Signal: broken pipe.
+        SIGPIPE: usize = 13;
+        /// Signal: terminate.
+        SIGTERM: usize = 15;
+        /// Signal: child process exited.
+        SIGCHLD: usize = 17;
     }
 
     /// Task management.
@@ -183,9 +197,11 @@ hadron_syscall_macros::define_syscalls! {
         /// Wait for a child task to exit. Returns child PID on success.
         fn task_wait(pid: usize, status_ptr: usize) = 0x02;
 
-        /// Kill a task.
-        #[reserved(phase = 11)]
-        fn task_kill() = 0x03;
+        /// Send a signal to a task.
+        ///
+        /// `pid` is the target process ID, `signum` is the signal number.
+        /// Returns 0 on success, or a negated errno on failure.
+        fn task_kill(pid: usize, signum: usize) = 0x03;
 
         /// Detach a task.
         #[reserved(phase = 11)]

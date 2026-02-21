@@ -1,4 +1,4 @@
-//! Task syscall handlers: task_exit, task_info, task_spawn, task_wait.
+//! Task syscall handlers: task_exit, task_info, task_spawn, task_wait, task_kill.
 
 use crate::arch::x86_64::registers::control::Cr3;
 use crate::arch::x86_64::registers::model_specific::{IA32_GS_BASE, IA32_KERNEL_GS_BASE};
@@ -244,5 +244,29 @@ pub(super) fn sys_task_wait(pid: usize, status_ptr: usize) -> isize {
     // still valid on the executor stack.
     unsafe {
         restore_kernel_context(saved_rsp);
+    }
+}
+
+/// `sys_task_kill` — sends a signal to a process.
+///
+/// Returns 0 on success, or a negated errno on failure.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "PID fits in u32"
+)]
+pub(super) fn sys_task_kill(pid: usize, signum: usize) -> isize {
+    use crate::proc::signal::Signal;
+
+    if !Signal::is_valid(signum) {
+        return -(crate::syscall::EINVAL);
+    }
+
+    let target = crate::proc::lookup_process(pid as u32);
+    match target {
+        Some(proc) => {
+            proc.signals.post(signum);
+            0
+        }
+        None => -(crate::syscall::EINVAL),
     }
 }

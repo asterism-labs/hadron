@@ -108,6 +108,8 @@ pub enum FsError {
     NotSupported,
     /// Too many levels of symbolic links.
     SymlinkLoop,
+    /// Operation interrupted by a signal.
+    Interrupted,
 }
 
 impl FsError {
@@ -125,6 +127,7 @@ impl FsError {
             FsError::InvalidArgument => crate::syscall::EINVAL,
             FsError::NotSupported => crate::syscall::ENOSYS,
             FsError::SymlinkLoop => crate::syscall::ELOOP,
+            FsError::Interrupted => crate::syscall::EINTR,
         }
     }
 }

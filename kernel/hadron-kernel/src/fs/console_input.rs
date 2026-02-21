@@ -53,6 +53,8 @@ struct ConsoleInputState {
     line_len: usize,
     /// Whether a shift key is currently held.
     shift_held: bool,
+    /// Whether a ctrl key is currently held.
+    ctrl_held: bool,
     /// Whether caps lock is active (toggled).
     caps_lock: bool,
     /// Whether the previous scancode was the 0xE0 extended prefix.
@@ -66,6 +68,7 @@ impl ConsoleInputState {
             line_buf: [0; LINE_BUF_SIZE],
             line_len: 0,
             shift_held: false,
+            ctrl_held: false,
             caps_lock: false,
             extended_prefix: false,
         }
@@ -203,6 +206,8 @@ enum EchoAction {
     Newline,
     /// Print a single ASCII character.
     Char(u8),
+    /// Print `^C` followed by a newline (Ctrl+C interrupt).
+    Interrupt,
 }
 
 /// Process a single raw scancode: decode, update modifier state, and buffer
@@ -236,6 +241,10 @@ fn process_scancode(state: &mut ConsoleInputState, scancode: u8) -> Option<EchoA
             state.shift_held = !is_release;
             return None;
         }
+        KeyCode::LeftCtrl | KeyCode::RightCtrl => {
+            state.ctrl_held = !is_release;
+            return None;
+        }
         KeyCode::CapsLock => {
             if !is_release {
                 state.caps_lock = !state.caps_lock;
@@ -248,6 +257,19 @@ fn process_scancode(state: &mut ConsoleInputState, scancode: u8) -> Option<EchoA
     // Only process key presses, not releases.
     if is_release {
         return None;
+    }
+
+    // Detect Ctrl+C: send SIGINT to the foreground process.
+    if state.ctrl_held && key == KeyCode::C {
+        let fg_pid = crate::proc::foreground_pid();
+        if fg_pid != 0 {
+            if let Some(proc) = crate::proc::lookup_process(fg_pid) {
+                proc.signals.post(crate::syscall::SIGINT);
+            }
+        }
+        // Discard the current line buffer and echo ^C via deferred action.
+        state.line_len = 0;
+        return Some(EchoAction::Interrupt);
     }
 
     let shifted = state.shift_held;
@@ -348,6 +370,7 @@ pub fn poll_keyboard_hardware() {
             Some(EchoAction::Backspace) => crate::kprint!("\x08 \x08"),
             Some(EchoAction::Newline) => crate::kprint!("\n"),
             Some(EchoAction::Char(ch)) => crate::kprint!("{}", *ch as char),
+            Some(EchoAction::Interrupt) => crate::kprint!("^C\n"),
             None => {}
         }
     }

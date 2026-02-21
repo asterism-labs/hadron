@@ -1,11 +1,11 @@
-//! System calls: exit, getpid, spawn, waitpid, pipe, query, clock.
+//! System calls: exit, getpid, spawn, waitpid, kill, pipe, query, clock.
 
 use hadron_syscall::raw::{syscall0, syscall1, syscall2, syscall4};
 use hadron_syscall::{
     CLOCK_MONOTONIC, KernelVersionInfo, MAP_ANONYMOUS, MemoryInfo, PROT_READ, PROT_WRITE,
     QUERY_KERNEL_VERSION, QUERY_MEMORY, QUERY_UPTIME, SYS_CLOCK_GETTIME, SYS_HANDLE_DUP,
     SYS_HANDLE_PIPE, SYS_MEM_MAP, SYS_MEM_UNMAP, SYS_QUERY, SYS_TASK_EXIT, SYS_TASK_INFO,
-    SYS_TASK_SPAWN, SYS_TASK_WAIT, SpawnArg, Timespec, UptimeInfo,
+    SYS_TASK_KILL, SYS_TASK_SPAWN, SYS_TASK_WAIT, SpawnArg, Timespec, UptimeInfo,
 };
 
 // ── Functions ─────────────────────────────────────────────────────────
@@ -101,6 +101,13 @@ pub fn waitpid(pid: u32, status_out: Option<&mut u64>) -> isize {
         None => 0,
     };
     syscall2(SYS_TASK_WAIT, pid as usize, status_ptr)
+}
+
+/// Send a signal to a process.
+///
+/// Returns 0 on success, or a negative errno on failure.
+pub fn kill(pid: u32, signum: usize) -> isize {
+    syscall2(SYS_TASK_KILL, pid as usize, signum)
 }
 
 /// Duplicate a file descriptor (dup2 semantics).

@@ -31,6 +31,10 @@ impl SyscallHandler for HadronDispatch {
         process::sys_task_wait(pid, status_ptr)
     }
 
+    fn sys_task_kill(&self, pid: usize, signum: usize) -> isize {
+        process::sys_task_kill(pid, signum)
+    }
+
     fn sys_task_info(&self) -> isize {
         process::sys_task_info()
     }

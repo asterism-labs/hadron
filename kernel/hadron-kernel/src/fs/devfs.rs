@@ -298,7 +298,18 @@ impl Future for ConsoleReadFuture<'_> {
             return Poll::Ready(Ok(n));
         }
 
-        // 4. No data — yield to executor until keyboard IRQ fires.
+        // 4. Check if the foreground process has a pending signal.
+        //    If so, return Interrupted to unblock the TRAP_IO handler.
+        let fg_pid = crate::proc::foreground_pid();
+        if fg_pid != 0 {
+            if let Some(proc) = crate::proc::lookup_process(fg_pid) {
+                if proc.signals.has_pending() {
+                    return Poll::Ready(Err(FsError::Interrupted));
+                }
+            }
+        }
+
+        // 5. No data — yield to executor until keyboard IRQ fires.
         Poll::Pending
     }
 }

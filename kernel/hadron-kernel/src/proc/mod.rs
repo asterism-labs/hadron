@@ -9,6 +9,7 @@
 
 pub mod binfmt;
 pub mod exec;
+pub mod signal;
 
 extern crate alloc;
 
@@ -145,6 +146,22 @@ static IO_BUF_LEN: CpuLocal<AtomicU64> = CpuLocal::new([const { AtomicU64::new(0
 /// Per-CPU I/O direction for TRAP_IO: 0 = read, 1 = write.
 static IO_IS_WRITE: CpuLocal<AtomicU8> = CpuLocal::new([const { AtomicU8::new(0) }; MAX_CPUS]);
 
+/// PID of the current foreground process (the one that receives Ctrl+C).
+///
+/// Set to the child PID in TRAP_WAIT before await, reset to 0 after.
+/// Accessed from the keyboard input handler to deliver SIGINT.
+static FOREGROUND_PID: AtomicU32 = AtomicU32::new(0);
+
+/// Sets the foreground process PID (called from `process_task` during TRAP_WAIT).
+pub fn set_foreground_pid(pid: u32) {
+    FOREGROUND_PID.store(pid, Ordering::Release);
+}
+
+/// Returns the current foreground process PID, or 0 if none.
+pub fn foreground_pid() -> u32 {
+    FOREGROUND_PID.load(Ordering::Acquire)
+}
+
 // ── Global process table ────────────────────────────────────────────
 
 /// Global process table mapping PID → `Arc<Process>`.
@@ -212,6 +229,8 @@ pub struct Process {
     pub fd_table: SpinLock<FileDescriptorTable>,
     /// Virtual address region allocator for `sys_mem_map` mappings.
     pub(crate) mmap_alloc: SpinLock<FreeRegionAllocator<MMAP_FREE_LIST_CAPACITY>>,
+    /// Pending signals for this process.
+    pub signals: signal::SignalState,
     /// Exit status, set when the process terminates.
     pub exit_status: SpinLock<Option<u64>>,
     /// Wait queue notified when this process exits.
@@ -236,6 +255,7 @@ impl Process {
             address_space,
             fd_table: SpinLock::new(FileDescriptorTable::new()),
             mmap_alloc: SpinLock::new(FreeRegionAllocator::new(mmap_region)),
+            signals: signal::SignalState::new(),
             exit_status: SpinLock::new(None),
             exit_notify: HeapWaitQueue::new(),
         }
@@ -528,6 +548,26 @@ pub fn set_io_params(fd: usize, buf_ptr: usize, buf_len: usize, is_write: bool) 
         .store(u8::from(is_write), Ordering::Release);
 }
 
+/// Check for pending signals and handle them.
+///
+/// Returns `true` if the process should be terminated (the caller should
+/// set exit status and break out of the process loop).
+fn check_signals(process: &Process) -> Option<u64> {
+    while let Some(sig) = process.signals.dequeue() {
+        let action = signal::default_action(sig.0);
+        match action {
+            signal::SignalAction::Terminate => {
+                // Exit status = 128 + signal number (Unix convention).
+                return Some(128 + sig.0 as u64);
+            }
+            signal::SignalAction::Ignore => {
+                // Discard the signal.
+            }
+        }
+    }
+    None
+}
+
 /// The async task that represents a running process.
 ///
 /// Enters userspace and re-enters after preemption in a loop.
@@ -582,6 +622,14 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
 
                 // Yield to the executor so other tasks can run.
                 crate::sched::primitives::yield_now().await;
+
+                // Check for pending signals before re-entering userspace.
+                if let Some(exit_code) = check_signals(&process) {
+                    kinfo!("Process {} killed by signal (exit {})", pid, exit_code);
+                    *process.exit_status.lock() = Some(exit_code);
+                    process.exit_notify.wake_all();
+                    break;
+                }
 
                 // Restore our saved context back before re-entering
                 // userspace. Another process may have overwritten it
@@ -639,7 +687,24 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                     )
                 };
 
+                // Set foreground PID so Ctrl+C delivers SIGINT to the child.
+                let child_pid_for_fg = if target != 0 { target } else { 0 };
+                if child_pid_for_fg != 0 {
+                    set_foreground_pid(child_pid_for_fg);
+                }
+
                 let (result, exit_code) = handle_wait(pid, target).await;
+
+                // Clear foreground PID.
+                set_foreground_pid(0);
+
+                // Check for pending signals after wait completes.
+                if let Some(exit_code) = check_signals(&process) {
+                    kinfo!("Process {} killed by signal (exit {})", pid, exit_code);
+                    *process.exit_status.lock() = Some(exit_code);
+                    process.exit_notify.wake_all();
+                    break;
+                }
 
                 // Write exit status to user memory under user CR3.
                 if status_ptr != 0 && result >= 0 {
@@ -825,6 +890,14 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                 } else {
                     -crate::syscall::EBADF
                 };
+
+                // Check for pending signals after I/O completes.
+                if let Some(exit_code) = check_signals(&process) {
+                    kinfo!("Process {} killed by signal (exit {})", pid, exit_code);
+                    *process.exit_status.lock() = Some(exit_code);
+                    process.exit_notify.wake_all();
+                    break;
+                }
 
                 // Restore user registers and set result in rax.
                 // SAFETY: USER_CONTEXT is per-CPU, only accessed from this
