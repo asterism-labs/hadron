@@ -5,7 +5,7 @@
 ## Goals
 
 - **Safety first**: Leverage Rust's type system and ownership model to eliminate entire classes of bugs (use-after-free, data races, buffer overflows) in the majority of kernel code.
-- **Framekernel architecture**: Separate the kernel into an unsafe **frame** (`hadron-core`) and safe **services** (`hadron-kernel`), providing a clear safety boundary without the IPC overhead of a microkernel.
+- **Framekernel architecture**: Separate the kernel into an unsafe **frame** (`hadron-kernel::arch`) and safe **services** (the rest of `hadron-kernel`), providing a clear safety boundary without the IPC overhead of a microkernel.
 - **Incremental POSIX compatibility**: Start with core syscalls (~50), expand to ~200 as features are added. Use Linux syscall numbers initially for easy testing with existing tools.
 - **x86_64 first, architecture abstractions from day one**: Primary target is x86_64, but all arch-specific code lives behind traits so other architectures can be added later.
 - **Minimal external dependencies**: Write our own UEFI, ACPI, and ELF crates as no_std, zero-dependency libraries. Only use external crates where the value is clear (e.g., `bitflags`).
@@ -24,19 +24,18 @@
 
 The project is in its early stages. What exists today:
 
-- **Workspace structure**: Cargo workspace with `hadron-core`, `hadron-kernel`, `limine` crate, and `xtask`
+- **Workspace structure**: `hadron-kernel` (monolithic kernel), `hadron-drivers` (pluggable drivers), `limine` crate, and build tool (`gluon`)
 - **Limine protocol bindings**: Complete `crates/limine/` with request/response types, memory map, framebuffer, MP support
-- **Kernel core**: `hadron-core` with `InitState`/`InitInfo` trait for boot handoff
+- **Kernel core**: `hadron-kernel` with `BootInfo` trait for boot handoff, arch abstractions, memory management, async executor, syscall interface
 - **Linker script**: `targets/x86_64-unknown-hadron.ld` for ELF64 kernel image
 - **Toolchain**: Nightly Rust targeting `x86_64-unknown-none` with `rust-src` and `llvm-tools-preview`
 
 ## About This Book
 
-This book serves as both the **development roadmap** and **architectural documentation** for Hadron. It is organized into:
+This book provides **architectural documentation** and a **development roadmap** for Hadron. It is organized into:
 
 - **Architecture**: How the framekernel design works, crate layout, safety boundaries
-- **Development Phases**: 16 sequential phases from boot stub to vDSO, each with goals, files, data structures, and milestones
+- **Kernel Internals**: Subsystem documentation covering memory management, the async executor, VFS, syscalls, driver model, and more
+- **Development Phases**: Remaining phases from async VFS to vDSO, each with goals, files, and milestones
 - **Design Decisions**: Rationale behind syscall strategy, POSIX approach, memory layout, and architecture choice
-- **Reference**: Target file tree, phase dependency graph, LOC estimates
-
-Each phase chapter tells you exactly what to build, what you'll learn, and how to verify it works.
+- **Reference**: Target file tree, phase dependency graph, scope estimates

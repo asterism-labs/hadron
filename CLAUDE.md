@@ -42,43 +42,51 @@ hadron/
 
 ## Build Commands
 
-The project uses `gluon`, a custom build tool at `tools/gluon/` that invokes `rustc` directly. It builds a custom sysroot, compiles all crates in dependency order, and provides Kconfig-like configuration via `gluon.rhai` (Rhai scripting).
+A `justfile` at the project root provides the primary build interface. All recipes auto-bootstrap `gluon` (the custom build tool) on first run.
 
-First, build the tool itself:
-```sh
-cargo build --manifest-path tools/gluon/Cargo.toml
-```
-Alternatively, a `justfile` is provided for common capabilities like `just build`, `just test`, etc. (which internally call the `gluon` binary):
+### Prerequisites
 
-Then use it (from the project root):
 ```sh
-gluon configure        # Resolve config + generate rust-project.json
-gluon build            # Build sysroot + all crates + kernel + HBTF + initrd
-gluon run [-- args]    # Build + run in QEMU via cargo-image-runner
-gluon test             # Run all tests (host + kernel)
-gluon test --host-only # Run host-side unit tests only
-gluon check            # Type-check kernel crates without linking
-gluon clippy           # Run clippy lints on project crates
-gluon fmt              # Format project source files
-gluon fmt --check      # Check formatting without modifying
-gluon clean            # Remove build artifacts
+just vendor             # Fetch/sync vendored dependencies
+just configure          # Resolve config + generate rust-project.json
+just build              # Build sysroot + all crates + kernel + initrd
 ```
 
-Global flags: `--profile <name>` (`-P`) selects a build profile from `gluon.rhai`, `--target <triple>` overrides the target.
+### Common Commands
+
+```sh
+just build              # Build the kernel
+just run [-- args]      # Build + run in QEMU
+just test               # Run all tests (host + kernel)
+just test --host-only   # Host-side unit tests only (fast)
+just check              # Type-check without linking
+just clippy             # Run clippy lints on project crates
+just fmt                # Format source files
+just fmt --check        # Check formatting (CI)
+just configure          # Resolve config + generate rust-project.json
+just menuconfig         # TUI configuration editor
+just vendor             # Fetch/sync vendored dependencies
+just vendor --check     # Verify vendor directory is up to date
+just vendor --prune     # Remove unused vendored crates
+just clean              # Remove build artifacts
+```
+
+### Global Flags
+
+- `--profile <name>` (`-P`) — select a build profile from `gluon.rhai`
+- `--target <triple>` — override the target
+- `--verbose` (`-v`) — verbose output
+- `--force` (`-f`) — force rebuild
 
 ### Configuration
 
-Build configuration lives in `gluon.rhai` at the project root, using the Rhai scripting language. The script defines:
-- **Project metadata**: name and version
-- **Targets**: custom target specs and linker scripts
-- **Config options**: typed kernel options (bool, u32, u64, str) with dependencies, selects, ranges, and choices
-- **Profiles**: named configurations (default, release, stress, debug-gdb) with inheritance
-- **Groups**: crate collections with shared compilation context (sysroot, host, kernel, userspace)
-- **Rules**: artifact generation (HBTF, initrd) with built-in or script handlers
-- **Pipeline**: ordered build stages with barriers and rule execution
-- **QEMU settings**: machine type, memory, extra args, test exit codes
+Build configuration lives in `gluon.rhai` (Rhai scripting). It defines:
+- Targets, custom target specs, and linker scripts
+- Typed kernel config options (bool, u32, u64, str) with dependencies and selects
+- Named profiles (default, release, stress, debug-gdb) with inheritance
+- Crate groups, build pipeline stages, and QEMU settings
 
-The build system evaluates `gluon.rhai` to produce a `BuildModel`, validates it, resolves configuration, then schedules and executes compilation stages.
+> **Note:** The justfile wraps `gluon`, a custom build tool at `tools/gluon/` that invokes `rustc` directly. For direct usage, see `tools/gluon/`.
 
 ## Architecture
 
@@ -203,4 +211,4 @@ Integration tests run in QEMU using `hadron-test` crate:
 
 ## Development Phases
 
-The project has a completed foundation (Phases 0-6) plus 9 remaining phases documented in `docs/src/phases/`. Phases 0-6 are complete; Phase 7 (Syscall Interface) is in progress. Phase 6 implemented an async cooperative executor instead of the originally-planned preemptive scheduler, so all remaining phases are designed around the async model (async VFS, async block devices, per-CPU executors for SMP). See `docs/src/SUMMARY.md` for the full phase listing.
+Phases 0-7 are complete (boot, serial, CPU init, PMM, VMM, interrupts, async executor, syscalls). The 8 remaining phases are documented in `docs/src/phases/`. Phase 6 introduced an async cooperative executor, so all remaining phases are designed around the async model (async VFS, async block devices, per-CPU executors for SMP). See `docs/src/SUMMARY.md` for the full phase listing.

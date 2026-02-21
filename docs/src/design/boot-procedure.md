@@ -275,13 +275,3 @@ The boot stub handles paging setup rather than the kernel because:
 - The UEFI stub must build tables before jumping to the higher half
 - A clean ownership boundary means the kernel always starts in a known, consistent state regardless of which bootloader was used
 
-## Code Changes Required
-
-These changes are prescribed by this design and will be implemented separately:
-
-| File | Change |
-|------|--------|
-| `kernel/hadron-kernel/src/boot.rs` | Rename `kernel_main` to `kernel_init`. Add `page_table_root() -> u64` to the `BootInfo` trait and `BootInfoData` struct. |
-| `kernel/hadron-kernel/src/lib.rs` | Update `pub use boot::kernel_main` to `pub use boot::kernel_init`. |
-| `kernel/boot/limine/src/main.rs` | Add page table construction, GDT loading, CR3 switch before calling `kernel_init`. |
-| `targets/x86_64-unknown-hadron.ld` | Add section boundary symbols: `__text_start`/`__text_end`, `__rodata_start`/`__rodata_end`, `__data_start`/`__data_end`. (Currently only defines `__bss_start`, `__bss_end`, `__kernel_end`.) |

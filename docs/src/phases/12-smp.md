@@ -14,8 +14,8 @@ The Phase 6 executor already provides `CpuLocal<T>` and a per-CPU design with `M
 
 | File | Description |
 |------|-------------|
-| `hadron-core/src/arch/x86_64/smp.rs` | AP bootstrap via Limine MP protocol |
-| `hadron-core/src/percpu.rs` | `PerCpu` struct, `PerCpu::current()` via GS base |
+| `hadron-kernel/src/arch/x86_64/smp.rs` | AP bootstrap via Limine MP protocol |
+| `hadron-kernel/src/percpu.rs` | `PerCpu` struct, `PerCpu::current()` via GS base |
 | `hadron-kernel/src/sched/smp.rs` | Work stealing, cross-CPU wakeup routing |
 | `hadron-kernel/src/sched/executor.rs` | Replace `LazyLock<Executor>` with `CpuLocal<Executor>` |
 | `hadron-kernel/src/arch/x86_64/gdt.rs` | Per-CPU GDT/TSS initialization for APs |

@@ -1,136 +1,154 @@
 # Crate Structure
 
-Hadron is organized as a Cargo workspace with clear separation between kernel components, boot stubs, and reusable libraries.
+Hadron follows a two-crate kernel model with standalone library crates and a custom build system.
 
-## Workspace Layout
+## Project Layout
 
 ```
 hadron/
-├── Cargo.toml              # Workspace root (resolver = "2", edition = "2024")
-├── rust-toolchain.toml     # Nightly + rust-src, llvm-tools-preview
+├── gluon.rhai              # Build configuration (Rhai scripting)
+├── justfile                # Primary build interface
 │
 ├── kernel/
-│   ├── hadron-core/        # The frame: unsafe core, safe public API
-│   │   ├── Cargo.toml
+│   ├── hadron-kernel/      # Monolithic kernel: arch, driver API, mm, sched, VFS, PCI
 │   │   └── src/
 │   │       ├── lib.rs
-│   │       ├── addr.rs         # PhysAddr, VirtAddr
-│   │       ├── cell.rs         # Interior mutability primitives
-│   │       ├── log.rs          # kprint!/kprintln! macros
+│   │       ├── addr.rs         # PhysAddr, VirtAddr, PhysFrame newtypes
+│   │       ├── boot.rs         # BootInfo trait, kernel_init
 │   │       ├── paging.rs       # High-level paging abstractions
-│   │       ├── static_assert.rs
-│   │       ├── arch/x86_64/    # instructions/, registers/, structures/
-│   │       ├── mm/             # hhdm, pmm, vmm, heap, layout, region
-│   │       └── sync/           # spinlock, rwlock, lazy
+│   │       ├── percpu.rs       # Per-CPU data, CpuLocal<T>
+│   │       ├── task.rs         # TaskId, task types
+│   │       ├── arch/x86_64/    # GDT, IDT, ACPI, SMP, interrupts, instructions, registers
+│   │       ├── mm/             # PMM, VMM, heap, HHDM, address_space, region, zone
+│   │       ├── sync/           # SpinLock, IrqSpinLock, Mutex, RwLock, WaitQueue, Lazy
+│   │       ├── sched/          # Async executor, waker encoding, timer, SMP scheduling
+│   │       ├── fs/             # VFS, devfs, console_input, block_adapter, file, path
+│   │       ├── proc/           # Process management, ELF loading (binfmt)
+│   │       ├── syscall/        # Syscall dispatch, io, memory, process, query, time, vfs
+│   │       ├── ipc/            # Pipes, IPC primitives
+│   │       ├── driver_api/     # Driver trait hierarchy (resources, categories, interfaces)
+│   │       ├── drivers/        # Device registry
+│   │       └── pci/            # PCI enumeration, BAR decoding, capabilities
 │   │
-│   ├── hadron-kernel/      # Safe services: drivers, memory management
-│   │   ├── Cargo.toml
+│   ├── hadron-drivers/     # Pluggable hardware drivers
 │   │   └── src/
 │   │       ├── lib.rs
-│   │       ├── boot.rs         # Boot initialization
-│   │       ├── log.rs          # Kernel logging
-│   │       ├── sync.rs         # Synchronization wrappers
-│   │       ├── arch/x86_64/    # gdt, idt, interrupts, paging
-│   │       ├── drivers/        # early_fb (early framebuffer)
-│   │       └── mm/             # heap, pmm, vmm, zone
+│   │       ├── ahci/           # AHCI (SATA) driver
+│   │       ├── virtio/         # VirtIO block, PCI transport, virtqueues
+│   │       ├── serial/         # UART16550, async serial
+│   │       ├── input/          # i8042, keyboard, mouse
+│   │       ├── display/        # Bochs VGA
+│   │       ├── block/          # Ramdisk
+│   │       └── fs/             # FAT, ISO9660, ramfs, initramfs
 │   │
 │   └── boot/
-│       └── limine/             # Limine bootloader entry point (binary crate)
-│           ├── Cargo.toml
-│           ├── build.rs
-│           └── src/
-│               ├── main.rs
-│               └── requests.rs
+│       └── limine/         # Limine boot stub binary (hadron-boot-limine)
 │
 ├── crates/
-│   ├── limine/             # Limine protocol bindings (no_std)
-│   ├── noalloc/            # Allocation-free data structures (ringbuf, vec)
-│   ├── hadron-drivers/     # Hardware drivers
-│   ├── hadron-test/        # Test framework (QEMU exit, test runner)
-│   ├── uefi/               # Custom UEFI bindings (Phase 2)
-│   ├── acpi/               # ACPI table parsing (planned)
-│   └── elf/                # ELF64 parser (planned)
+│   ├── limine/             # Limine boot protocol bindings
+│   ├── noalloc/            # Allocation-free data structures
+│   ├── hadron-test/        # Test framework (QEMU isa-debug-exit)
+│   ├── hadron-syscall/     # Syscall numbers and ABI definitions
+│   ├── acpi/               # ACPI table parsing (hadron-acpi)
+│   ├── dwarf/              # DWARF debug info (hadron-dwarf)
+│   ├── elf/                # ELF parser (hadron-elf)
+│   └── uefi/               # UEFI bindings
 │
-└── xtask/                  # Build automation (runs on host)
-    ├── Cargo.toml
-    └── src/
-        ├── main.rs         # CLI dispatch
-        ├── build.rs        # Cross-compilation
-        ├── config.rs       # Paths, targets
-        ├── iso.rs          # ISO creation via xorriso + Limine
-        ├── limine.rs       # Limine bootloader management
-        ├── run.rs          # QEMU launch
-        └── test.rs         # Test runner
+├── userspace/
+│   ├── init/               # Init process (lepton-init)
+│   ├── lepton-syslib/      # Userspace syscall library
+│   ├── shell/              # Interactive shell (lepton-shell)
+│   └── coreutils/          # Core utilities (lepton-coreutils)
+│
+├── tools/
+│   └── gluon/              # Custom build system
+│
+├── vendor/                 # Vendored external dependencies
+├── targets/                # Custom target specs (x86_64-unknown-hadron.json)
+└── docs/                   # This mdbook
 ```
 
 ## Crate Dependency Graph
 
 ```
-kernel/boot/limine ──┬──> crates/limine
-                     ├──> kernel/hadron-core
-                     ├──> kernel/hadron-kernel
-                     ├──> crates/hadron-drivers
+kernel/boot/limine ──┬──> kernel/hadron-kernel
+                     ├──> kernel/hadron-drivers
+                     ├──> crates/limine
                      └──> crates/noalloc
 
-kernel/hadron-kernel ──┬──> kernel/hadron-core
-                       ├──> crates/hadron-drivers
-                       └──> crates/noalloc
-                       (dev: hadron-test, limine)
+kernel/hadron-drivers ──┬──> kernel/hadron-kernel
+                        ├──> bitflags
+                        ├──> hadris-cpio, hadris-fat, hadris-io, hadris-iso
+                        └──> (registers via linker-section macros)
 
-kernel/hadron-core ──> bitflags
+kernel/hadron-kernel ──┬──> bitflags
+                       ├──> hadris-io
+                       ├──> hadron-acpi, hadron-elf, hadron-syscall
+                       └──> noalloc
 
-crates/limine    ──> (no deps)
-crates/noalloc   ──> (no deps)
-crates/uefi      ──> (no deps)
-
-xtask ──> (host-only, uses std)
+crates/limine      ──> (no deps)
+crates/noalloc     ──> (no deps)
+crates/hadron-test ──> (no deps)
 ```
 
-Key design principle: **`crates/*` are standalone, no_std libraries** that can be tested independently and reused in other projects. `hadron-core` depends on `bitflags` for hardware register flag definitions.
+Key design principle: **`crates/*` are standalone, no_std libraries** that can be tested independently and reused in other projects.
 
 ## Crate Responsibilities
 
-### `kernel/hadron-core` — The Frame
+### `kernel/hadron-kernel` — Monolithic Kernel
 
-The unsafe foundation. Contains all hardware interaction code and exports safe abstractions.
+Contains both the unsafe frame (arch-specific, hardware-touching code) and safe services (subsystems built on safe abstractions). The framekernel safety boundary is enforced at the module level within this crate.
 
-| Module | Purpose |
-|--------|---------|
-| `addr.rs` | `PhysAddr`, `VirtAddr` newtypes |
-| `cell.rs` | Interior mutability primitives for kernel use |
-| `log.rs` | `kprint!`/`kprintln!` macros |
-| `paging.rs` | High-level paging abstractions |
-| `static_assert.rs` | Compile-time assertions |
-| `arch/x86_64/instructions/` | Port I/O, interrupts, segmentation, TLB, tables |
-| `arch/x86_64/registers/` | Control registers, MSRs, RFLAGS |
-| `arch/x86_64/structures/` | GDT, IDT, paging structures |
-| `mm/` | HHDM, PMM, VMM, heap, memory layout, regions |
-| `sync/` | `SpinLock`, `RwLock`, `Lazy` |
-
-### `kernel/hadron-kernel` — Safe Services
-
-High-level kernel functionality built on the frame's safe abstractions.
+**Frame modules** (contain `unsafe`):
 
 | Module | Purpose |
 |--------|---------|
-| `boot.rs` | Boot initialization sequence |
-| `log.rs` | Kernel logging infrastructure |
-| `sync.rs` | Synchronization wrappers |
-| `arch/x86_64/` | GDT, IDT, interrupts, paging setup |
-| `drivers/` | Early framebuffer driver |
-| `mm/` | Heap allocator, PMM, VMM, zone allocator |
+| `addr.rs` | `PhysAddr`, `VirtAddr`, `PhysFrame` newtypes |
+| `paging.rs` | Page table types and mapping abstractions |
+| `arch/x86_64/` | GDT, IDT, ACPI, SMP, instructions, registers, interrupts, syscall entry |
+| `mm/` | HHDM, PMM (bitmap allocator), VMM, heap, address spaces, regions, zones |
+| `sync/` | `SpinLock`, `IrqSpinLock`, `Mutex`, `RwLock`, `WaitQueue`, `Lazy` |
+
+**Service modules** (safe Rust):
+
+| Module | Purpose |
+|--------|---------|
+| `boot.rs` | `BootInfo` trait, `kernel_init` entry point |
+| `sched/` | Async executor, priority tiers, waker encoding, timer integration |
+| `fs/` | VFS mount table, devfs, console input, file descriptors, path resolution |
+| `proc/` | Process struct, ELF loading (binfmt), userspace entry/exit |
+| `syscall/` | Syscall dispatch table, I/O, memory, process, time categories |
+| `ipc/` | Pipes (circular buffer, Inode implementation) |
+| `driver_api/` | Driver trait hierarchy (resources, categories, interfaces) |
+| `drivers/` | Device registry |
+| `pci/` | PCI enumeration, BAR decoding, capabilities parsing |
+
+### `kernel/hadron-drivers` — Pluggable Drivers
+
+Hardware driver implementations registered via linker-section macros (`pci_driver_entry!`, `platform_driver_entry!`, `block_fs_entry!`). Depends on `hadron-kernel` for the driver API traits.
+
+| Module | Purpose |
+|--------|---------|
+| `ahci/` | AHCI (SATA) controller driver |
+| `virtio/` | VirtIO block device, PCI transport, virtqueues |
+| `serial/` | UART16550 driver, async serial interface |
+| `input/` | i8042 controller, PS/2 keyboard and mouse |
+| `display/` | Bochs VGA display driver |
+| `block/` | Ramdisk block device |
+| `fs/` | FAT, ISO9660, ramfs, initramfs filesystem implementations |
 
 ### `crates/*` — Reusable Libraries
 
-| Crate | Purpose | Status |
-|-------|---------|--------|
-| `limine` | Limine boot protocol bindings | Exists |
-| `noalloc` | Allocation-free data structures (ring buffer, array vec) | Exists |
-| `hadron-drivers` | Hardware drivers | Exists |
-| `hadron-test` | Test framework (QEMU isa-debug-exit, test runner) | Exists |
-| `uefi` | UEFI protocol bindings (SystemTable, GOP, etc.) | Phase 2 |
-| `acpi` | ACPI table parsing (RSDP, MADT, HPET, FADT) | Planned |
-| `elf` | ELF64 parsing (program headers, entry point) | Planned |
+| Crate | Purpose |
+|-------|---------|
+| `limine` | Limine boot protocol bindings |
+| `noalloc` | Allocation-free data structures (ring buffer, array vec) |
+| `hadron-test` | Test framework (QEMU isa-debug-exit, test runner) |
+| `hadron-syscall` | Syscall numbers and ABI definitions (shared kernel/userspace) |
+| `hadron-acpi` | ACPI table parsing (RSDP, MADT, HPET, FADT) |
+| `hadron-dwarf` | DWARF debug info parsing |
+| `hadron-elf` | ELF64 parser (program headers, sections, entry point) |
+| `uefi` | UEFI bindings |
 
 ### `kernel/boot/*` — Boot Stubs
 
@@ -139,14 +157,3 @@ Binary crates that bridge bootloader protocols to the kernel.
 | Stub | Crate Name | Bootloader | Purpose |
 |------|-----------|-----------|---------|
 | `kernel/boot/limine/` | `hadron-boot-limine` | Limine | Primary boot path, HHDM provided by bootloader |
-| `kernel/boot/uefi/` | — | Direct UEFI | Alternative boot (Phase 2, planned) |
-
-### `xtask` — Build Automation
-
-Host-side tool providing:
-
-| Command | Purpose |
-|---------|---------|
-| `cargo xtask build` | Cross-compile kernel for target architecture |
-| `cargo xtask run` | Build + create ISO + launch QEMU |
-| `cargo xtask test` | Build + run tests in QEMU with isa-debug-exit |

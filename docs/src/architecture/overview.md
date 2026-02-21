@@ -13,13 +13,13 @@ This is conceptually similar to a microkernel's separation of concerns, but with
 
 ## Layer Architecture
 
-| Layer | Crate | Safety | Responsibility |
-|-------|-------|--------|----------------|
-| **Frame** | `hadron-core` | Contains `unsafe` | Physical memory, page tables, interrupts, CPU state, I/O ports, context switching |
-| **Safe Services** | `hadron-kernel` | Safe Rust only | Scheduler, VFS, syscall dispatch, drivers, networking |
-| **Platform HAL** | `hadron-core/src/arch/` | `unsafe` in frame | Architecture-specific implementations behind common traits |
-| **Boot Stubs** | `kernel/boot/{limine,uefi}/` | `unsafe` (entry) | Bootloader-specific entry, translates to `InitInfo` |
-| **Reusable Crates** | `crates/{limine,noalloc,hadron-drivers,hadron-test,uefi}/` | Varies | Standalone no_std libraries and protocol bindings |
+| Layer | Location | Safety | Responsibility |
+|-------|----------|--------|----------------|
+| **Frame** | `hadron-kernel::arch`, `mm`, `sync` | Contains `unsafe` | Physical memory, page tables, interrupts, CPU state, I/O ports |
+| **Safe Services** | `hadron-kernel::fs`, `sched`, `syscall`, `proc`, etc. | Safe Rust only | Executor, VFS, syscall dispatch, process management |
+| **Drivers** | `hadron-drivers` | Safe Rust (uses driver API traits) | AHCI, VirtIO, serial, display, input, filesystem implementations |
+| **Boot Stubs** | `kernel/boot/{limine}/` | `unsafe` (entry) | Bootloader-specific entry, translates to `BootInfo` |
+| **Reusable Crates** | `crates/{limine,noalloc,hadron-test,acpi,elf,...}/` | Varies | Standalone no_std libraries and protocol bindings |
 
 ## Safety Model
 
@@ -28,34 +28,34 @@ The framekernel's key insight is using Rust's module visibility and type system 
 ```
 ┌─────────────────────────────────────────────────────┐
 │                    hadron-kernel                     │
-│               (100% safe Rust services)             │
 │                                                     │
 │  ┌─────────┐ ┌──────┐ ┌─────────┐ ┌───────────┐   │
-│  │Scheduler│ │ VFS  │ │Syscalls │ │  Drivers  │   │
+│  │Executor │ │ VFS  │ │Syscalls │ │  Proc Mgr │   │
 │  └────┬────┘ └──┬───┘ └────┬────┘ └─────┬─────┘   │
 │       │         │          │             │          │
-├───────┴─────────┴──────────┴─────────────┴──────────┤
-│              Safe API boundary (traits)              │
-├─────────────────────────────────────────────────────┤
-│                    hadron-core                       │
-│              (unsafe frame, ~16% unsafe)            │
+│  ─────┴─────────┴──────────┴─────────────┴────────  │
+│         Safe API boundary (module visibility)        │
+│  ─────────────────────────────────────────────────  │
+│          arch/, mm/, sync/ (unsafe frame)            │
 │                                                     │
 │  ┌──────┐ ┌───────────┐ ┌─────┐ ┌──────────────┐  │
-│  │ PMM  │ │Page Tables│ │ IDT │ │Context Switch│  │
+│  │ PMM  │ │Page Tables│ │ IDT │ │    SYSCALL   │  │
 │  └──────┘ └───────────┘ └─────┘ └──────────────┘  │
 │                                                     │
 │  ┌──────┐ ┌──────┐ ┌─────────┐ ┌─────────┐       │
-│  │ GDT  │ │ APIC │ │ I/O Ops │ │ SYSCALL │       │
+│  │ GDT  │ │ APIC │ │ I/O Ops │ │SpinLock │       │
 │  └──────┘ └──────┘ └─────────┘ └─────────┘       │
 └─────────────────────────────────────────────────────┘
 ```
 
+Note: Unlike the original framekernel design where frame and services are separate crates, Hadron uses a single `hadron-kernel` crate with the safety boundary enforced at the module level. The `arch/` modules contain the unsafe frame, and the rest of the crate contains safe services.
+
 ### Rules
 
-1. **All `unsafe` code lives in `hadron-core`**. The `hadron-kernel` crate never uses `unsafe` directly.
-2. **`hadron-core` exports only safe APIs**. Even though its internals use `unsafe`, the public interface is safe Rust.
+1. **All `unsafe` code lives in `arch/`, `mm/`, and `sync/` modules**. Service modules (fs/, sched/, syscall/, proc/) avoid `unsafe` directly.
+2. **Frame modules export safe APIs**. Even though their internals use `unsafe`, the public interface is safe Rust.
 3. **Type-enforced invariants**. Newtypes like `PhysAddr`, `VirtAddr`, and `PhysFrame` encode hardware constraints in the type system.
-4. **Trait-based abstraction**. Architecture-specific code implements common traits, so `hadron-kernel` is portable without being aware of the underlying platform.
+4. **Trait-based abstraction**. Architecture-specific code implements common traits, so service modules are portable without being aware of the underlying platform.
 
 ### Why Not a Microkernel?
 
@@ -70,7 +70,7 @@ A microkernel achieves isolation through separate address spaces and IPC. A fram
 | Auditability | Audit IPC interfaces | Audit `unsafe` blocks in frame |
 
 The framekernel trades hardware-enforced isolation for compiler-enforced isolation, which is acceptable when:
-- The frame is small and auditable (~16% unsafe code)
+- The frame modules are small and auditable
 - The rest of the kernel benefits from zero-cost abstractions
 - Performance is a priority (no IPC tax)
 

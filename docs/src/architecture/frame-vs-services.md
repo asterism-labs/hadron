@@ -1,13 +1,13 @@
 # Frame vs Services
 
-This chapter explains the dividing line between the unsafe **frame** (`hadron-core`) and the safe **services** (`hadron-kernel`), with concrete examples of what goes where and why.
+This chapter explains the dividing line between the unsafe **frame** (modules like `arch/`, `mm/`, `sync/` within `hadron-kernel`) and the safe **services** (modules like `fs/`, `sched/`, `syscall/`, `proc/` within the same crate), with concrete examples of what goes where and why.
 
 ## The Rule
 
-> If it touches hardware, raw pointers, or inline assembly, it belongs in the frame.
-> Everything else is a safe service.
+> If it touches hardware, raw pointers, or inline assembly, it belongs in the frame modules.
+> Everything else is a safe service module.
 
-The frame's job is to wrap every piece of `unsafe` code in a safe API. Once the frame provides safe abstractions, services never need to reach for `unsafe`.
+The frame modules' job is to wrap every piece of `unsafe` code in a safe API. Once the frame provides safe abstractions, service modules never need to reach for `unsafe`.
 
 ## Classification Table
 
@@ -40,7 +40,7 @@ The frame's job is to wrap every piece of `unsafe` code in a safe API. Once the 
 
 The serial port illustrates the frame/service split perfectly.
 
-### Frame Layer (`hadron-core`)
+### Frame Layer (`hadron-kernel::arch`)
 
 ```rust
 // arch/x86_64/io.rs — raw I/O port access (unsafe)
@@ -82,7 +82,7 @@ impl core::fmt::Write for SerialPort {
 }
 ```
 
-### Service Layer (`hadron-kernel`)
+### Service Layer
 
 ```rust
 // console/serial.rs — safe serial console (no unsafe!)
@@ -101,7 +101,7 @@ pub fn print(args: core::fmt::Arguments) {
 
 ## Example: Page Tables
 
-### Frame Layer
+### Frame Layer (`hadron-kernel::arch`)
 
 ```rust
 // arch/x86_64/paging/mapper.rs

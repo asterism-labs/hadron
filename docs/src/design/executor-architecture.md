@@ -53,7 +53,7 @@ The `CpuLocal<T>` wrapper indexes a static array by CPU ID. For now, `MAX_CPUS =
 3. Each AP boots into its own `executor().run()` loop
 4. Wakers encode target CPU in upper bits for cross-CPU wake (+ IPI)
 
-The `CpuLocal<T>` type is defined in `hadron-core::percpu` and is available today but not yet used for the executor.
+The `CpuLocal<T>` type is defined in `hadron_kernel::percpu` and is available today but not yet used for the executor.
 
 ### Waker Encoding Expansion
 

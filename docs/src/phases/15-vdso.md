@@ -14,7 +14,7 @@ Implement a virtual Dynamic Shared Object (vDSO) mapped into every process for f
 | `hadron-kernel/src/vdso/data.rs` | VVAR page layout, seqlock update logic |
 | `hadron-kernel/src/vdso/code.rs` | vDSO function implementations (compiled into ELF) |
 | `hadron-kernel/src/syscall/futex.rs` | `sys_futex` implementation |
-| `hadron-core/src/arch/x86_64/tsc.rs` | TSC reading and calibration constants |
+| `hadron-kernel/src/arch/x86_64/tsc.rs` | TSC reading and calibration constants |
 
 ## Key Design
 

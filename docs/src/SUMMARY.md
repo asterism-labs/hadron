@@ -8,10 +8,21 @@
 - [Crate Structure](architecture/crate-structure.md)
 - [Frame vs Services](architecture/frame-vs-services.md)
 
+# Kernel Internals
+
+- [Memory Management](internals/memory-management.md)
+- [Async Executor](internals/executor.md)
+- [Virtual Filesystem](internals/vfs.md)
+- [Process Management](internals/process-management.md)
+- [Syscall Interface](internals/syscalls.md)
+- [Driver Model](internals/driver-model.md)
+- [Synchronization Primitives](internals/synchronization.md)
+- [Architecture & Boot](internals/arch-and-boot.md)
+- [Hardware Drivers](internals/drivers.md)
+- [Inter-Process Communication](internals/ipc.md)
+
 # Development Phases
 
-- [Completed Work (Phases 0-6)](phases/completed-work.md)
-- [Phase 7: Syscall Interface](phases/07-syscall-interface.md)
 - [Phase 8: Async VFS & Ramfs](phases/08-vfs-ramfs.md)
 - [Phase 9: Userspace & ELF Loading](phases/09-userspace.md)
 - [Phase 10: Device Drivers](phases/10-device-drivers.md)

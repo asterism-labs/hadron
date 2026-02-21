@@ -64,11 +64,11 @@ A Rust-specific architecture that splits the kernel into an **unsafe frame** and
 │           User Space (Ring 3)          │
 ├────────────────────────────────────────┤
 │ ┌────────────────────────────────────┐ │
-│ │    Safe Services (hadron-kernel)   │ │
+│ │          hadron-kernel              │ │
 │ │  Scheduler │ VFS │ Drivers │ Net   │ │
-│ │       (100% safe Rust)             │ │
+│ │       (safe Rust services)         │ │
 │ ├────────────────────────────────────┤ │
-│ │    Unsafe Frame (hadron-core)      │ │
+│ │    Unsafe Frame (arch/ modules)    │ │
 │ │  PMM │ Paging │ IDT │ Ctx Switch  │ │
 │ │       (contains unsafe)            │ │
 │ └────────────────────────────────────┘ │
@@ -141,7 +141,7 @@ A framekernel runs everything in ring 0 with direct function calls — identical
 
 ### 3. Practical Audit Surface
 
-The audit target is clear and bounded: **only `unsafe` blocks in `hadron-core`**. This is far smaller than auditing an entire monolithic kernel, and doesn't require the complex IPC infrastructure of a microkernel.
+The audit target is clear and bounded: **only `unsafe` blocks in `hadron-kernel`'s frame modules (`arch/`, `mm/`, `sync/`)**. This is far smaller than auditing an entire monolithic kernel, and doesn't require the complex IPC infrastructure of a microkernel.
 
 Estimated unsafe surface: ~16% of total kernel code, concentrated in:
 - Page table manipulation

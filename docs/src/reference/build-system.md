@@ -5,8 +5,9 @@ Hadron uses a custom build tool (`gluon`) that invokes `rustc` directly instead 
 ## Quick Start
 
 ```sh
-# Bootstrap the build tool (once, or after changing gluon source)
-just bootstrap
+# First-time setup
+just vendor             # Fetch/sync vendored dependencies
+just configure          # Resolve config + generate rust-project.json
 
 # Common commands
 just build              # Build the kernel
@@ -17,13 +18,16 @@ just check              # Type-check without linking
 just clippy             # Lint project crates
 just fmt                # Format source files
 just fmt --check        # Check formatting (CI)
-just configure          # Resolve config + generate rust-project.json
+just menuconfig         # TUI configuration editor
+just vendor             # Fetch/sync vendored dependencies
 just clean              # Remove build/ directory
 ```
 
-Global flags (passed before the subcommand):
-- `--profile <name>` or `-P <name>` — select a build profile from `hadron.toml`
+Global flags:
+- `--profile <name>` or `-P <name>` — select a build profile from `gluon.rhai`
 - `--target <triple>` — override the target
+- `--verbose` (`-v`) — verbose output
+- `--force` (`-f`) — force rebuild
 
 ## Configuration Files
 
@@ -70,18 +74,7 @@ config = { smp = true, MAX_CPUS = 4 }
 
 The crate registry defines every compilation unit, its dependencies, and its context. This is the file you edit when adding or removing crates.
 
-Each entry has the form:
-
-```toml
-[crate.<name>]
-path = "relative/path"          # relative to project root
-edition = "2024"                # Rust edition (default: "2024")
-type = "lib"                    # "lib" (default), "bin", or "proc-macro"
-context = ""                    # "sysroot", "host", "userspace", or absent (kernel)
-deps = { ext_name = "crate-name" }
-features = ["feature1"]
-root = "src/lib.rs"             # override root file (default: src/lib.rs or src/main.rs)
-```
+Each entry is defined in `gluon.rhai` as part of a crate group. Key fields include path, edition, type (`lib`, `bin`, `proc-macro`), context (`sysroot`, `host`, `userspace`, or kernel by default), dependencies, and features.
 
 **Contexts** determine how a crate is compiled:
 
@@ -103,7 +96,7 @@ root = "src/lib.rs"             # override root file (default: src/lib.rs or src
 [crate.my-crate]
 path = "crates/my-crate"
 edition = "2024"
-deps = { hadron_core = "hadron-core" }  # dependencies
+deps = { hadron_kernel = "hadron-kernel" }  # dependencies
 ```
 
 3. Add it as a dependency of whatever crate uses it:

@@ -4,189 +4,139 @@ This is the target file tree after all remaining phases are implemented. Files a
 
 ```
 hadron/
-├── Cargo.toml                                    # Workspace root
-├── Cargo.lock
-├── rust-toolchain.toml                           # Nightly + custom target
+├── gluon.rhai                                    # Build configuration (Rhai scripting)
+├── justfile                                      # Primary build interface
+├── limine.conf                                   # Limine bootloader config
+│
 ├── targets/
-│   └── x86_64-unknown-hadron.json                # Custom target spec
+│   ├── x86_64-unknown-hadron.json                # Custom target spec
+│   └── x86_64-unknown-hadron.ld                  # Kernel linker script
 │
 ├── crates/
 │   ├── limine/                                   # Limine boot protocol bindings
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs
-│   │       ├── request.rs
-│   │       ├── response.rs
-│   │       ├── file.rs
-│   │       ├── firmware_type.rs
-│   │       ├── framebuffer.rs
-│   │       ├── memory_map.rs
-│   │       ├── modules.rs
-│   │       ├── mp.rs
-│   │       └── paging.rs
-│   │
 │   ├── noalloc/                                  # Allocation-free data structures
-│   │   ├── Cargo.toml
-│   │   └── src/lib.rs
-│   │
-│   ├── hadron-drivers/                           # Hardware drivers
-│   │   ├── Cargo.toml
-│   │   └── src/lib.rs
-│   │
 │   ├── hadron-test/                              # Test framework (QEMU exit)
-│   │   ├── Cargo.toml
-│   │   └── src/lib.rs
-│   │
-│   ├── hadron-elf/                               # ELF64 parser
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       └── lib.rs
-│   │
-│   └── uefi/                                     # UEFI bindings (future)
-│       ├── Cargo.toml
-│       └── src/lib.rs
+│   ├── hadron-syscall/                           # Syscall numbers and ABI definitions
+│   ├── acpi/                                     # ACPI table parsing (hadron-acpi)
+│   ├── dwarf/                                    # DWARF debug info (hadron-dwarf)
+│   ├── elf/                                      # ELF64 parser (hadron-elf)
+│   └── uefi/                                     # UEFI bindings
 │
 ├── kernel/
-│   ├── hadron-core/                              # The Frame (unsafe core)
-│   │   ├── Cargo.toml
+│   ├── hadron-kernel/                            # Monolithic kernel crate
 │   │   └── src/
 │   │       ├── lib.rs
-│   │       ├── addr.rs                            # PhysAddr, VirtAddr newtypes
-│   │       ├── cell.rs                            # Cell primitives
-│   │       ├── log.rs                             # kprint!/kprintln! macros
+│   │       ├── addr.rs                            # PhysAddr, VirtAddr, PhysFrame
+│   │       ├── boot.rs                            # BootInfo trait, kernel_init
+│   │       ├── paging.rs                          # Paging abstractions
 │   │       ├── percpu.rs                          # Per-CPU data, CpuLocal<T>
-│   │       ├── static_assert.rs
 │   │       ├── task.rs                            # TaskId, task types
 │   │       │
-│   │       ├── arch/
-│   │       │   └── x86_64/
-│   │       │       ├── mod.rs
-│   │       │       ├── io.rs                      # inb/outb port I/O
-│   │       │       ├── serial.rs                  # UART 16550 driver
-│   │       │       ├── registers/
-│   │       │       │   └── model_specific.rs      # MSR wrappers
-│   │       │       ├── syscall.rs                 # SYSCALL/SYSRET setup [Phase 7]
-│   │       │       ├── userspace.rs               # jump_to_userspace [Phase 9]
-│   │       │       └── smp.rs                     # AP bootstrap [Phase 12]
+│   │       ├── arch/x86_64/
+│   │       │   ├── mod.rs
+│   │       │   ├── acpi.rs                        # ACPI table handling
+│   │       │   ├── gdt.rs                         # GDT + TSS
+│   │       │   ├── idt.rs                         # IDT + exception handlers
+│   │       │   ├── smp.rs                         # SMP bootstrap
+│   │       │   ├── syscall.rs                     # SYSCALL/SYSRET setup
+│   │       │   ├── userspace.rs                   # Userspace entry/exit
+│   │       │   ├── instructions/                  # Safe CPU instruction wrappers
+│   │       │   ├── registers/                     # Control registers, MSRs
+│   │       │   └── interrupts/                    # IRQ handlers, APIC
 │   │       │
 │   │       ├── mm/
-│   │       │   ├── mod.rs
-│   │       │   └── hhdm.rs                        # HHDM translation
-│   │       │
-│   │       ├── paging/
-│   │       │   ├── mod.rs
-│   │       │   └── ...                            # Page table types
+│   │       │   ├── pmm.rs                         # Bitmap frame allocator
+│   │       │   ├── vmm.rs                         # Virtual memory manager
+│   │       │   ├── heap.rs                        # Kernel heap
+│   │       │   ├── hhdm.rs                        # Higher Half Direct Map
+│   │       │   ├── address_space.rs               # Per-process address spaces
+│   │       │   ├── region.rs                      # Memory regions
+│   │       │   ├── zone.rs                        # Memory zones
+│   │       │   ├── layout.rs                      # Kernel memory layout
+│   │       │   └── mapper.rs                      # Page table mapper
 │   │       │
 │   │       ├── sync/
-│   │       │   ├── mod.rs
-│   │       │   ├── spinlock.rs                    # SpinLock<T>
-│   │       │   ├── lazy.rs                        # LazyLock<T>
-│   │       │   └── waitqueue.rs                   # WaitQueue
+│   │       │   ├── spinlock.rs                    # SpinLock, IrqSpinLock
+│   │       │   ├── mutex.rs                       # Async-friendly Mutex
+│   │       │   ├── rwlock.rs                      # RwLock
+│   │       │   ├── waitqueue.rs                   # WaitQueue, HeapWaitQueue
+│   │       │   └── lazy.rs                        # Lazy initialization
 │   │       │
-│   │       └── syscall/
-│   │           ├── mod.rs                         # Syscall numbers, error codes
-│   │           └── userptr.rs                     # UserPtr<T>, UserSlice [Phase 7]
+│   │       ├── sched/
+│   │       │   ├── executor.rs                    # Priority async executor
+│   │       │   ├── waker.rs                       # Waker encoding
+│   │       │   ├── timer.rs                       # Timer integration
+│   │       │   ├── smp.rs                         # SMP work stealing [Phase 12]
+│   │       │   └── block_on.rs                    # Blocking executor bridge
+│   │       │
+│   │       ├── fs/
+│   │       │   ├── vfs.rs                         # Mount table, path resolution
+│   │       │   ├── file.rs                        # File descriptors
+│   │       │   ├── devfs.rs                       # /dev nodes
+│   │       │   ├── console_input.rs               # Console input device
+│   │       │   ├── block_adapter.rs               # Block device to FS bridge
+│   │       │   └── path.rs                        # Path utilities
+│   │       │
+│   │       ├── proc/
+│   │       │   ├── mod.rs                         # Process struct
+│   │       │   ├── binfmt.rs                      # ELF loader
+│   │       │   └── exec.rs                        # Process execution
+│   │       │
+│   │       ├── syscall/
+│   │       │   ├── mod.rs                         # Dispatch table
+│   │       │   ├── io.rs                          # read/write/open/close
+│   │       │   ├── process.rs                     # exit/getpid/spawn
+│   │       │   ├── memory.rs                      # mmap/munmap/brk
+│   │       │   ├── time.rs                        # clock_gettime
+│   │       │   ├── vfs.rs                         # VFS syscalls
+│   │       │   └── query.rs                       # System query syscalls
+│   │       │
+│   │       ├── ipc/
+│   │       │   └── pipe.rs                        # Pipe implementation
+│   │       │
+│   │       ├── driver_api/                        # Driver trait hierarchy
+│   │       │   ├── mod.rs                         # Core driver traits
+│   │       │   └── ...                            # Category and interface traits
+│   │       │
+│   │       ├── drivers/
+│   │       │   └── device_registry.rs             # Device discovery and registry
+│   │       │
+│   │       ├── pci/
+│   │       │   ├── cam.rs                         # PCI configuration access
+│   │       │   ├── caps.rs                        # PCI capabilities
+│   │       │   └── enumerate.rs                   # PCI bus enumeration
+│   │       │
+│   │       └── vdso/                              # [Phase 15]
+│   │           ├── mod.rs                         # vDSO generation, mapping
+│   │           └── data.rs                        # VVAR page
 │   │
-│   ├── boot/
-│   │   └── limine/
-│   │       ├── Cargo.toml
-│   │       ├── build.rs
-│   │       └── src/
-│   │           └── main.rs                        # Limine entry point
+│   ├── hadron-drivers/                            # Pluggable hardware drivers
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── ahci/                              # AHCI (SATA) driver
+│   │       ├── virtio/                            # VirtIO (block, PCI transport)
+│   │       ├── serial/                            # UART16550, async serial
+│   │       ├── input/                             # i8042, keyboard, mouse
+│   │       ├── display/                           # Bochs VGA
+│   │       ├── block/                             # Ramdisk
+│   │       └── fs/                                # FAT, ISO9660, ramfs, initramfs
 │   │
-│   └── hadron-kernel/                             # Safe Services
-│       ├── Cargo.toml
-│       └── src/
-│           ├── lib.rs
-│           ├── boot.rs                            # BootInfo, kernel_init
-│           ├── log.rs                             # Logger with sinks
-│           │
-│           ├── arch/
-│           │   ├── mod.rs
-│           │   └── x86_64/
-│           │       ├── gdt.rs                     # GDT + TSS
-│           │       ├── idt.rs                     # IDT + exception handlers
-│           │       └── interrupts/
-│           │           └── handlers.rs            # IRQ handlers
-│           │
-│           ├── mm/
-│           │   ├── pmm.rs                         # Bitmap frame allocator
-│           │   ├── vmm.rs                         # Virtual memory manager
-│           │   └── heap.rs                        # Kernel heap
-│           │
-│           ├── sched/
-│           │   ├── mod.rs                         # Executor access, spawn APIs
-│           │   ├── executor.rs                    # Priority async executor
-│           │   └── waker.rs                       # Waker encoding
-│           │
-│           ├── drivers/
-│           │   ├── early_fb.rs                    # Early framebuffer
-│           │   ├── pci/                           # [Phase 10]
-│           │   │   ├── mod.rs
-│           │   │   ├── config.rs
-│           │   │   └── device.rs
-│           │   ├── block/                         # [Phase 10]
-│           │   │   ├── mod.rs                     # AsyncBlockDevice trait
-│           │   │   └── ramdisk.rs
-│           │   └── virtio/                        # [Phase 10]
-│           │       ├── mod.rs                     # VirtIO transport
-│           │       ├── block.rs                   # VirtIO-blk
-│           │       └── net.rs                     # VirtIO-net [Phase 14]
-│           │
-│           ├── syscall/
-│           │   ├── mod.rs                         # Dispatch table [Phase 7]
-│           │   ├── io.rs                          # read/write/open/close [Phase 7]
-│           │   ├── process.rs                     # exit/getpid [Phase 7]
-│           │   ├── memory.rs                      # mmap/munmap/brk [Phase 7]
-│           │   └── time.rs                        # clock_gettime [Phase 7]
-│           │
-│           ├── fs/                                # [Phase 8]
-│           │   ├── mod.rs                         # FileSystem, Inode traits
-│           │   ├── vfs.rs                         # Mount table, path resolution
-│           │   ├── file.rs                        # FileDescriptor table
-│           │   ├── ramfs.rs                       # Heap-backed FS
-│           │   ├── initramfs.rs                   # CPIO unpacker
-│           │   ├── devfs.rs                       # /dev nodes
-│           │   ├── procfs.rs                      # /proc
-│           │   └── ext2/                          # [Phase 13]
-│           │       ├── mod.rs
-│           │       ├── superblock.rs
-│           │       ├── block_group.rs
-│           │       ├── inode.rs
-│           │       └── dir.rs
-│           │
-│           ├── task/                              # [Phase 9]
-│           │   └── process.rs                     # Process struct, exec()
-│           │
-│           ├── ipc/                               # [Phase 11]
-│           │   ├── mod.rs                         # Async channels
-│           │   └── pipe.rs                        # Pipe (byte-oriented channel)
-│           │
-│           ├── signal/                            # [Phase 11]
-│           │   └── mod.rs                         # Minimal signal handling
-│           │
-│           ├── net/                               # [Phase 14]
-│           │   ├── mod.rs                         # smoltcp integration
-│           │   └── socket.rs                      # Socket syscall wrappers
-│           │
-│           ├── vdso/                              # [Phase 15]
-│           │   ├── mod.rs                         # vDSO generation, mapping
-│           │   └── data.rs                        # VVAR page
-│           │
-│           └── sync.rs                            # KernelServices sync
+│   └── boot/
+│       └── limine/
+│           └── src/main.rs                        # Limine entry point
 │
-├── xtask/                                         # Build automation
-│   ├── Cargo.toml
-│   └── src/
-│       ├── main.rs
-│       ├── build.rs
-│       ├── config.rs
-│       ├── iso.rs
-│       ├── limine.rs
-│       ├── run.rs
-│       └── test.rs
+├── userspace/
+│   ├── init/                                      # Init process (lepton-init)
+│   ├── lepton-syslib/                             # Userspace syscall library
+│   ├── shell/                                     # Interactive shell (lepton-shell)
+│   └── coreutils/                                 # Core utilities (lepton-coreutils)
 │
-└── docs/                                          # This book
+├── vendor/                                        # Vendored external dependencies
+│
+├── tools/
+│   └── gluon/                                     # Custom build system
+│
+└── docs/                                          # This mdbook
     ├── book.toml
     └── src/
         ├── SUMMARY.md
@@ -200,9 +150,9 @@ The async executor model changes the file tree in several ways:
 | Original Plan | Actual / Current Plan |
 |--------------|----------------------|
 | `sched/round_robin.rs` | `sched/executor.rs` + `sched/waker.rs` |
-| `task/context.rs` (CpuContext) | Not needed (no context switch) |
+| `task/context.rs` (CpuContext) | Not needed (no context switch between kernel tasks) |
 | `task/stack.rs` (KernelStack) | Not needed (no per-task stacks) |
 | `arch/x86_64/context.rs` (switch_context) | Not needed |
 | `task/fork.rs` (fork + CoW) | Not planned (use sys_spawn) |
 | `net/ethernet.rs`, `arp.rs`, `tcp.rs`, etc. | Replaced by `smoltcp` crate |
-| `syscall/userptr.rs` not planned | Added for pointer validation |
+| Separate `hadron-core` crate | Merged into `hadron-kernel` (single monolithic crate) |
