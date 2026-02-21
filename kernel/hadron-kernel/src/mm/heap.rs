@@ -15,6 +15,169 @@ const MIN_BLOCK_SIZE: usize = 32;
 /// Align all blocks to at least 16 bytes for SSE compatibility.
 const BLOCK_ALIGN: usize = 16;
 
+// ---------------------------------------------------------------------------
+// Heap poisoning constants and types (always defined for cfg!() type-checking)
+// ---------------------------------------------------------------------------
+
+/// Heap poison fill values and red zone metadata. Defined unconditionally so
+/// `cfg!()` branches type-check; optimized away when `hadron_debug_heap_poison`
+/// is off.
+mod poison {
+    /// Uninitialized heap memory marker.
+    pub const ALLOC_FILL: u8 = 0xCD;
+    /// Freed heap memory marker.
+    pub const FREE_FILL: u8 = 0xDD;
+    /// Red zone fill byte (buffer overflow sentinel).
+    pub const REDZONE_FILL: u8 = 0xFD;
+    /// Red zone size in bytes (before + after each allocation).
+    pub const REDZONE_SIZE: usize = 16;
+    /// Magic value stored in the red zone header for integrity verification.
+    pub const REDZONE_MAGIC: u32 = 0xFDFD_FDFD;
+
+    /// Header stored in the last 16 bytes of the front red zone.
+    ///
+    /// Layout: `[alloc_size: u64, magic: u32, pad: [u8; 4]]` = 16 bytes.
+    #[repr(C)]
+    pub struct RedZoneHeader {
+        /// The user-visible allocation size (after `max(MIN_BLOCK_SIZE)`).
+        pub alloc_size: usize,
+        /// Magic value (`REDZONE_MAGIC`) for corruption detection.
+        pub magic: u32,
+        /// Padding filled with `REDZONE_FILL`.
+        pub _pad: [u8; 4],
+    }
+
+    /// Fills red zones and alloc pattern after a successful allocation.
+    /// Returns the user-visible pointer (past the front red zone).
+    ///
+    /// # Safety
+    ///
+    /// `block_addr` must point to a valid, writable region of at least
+    /// `front_pad + user_size + REDZONE_SIZE` bytes.
+    pub unsafe fn fill_alloc(block_addr: usize, user_size: usize, front_pad: usize) -> *mut u8 {
+        let user_ptr = block_addr + front_pad;
+
+        // Fill front padding before the header with REDZONE_FILL.
+        if front_pad > REDZONE_SIZE {
+            // SAFETY: Region [block_addr..block_addr+front_pad-REDZONE_SIZE] is within
+            // the allocated block.
+            unsafe {
+                core::ptr::write_bytes(block_addr as *mut u8, REDZONE_FILL, front_pad - REDZONE_SIZE);
+            }
+        }
+
+        // Write header (last 16 bytes of front zone, immediately before user data).
+        let header_ptr = (user_ptr - REDZONE_SIZE) as *mut RedZoneHeader;
+        // SAFETY: header_ptr is within the allocated block and properly aligned
+        // (REDZONE_SIZE = 16, block is 16-aligned).
+        unsafe {
+            (*header_ptr).alloc_size = user_size;
+            (*header_ptr).magic = REDZONE_MAGIC;
+            (*header_ptr)._pad = [REDZONE_FILL; 4];
+        }
+
+        // Fill user region with ALLOC_FILL (0xCD = "clean" / uninitialized).
+        // SAFETY: user region is within the allocated block.
+        unsafe {
+            core::ptr::write_bytes(user_ptr as *mut u8, ALLOC_FILL, user_size);
+        }
+
+        // Fill back red zone with REDZONE_FILL.
+        // SAFETY: back red zone is within the allocated block.
+        unsafe {
+            core::ptr::write_bytes((user_ptr + user_size) as *mut u8, REDZONE_FILL, REDZONE_SIZE);
+        }
+
+        user_ptr as *mut u8
+    }
+
+    /// Checks red zone integrity and fills freed region with `FREE_FILL`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any red zone byte has been corrupted (buffer overflow/underflow).
+    ///
+    /// # Safety
+    ///
+    /// `user_ptr` must be a pointer previously returned by [`fill_alloc`] with
+    /// matching `user_size` and `front_pad`.
+    pub unsafe fn check_and_fill_dealloc(user_ptr: *mut u8, user_size: usize, front_pad: usize) {
+        let user_addr = user_ptr as usize;
+        let block_addr = user_addr - front_pad;
+
+        // Check header magic and size.
+        let header_ptr = (user_addr - REDZONE_SIZE) as *const RedZoneHeader;
+        // SAFETY: header_ptr was written by fill_alloc and is still valid.
+        let header = unsafe { &*header_ptr };
+
+        if header.magic != REDZONE_MAGIC {
+            panic!(
+                "heap corruption: front red zone magic mismatch at {:#x} (expected {:#x}, got {:#x})",
+                user_addr, REDZONE_MAGIC, header.magic
+            );
+        }
+
+        if header.alloc_size != user_size {
+            panic!(
+                "heap corruption: size mismatch at {:#x} (header says {}, layout says {})",
+                user_addr, header.alloc_size, user_size
+            );
+        }
+
+        // Check header padding bytes.
+        if header._pad != [REDZONE_FILL; 4] {
+            panic!(
+                "heap corruption: front red zone padding corrupted at {:#x}",
+                user_addr
+            );
+        }
+
+        // Check front fill (before header, if front_pad > REDZONE_SIZE).
+        if front_pad > REDZONE_SIZE {
+            let front_fill = unsafe {
+                core::slice::from_raw_parts(block_addr as *const u8, front_pad - REDZONE_SIZE)
+            };
+            for (i, &byte) in front_fill.iter().enumerate() {
+                if byte != REDZONE_FILL {
+                    panic!(
+                        "heap corruption: front red zone byte {} corrupted at {:#x} \
+                         (expected {:#x}, got {:#x})",
+                        i,
+                        block_addr + i,
+                        REDZONE_FILL,
+                        byte
+                    );
+                }
+            }
+        }
+
+        // Check back red zone (16 bytes after user data).
+        let back_start = user_addr + user_size;
+        // SAFETY: back red zone was written by fill_alloc and is within the block.
+        let back_zone = unsafe {
+            core::slice::from_raw_parts(back_start as *const u8, REDZONE_SIZE)
+        };
+        for (i, &byte) in back_zone.iter().enumerate() {
+            if byte != REDZONE_FILL {
+                panic!(
+                    "heap corruption: back red zone byte {} corrupted at {:#x} \
+                     (expected {:#x}, got {:#x})",
+                    i,
+                    back_start + i,
+                    REDZONE_FILL,
+                    byte
+                );
+            }
+        }
+
+        // Fill user region with FREE_FILL (0xDD = "dead" / freed).
+        // SAFETY: user region is within the block and we own it.
+        unsafe {
+            core::ptr::write_bytes(user_ptr, FREE_FILL, user_size);
+        }
+    }
+}
+
 /// Free block header, stored at the start of each free block.
 #[repr(C)]
 struct FreeBlock {
@@ -249,21 +412,38 @@ impl LinkedListAllocator {
 
 unsafe impl GlobalAlloc for LinkedListAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let size = layout.size().max(MIN_BLOCK_SIZE);
+        let user_size = layout.size().max(MIN_BLOCK_SIZE);
         let align = layout.align().max(BLOCK_ALIGN);
+
+        // When heap poisoning is enabled, allocate extra space for red zones.
+        // front_pad is aligned up to guarantee the user pointer stays aligned.
+        let (alloc_size, front_pad) = if cfg!(hadron_debug_heap_poison) {
+            let fp = align_up(poison::REDZONE_SIZE, align);
+            (fp + user_size + poison::REDZONE_SIZE, fp)
+        } else {
+            (user_size, 0)
+        };
 
         let mut inner = self.inner.lock_unchecked();
 
         // Try allocation.
-        if let Some((addr, alloc_size)) = Self::find_first_fit(&mut inner, size, align) {
-            inner.allocated_bytes += alloc_size;
+        if let Some((addr, size)) = Self::find_first_fit(&mut inner, alloc_size, align) {
+            inner.allocated_bytes += size;
+            if cfg!(hadron_debug_alloc_track) {
+                drop(inner);
+                track_alloc(user_size);
+            }
+            if cfg!(hadron_debug_heap_poison) {
+                // SAFETY: addr points to a valid region of at least alloc_size bytes.
+                return unsafe { poison::fill_alloc(addr, user_size, front_pad) };
+            }
             return addr as *mut u8;
         }
 
         // Try growing the heap.
         if let Some(grow) = inner.grow_fn {
             // Request at least the needed size, rounded up.
-            let min_grow = size.max(64 * 1024); // at least 64 KiB
+            let min_grow = alloc_size.max(64 * 1024); // at least 64 KiB
             drop(inner); // Release lock before calling grow_fn (it may need the PMM lock).
 
             if let Some((ptr, actual_size)) = grow(min_grow) {
@@ -273,8 +453,16 @@ unsafe impl GlobalAlloc for LinkedListAllocator {
                 }
                 inner.heap_end = inner.heap_end.max(ptr as usize + actual_size);
 
-                if let Some((addr, alloc_size)) = Self::find_first_fit(&mut inner, size, align) {
-                    inner.allocated_bytes += alloc_size;
+                if let Some((addr, size)) = Self::find_first_fit(&mut inner, alloc_size, align) {
+                    inner.allocated_bytes += size;
+                    if cfg!(hadron_debug_alloc_track) {
+                        drop(inner);
+                        track_alloc(user_size);
+                    }
+                    if cfg!(hadron_debug_heap_poison) {
+                        // SAFETY: addr points to a valid region of at least alloc_size bytes.
+                        return unsafe { poison::fill_alloc(addr, user_size, front_pad) };
+                    }
                     return addr as *mut u8;
                 }
             }
@@ -284,14 +472,29 @@ unsafe impl GlobalAlloc for LinkedListAllocator {
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        let size = layout.size().max(MIN_BLOCK_SIZE);
-        let addr = ptr as usize;
+        let user_size = layout.size().max(MIN_BLOCK_SIZE);
+        let align = layout.align().max(BLOCK_ALIGN);
+
+        // When heap poisoning is enabled, recover the full block (including red zones).
+        let (block_addr, block_size) = if cfg!(hadron_debug_heap_poison) {
+            let front_pad = align_up(poison::REDZONE_SIZE, align);
+            // SAFETY: ptr was returned by our alloc with the same layout.
+            unsafe { poison::check_and_fill_dealloc(ptr, user_size, front_pad) };
+            let base = ptr as usize - front_pad;
+            (base, front_pad + user_size + poison::REDZONE_SIZE)
+        } else {
+            (ptr as usize, user_size)
+        };
+
+        if cfg!(hadron_debug_alloc_track) {
+            track_dealloc(user_size);
+        }
 
         let mut inner = self.inner.lock_unchecked();
-        inner.allocated_bytes -= size;
+        inner.allocated_bytes -= block_size;
 
         unsafe {
-            Self::add_free_region(&mut inner, addr, size);
+            Self::add_free_region(&mut inner, block_addr, block_size);
         }
     }
 }
@@ -318,6 +521,108 @@ pub fn register_grow_fn(f: fn(usize) -> Option<(*mut u8, usize)>) {
     HEAP.register_grow_fn(f);
 }
 
+/// Checks red zone integrity of all live heap allocations.
+///
+/// Red zones are checked on every `dealloc`; this function provides an
+/// additional manual or periodic full-heap scan. A complete walk of live
+/// allocations requires the allocation tracking side table
+/// (`debug_alloc_track`); without it, only dealloc-time checks are active.
+#[cfg(hadron_debug_heap_poison)]
+pub fn scan_red_zones() {
+    crate::kinfo!(
+        "heap: red zone dealloc-time checks active; \
+         full heap scan requires alloc tracking side table"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Allocation tracking (requires debug_alloc_track + debug_heap_poison)
+// ---------------------------------------------------------------------------
+
+/// Heap allocation statistics for leak investigation.
+///
+/// Defined unconditionally for `cfg!()` type-checking; compiled away when
+/// `hadron_debug_alloc_track` is off.
+struct AllocStats {
+    /// Total number of allocations since boot.
+    total_allocs: u64,
+    /// Total number of frees since boot.
+    total_frees: u64,
+    /// Currently live allocations.
+    current_live: u64,
+    /// Currently allocated bytes (user-visible size, excludes red zones).
+    current_bytes: u64,
+    /// Peak live allocations.
+    peak_live: u64,
+    /// Peak allocated bytes.
+    peak_bytes: u64,
+}
+
+impl AllocStats {
+    const fn new() -> Self {
+        Self {
+            total_allocs: 0,
+            total_frees: 0,
+            current_live: 0,
+            current_bytes: 0,
+            peak_live: 0,
+            peak_bytes: 0,
+        }
+    }
+
+    fn record_alloc(&mut self, user_size: usize) {
+        self.total_allocs += 1;
+        self.current_live += 1;
+        self.current_bytes += user_size as u64;
+        if self.current_live > self.peak_live {
+            self.peak_live = self.current_live;
+        }
+        if self.current_bytes > self.peak_bytes {
+            self.peak_bytes = self.current_bytes;
+        }
+    }
+
+    fn record_free(&mut self, user_size: usize) {
+        self.total_frees += 1;
+        self.current_live -= 1;
+        self.current_bytes -= user_size as u64;
+    }
+}
+
+static ALLOC_STATS: SpinLock<AllocStats> = SpinLock::named("ALLOC_STATS", AllocStats::new());
+
+/// Records a successful allocation in the tracking stats.
+///
+/// Called from the `GlobalAlloc` impl when `debug_alloc_track` is enabled.
+fn track_alloc(user_size: usize) {
+    ALLOC_STATS.lock_unchecked().record_alloc(user_size);
+}
+
+/// Records a deallocation in the tracking stats.
+///
+/// Called from the `GlobalAlloc` impl when `debug_alloc_track` is enabled.
+fn track_dealloc(user_size: usize) {
+    ALLOC_STATS.lock_unchecked().record_free(user_size);
+}
+
+/// Logs current heap allocation statistics.
+///
+/// Reports total allocs/frees, current live count/bytes, and peak values.
+/// Useful for leak investigation.
+#[cfg(hadron_debug_alloc_track)]
+pub fn dump_alloc_stats() {
+    let stats = ALLOC_STATS.lock_unchecked();
+    crate::kinfo!(
+        "heap stats: allocs={} frees={} live={} bytes={} peak_live={} peak_bytes={}",
+        stats.total_allocs,
+        stats.total_frees,
+        stats.current_live,
+        stats.current_bytes,
+        stats.peak_live,
+        stats.peak_bytes
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Kernel-level heap initialization
 // ---------------------------------------------------------------------------
@@ -335,6 +640,14 @@ pub fn init() {
     }
 
     register_grow_fn(grow_callback);
+
+    crate::ktrace_subsys!(
+        mm,
+        "heap initialized at {:#x}, size {:#x} ({} KiB)",
+        heap_start,
+        heap_size,
+        heap_size / 1024
+    );
 }
 
 /// Growth callback invoked by the heap allocator when it runs out of space.

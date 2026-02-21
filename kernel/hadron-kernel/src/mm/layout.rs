@@ -35,6 +35,19 @@ pub const VDSO_OFFSET: u64 = 48 * 1024 * 1024 * 1024 * 1024; // +48 TiB
 /// Maximum vDSO region size: 2 MiB.
 pub const VDSO_MAX_SIZE: u64 = 2 * 1024 * 1024;
 
+/// Offset from regions_base to the KASAN shadow memory region (design sketch).
+///
+/// Shadow memory uses a 1:8 ratio — one shadow byte per eight real bytes.
+/// The shadow for address `addr` is at `(addr >> 3) + KASAN_SHADOW_OFFSET`.
+/// This region is reserved for future KASAN implementation; it is not mapped
+/// or used until the sanitizer runtime is in place.
+#[allow(dead_code)] // KASAN: used by future sanitizer runtime
+pub const KASAN_SHADOW_OFFSET: u64 = 56 * 1024 * 1024 * 1024 * 1024; // +56 TiB
+
+/// Maximum KASAN shadow region size: 2 TiB (covers 16 TiB of kernel address space).
+#[allow(dead_code)] // KASAN: used by future sanitizer runtime
+pub const KASAN_SHADOW_MAX_SIZE: u64 = 2 * 1024 * 1024 * 1024 * 1024;
+
 /// Fixed kernel image base address (not KASLR-shifted).
 pub const KERNEL_IMAGE_BASE: u64 = 0xFFFF_FFFF_8000_0000;
 /// Maximum kernel image size: 128 MiB.

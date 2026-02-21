@@ -65,4 +65,71 @@ config lockdep
     default n
     binding cfg
 
+menu "Subsystem Tracing"
+
+config trace_mm
+    bool "Memory management tracing (PMM, VMM, heap)"
+    default n
+    binding cfg
+
+config trace_vfs
+    bool "VFS tracing"
+    default n
+    binding cfg
+
+config trace_sched
+    bool "Scheduler tracing"
+    default n
+    binding cfg
+
+config trace_pci
+    bool "PCI bus tracing"
+    default n
+    binding cfg
+
+config trace_acpi
+    bool "ACPI tracing"
+    default n
+    binding cfg
+
+config trace_irq
+    bool "Interrupt tracing"
+    default n
+    binding cfg
+
+config trace_syscall
+    bool "Syscall tracing"
+    default n
+    binding cfg
+
+config trace_drivers
+    bool "Driver framework tracing"
+    default n
+    binding cfg
+
+endmenu
+
+menu "Sanitizers"
+
+config debug_heap_poison
+    bool "Heap allocation poisoning & red zones"
+    default n
+    binding cfg
+    help "Fill allocations with 0xCD, freed memory with 0xDD, add 16-byte red zones (0xFD)"
+
+config debug_pmm_poison
+    bool "Physical page poisoning"
+    default n
+    binding cfg
+    help "Fill freed pages with 0xDEAD pattern, verify on allocation (detects use-after-free)"
+
+config debug_alloc_track
+    bool "Allocation origin tracking"
+    default n
+    depends on debug_heap_poison
+    binding cfg
+    help "Track allocation counts and origins, provides dump_alloc_stats() for leak investigation"
+
+endmenu
+
 endmenu

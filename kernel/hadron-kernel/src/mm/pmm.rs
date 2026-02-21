@@ -22,6 +22,49 @@ struct BitmapAllocatorInner {
     free_count: usize,
     /// Word index hint for next allocation search (amortized O(1)).
     search_hint: usize,
+    /// HHDM offset for physical-to-virtual translation (used by page poisoning).
+    hhdm_offset: u64,
+}
+
+// ---------------------------------------------------------------------------
+// PMM page poisoning helpers (always defined for cfg!() type-checking)
+// ---------------------------------------------------------------------------
+
+/// Poison pattern written to freed pages: `0xDEAD_DEAD` repeated.
+const PAGE_POISON_PATTERN: u32 = 0xDEAD_DEAD;
+
+/// Writes the poison pattern across a 4 KiB page via HHDM.
+fn poison_page(phys_addr: u64, hhdm_offset: u64) {
+    let virt = (hhdm_offset + phys_addr) as *mut u32;
+    for i in 0..(FRAME_SIZE as usize / 4) {
+        // SAFETY: The virtual address is within the HHDM region and the page
+        // has just been freed (no longer in use).
+        unsafe { virt.add(i).write_volatile(PAGE_POISON_PATTERN) };
+    }
+}
+
+/// Checks whether a previously poisoned page is still intact.
+///
+/// Returns `true` if the page was never poisoned (first word doesn't match)
+/// or if the full poison pattern is intact. Returns `false` only when partial
+/// corruption is detected (first word matches but later words don't),
+/// indicating a use-after-free.
+fn check_page_poison(phys_addr: u64, hhdm_offset: u64) -> bool {
+    let virt = (hhdm_offset + phys_addr) as *const u32;
+    // Quick check: if the first word isn't poison, page was never poisoned
+    // (first allocation after boot). Skip verification.
+    // SAFETY: The virtual address is within the HHDM region.
+    if unsafe { virt.read_volatile() } != PAGE_POISON_PATTERN {
+        return true;
+    }
+    // First word matches; verify the rest of the page.
+    for i in 1..(FRAME_SIZE as usize / 4) {
+        // SAFETY: The virtual address is within the HHDM region.
+        if unsafe { virt.add(i).read_volatile() } != PAGE_POISON_PATTERN {
+            return false;
+        }
+    }
+    true
 }
 
 /// A bitmap-based physical frame allocator.
@@ -122,6 +165,7 @@ impl BitmapAllocator {
                 total_frames,
                 free_count,
                 search_hint: 0,
+                hhdm_offset,
             }),
         })
     }
@@ -159,8 +203,20 @@ impl BitmapAllocator {
             inner.free_count -= 1;
             inner.search_hint = word_idx;
 
-            let phys = PhysAddr::new(frame_idx as u64 * FRAME_SIZE);
-            return Some(PhysFrame::containing_address(phys));
+            let phys_addr = frame_idx as u64 * FRAME_SIZE;
+
+            // Verify poison pattern is intact (detects use-after-free).
+            if cfg!(hadron_debug_pmm_poison)
+                && !check_page_poison(phys_addr, inner.hhdm_offset)
+            {
+                crate::kwarn!(
+                    "PMM: page at {:#x} modified after free (use-after-free)",
+                    phys_addr
+                );
+            }
+
+            crate::ktrace_subsys!(mm, "PMM: allocated frame at {:#x}", phys_addr);
+            return Some(PhysFrame::containing_address(PhysAddr::new(phys_addr)));
         }
 
         None
@@ -250,6 +306,17 @@ impl BitmapAllocator {
             let word_idx = fi / BITS_PER_WORD;
             let bit_idx = fi % BITS_PER_WORD;
             inner.bitmap[word_idx] |= 1u64 << bit_idx;
+
+            // Verify poison pattern is intact (detects use-after-free).
+            if cfg!(hadron_debug_pmm_poison) {
+                let phys_addr = (fi as u64) * FRAME_SIZE;
+                if !check_page_poison(phys_addr, inner.hhdm_offset) {
+                    crate::kwarn!(
+                        "PMM: page at {:#x} modified after free (use-after-free)",
+                        phys_addr
+                    );
+                }
+            }
         }
         inner.free_count -= count;
         inner.search_hint = (run_start + count) / BITS_PER_WORD;
@@ -282,6 +349,13 @@ impl BitmapAllocator {
         );
         inner.bitmap[word_idx] &= !(1u64 << bit_idx);
         inner.free_count += 1;
+
+        crate::ktrace_subsys!(mm, "PMM: freed frame at {:#x}", frame.start_address().as_u64());
+
+        // Poison the freed page so use-after-free is detectable on re-allocation.
+        if cfg!(hadron_debug_pmm_poison) {
+            poison_page(frame.start_address().as_u64(), inner.hhdm_offset);
+        }
 
         // Update hint to potentially speed up next allocation.
         if word_idx < inner.search_hint {
@@ -320,6 +394,11 @@ impl BitmapAllocator {
             );
             inner.bitmap[word_idx] &= !(1u64 << bit_idx);
             inner.free_count += 1;
+
+            // Poison each freed page.
+            if cfg!(hadron_debug_pmm_poison) {
+                poison_page((fi as u64) * FRAME_SIZE, inner.hhdm_offset);
+            }
         }
 
         let hint_word = start_idx / BITS_PER_WORD;

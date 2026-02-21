@@ -153,6 +153,36 @@ pub fn _log(level: LogLevel, args: fmt::Arguments<'_>) {
     load_log_fn()(level, args);
 }
 
+// ---------------------------------------------------------------------------
+// Subsystem-tagged log function (ktrace_subsys!)
+// ---------------------------------------------------------------------------
+
+/// The signature of the global subsystem-tagged log function.
+pub type SubsysLogFn = fn(LogLevel, &str, fmt::Arguments<'_>);
+
+fn null_subsys_log(_level: LogLevel, _subsys: &str, _args: fmt::Arguments<'_>) {}
+
+static SUBSYS_LOG_FN: AtomicPtr<()> = AtomicPtr::new(null_subsys_log as *mut ());
+
+/// Registers the global subsystem-tagged log function.
+///
+/// # Safety
+///
+/// The provided function must be safe to call from any context. May be called
+/// more than once (e.g., once for early serial, once for the full logger).
+pub unsafe fn set_subsys_log_fn(f: SubsysLogFn) {
+    SUBSYS_LOG_FN.store(f as *mut (), Ordering::Release);
+}
+
+/// Implementation detail for [`ktrace_subsys!`]. Not public API.
+#[doc(hidden)]
+pub fn _log_subsys(level: LogLevel, subsys: &str, args: fmt::Arguments<'_>) {
+    let ptr = SUBSYS_LOG_FN.load(Ordering::Acquire);
+    // SAFETY: We only ever store valid `SubsysLogFn` function pointers into SUBSYS_LOG_FN.
+    let f: SubsysLogFn = unsafe { core::mem::transmute(ptr) };
+    f(level, subsys, args);
+}
+
 /// Logs a message at the given level.
 #[macro_export]
 macro_rules! klog {
@@ -223,6 +253,57 @@ macro_rules! ktrace {
     ($($arg:tt)*) => {
         if cfg!(hadron_LOG_LEVEL_trace) {
             $crate::klog!($crate::log::LogLevel::Trace, $($arg)*)
+        }
+    };
+}
+
+/// Logs a subsystem-specific trace message.
+///
+/// Each arm is gated behind its own `hadron_trace_<subsys>` cfg flag,
+/// independent of the global `LOG_LEVEL`. When the flag is off, the
+/// entire macro body compiles away (zero-cost).
+///
+/// Output format: `[secs.micros] TRACE [subsys] message`
+#[macro_export]
+macro_rules! ktrace_subsys {
+    (mm, $($arg:tt)*) => {
+        if cfg!(hadron_trace_mm) {
+            $crate::log::_log_subsys($crate::log::LogLevel::Trace, "mm", format_args!($($arg)*))
+        }
+    };
+    (vfs, $($arg:tt)*) => {
+        if cfg!(hadron_trace_vfs) {
+            $crate::log::_log_subsys($crate::log::LogLevel::Trace, "vfs", format_args!($($arg)*))
+        }
+    };
+    (sched, $($arg:tt)*) => {
+        if cfg!(hadron_trace_sched) {
+            $crate::log::_log_subsys($crate::log::LogLevel::Trace, "sched", format_args!($($arg)*))
+        }
+    };
+    (pci, $($arg:tt)*) => {
+        if cfg!(hadron_trace_pci) {
+            $crate::log::_log_subsys($crate::log::LogLevel::Trace, "pci", format_args!($($arg)*))
+        }
+    };
+    (acpi, $($arg:tt)*) => {
+        if cfg!(hadron_trace_acpi) {
+            $crate::log::_log_subsys($crate::log::LogLevel::Trace, "acpi", format_args!($($arg)*))
+        }
+    };
+    (irq, $($arg:tt)*) => {
+        if cfg!(hadron_trace_irq) {
+            $crate::log::_log_subsys($crate::log::LogLevel::Trace, "irq", format_args!($($arg)*))
+        }
+    };
+    (syscall, $($arg:tt)*) => {
+        if cfg!(hadron_trace_syscall) {
+            $crate::log::_log_subsys($crate::log::LogLevel::Trace, "syscall", format_args!($($arg)*))
+        }
+    };
+    (drivers, $($arg:tt)*) => {
+        if cfg!(hadron_trace_drivers) {
+            $crate::log::_log_subsys($crate::log::LogLevel::Trace, "drivers", format_args!($($arg)*))
         }
     };
 }
@@ -510,16 +591,32 @@ fn early_serial_log(level: LogLevel, args: fmt::Arguments<'_>) {
     let _ = write!(w, "[{secs:>5}.{micros:06}] {level_str} {args}\n");
 }
 
+/// Early subsystem-tagged log function: writes directly to COM1.
+///
+/// Always emits (bypasses `MAX_LOG_LEVEL`), since subsystem tracing is
+/// independently gated by compile-time `hadron_trace_<subsys>` cfg flags.
+fn early_serial_subsys_log(level: LogLevel, subsys: &str, args: fmt::Arguments<'_>) {
+    let nanos = crate::time::boot_nanos();
+    let total_micros = nanos / 1_000;
+    let secs = total_micros / 1_000_000;
+    let micros = total_micros % 1_000_000;
+    let level_str = level.name();
+
+    let mut w = SerialWriter(EarlySerial::new(COM1));
+    let _ = write!(w, "[{secs:>5}.{micros:06}] {level_str} [{subsys}] {args}\n");
+}
+
 /// Registers early serial print/log functions.
 ///
 /// Call this after UART hardware init and before any `kprint!`/`klog!` use.
 /// No heap allocation required.
 pub fn init_early_serial() {
-    // SAFETY: Both functions are safe to call from any context — they
+    // SAFETY: All three functions are safe to call from any context — they
     // construct a Uart16550 on the stack (just a u16) and write bytes.
     unsafe {
         set_print_fn(early_serial_print);
         set_log_fn(early_serial_log);
+        set_subsys_log_fn(early_serial_subsys_log);
     }
 }
 
@@ -566,10 +663,12 @@ impl Logger {
         }
 
         // Replace early serial functions with the logger's functions.
-        // SAFETY: logger_print and logger_log are safe to call from any context.
+        // SAFETY: logger_print, logger_log, and logger_subsys_log are safe to
+        // call from any context.
         unsafe {
             set_print_fn(logger_print);
             set_log_fn(logger_log);
+            set_subsys_log_fn(logger_subsys_log);
         }
     }
 
@@ -627,6 +726,25 @@ impl Logger {
             }
         }
     }
+
+    /// Subsystem-tagged write — always emits to all sinks (bypasses per-sink
+    /// `max_level` filtering, since subsystem traces are independently gated
+    /// at compile time).
+    fn log_subsys(&self, level: LogLevel, subsys: &str, args: fmt::Arguments<'_>) {
+        let nanos = crate::time::boot_nanos();
+        let total_micros = nanos / 1_000;
+        let secs = total_micros / 1_000_000;
+        let micros = total_micros % 1_000_000;
+        let level_str = level.name();
+
+        let guard = self.inner.lock();
+        if let Some(inner) = guard.as_ref() {
+            for sink in &inner.sinks {
+                let mut w = SinkWriter(sink.as_ref());
+                let _ = write!(w, "[{secs:>5}.{micros:06}] {level_str} [{subsys}] {args}\n");
+            }
+        }
+    }
 }
 
 /// Adapter that wraps a `&dyn LogSink` to implement `fmt::Write`.
@@ -654,6 +772,11 @@ fn logger_print(args: fmt::Arguments<'_>) {
 /// Log function that forwards to the global logger (leveled, timestamped).
 fn logger_log(level: LogLevel, args: fmt::Arguments<'_>) {
     LOGGER.log(level, args);
+}
+
+/// Subsystem log function that forwards to the global logger.
+fn logger_subsys_log(level: LogLevel, subsys: &str, args: fmt::Arguments<'_>) {
+    LOGGER.log_subsys(level, subsys, args);
 }
 
 /// Initializes the full logger (Phase 2), replacing early serial functions.
