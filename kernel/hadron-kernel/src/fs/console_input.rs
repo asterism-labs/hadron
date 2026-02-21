@@ -191,13 +191,30 @@ fn extended_scancode_to_keycode(scancode: u8) -> Option<KeyCode> {
     }
 }
 
-/// Process a single raw scancode: decode, update modifier state, echo, and
-/// buffer the resulting character in cooked mode.
-fn process_scancode(state: &mut ConsoleInputState, scancode: u8) {
+/// Deferred echo action returned by [`process_scancode`].
+///
+/// Collected while holding the [`STATE`] lock, then executed after the lock is
+/// released so that `kprint!()` (which acquires the logger lock) never runs
+/// with interrupts disabled.
+enum EchoAction {
+    /// Erase one character: cursor back, space, cursor back.
+    Backspace,
+    /// Print a newline.
+    Newline,
+    /// Print a single ASCII character.
+    Char(u8),
+}
+
+/// Process a single raw scancode: decode, update modifier state, and buffer
+/// the resulting character in cooked mode.
+///
+/// Returns an [`EchoAction`] if the caller should echo output after releasing
+/// the [`STATE`] lock.
+fn process_scancode(state: &mut ConsoleInputState, scancode: u8) -> Option<EchoAction> {
     // Handle 0xE0 extended prefix.
     if scancode == 0xE0 {
         state.extended_prefix = true;
-        return;
+        return None;
     }
 
     let is_release = is_release(scancode);
@@ -210,27 +227,27 @@ fn process_scancode(state: &mut ConsoleInputState, scancode: u8) {
     };
 
     let Some(key) = keycode else {
-        return;
+        return None;
     };
 
     // Update modifier state.
     match key {
         KeyCode::LeftShift | KeyCode::RightShift => {
             state.shift_held = !is_release;
-            return;
+            return None;
         }
         KeyCode::CapsLock => {
             if !is_release {
                 state.caps_lock = !state.caps_lock;
             }
-            return;
+            return None;
         }
         _ => {}
     }
 
     // Only process key presses, not releases.
     if is_release {
-        return;
+        return None;
     }
 
     let shifted = state.shift_held;
@@ -242,8 +259,7 @@ fn process_scancode(state: &mut ConsoleInputState, scancode: u8) {
                 // Backspace: erase one character.
                 if state.line_len > 0 {
                     state.line_len -= 1;
-                    // Echo: move cursor back, overwrite with space, move back again.
-                    crate::kprint!("\x08 \x08");
+                    return Some(EchoAction::Backspace);
                 }
             }
             b'\n' => {
@@ -255,7 +271,7 @@ fn process_scancode(state: &mut ConsoleInputState, scancode: u8) {
                 }
                 let _ = state.ready_buf.try_push(b'\n');
                 state.line_len = 0;
-                crate::kprint!("\n");
+                return Some(EchoAction::Newline);
             }
             _ => {
                 // Printable character: append to line buffer if there's room.
@@ -263,11 +279,12 @@ fn process_scancode(state: &mut ConsoleInputState, scancode: u8) {
                 if len < LINE_BUF_SIZE {
                     state.line_buf[len] = ch;
                     state.line_len += 1;
-                    crate::kprint!("{}", ch as char);
+                    return Some(EchoAction::Char(ch));
                 }
             }
         }
     }
+    None
 }
 
 /// Drain buffered scancodes, decode them, and push ASCII into the line buffer.
@@ -276,11 +293,12 @@ fn process_scancode(state: &mut ConsoleInputState, scancode: u8) {
 /// 1. The [`SCANCODE_BUF`] ring buffer (filled by the IRQ handler)
 /// 2. The PS/2 hardware FIFO directly (catches bytes from before IRQ setup)
 ///
-/// Scancodes are collected with interrupts disabled to prevent races with
-/// the IRQ handler, then processed under the [`STATE`] lock (which echoes
-/// characters via `kprint!`).
+/// Echo output is deferred until after the [`STATE`] lock is released to avoid
+/// holding an IRQ-disabling lock while writing to the logger (which acquires
+/// its own spinlock). This prevents an ABBA deadlock between `STATE` and the
+/// logger lock.
 pub fn poll_keyboard_hardware() {
-    // Collect raw scancodes with interrupts disabled (no logger lock needed).
+    // Phase 1: drain scancodes (interrupts disabled briefly).
     let mut raw = [0u8; SCANCODE_BUF_SIZE];
     let mut count = 0;
 
@@ -310,10 +328,28 @@ pub fn poll_keyboard_hardware() {
         return;
     }
 
-    // Process all collected scancodes (echo + line editing).
-    let mut state = STATE.lock();
-    for &scancode in &raw[..count] {
-        process_scancode(&mut state, scancode);
+    // Phase 2: process under STATE lock, collect echo actions.
+    let mut echoes: [Option<EchoAction>; SCANCODE_BUF_SIZE] = [const { None }; SCANCODE_BUF_SIZE];
+    let mut echo_count = 0;
+    {
+        let mut state = STATE.lock();
+        for &scancode in &raw[..count] {
+            if let Some(action) = process_scancode(&mut state, scancode) {
+                echoes[echo_count] = Some(action);
+                echo_count += 1;
+            }
+        }
+    }
+    // STATE released here — interrupts re-enabled.
+
+    // Phase 3: echo with no locks held.
+    for echo in &echoes[..echo_count] {
+        match echo {
+            Some(EchoAction::Backspace) => crate::kprint!("\x08 \x08"),
+            Some(EchoAction::Newline) => crate::kprint!("\n"),
+            Some(EchoAction::Char(ch)) => crate::kprint!("{}", *ch as char),
+            None => {}
+        }
     }
 }
 
