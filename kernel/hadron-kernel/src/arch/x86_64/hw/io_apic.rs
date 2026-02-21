@@ -154,6 +154,18 @@ impl IoApic {
         self.write_reg(reg_low, val & !(1 << 16));
     }
 
+    /// Reads the raw low and high dwords of a redirection table entry.
+    ///
+    /// Useful for diagnostics: low dword contains vector, delivery mode, mask
+    /// bit; high dword contains the destination APIC ID.
+    pub fn read_entry_raw(&self, index: u8) -> (u32, u32) {
+        let reg_low = 0x10 + 2 * u32::from(index);
+        let reg_high = reg_low + 1;
+        let low = self.read_reg(reg_low);
+        let high = self.read_reg(reg_high);
+        (low, high)
+    }
+
     #[inline]
     fn read_reg(&self, reg: u32) -> u32 {
         // SAFETY: The caller of `IoApic::new` guarantees that `self.base` points to

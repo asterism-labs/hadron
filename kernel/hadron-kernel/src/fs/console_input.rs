@@ -478,7 +478,71 @@ pub fn init() {
 
     crate::arch::x86_64::acpi::with_io_apic(|ioapic| ioapic.unmask(1));
 
+    // Diagnostic: verify IOAPIC entry 1 and i8042 config byte after setup.
+    // This identifies whether IRQ=0 is caused by the i8042 not generating
+    // interrupts or the IOAPIC not delivering them.
+    #[cfg(hadron_lock_debug)]
+    dump_irq1_state();
+
     crate::kinfo!("Console input: keyboard IRQ1 enabled (vector {})", vector);
+}
+
+/// Dumps the IOAPIC redirection entry 1 and i8042 controller config byte.
+///
+/// Called once during init to verify hardware state. When `irq=0` is observed
+/// in the health monitor, these values identify the failing component:
+/// - IOAPIC masked or wrong vector → interrupt routing issue
+/// - i8042 PORT1_IRQ clear → controller not generating IRQ1
+/// - i8042 PORT1_CLOCK_DISABLE set → keyboard port disabled (probe failed)
+#[cfg(hadron_lock_debug)]
+fn dump_irq1_state() {
+    // Read back IOAPIC redirection entry 1 to verify unmask succeeded.
+    // Collect values inside the PLATFORM lock, log OUTSIDE to avoid holding
+    // IrqSpinLock while acquiring the logger lock (ABBA deadlock with APs
+    // that acquire PLATFORM via lapic_virt/send_wake_ipi).
+    let ioapic_info = crate::arch::x86_64::acpi::with_io_apic(|ioapic| {
+        ioapic.read_entry_raw(1)
+    });
+    if let Some((low, high)) = ioapic_info {
+        let entry_vector = low & 0xFF;
+        let masked = (low >> 16) & 1;
+        let dest = (high >> 24) & 0xFF;
+        crate::kinfo!(
+            "IOAPIC entry 1: vector={} masked={} dest={} raw_low={:#010x} raw_high={:#010x}",
+            entry_vector, masked, dest, low, high
+        );
+    }
+
+    // Read i8042 config byte to verify PORT1_IRQ is enabled.
+    // SAFETY: Standard i8042 read-config command sequence (0x20 to port 0x64,
+    // then read result from port 0x60). The i8042 probe has already run.
+    let config = unsafe {
+        use crate::arch::x86_64::Port;
+        let cmd_port = Port::<u8>::new(0x64);
+        let data_port = Port::<u8>::new(0x60);
+        cmd_port.write(0x20); // READ_CONFIG command
+        // Spin until output buffer has the config byte.
+        for _ in 0..100_000u32 {
+            let status = Port::<u8>::new(0x64).read();
+            if status & 0x01 != 0 {
+                break;
+            }
+            core::hint::spin_loop();
+        }
+        data_port.read()
+    };
+    let irq1_enabled = config & 0x01 != 0;
+    let port1_clock_disabled = config & 0x10 != 0;
+    crate::kinfo!(
+        "i8042 config: {:#04x} irq1_enabled={} port1_clock_disabled={}",
+        config, irq1_enabled, port1_clock_disabled
+    );
+    if !irq1_enabled {
+        crate::kwarn!("i8042 PORT1_IRQ is DISABLED - keyboard will not generate IRQ1!");
+    }
+    if port1_clock_disabled {
+        crate::kwarn!("i8042 PORT1 clock is DISABLED - keyboard port is inactive!");
+    }
 }
 
 /// Registers a waker to be notified when keyboard input arrives.

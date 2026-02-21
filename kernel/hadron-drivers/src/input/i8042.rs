@@ -533,8 +533,10 @@ impl I8042Driver {
         // Platform init hook — performs the actual controller initialization.
         let ctrl = I8042::new();
         // SAFETY: Called once during driver matching, ports 0x60/0x64 are valid i8042.
-        unsafe { ctrl.init() }
-            .map_err(|_| hadron_kernel::driver_api::error::DriverError::InitFailed)?;
+        unsafe { ctrl.init() }.map_err(|e| {
+            hadron_kernel::kwarn!("i8042: controller init failed: {}", e);
+            hadron_kernel::driver_api::error::DriverError::InitFailed
+        })?;
 
         Ok(PlatformDriverRegistration {
             devices: DeviceSet::new(),
