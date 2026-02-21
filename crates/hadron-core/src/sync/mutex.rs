@@ -222,6 +222,15 @@ pub struct MutexGuard<'a, T> {
     class: LockClassId,
 }
 
+impl<'a, T> MutexGuard<'a, T> {
+    /// Returns a reference to the underlying [`Mutex`].
+    ///
+    /// Used by [`Condvar::wait_async`](super::Condvar::wait_async) to re-acquire after release.
+    pub fn mutex_ref(&self) -> &'a Mutex<T> {
+        self.mutex
+    }
+}
+
 impl<T> Deref for MutexGuard<'_, T> {
     type Target = T;
 

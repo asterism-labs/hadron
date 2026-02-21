@@ -52,8 +52,17 @@ pub extern "x86-interrupt" fn debug(frame: InterruptStackFrame) {
     crate::kwarn!("EXCEPTION: DEBUG\n{:#?}", frame);
 }
 
-pub extern "x86-interrupt" fn nmi(frame: InterruptStackFrame) {
-    panic!("EXCEPTION: NON-MASKABLE INTERRUPT\n{:#?}", frame);
+pub extern "x86-interrupt" fn nmi(_frame: InterruptStackFrame) {
+    // If a panic is in progress, this NMI was sent by `panic_halt_other_cpus`.
+    // Halt this CPU permanently.
+    if crate::sched::smp::is_panic_halt() {
+        loop {
+            unsafe {
+                core::arch::asm!("cli; hlt", options(nomem, nostack, preserves_flags));
+            }
+        }
+    }
+    panic!("EXCEPTION: NON-MASKABLE INTERRUPT\n{:#?}", _frame);
 }
 
 pub extern "x86-interrupt" fn breakpoint(frame: InterruptStackFrame) {

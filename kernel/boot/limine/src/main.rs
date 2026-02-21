@@ -823,8 +823,13 @@ fn log_boot_info(boot_info: &BootInfoData) {
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
+    // Stop all other CPUs first to prevent garbled output and cascading panics.
+    hadron_kernel::sched::smp::panic_halt_other_cpus();
+
     hadron_kernel::log::panic_serial(info);
     loop {
-        core::hint::spin_loop();
+        unsafe {
+            core::arch::asm!("cli; hlt", options(nomem, nostack, preserves_flags));
+        }
     }
 }

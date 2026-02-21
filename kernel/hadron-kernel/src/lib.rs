@@ -13,14 +13,18 @@
 extern crate alloc;
 
 // ── Always-available modules (pure logic, host-testable) ─────────────────
+// Core types and sync primitives live in hadron-core for host testability.
+// Re-export them so existing `hadron_kernel::*` paths continue to work.
 
-pub mod addr;
-pub mod cell;
+pub use hadron_core::addr;
+pub use hadron_core::cell;
+pub use hadron_core::cpu_local;
+pub use hadron_core::paging;
+pub use hadron_core::static_assert;
+pub use hadron_core::sync;
+pub use hadron_core::task;
+
 pub mod driver_api;
-pub mod paging;
-pub mod static_assert;
-pub mod sync;
-pub mod task;
 
 // ── Kernel-runtime modules (require target_os = "none") ──────────────────
 

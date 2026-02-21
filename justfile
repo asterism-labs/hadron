@@ -41,6 +41,14 @@ clippy *args: bootstrap
 fmt *args: bootstrap
     {{hb}} fmt {{args}}
 
+# Run miri on hadron-core sync primitives
+miri *args:
+    cargo +nightly miri test -p hadron-core -- sync:: {{args}}
+
+# Run loom concurrency tests on hadron-core
+loom *args:
+    RUSTFLAGS="--cfg loom" cargo test -p hadron-core {{args}}
+
 # Remove build artifacts
 clean *args: bootstrap
     {{hb}} clean {{args}}

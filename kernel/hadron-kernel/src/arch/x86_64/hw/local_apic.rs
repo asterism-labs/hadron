@@ -110,6 +110,26 @@ impl LocalApic {
         }
     }
 
+    /// Sends an NMI to all CPUs except the current one.
+    ///
+    /// Used by the panic handler to halt all other CPUs. NMIs cannot be
+    /// masked, so this reaches CPUs even if they have interrupts disabled.
+    ///
+    /// # Safety
+    ///
+    /// The LAPIC must be enabled and properly mapped.
+    pub unsafe fn send_broadcast_nmi(&self) {
+        // ICR: delivery mode = NMI (0b100), destination shorthand = all-excluding-self (0b11).
+        const NMI_DELIVERY: u32 = 0b100 << 8;
+        const ALL_EXCLUDING_SELF: u32 = 0b11 << 18;
+        self.write_reg(REG_ICR_HIGH, 0);
+        self.write_reg(REG_ICR_LOW, NMI_DELIVERY | ALL_EXCLUDING_SELF);
+        // Wait for delivery.
+        while self.read_reg(REG_ICR_LOW) & (1 << 12) != 0 {
+            core::hint::spin_loop();
+        }
+    }
+
     #[inline]
     fn read_reg(&self, offset: u32) -> u32 {
         // SAFETY: The caller of `LocalApic::new` guarantees that `self.base` points to

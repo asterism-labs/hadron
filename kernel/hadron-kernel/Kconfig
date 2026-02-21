@@ -65,6 +65,18 @@ config lockdep
     default n
     binding cfg
 
+config lock_stat
+    bool "Lock contention statistics"
+    default n
+    depends on lockdep
+    binding cfg
+
+config lockdep_warn
+    bool "Lockdep warning-only mode (no panic)"
+    default n
+    depends on lockdep
+    binding cfg
+
 menu "Subsystem Tracing"
 
 config trace_mm

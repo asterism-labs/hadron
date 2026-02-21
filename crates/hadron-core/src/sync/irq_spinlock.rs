@@ -22,8 +22,8 @@ use super::lockdep::LockClassId;
 /// `Mutex` to assert they are not acquired inside an `IrqSpinLock` critical
 /// section, which could cause deadlocks with interrupt handlers.
 #[cfg(all(hadron_lock_debug, target_os = "none"))]
-static IRQ_LOCK_DEPTH: crate::percpu::CpuLocal<AtomicU32> = crate::percpu::CpuLocal::new(
-    [const { AtomicU32::new(0) }; crate::percpu::MAX_CPUS],
+static IRQ_LOCK_DEPTH: crate::cpu_local::CpuLocal<AtomicU32> = crate::cpu_local::CpuLocal::new(
+    [const { AtomicU32::new(0) }; crate::cpu_local::MAX_CPUS],
 );
 
 /// Returns the number of `IrqSpinLock`s held by the current CPU.
@@ -31,7 +31,7 @@ static IRQ_LOCK_DEPTH: crate::percpu::CpuLocal<AtomicU32> = crate::percpu::CpuLo
 pub(super) fn irq_lock_depth() -> u32 {
     #[cfg(target_os = "none")]
     {
-        if !crate::percpu::current_cpu().is_initialized() {
+        if !crate::cpu_local::cpu_is_initialized() {
             return 0;
         }
         IRQ_LOCK_DEPTH.get().load(Ordering::Relaxed)
@@ -44,7 +44,7 @@ pub(super) fn irq_lock_depth() -> u32 {
 
 #[cfg(all(hadron_lock_debug, target_os = "none"))]
 fn increment_irq_depth() {
-    if !crate::percpu::current_cpu().is_initialized() {
+    if !crate::cpu_local::cpu_is_initialized() {
         return;
     }
     IRQ_LOCK_DEPTH.get().fetch_add(1, Ordering::Relaxed);
@@ -52,7 +52,7 @@ fn increment_irq_depth() {
 
 #[cfg(all(hadron_lock_debug, target_os = "none"))]
 fn decrement_irq_depth() {
-    if !crate::percpu::current_cpu().is_initialized() {
+    if !crate::cpu_local::cpu_is_initialized() {
         return;
     }
     IRQ_LOCK_DEPTH.get().fetch_sub(1, Ordering::Relaxed);

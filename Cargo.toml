@@ -21,6 +21,7 @@ publish = false
 [workspace.dependencies]
 # Internal crates
 hadron-acpi = { path = "crates/acpi" }
+hadron-core = { path = "crates/hadron-core" }
 hadron-binparse = { path = "crates/binparse" }
 hadron-binparse-macros = { path = "crates/hadron-binparse-macros" }
 hadron-codegen = { path = "crates/hadron-codegen" }

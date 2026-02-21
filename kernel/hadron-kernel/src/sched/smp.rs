@@ -9,7 +9,7 @@
 //! metadata) is migrated to the stealer's executor. On the next poll, the
 //! waker will encode the stealer's CPU ID, completing the migration.
 
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use crate::percpu::MAX_CPUS;
 use crate::task::Priority;
@@ -20,6 +20,11 @@ use crate::arch::x86_64::interrupts::dispatch::vectors;
 
 /// IPI vector used to wake a CPU from HLT.
 const IPI_WAKE_VECTOR: u8 = vectors::IPI_START; // 240
+
+/// Global flag set by the panic handler to signal all CPUs to halt.
+///
+/// Checked by the NMI handler and the executor idle loop.
+pub static PANIC_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
 /// CPU ID → APIC ID mapping, populated during bootstrap.
 ///
@@ -97,4 +102,39 @@ pub(crate) fn try_steal() -> Option<(crate::task::TaskId, Priority, TaskEntry)> 
     }
 
     None
+}
+
+/// Halts all other CPUs by sending a broadcast NMI.
+///
+/// Called from the panic handler. Sets [`PANIC_IN_PROGRESS`] and sends an
+/// NMI to all-excluding-self via the Local APIC. The NMI handler on each
+/// remote CPU checks the flag and enters `cli; hlt`.
+///
+/// If the LAPIC is not yet initialized (early boot panic), this is a no-op
+/// — there are no other CPUs running yet.
+pub fn panic_halt_other_cpus() {
+    // Ensure only the first panicking CPU sends the broadcast.
+    if PANIC_IN_PROGRESS.swap(true, Ordering::SeqCst) {
+        // Another CPU already initiated the halt — just stop ourselves.
+        loop {
+            unsafe {
+                core::arch::asm!("cli; hlt", options(nomem, nostack, preserves_flags));
+            }
+        }
+    }
+
+    if let Some(lapic_virt) = crate::arch::x86_64::acpi::lapic_virt() {
+        // SAFETY: The LAPIC is mapped and permanent. NMI delivery is always
+        // safe — it cannot be masked, so all CPUs will receive it.
+        let lapic = unsafe { LocalApic::new(lapic_virt) };
+        unsafe { lapic.send_broadcast_nmi() };
+    }
+}
+
+/// Called from the NMI handler to check if the NMI was a panic halt signal.
+///
+/// Returns `true` if a panic is in progress and the caller should halt.
+/// The caller should enter `cli; hlt` when this returns `true`.
+pub fn is_panic_halt() -> bool {
+    PANIC_IN_PROGRESS.load(Ordering::SeqCst)
 }

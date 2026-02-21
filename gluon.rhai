@@ -142,6 +142,8 @@ host.add("hadron-binparse-macros", "crates/hadron-binparse-macros")
 let kernel_libs = group("kernel-libs").target("x86_64-unknown-hadron").edition("2024").config(true);
 
 kernel_libs.add("noalloc", "crates/noalloc");
+kernel_libs.add("hadron-core", "crates/hadron-core")
+    .deps(#{ noalloc: "noalloc" });
 kernel_libs.add("hadron-linkset", "crates/linkset");
 kernel_libs.add("hadron-binparse", "crates/binparse")
     .deps(#{ hadron_binparse_macros: #{ "crate": "hadron-binparse-macros", proc_macro: true } });
@@ -200,6 +202,7 @@ kernel_main.add("hadron-kernel", "kernel/hadron-kernel")
         bitflags: "bitflags",
         hadris_io: "hadris-io",
         hadron_acpi: "hadron-acpi",
+        hadron_core: "hadron-core",
         hadron_elf: "hadron-elf",
         hadron_linkset: "hadron-linkset",
         hadron_syscall: "hadron-syscall",
@@ -315,6 +318,7 @@ image()
 tests()
     .host_testable([
         "hadron-binparse",
+        "hadron-core",
         "hadron-dwarf",
         "hadron-elf",
         "noalloc",

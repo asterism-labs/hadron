@@ -50,11 +50,12 @@ impl<T> SpinLock<T> {
     ///
     /// Returns a [`SpinLockGuard`] that releases the lock when dropped.
     pub fn lock(&self) -> SpinLockGuard<'_, T> {
-        // NOTE: The IRQ-context assertion (hadron_lock_debug) is disabled
-        // pending a proper guard mechanism. The executor polls tasks with
-        // interrupts disabled, which legitimately acquires SpinLocks.
-        // A future approach should track IrqSpinLock nesting depth rather
-        // than checking the IF flag directly.
+        #[cfg(hadron_lock_debug)]
+        {
+            if super::irq_spinlock::irq_lock_depth() != 0 {
+                panic!("SpinLock::lock() called while holding IrqSpinLock");
+            }
+        }
 
         loop {
             // Fast path: try to acquire directly.
@@ -108,7 +109,7 @@ impl<T> SpinLock<T> {
     /// Only for locks known-safe to hold with interrupts disabled — specifically
     /// the heap allocator, which may be entered from any context including
     /// `IrqSpinLock` critical sections that allocate.
-    pub(crate) fn lock_unchecked(&self) -> SpinLockGuard<'_, T> {
+    pub fn lock_unchecked(&self) -> SpinLockGuard<'_, T> {
         loop {
             if self
                 .locked
@@ -156,6 +157,15 @@ pub struct SpinLockGuard<'a, T> {
     lock: &'a SpinLock<T>,
     #[cfg(hadron_lockdep)]
     class: LockClassId,
+}
+
+impl<'a, T> SpinLockGuard<'a, T> {
+    /// Returns a reference to the underlying [`SpinLock`].
+    ///
+    /// Used by [`Condvar::wait`](super::Condvar::wait) to re-acquire after release.
+    pub fn lock_ref(&self) -> &'a SpinLock<T> {
+        self.lock
+    }
 }
 
 impl<T> Deref for SpinLockGuard<'_, T> {

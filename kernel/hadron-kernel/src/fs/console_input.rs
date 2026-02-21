@@ -5,19 +5,24 @@
 //! copied into a ready buffer that userspace can read from.
 //!
 //! Keyboard input is driven by IRQ1: the interrupt handler drains the PS/2
-//! hardware FIFO into a software ring buffer, then wakes futures waiting on
-//! the [`INPUT_READY`] wait queue. Deferred scancode processing (echo, line
-//! editing) happens in [`poll_keyboard_hardware`] when the reader future is
-//! polled by the executor.
+//! hardware FIFO into a software ring buffer, then wakes the single reader
+//! via the [`INPUT_READY`] waker slot. Deferred scancode processing (echo,
+//! line editing) happens in [`poll_keyboard_hardware`] when the reader future
+//! is polled by the executor.
+
+use core::task::Waker;
 
 use crate::sync::IrqSpinLock;
 use crate::driver_api::input::KeyCode;
 use noalloc::ringbuf::RingBuf;
 
-use crate::sync::HeapWaitQueue;
-
-/// Woken by the keyboard IRQ handler when a scancode is available.
-static INPUT_READY: HeapWaitQueue = HeapWaitQueue::new();
+/// Single-waker slot for the console reader.
+///
+/// Only one task reads from `/dev/console` at a time, so a single `Option<Waker>`
+/// suffices. This avoids the heap allocation that `HeapWaitQueue` (`VecDeque`)
+/// performs inside an IrqSpinLock critical section, which can interact badly
+/// with the allocator when interrupts are disabled.
+static INPUT_READY: IrqSpinLock<Option<Waker>> = IrqSpinLock::named("INPUT_READY", None);
 
 /// Maximum line length for cooked-mode editing.
 const LINE_BUF_SIZE: usize = 256;
@@ -397,7 +402,7 @@ pub fn try_read(buf: &mut [u8]) -> usize {
     n
 }
 
-/// Keyboard IRQ handler — drains the PS/2 FIFO and wakes waiting readers.
+/// Keyboard IRQ handler — drains the PS/2 FIFO and wakes the waiting reader.
 ///
 /// Scancodes are buffered in [`SCANCODE_BUF`] for deferred processing by
 /// [`poll_keyboard_hardware`]. Echo and line editing happen there (in thread
@@ -409,7 +414,11 @@ fn keyboard_irq_handler(_vector: u8) {
             let _ = buf.try_push(scancode);
         }
     }
-    INPUT_READY.wake_all();
+    // Take the single waker (if any) and wake it outside the lock.
+    let waker = INPUT_READY.lock().take();
+    if let Some(w) = waker {
+        w.wake();
+    }
 }
 
 /// Initialize IRQ-driven keyboard input.
@@ -429,8 +438,11 @@ pub fn init() {
 }
 
 /// Registers a waker to be notified when keyboard input arrives.
-pub fn subscribe(waker: &core::task::Waker) {
-    INPUT_READY.register_waker(waker);
+///
+/// Replaces any previously registered waker. Only one reader is expected
+/// at a time (`/dev/console` is single-consumer).
+pub fn subscribe(waker: &Waker) {
+    *INPUT_READY.lock() = Some(waker.clone());
 }
 
 /// Translate a [`KeyCode`] to an ASCII byte, accounting for shift and caps lock.
