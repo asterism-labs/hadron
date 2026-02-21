@@ -50,12 +50,11 @@ impl<T> SpinLock<T> {
     ///
     /// Returns a [`SpinLockGuard`] that releases the lock when dropped.
     pub fn lock(&self) -> SpinLockGuard<'_, T> {
-        #[cfg(all(hadron_lock_debug, target_os = "none"))]
-        debug_assert!(
-            crate::arch::x86_64::instructions::interrupts::are_enabled(),
-            "SpinLock::lock() called with interrupts disabled — \
-             nesting inside an IrqSpinLock risks ABBA deadlock"
-        );
+        // NOTE: The IRQ-context assertion (hadron_lock_debug) is disabled
+        // pending a proper guard mechanism. The executor polls tasks with
+        // interrupts disabled, which legitimately acquires SpinLocks.
+        // A future approach should track IrqSpinLock nesting depth rather
+        // than checking the IF flag directly.
 
         loop {
             // Fast path: try to acquire directly.
