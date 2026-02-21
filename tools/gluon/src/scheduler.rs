@@ -1,8 +1,9 @@
-//! Barrier + DAG scheduler for the build pipeline.
+//! Unified global DAG scheduler for the build pipeline.
 //!
-//! Walks [`PipelineDef`] steps sequentially: stages expand groups into crates
-//! and compile them with DAG-ordered parallelism, barriers wait for all prior
-//! work, and rules execute artifact generation handlers.
+//! Builds a single DAG containing all compilation units across all pipeline
+//! stages, with edges based on actual dependencies rather than stage barriers.
+//! This allows host proc-macros to compile in parallel with sysroot builds,
+//! and userspace crates to overlap with late kernel compilation.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -13,7 +14,7 @@ use anyhow::{Result, bail};
 use crate::cache::{CacheManifest, CrateEntry};
 use crate::compile::{self, ArtifactMap, CompileMode};
 use crate::config::ResolvedConfig;
-use crate::crate_graph::{self, ResolvedCrate};
+use crate::crate_graph;
 use crate::model::{BuildModel, PipelineStep, RuleHandler};
 use crate::sysroot;
 
@@ -34,9 +35,51 @@ pub struct PipelineState {
     pub kernel_binary_rebuilt: bool,
     pub total_crates: usize,
     pub recompiled_crates: usize,
+    /// Maximum number of parallel workers (0 = auto-detect from CPU count).
+    pub max_workers: usize,
 }
 
-/// Execute the build pipeline for a full build.
+// ---------------------------------------------------------------------------
+// Global DAG node types
+// ---------------------------------------------------------------------------
+
+/// A node in the unified build DAG.
+enum DagNode {
+    /// Build a sysroot for a specific target.
+    Sysroot { target: String },
+    /// Build the config crate for a specific target.
+    ConfigCrate { target: String },
+    /// Compile a regular crate. `krate_idx` indexes into the shared `all_crates` vec.
+    Crate { krate_idx: usize, has_config: bool },
+    /// Execute a named rule (e.g. hbtf, initrd, hkif).
+    Rule { name: String },
+}
+
+/// Result sent back from a worker thread.
+enum CompileOutcome {
+    /// Crate compilation succeeded.
+    Compiled {
+        node_idx: usize,
+        artifact: PathBuf,
+        flags_hash: String,
+    },
+    /// Crate compilation failed.
+    Error {
+        node_idx: usize,
+        error: anyhow::Error,
+    },
+}
+
+/// A compilation job dispatched to a worker thread.
+struct CompileJob {
+    node_idx: usize,
+    krate_idx: usize,
+    flags_hash: String,
+    has_config: bool,
+    mode: CompileMode,
+}
+
+/// Execute the build pipeline using a unified global DAG.
 pub fn execute_pipeline(
     model: &BuildModel,
     state: &mut PipelineState,
@@ -45,322 +88,208 @@ pub fn execute_pipeline(
     let root = state.config.root.clone();
     let sysroot_src = sysroot::sysroot_src_dir()?;
 
-    for step in &model.pipeline.steps {
-        match step {
-            PipelineStep::Stage { name, groups } => {
-                if groups.is_empty() {
-                    continue;
-                }
-                println!("\nCompiling stage '{name}'...");
-                let _t = crate::verbose::Timer::start("stage");
-                execute_stage(model, state, groups, &root, &sysroot_src, mode)?;
-            }
-            PipelineStep::Barrier(_) => {
-                // Barriers are implicit in sequential execution.
-            }
-            PipelineStep::Rule(rname) => {
-                if mode != CompileMode::Build {
-                    continue;
-                }
-                execute_rule(model, state, rname, &root)?;
-            }
-        }
+    // Pre-resolve all target specs eagerly so workers can reference them.
+    for (_name, target_def) in &model.targets {
+        let target_spec_path = root.join(&target_def.spec);
+        let target_spec = target_spec_path
+            .to_str()
+            .expect("target spec path is valid UTF-8")
+            .to_string();
+        state.target_specs.insert(target_def.name.clone(), target_spec);
     }
 
-    Ok(())
-}
-
-/// Ensure a sysroot exists for the given target, building it lazily if needed.
-fn ensure_sysroot(
-    model: &BuildModel,
-    state: &mut PipelineState,
-    target: &str,
-    root: &Path,
-) -> Result<()> {
-    if state.sysroots.contains_key(target) {
-        return Ok(());
-    }
-
-    let target_def = model.targets.get(target)
-        .ok_or_else(|| anyhow::anyhow!("target '{target}' not found in model"))?;
-    let target_spec_path = root.join(&target_def.spec);
-    let target_spec = target_spec_path
-        .to_str()
-        .expect("target spec path is valid UTF-8")
-        .to_string();
-
-    // Store the spec path for this target.
-    state.target_specs.insert(target.to_string(), target_spec);
-
-    // Build or reuse sysroot.
-    println!("  Building sysroot for {target}...");
-    let sysroot_dir = if !state.force
-        && state.cache
-            .is_sysroot_fresh(target, state.config.profile.opt_level)
-            .is_fresh()
-    {
-        println!("  Sysroot unchanged, skipping.");
-        sysroot::sysroot_output_paths(root, target).sysroot_dir
-    } else {
-        let sysroot_output = sysroot::build_sysroot(
-            root,
-            &target_spec_path,
-            target,
-            state.config.profile.opt_level,
-        )?;
-        state.cache.record_sysroot(
-            target,
-            state.config.profile.opt_level,
-            sysroot_output.core_rlib,
-            sysroot_output.compiler_builtins_rlib,
-            sysroot_output.alloc_rlib,
-        );
-        println!("  Sysroot ready.");
-        sysroot_output.sysroot_dir
-    };
-
-    state.sysroots.insert(target.to_string(), sysroot_dir);
-    Ok(())
-}
-
-/// Ensure a config crate exists for the given target, building it lazily if needed.
-fn ensure_config_crate(
-    state: &mut PipelineState,
-    target: &str,
-) -> Result<()> {
-    if state.config_rlibs.contains_key(target) {
-        return Ok(());
-    }
-
-    let target_spec = state.target_specs.get(target)
-        .ok_or_else(|| anyhow::anyhow!("target spec for '{target}' not resolved"))?
-        .clone();
-    let sysroot_dir = state.sysroots.get(target)
-        .ok_or_else(|| anyhow::anyhow!("sysroot for '{target}' not built"))?
-        .clone();
-
-    println!("  Generating hadron_config for {target}...");
-    let config_dep_info = compile::config_crate_dep_info_path(&state.config);
-
-    let config_flags_hash = {
-        let mut parts: Vec<&std::ffi::OsStr> = vec!["hadron_config".as_ref()];
-        let opt_str = format!("{}", state.config.profile.opt_level);
-        parts.push(opt_str.as_ref());
-        parts.push(target_spec.as_ref());
-        compile::hash_args(&parts)
-    };
-
-    let config_rlib_path = state.config.root
-        .join("build/kernel")
-        .join(target)
-        .join("debug/libhadron_config.rlib");
-
-    let config_needs_rebuild = state.force || {
-        let key = format!("hadron_config_{target}");
-        match state.cache.entries.get_mut(&key) {
-            Some(entry) => !entry.is_fresh(&config_flags_hash, &state.rebuilt, &[]).is_fresh(),
-            None => true,
-        }
-    };
-
-    let config_rlib = if config_needs_rebuild {
-        let rlib = compile::build_config_crate(&state.config, &target_spec, &sysroot_dir)?;
-        let key = format!("hadron_config_{target}");
-        if let Ok(entry) = CrateEntry::from_compilation(config_flags_hash, &rlib, &config_dep_info) {
-            state.cache.entries.insert(key, entry);
-        }
-        state.rebuilt.insert(format!("hadron_config_{target}"));
-        rlib
-    } else {
-        println!("  Skipping hadron_config (unchanged)");
-        config_rlib_path
-    };
-    state.artifacts.insert(&format!("hadron_config_{target}"), config_rlib.clone());
-    state.config_rlibs.insert(target.to_string(), config_rlib);
-
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Parallel DAG compilation
-// ---------------------------------------------------------------------------
-
-/// A compilation job dispatched to a worker thread.
-struct CompileJob {
-    /// Index into the stage's `all_crates` vector.
-    krate_idx: usize,
-    /// Pre-computed flags hash for cache recording.
-    flags_hash: String,
-    /// Whether this crate's group has config enabled.
-    has_config: bool,
-    mode: CompileMode,
-}
-
-/// Result sent back from a worker thread.
-enum CompileOutcome {
-    /// Compilation succeeded.
-    Compiled {
-        krate_idx: usize,
-        artifact: PathBuf,
-        flags_hash: String,
-    },
-    /// Compilation failed.
-    Error {
-        krate_idx: usize,
-        error: anyhow::Error,
-    },
-}
-
-/// Execute a single pipeline stage: expand groups, toposort, compile with parallelism.
-fn execute_stage(
-    model: &BuildModel,
-    state: &mut PipelineState,
-    group_names: &[String],
-    root: &Path,
-    sysroot_src: &Path,
-    mode: CompileMode,
-) -> Result<()> {
-    // For each group, ensure sysroot and config are ready, then collect crates.
-    let mut all_crates = Vec::new();
-    let mut seen_crate_names: HashSet<String> = HashSet::new();
-    let mut group_config_map: HashMap<String, bool> = HashMap::new();
-
-    for gname in group_names {
-        let group = model.groups.get(gname)
-            .ok_or_else(|| anyhow::anyhow!("group '{gname}' not found"))?;
-
-        // Ensure sysroot for non-host targets.
-        if group.target != "host" {
-            ensure_sysroot(model, state, &group.target, root)?;
-        }
-
-        // Ensure config crate for config-enabled groups.
-        if group.config && group.target != "host" {
-            ensure_config_crate(state, &group.target)?;
-        }
-
-        // Track which groups have config enabled.
-        group_config_map.insert(gname.clone(), group.config);
-
-        // Resolve and collect crates.
-        let resolved = crate_graph::resolve_group_from_model(
-            model,
-            gname,
-            root,
-            sysroot_src,
-        )?;
-
-        for krate in resolved {
-            // Skip sysroot crates (paths starting with {sysroot}/) — they're
-            // compiled by sysroot::build_sysroot(), not the regular pipeline.
-            let model_def = model.crates.get(&krate.name);
-            if let Some(def) = model_def {
-                if def.path.starts_with("{sysroot}/") {
-                    continue;
-                }
-            }
-
-            // Avoid duplicates (a crate might be in multiple groups).
-            if seen_crate_names.insert(krate.name.clone()) {
-                all_crates.push((krate, group.config));
-            }
-        }
-    }
-
-    // Crate gating: remove crates whose requires_config options are disabled.
-    all_crates.retain(|(krate, _)| {
-        let crate_def = model.crates.get(&krate.name);
-        if let Some(def) = crate_def {
-            for req in &def.requires_config {
-                match state.config.options.get(req) {
-                    Some(crate::config::ResolvedValue::Bool(true)) => {}
-                    _ => {
-                        println!("  Skipping {} (requires config '{req}' which is disabled)", krate.name);
-                        return false;
-                    }
-                }
-            }
-        }
-        true
-    });
+    // Resolve all crates from all groups across all pipeline stages.
+    let all_crates = crate_graph::resolve_all_groups(
+        model, &root, &sysroot_src, &state.config.options,
+    )?;
 
     if all_crates.is_empty() {
         return Ok(());
     }
 
-    // Cross-group topological sort: re-order all_crates so that dependencies
-    // from other groups in the same stage are compiled first.
-    toposort_stage_crates(&mut all_crates);
+    // Collect the set of non-host targets and config-enabled targets.
+    let mut sysroot_targets: HashSet<String> = HashSet::new();
+    let mut config_targets: HashSet<String> = HashSet::new();
 
-    let total = all_crates.len();
-    state.total_crates += total;
-
-    // Build in-degree map and forward adjacency for DAG scheduling.
-    // Only count dependencies that are within this stage.
-    let name_to_idx: HashMap<&str, usize> = all_crates.iter()
-        .enumerate()
-        .map(|(i, (k, _))| (k.name.as_str(), i))
-        .collect();
-
-    let mut in_degree: Vec<usize> = vec![0; total];
-    let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); total];
-
-    for (idx, (krate, _)) in all_crates.iter().enumerate() {
-        for dep in &krate.deps {
-            if let Some(&dep_idx) = name_to_idx.get(dep.crate_name.as_str()) {
-                in_degree[idx] += 1;
-                dependents[dep_idx].push(idx);
+    for (krate, has_config) in &all_crates {
+        if krate.target != "host" {
+            sysroot_targets.insert(krate.target.clone());
+            if *has_config {
+                config_targets.insert(krate.target.clone());
             }
         }
     }
 
-    // Seed the ready queue with zero-in-degree crates.
+    // Collect pipeline rules (in order).
+    let rules: Vec<String> = model.pipeline.steps.iter().filter_map(|step| {
+        if let PipelineStep::Rule(name) = step {
+            if mode == CompileMode::Build { Some(name.clone()) } else { None }
+        } else {
+            None
+        }
+    }).collect();
+
+    // Build DAG nodes.
+    let mut nodes: Vec<DagNode> = Vec::new();
+    let mut node_name_to_idx: HashMap<String, usize> = HashMap::new();
+
+    // Add Sysroot nodes (one per non-host target).
+    for target in &sysroot_targets {
+        let idx = nodes.len();
+        node_name_to_idx.insert(format!("__sysroot_{target}"), idx);
+        nodes.push(DagNode::Sysroot { target: target.clone() });
+    }
+
+    // Add ConfigCrate nodes (one per config-enabled target).
+    for target in &config_targets {
+        let idx = nodes.len();
+        node_name_to_idx.insert(format!("__config_{target}"), idx);
+        nodes.push(DagNode::ConfigCrate { target: target.clone() });
+    }
+
+    // Add Crate nodes.
+    for (i, (krate, has_config)) in all_crates.iter().enumerate() {
+        let idx = nodes.len();
+        node_name_to_idx.insert(krate.name.clone(), idx);
+        nodes.push(DagNode::Crate { krate_idx: i, has_config: *has_config });
+    }
+
+    // Add Rule nodes.
+    for rule_name in &rules {
+        let idx = nodes.len();
+        node_name_to_idx.insert(format!("__rule_{rule_name}"), idx);
+        nodes.push(DagNode::Rule { name: rule_name.clone() });
+    }
+
+    let total = nodes.len();
+
+    // Build adjacency (dependents) and in-degree.
+    let mut in_degree: Vec<usize> = vec![0; total];
+    let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); total];
+
+    let mut add_edge = |from: usize, to: usize| {
+        in_degree[to] += 1;
+        dependents[from].push(to);
+    };
+
+    for (krate, has_config) in &all_crates {
+        let crate_node_idx = *node_name_to_idx.get(&krate.name).unwrap();
+
+        // Non-host crates depend on their target's Sysroot node.
+        if krate.target != "host" {
+            if let Some(&sysroot_idx) = node_name_to_idx.get(&format!("__sysroot_{}", krate.target)) {
+                add_edge(sysroot_idx, crate_node_idx);
+            }
+
+            // Config-enabled crates depend on their target's ConfigCrate node.
+            if *has_config {
+                if let Some(&config_idx) = node_name_to_idx.get(&format!("__config_{}", krate.target)) {
+                    add_edge(config_idx, crate_node_idx);
+                }
+            }
+        }
+
+        // Crate-to-crate edges from resolved dependencies.
+        for dep in &krate.deps {
+            if let Some(&dep_node_idx) = node_name_to_idx.get(&dep.crate_name) {
+                add_edge(dep_node_idx, crate_node_idx);
+            }
+        }
+    }
+
+    // ConfigCrate depends on its Sysroot.
+    for target in &config_targets {
+        if let (Some(&config_idx), Some(&sysroot_idx)) = (
+            node_name_to_idx.get(&format!("__config_{target}")),
+            node_name_to_idx.get(&format!("__sysroot_{target}")),
+        ) {
+            add_edge(sysroot_idx, config_idx);
+        }
+    }
+
+    // Rule nodes depend on their declared inputs (crates) and other rules.
+    for rule_name in &rules {
+        let rule_node_idx = *node_name_to_idx.get(&format!("__rule_{rule_name}")).unwrap();
+        if let Some(rule) = model.rules.get(rule_name) {
+            for input in &rule.inputs {
+                if let Some(&input_idx) = node_name_to_idx.get(input) {
+                    add_edge(input_idx, rule_node_idx);
+                }
+            }
+            for dep_rule in &rule.depends_on {
+                if let Some(&dep_idx) = node_name_to_idx.get(&format!("__rule_{dep_rule}")) {
+                    add_edge(dep_idx, rule_node_idx);
+                }
+            }
+        }
+    }
+
+    // Seed the ready queue.
     let mut ready_queue: Vec<usize> = (0..total)
         .filter(|&i| in_degree[i] == 0)
         .collect();
 
-    let num_workers = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4)
-        .min(8);
+    let num_workers = match state.max_workers {
+        0 => std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4),
+        n => n,
+    };
 
-    crate::verbose::vprintln!("  parallel compilation: {} workers, {} crates", num_workers, total);
+    let crate_count = all_crates.len();
+    state.total_crates += crate_count;
+    crate::verbose::vprintln!(
+        "  unified DAG: {} nodes ({} crates, {} sysroots, {} configs, {} rules), {} workers",
+        total, crate_count, sysroot_targets.len(), config_targets.len(), rules.len(), num_workers,
+    );
 
-    // Move artifacts into shared RwLock for concurrent access.
+    // Move shared state into RwLocks for concurrent access.
+    // Workers acquire read locks; main thread acquires brief write locks for inserts.
     let shared_artifacts = RwLock::new(std::mem::take(&mut state.artifacts));
+    let shared_target_specs = RwLock::new(std::mem::take(&mut state.target_specs));
+    let shared_sysroots = RwLock::new(std::mem::take(&mut state.sysroots));
+    let shared_config_rlibs = RwLock::new(std::mem::take(&mut state.config_rlibs));
 
-    // Create channels.
+    // Clone config for worker threads. state.config stays populated for main-thread use.
+    let config = state.config.clone();
+    let boot_binary_name = config.profile.boot_binary.clone();
+
+    // Channels for crate compilation jobs.
     let (job_tx, job_rx) = mpsc::channel::<CompileJob>();
     let (result_tx, result_rx) = mpsc::channel::<CompileOutcome>();
     let job_rx = Mutex::new(job_rx);
 
-    // References for workers (captured by thread::scope closures).
+    // References for workers.
     let all_crates_ref = &all_crates;
-    let config_ref = &state.config;
-    let target_specs_ref = &state.target_specs;
-    let sysroots_ref = &state.sysroots;
-    let config_rlibs_ref = &state.config_rlibs;
+    let config_ref = &config;
+    let shared_target_specs_ref = &shared_target_specs;
+    let shared_sysroots_ref = &shared_sysroots;
+    let shared_config_rlibs_ref = &shared_config_rlibs;
     let shared_artifacts_ref = &shared_artifacts;
     let job_rx_ref = &job_rx;
 
-    let stage_result: Result<()> = std::thread::scope(|s| {
-        // Spawn worker threads.
+    let dag_result: Result<()> = std::thread::scope(|s| {
+        // Spawn worker threads for crate compilation.
         for _ in 0..num_workers {
             let tx = result_tx.clone();
             s.spawn(move || {
                 loop {
                     let job = match job_rx_ref.lock().unwrap().recv() {
                         Ok(j) => j,
-                        Err(_) => break, // channel closed, exit
+                        Err(_) => break,
                     };
 
                     let (krate, _) = &all_crates_ref[job.krate_idx];
-                    let target_spec = target_specs_ref.get(&krate.target)
-                        .map(|s| s.as_str());
-                    let sysroot_dir = sysroots_ref.get(&krate.target)
-                        .map(|p| p.as_path());
+
+                    let specs = shared_target_specs_ref.read().unwrap();
+                    let target_spec = specs.get(&krate.target).cloned();
+                    drop(specs);
+
+                    let sysroots = shared_sysroots_ref.read().unwrap();
+                    let sysroot_dir = sysroots.get(&krate.target).cloned();
+                    drop(sysroots);
+
                     let config_rlib = if job.has_config {
-                        config_rlibs_ref.get(&krate.target).map(|p| p.as_path())
+                        let rlibs = shared_config_rlibs_ref.read().unwrap();
+                        rlibs.get(&krate.target).cloned()
                     } else {
                         None
                     };
@@ -369,10 +298,10 @@ fn execute_stage(
                     let result = compile::compile_crate(
                         krate,
                         config_ref,
-                        target_spec,
-                        sysroot_dir,
+                        target_spec.as_deref(),
+                        sysroot_dir.as_deref(),
                         &arts,
-                        config_rlib,
+                        config_rlib.as_deref(),
                         None,
                         job.mode,
                     );
@@ -380,12 +309,12 @@ fn execute_stage(
 
                     let outcome = match result {
                         Ok(artifact) => CompileOutcome::Compiled {
-                            krate_idx: job.krate_idx,
+                            node_idx: job.node_idx,
                             artifact,
                             flags_hash: job.flags_hash,
                         },
                         Err(error) => CompileOutcome::Error {
-                            krate_idx: job.krate_idx,
+                            node_idx: job.node_idx,
                             error,
                         },
                     };
@@ -396,148 +325,207 @@ fn execute_stage(
             });
         }
 
-        // Drop the original result_tx so the channel closes when all workers finish.
+        // Drop the cloned sender so the channel closes when workers finish.
         drop(result_tx);
 
-        // --- Main thread: dispatch jobs and process results ---
-        let boot_binary_name = &state.config.profile.boot_binary;
-        let mut compiled_count = 0usize;
+        // --- Main thread: process DAG nodes ---
+        let mut completed_count = 0usize;
         let mut in_flight = 0usize;
-        let mut first_error: Option<anyhow::Error> = None;
 
-        while compiled_count < total {
-            // Dispatch all ready crates.
+        while completed_count < total {
+            // Process all ready nodes.
             let batch: Vec<usize> = ready_queue.drain(..).collect();
             for idx in batch {
-                if first_error.is_some() {
-                    break;
-                }
+                match &nodes[idx] {
+                    DagNode::Sysroot { target } => {
+                        // Build sysroot on main thread using brief RwLock ops.
+                        ensure_sysroot(
+                            model,
+                            &config,
+                            &mut state.cache,
+                            state.force,
+                            target,
+                            &root,
+                            &shared_target_specs,
+                            &shared_sysroots,
+                        )?;
 
-                let (krate, has_config) = &all_crates[idx];
-                let is_host = krate.target == "host";
-                let artifact_path = compile::crate_artifact_path(krate, root, None, mode);
-                let dep_names: Vec<String> = krate.deps.iter()
-                    .map(|d| d.crate_name.clone())
-                    .collect();
-
-                let mode_tag = match mode {
-                    CompileMode::Build if is_host => "host",
-                    CompileMode::Build => "kernel",
-                    CompileMode::Check => "check",
-                    CompileMode::Clippy => "clippy",
-                };
-
-                let flags_hash = if is_host {
-                    compile::hash_args(&[
-                        "host".as_ref(),
-                        krate.name.as_ref(),
-                        krate.edition.as_ref(),
-                        krate.crate_type.as_str().as_ref(),
-                    ])
-                } else {
-                    let target_spec = state.target_specs
-                        .get(&krate.target)
-                        .map(|s| s.as_str())
-                        .unwrap_or("");
-                    compile::hash_args(&[
-                        mode_tag.as_ref(),
-                        krate.name.as_ref(),
-                        krate.edition.as_ref(),
-                        krate.crate_type.as_str().as_ref(),
-                        format!("{}", state.config.profile.opt_level).as_ref(),
-                        target_spec.as_ref(),
-                    ])
-                };
-
-                // Check cache freshness (main thread only — mutates cache).
-                if !state.force {
-                    if let Some(entry) = state.cache.entries.get_mut(&krate.name) {
-                        let freshness = entry.is_fresh(
-                            &flags_hash,
-                            &state.rebuilt,
-                            &dep_names,
-                        );
-                        if freshness.is_fresh() {
-                            println!("  Skipping {} (unchanged)", krate.name);
-                            if krate.name == *boot_binary_name {
-                                state.kernel_binary = Some(artifact_path.clone());
+                        completed_count += 1;
+                        for &dep_idx in &dependents[idx] {
+                            in_degree[dep_idx] -= 1;
+                            if in_degree[dep_idx] == 0 {
+                                ready_queue.push(dep_idx);
                             }
-                            shared_artifacts.write().unwrap()
-                                .insert(&krate.name, artifact_path);
-                            compiled_count += 1;
-
-                            // Decrement dependents' in-degree.
-                            for &dep_idx in &dependents[idx] {
-                                in_degree[dep_idx] -= 1;
-                                if in_degree[dep_idx] == 0 {
-                                    ready_queue.push(dep_idx);
-                                }
-                            }
-                            continue;
-                        }
-                        if let crate::cache::FreshResult::Stale(ref reason) = freshness {
-                            crate::verbose::vprintln!(
-                                "  stale: {} — {}",
-                                krate.name,
-                                reason
-                            );
                         }
                     }
+                    DagNode::ConfigCrate { target } => {
+                        // Build config crate on main thread using brief RwLock ops.
+                        ensure_config_crate(
+                            &config,
+                            &mut state.cache,
+                            &mut state.rebuilt,
+                            state.force,
+                            target,
+                            &shared_target_specs,
+                            &shared_sysroots,
+                            &shared_config_rlibs,
+                            &shared_artifacts,
+                        )?;
+
+                        completed_count += 1;
+                        for &dep_idx in &dependents[idx] {
+                            in_degree[dep_idx] -= 1;
+                            if in_degree[dep_idx] == 0 {
+                                ready_queue.push(dep_idx);
+                            }
+                        }
+                    }
+                    DagNode::Rule { name } => {
+                        // Execute rules on main thread using brief RwLock ops.
+                        execute_rule(
+                            model,
+                            &config,
+                            name,
+                            &root,
+                            &mut state.kernel_binary,
+                            state.kernel_binary_rebuilt,
+                            state.force,
+                            &mut state.cache,
+                            &shared_artifacts,
+                            &shared_target_specs,
+                            &shared_sysroots,
+                            &shared_config_rlibs,
+                        )?;
+
+                        completed_count += 1;
+                        for &dep_idx in &dependents[idx] {
+                            in_degree[dep_idx] -= 1;
+                            if in_degree[dep_idx] == 0 {
+                                ready_queue.push(dep_idx);
+                            }
+                        }
+                    }
+                    DagNode::Crate { krate_idx, has_config } => {
+                        let (krate, _) = &all_crates[*krate_idx];
+                        let is_host = krate.target == "host";
+                        let artifact_path = compile::crate_artifact_path(krate, &root, None, mode);
+                        let dep_names: Vec<String> = krate.deps.iter()
+                            .map(|d| d.crate_name.clone())
+                            .collect();
+
+                        let mode_tag = match mode {
+                            CompileMode::Build if is_host => "host",
+                            CompileMode::Build => "kernel",
+                            CompileMode::Check => "check",
+                            CompileMode::Clippy => "clippy",
+                        };
+
+                        let flags_hash = if is_host {
+                            compile::hash_args(&[
+                                "host".as_ref(),
+                                krate.name.as_ref(),
+                                krate.edition.as_ref(),
+                                krate.crate_type.as_str().as_ref(),
+                            ])
+                        } else {
+                            let specs = shared_target_specs.read().unwrap();
+                            let target_spec = specs.get(&krate.target)
+                                .map(|s| s.as_str())
+                                .unwrap_or("");
+                            let hash = compile::hash_args(&[
+                                mode_tag.as_ref(),
+                                krate.name.as_ref(),
+                                krate.edition.as_ref(),
+                                krate.crate_type.as_str().as_ref(),
+                                format!("{}", config.profile.opt_level).as_ref(),
+                                target_spec.as_ref(),
+                            ]);
+                            drop(specs);
+                            hash
+                        };
+
+                        // Check cache freshness (main thread only — mutates cache).
+                        if !state.force {
+                            if let Some(entry) = state.cache.entries.get_mut(&krate.name) {
+                                let freshness = entry.is_fresh(
+                                    &flags_hash,
+                                    &state.rebuilt,
+                                    &dep_names,
+                                );
+                                if freshness.is_fresh() {
+                                    println!("  Skipping {} (unchanged)", krate.name);
+                                    if krate.name == boot_binary_name {
+                                        state.kernel_binary = Some(artifact_path.clone());
+                                    }
+                                    shared_artifacts.write().unwrap()
+                                        .insert(&krate.name, artifact_path);
+                                    completed_count += 1;
+
+                                    for &dep_idx in &dependents[idx] {
+                                        in_degree[dep_idx] -= 1;
+                                        if in_degree[dep_idx] == 0 {
+                                            ready_queue.push(dep_idx);
+                                        }
+                                    }
+                                    continue;
+                                }
+                                if let crate::cache::FreshResult::Stale(ref reason) = freshness {
+                                    crate::verbose::vprintln!(
+                                        "  stale: {} — {}",
+                                        krate.name,
+                                        reason
+                                    );
+                                }
+                            }
+                        }
+
+                        // Dispatch to worker.
+                        let verb = match mode {
+                            CompileMode::Build => "Compiling",
+                            CompileMode::Check => "Checking",
+                            CompileMode::Clippy => "Checking",
+                        };
+                        let ctx_tag = if is_host { " (host)" } else { "" };
+                        println!("  {verb} {}{}...", krate.name, ctx_tag);
+
+                        let _ = job_tx.send(CompileJob {
+                            node_idx: idx,
+                            krate_idx: *krate_idx,
+                            flags_hash,
+                            has_config: *has_config,
+                            mode,
+                        });
+                        in_flight += 1;
+                    }
                 }
-
-                // Not cached — dispatch to worker.
-                let verb = match mode {
-                    CompileMode::Build => "Compiling",
-                    CompileMode::Check => "Checking",
-                    CompileMode::Clippy => "Checking",
-                };
-                let ctx_tag = if is_host { " (host)" } else { "" };
-                println!("  {verb} {}{}...", krate.name, ctx_tag);
-
-                let _ = job_tx.send(CompileJob {
-                    krate_idx: idx,
-                    flags_hash,
-                    has_config: *has_config,
-                    mode,
-                });
-                in_flight += 1;
             }
 
-            // If nothing in flight and nothing ready, check if we're done or stuck.
+            // If nothing in flight and nothing ready, check state.
             if in_flight == 0 {
-                if compiled_count >= total {
+                if completed_count >= total {
                     break;
                 }
                 if ready_queue.is_empty() {
-                    bail!("dependency cycle detected: {} of {} crates cannot be scheduled",
-                        total - compiled_count, total);
+                    bail!(
+                        "dependency cycle detected: {} of {} nodes cannot be scheduled",
+                        total - completed_count, total,
+                    );
                 }
-                // There are newly-ready crates from cache skips; loop back to dispatch them.
                 continue;
             }
 
-            if first_error.is_some() {
-                // Drain remaining in-flight results before returning.
-                while in_flight > 0 {
-                    if result_rx.recv().is_ok() {
-                        in_flight -= 1;
-                    } else {
-                        break;
-                    }
-                }
-                // Close job channel to shut down workers.
-                drop(job_tx);
-                return Err(first_error.unwrap());
-            }
-
-            // Wait for one result.
+            // Wait for one compilation result.
             match result_rx.recv() {
-                Ok(CompileOutcome::Compiled { krate_idx, artifact, flags_hash }) => {
+                Ok(CompileOutcome::Compiled { node_idx, artifact, flags_hash }) => {
                     in_flight -= 1;
-                    compiled_count += 1;
+                    completed_count += 1;
 
+                    let krate_idx = match &nodes[node_idx] {
+                        DagNode::Crate { krate_idx, .. } => *krate_idx,
+                        _ => unreachable!("CompileOutcome from non-Crate node"),
+                    };
                     let (krate, _) = &all_crates[krate_idx];
-                    let dep_info_path = compile::crate_dep_info_path(krate, root, None);
+                    let dep_info_path = compile::crate_dep_info_path(krate, &root, None);
 
                     // Update cache.
                     if let Ok(entry) = CrateEntry::from_compilation(
@@ -549,7 +537,7 @@ fn execute_stage(
                     }
 
                     // Track kernel binary.
-                    if krate.name == *boot_binary_name {
+                    if krate.name == boot_binary_name {
                         state.kernel_binary = Some(artifact.clone());
                         state.kernel_binary_rebuilt = true;
                     }
@@ -559,24 +547,22 @@ fn execute_stage(
                         .insert(&krate.name, artifact);
                     state.recompiled_crates += 1;
 
-                    // Decrement dependents' in-degree.
-                    for &dep_idx in &dependents[krate_idx] {
+                    for &dep_idx in &dependents[node_idx] {
                         in_degree[dep_idx] -= 1;
                         if in_degree[dep_idx] == 0 {
                             ready_queue.push(dep_idx);
                         }
                     }
                 }
-                Ok(CompileOutcome::Error { krate_idx, error }) => {
+                Ok(CompileOutcome::Error { node_idx, error }) => {
                     in_flight -= 1;
-                    let (krate, _) = &all_crates[krate_idx];
-                    first_error = Some(anyhow::anyhow!(
-                        "failed to compile '{}': {error}",
-                        krate.name,
-                    ));
-                    // Close job channel to stop new dispatches.
+                    let krate_name = match &nodes[node_idx] {
+                        DagNode::Crate { krate_idx, .. } => &all_crates[*krate_idx].0.name,
+                        _ => unreachable!(),
+                    };
+                    let err = anyhow::anyhow!("failed to compile '{}': {error}", krate_name);
+                    // Close job channel and drain remaining.
                     drop(job_tx);
-                    // Drain remaining.
                     while in_flight > 0 {
                         if result_rx.recv().is_ok() {
                             in_flight -= 1;
@@ -584,10 +570,9 @@ fn execute_stage(
                             break;
                         }
                     }
-                    return Err(first_error.unwrap());
+                    return Err(err);
                 }
                 Err(_) => {
-                    // All workers dropped — shouldn't happen if in_flight > 0.
                     bail!("worker threads terminated unexpectedly");
                 }
             }
@@ -595,91 +580,175 @@ fn execute_stage(
 
         // Close job channel to shut down workers.
         drop(job_tx);
-
         Ok(())
     });
 
-    // Move artifacts back from RwLock into state.
+    // Move state back from RwLocks.
     state.artifacts = shared_artifacts.into_inner().unwrap();
+    state.target_specs = shared_target_specs.into_inner().unwrap();
+    state.sysroots = shared_sysroots.into_inner().unwrap();
+    state.config_rlibs = shared_config_rlibs.into_inner().unwrap();
 
-    stage_result
+    dag_result
 }
 
-/// Re-order crates across all groups in a stage using topological sort.
-///
-/// Within a single pipeline stage, multiple groups may contribute crates that
-/// depend on each other (e.g. vendored `hadris-common` depends on project
-/// `noalloc` from `kernel-libs`). The per-group toposort in `crate_graph.rs`
-/// only orders within a group. This function does a unified sort across all
-/// crates collected for the stage.
-fn toposort_stage_crates(crates: &mut Vec<(ResolvedCrate, bool)>) {
-    use std::collections::VecDeque;
+// ---------------------------------------------------------------------------
+// Sysroot helper (executed on main thread, uses brief RwLock ops)
+// ---------------------------------------------------------------------------
 
-    let name_set: HashSet<&str> = crates.iter().map(|(k, _)| k.name.as_str()).collect();
-
-    // Build in-degree and forward adjacency (dep → dependents).
-    let mut in_degree: HashMap<&str, usize> = HashMap::new();
-    let mut dependents: HashMap<&str, Vec<&str>> = HashMap::new();
-
-    for (krate, _) in crates.iter() {
-        in_degree.insert(&krate.name, 0);
+/// Ensure a sysroot exists for the given target, building it lazily if needed.
+fn ensure_sysroot(
+    model: &BuildModel,
+    config: &ResolvedConfig,
+    cache: &mut CacheManifest,
+    force: bool,
+    target: &str,
+    root: &Path,
+    shared_target_specs: &RwLock<HashMap<String, String>>,
+    shared_sysroots: &RwLock<HashMap<String, PathBuf>>,
+) -> Result<()> {
+    if shared_sysroots.read().unwrap().contains_key(target) {
+        return Ok(());
     }
 
-    for (krate, _) in crates.iter() {
-        for dep in &krate.deps {
-            if name_set.contains(dep.crate_name.as_str()) {
-                *in_degree.entry(krate.name.as_str()).or_insert(0) += 1;
-                dependents
-                    .entry(dep.crate_name.as_str())
-                    .or_default()
-                    .push(&krate.name);
-            }
-        }
-    }
+    let target_def = model.targets.get(target)
+        .ok_or_else(|| anyhow::anyhow!("target '{target}' not found in model"))?;
+    let target_spec_path = root.join(&target_def.spec);
+    let target_spec = target_spec_path
+        .to_str()
+        .expect("target spec path is valid UTF-8")
+        .to_string();
 
-    // Kahn's algorithm.
-    let mut queue: VecDeque<&str> = VecDeque::new();
-    for (&name, &degree) in &in_degree {
-        if degree == 0 {
-            queue.push_back(name);
-        }
-    }
+    // Store the spec path for this target (brief write lock).
+    shared_target_specs.write().unwrap()
+        .insert(target.to_string(), target_spec);
 
-    let mut sorted_names: Vec<String> = Vec::with_capacity(crates.len());
-    while let Some(name) = queue.pop_front() {
-        sorted_names.push(name.to_string());
-        if let Some(deps) = dependents.get(name) {
-            for dep in deps {
-                if let Some(degree) = in_degree.get_mut(dep) {
-                    *degree -= 1;
-                    if *degree == 0 {
-                        queue.push_back(dep);
-                    }
-                }
-            }
-        }
-    }
+    // Build or reuse sysroot.
+    println!("  Building sysroot for {target}...");
+    let sysroot_dir = if !force
+        && cache
+            .is_sysroot_fresh(target, config.profile.opt_level)
+            .is_fresh()
+    {
+        println!("  Sysroot unchanged, skipping.");
+        sysroot::sysroot_output_paths(root, target).sysroot_dir
+    } else {
+        let sysroot_output = sysroot::build_sysroot(
+            root,
+            &target_spec_path,
+            target,
+            config.profile.opt_level,
+        )?;
+        cache.record_sysroot(
+            target,
+            config.profile.opt_level,
+            sysroot_output.core_rlib,
+            sysroot_output.compiler_builtins_rlib,
+            sysroot_output.alloc_rlib,
+        );
+        println!("  Sysroot ready.");
+        sysroot_output.sysroot_dir
+    };
 
-    // If we couldn't sort all crates (cycle), leave them as-is.
-    if sorted_names.len() != crates.len() {
-        return;
-    }
-
-    // Build index map and reorder in-place.
-    let order: HashMap<&str, usize> = sorted_names
-        .iter()
-        .enumerate()
-        .map(|(i, n)| (n.as_str(), i))
-        .collect();
-    crates.sort_by_key(|(k, _)| order.get(k.name.as_str()).copied().unwrap_or(usize::MAX));
+    // Record sysroot (brief write lock).
+    shared_sysroots.write().unwrap()
+        .insert(target.to_string(), sysroot_dir);
+    Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Config crate helper (executed on main thread, uses brief RwLock ops)
+// ---------------------------------------------------------------------------
+
+/// Ensure a config crate exists for the given target, building it lazily if needed.
+fn ensure_config_crate(
+    config: &ResolvedConfig,
+    cache: &mut CacheManifest,
+    rebuilt: &mut HashSet<String>,
+    force: bool,
+    target: &str,
+    shared_target_specs: &RwLock<HashMap<String, String>>,
+    shared_sysroots: &RwLock<HashMap<String, PathBuf>>,
+    shared_config_rlibs: &RwLock<HashMap<String, PathBuf>>,
+    shared_artifacts: &RwLock<ArtifactMap>,
+) -> Result<()> {
+    if shared_config_rlibs.read().unwrap().contains_key(target) {
+        return Ok(());
+    }
+
+    let target_spec = shared_target_specs.read().unwrap()
+        .get(target)
+        .ok_or_else(|| anyhow::anyhow!("target spec for '{target}' not resolved"))?
+        .clone();
+    let sysroot_dir = shared_sysroots.read().unwrap()
+        .get(target)
+        .ok_or_else(|| anyhow::anyhow!("sysroot for '{target}' not built"))?
+        .clone();
+
+    println!("  Generating hadron_config for {target}...");
+    let config_dep_info = compile::config_crate_dep_info_path(config);
+
+    let config_flags_hash = {
+        let mut parts: Vec<&std::ffi::OsStr> = vec!["hadron_config".as_ref()];
+        let opt_str = format!("{}", config.profile.opt_level);
+        parts.push(opt_str.as_ref());
+        parts.push(target_spec.as_ref());
+        compile::hash_args(&parts)
+    };
+
+    let config_rlib_path = config.root
+        .join("build/kernel")
+        .join(target)
+        .join("debug/libhadron_config.rlib");
+
+    let config_needs_rebuild = force || {
+        let key = format!("hadron_config_{target}");
+        match cache.entries.get_mut(&key) {
+            Some(entry) => !entry.is_fresh(&config_flags_hash, rebuilt, &[]).is_fresh(),
+            None => true,
+        }
+    };
+
+    let config_rlib = if config_needs_rebuild {
+        let rlib = compile::build_config_crate(config, &target_spec, &sysroot_dir)?;
+        let key = format!("hadron_config_{target}");
+        if let Ok(entry) = CrateEntry::from_compilation(config_flags_hash, &rlib, &config_dep_info) {
+            cache.entries.insert(key, entry);
+        }
+        rebuilt.insert(format!("hadron_config_{target}"));
+        rlib
+    } else {
+        println!("  Skipping hadron_config (unchanged)");
+        config_rlib_path
+    };
+
+    // Brief write locks for the inserts.
+    shared_artifacts.write().unwrap()
+        .insert(&format!("hadron_config_{target}"), config_rlib.clone());
+    shared_config_rlibs.write().unwrap()
+        .insert(target.to_string(), config_rlib);
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Rule execution (main thread, uses brief RwLock ops)
+// ---------------------------------------------------------------------------
 
 /// Execute a named rule.
 fn execute_rule(
     model: &BuildModel,
-    state: &mut PipelineState,
+    config: &ResolvedConfig,
     rule_name: &str,
     root: &Path,
+    kernel_binary: &mut Option<PathBuf>,
+    kernel_binary_rebuilt: bool,
+    force: bool,
+    cache: &mut CacheManifest,
+    shared_artifacts: &RwLock<ArtifactMap>,
+    shared_target_specs: &RwLock<HashMap<String, String>>,
+    shared_sysroots: &RwLock<HashMap<String, PathBuf>>,
+    shared_config_rlibs: &RwLock<HashMap<String, PathBuf>>,
 ) -> Result<()> {
     let rule = model.rules.get(rule_name)
         .ok_or_else(|| anyhow::anyhow!("rule '{rule_name}' not found"))?;
@@ -688,14 +757,14 @@ fn execute_rule(
         RuleHandler::Builtin(handler_name) => {
             match handler_name.as_str() {
                 "hbtf" => {
-                    if let Some(ref kernel_bin) = state.kernel_binary {
-                        if state.kernel_binary_rebuilt || state.force {
+                    if let Some(kernel_bin) = kernel_binary.as_ref() {
+                        if kernel_binary_rebuilt || force {
                             let hbtf_path = root.join("build/backtrace.hbtf");
                             println!("\nGenerating HBTF...");
                             crate::artifact::hbtf::generate_hbtf(
                                 kernel_bin,
                                 &hbtf_path,
-                                state.config.profile.debug_info,
+                                config.profile.debug_info,
                             )?;
                             let target_hbtf = root.join("target/backtrace.hbtf");
                             std::fs::create_dir_all(target_hbtf.parent().unwrap())?;
@@ -709,33 +778,32 @@ fn execute_rule(
                     let initrd_path = root.join("build/initrd.cpio");
                     let target_initrd = root.join("target/initrd.cpio");
 
-                    // Collect already-compiled binary artifacts from the rule's inputs.
+                    // Collect binary artifacts from the rule's inputs (brief read lock).
                     let mut bin_artifacts = Vec::new();
-                    for input in &rule.inputs {
-                        if let Some(path) = state.artifacts.get(input) {
-                            // Only include binary crate artifacts.
-                            if let Some(def) = model.crates.get(input) {
-                                if def.crate_type == crate::model::CrateType::Bin {
-                                    bin_artifacts.push((input.clone(), path.to_path_buf()));
+                    {
+                        let arts = shared_artifacts.read().unwrap();
+                        for input in &rule.inputs {
+                            if let Some(path) = arts.get(input) {
+                                if let Some(def) = model.crates.get(input) {
+                                    if def.crate_type == crate::model::CrateType::Bin {
+                                        bin_artifacts.push((input.clone(), path.to_path_buf()));
+                                    }
                                 }
                             }
                         }
                     }
 
                     // Track source roots for freshness.
-                    let sysroot_src = sysroot::sysroot_src_dir()?;
                     let user_source_roots: Vec<PathBuf> = rule.inputs.iter()
                         .filter_map(|name| model.crates.get(name))
-                        .filter_map(|def| {
+                        .map(|def| {
                             let resolved_path = root.join(&def.path);
-                            Some(def.root_file(&resolved_path))
+                            def.root_file(&resolved_path)
                         })
                         .collect();
-                    // Silence unused variable warning for sysroot_src.
-                    let _ = sysroot_src;
 
-                    let initrd_fresh = !state.force
-                        && state.cache.is_initrd_fresh(&initrd_path, &user_source_roots)
+                    let initrd_fresh = !force
+                        && cache.is_initrd_fresh(&initrd_path, &user_source_roots)
                         && target_initrd.exists();
 
                     if initrd_fresh {
@@ -743,39 +811,33 @@ fn execute_rule(
                     } else {
                         println!("\nBuilding initrd...");
                         let built = crate::artifact::initrd::build_initrd(
-                            &state.config,
+                            config,
                             &bin_artifacts,
                         )?;
-                        state.cache.record_initrd(&built, &user_source_roots);
-                        state.cache.save(&state.config.root)?;
+                        cache.record_initrd(&built, &user_source_roots);
+                        cache.save(&config.root)?;
 
                         std::fs::create_dir_all(target_initrd.parent().unwrap())?;
                         std::fs::copy(&built, &target_initrd)?;
                     }
                 }
                 "hkif" => {
-                    if let Some(ref kernel_bin) = state.kernel_binary {
-                        if state.kernel_binary_rebuilt || state.force {
+                    if let Some(kernel_bin) = kernel_binary.as_ref() {
+                        if kernel_binary_rebuilt || force {
                             println!("\nGenerating HKIF (two-pass link)...");
                             let hkif_bin = root.join("build/hkif.bin");
                             let hkif_asm = root.join("build/hkif.S");
                             let hkif_obj = crate::artifact::hkif::hkif_object_path(root);
 
-                            // Step 1: Generate HKIF blob from pass-1 kernel ELF.
                             crate::artifact::hkif::generate_hkif(
                                 kernel_bin,
                                 &hkif_bin,
-                                state.config.profile.debug_info,
+                                config.profile.debug_info,
                             )?;
-
-                            // Step 2: Generate assembly stub.
                             crate::artifact::hkif::generate_hkif_asm(&hkif_bin, &hkif_asm)?;
-
-                            // Step 3: Assemble to object file.
                             crate::artifact::hkif::assemble_hkif(&hkif_asm, &hkif_obj)?;
 
-                            // Step 4: Re-link kernel with HKIF object (pass 2).
-                            let boot_name = &state.config.profile.boot_binary;
+                            let boot_name = &config.profile.boot_binary;
                             let sysroot_src = sysroot::sysroot_src_dir()?;
                             let group_crates = crate_graph::resolve_group_from_model(
                                 model, "kernel-main", root, &sysroot_src,
@@ -786,30 +848,41 @@ fn execute_rule(
                                     "boot binary '{}' not found in kernel-main group", boot_name
                                 ))?;
 
-                            let target_spec = state.target_specs.get(&boot_crate.target)
+                            // Brief read locks for target spec, sysroot, config rlib.
+                            let target_spec = shared_target_specs.read().unwrap()
+                                .get(&boot_crate.target)
                                 .ok_or_else(|| anyhow::anyhow!(
                                     "target spec for '{}' not found", boot_crate.target
-                                ))?;
-                            let sysroot_dir = state.sysroots.get(&boot_crate.target)
+                                ))?
+                                .clone();
+                            let sysroot_dir = shared_sysroots.read().unwrap()
+                                .get(&boot_crate.target)
                                 .ok_or_else(|| anyhow::anyhow!(
                                     "sysroot for '{}' not found", boot_crate.target
-                                ))?;
-                            let config_rlib = state.config_rlibs.get(&boot_crate.target)
-                                .map(|p| p.as_path());
+                                ))?
+                                .clone();
+                            let config_rlib = shared_config_rlibs.read().unwrap()
+                                .get(&boot_crate.target)
+                                .cloned();
 
                             println!("  Re-linking {} with HKIF object...", boot_name);
+                            // Hold read lock on artifacts during relink (workers can
+                            // also hold read locks concurrently — this is safe).
+                            let arts = shared_artifacts.read().unwrap();
                             let new_binary = compile::relink_with_objects(
                                 boot_crate,
-                                &state.config,
-                                target_spec,
-                                sysroot_dir,
-                                &state.artifacts,
-                                config_rlib,
+                                config,
+                                &target_spec,
+                                &sysroot_dir,
+                                &arts,
+                                config_rlib.as_deref(),
                                 &[hkif_obj],
                             )?;
+                            drop(arts);
 
-                            state.kernel_binary = Some(new_binary.clone());
-                            state.artifacts.insert(boot_name, new_binary);
+                            *kernel_binary = Some(new_binary.clone());
+                            shared_artifacts.write().unwrap()
+                                .insert(boot_name, new_binary);
                         } else {
                             println!("\nHKIF unchanged, skipping.");
                         }

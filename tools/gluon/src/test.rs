@@ -17,29 +17,129 @@ use crate::run;
 use crate::scheduler::PipelineState;
 use crate::sysroot;
 
+/// Result of a single host test crate run.
+struct HostTestResult {
+    crate_name: String,
+    success: bool,
+    output: std::process::Output,
+}
+
 /// Run host-side unit tests for all host-testable crates.
 ///
-/// Uses `cargo test` since these crates compile for the host target.
-pub fn run_host_tests(config: &ResolvedConfig) -> Result<()> {
-    println!("Running host-side unit tests...");
-
-    for crate_name in &config.tests.host_testable {
-        println!("  Testing {crate_name}...");
-        let status = Command::new("cargo")
-            .arg("test")
-            .arg("-p")
-            .arg(crate_name)
-            .current_dir(&config.root)
-            .status()
-            .with_context(|| format!("failed to run cargo test -p {crate_name}"))?;
-
-        if !status.success() {
-            bail!("tests failed for {crate_name}");
-        }
+/// Runs crates in parallel using a work-stealing pattern. Each worker captures
+/// output to avoid interleaving. All failures are collected and reported at the
+/// end.
+pub fn run_host_tests(config: &ResolvedConfig, max_workers: usize) -> Result<()> {
+    let crates = &config.tests.host_testable;
+    if crates.is_empty() {
+        println!("No host-testable crates configured.");
+        return Ok(());
     }
 
-    println!("All host-side unit tests passed.");
-    Ok(())
+    let num_workers = match max_workers {
+        0 => std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4),
+        n => n,
+    };
+    // Don't spawn more workers than crates.
+    let num_workers = num_workers.min(crates.len());
+
+    println!("Running host-side unit tests ({} crates, {} workers)...", crates.len(), num_workers);
+
+    let root = &config.root;
+    let next_idx = std::sync::Mutex::new(0usize);
+    let (tx, rx) = std::sync::mpsc::channel::<HostTestResult>();
+
+    std::thread::scope(|s| {
+        for _ in 0..num_workers {
+            let tx = tx.clone();
+            let next = &next_idx;
+            s.spawn(move || {
+                loop {
+                    let idx = {
+                        let mut guard = next.lock().unwrap();
+                        let i = *guard;
+                        if i >= crates.len() {
+                            break;
+                        }
+                        *guard = i + 1;
+                        i
+                    };
+
+                    let crate_name = &crates[idx];
+                    let output = Command::new("cargo")
+                        .arg("test")
+                        .arg("-p")
+                        .arg(crate_name)
+                        .current_dir(root)
+                        .output();
+
+                    let result = match output {
+                        Ok(out) => HostTestResult {
+                            crate_name: crate_name.clone(),
+                            success: out.status.success(),
+                            output: out,
+                        },
+                        Err(e) => {
+                            // Synthesize a failed output.
+                            let stderr = format!("failed to run cargo test: {e}");
+                            HostTestResult {
+                                crate_name: crate_name.clone(),
+                                success: false,
+                                output: std::process::Output {
+                                    status: std::process::ExitStatus::default(),
+                                    stdout: Vec::new(),
+                                    stderr: stderr.into_bytes(),
+                                },
+                            }
+                        }
+                    };
+
+                    if tx.send(result).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        drop(tx);
+
+        // Collect results as they arrive.
+        let mut passed = 0usize;
+        let mut failures: Vec<HostTestResult> = Vec::new();
+
+        for result in rx {
+            if result.success {
+                println!("  {} ... ok", result.crate_name);
+                passed += 1;
+            } else {
+                println!("  {} ... FAILED", result.crate_name);
+                failures.push(result);
+            }
+        }
+
+        println!(
+            "\nHost test results: {} passed, {} failed",
+            passed,
+            failures.len()
+        );
+
+        if !failures.is_empty() {
+            println!("\nFailure details:");
+            for f in &failures {
+                println!("\n--- {} ---", f.crate_name);
+                let stdout = String::from_utf8_lossy(&f.output.stdout);
+                let stderr = String::from_utf8_lossy(&f.output.stderr);
+                if !stdout.is_empty() {
+                    print!("{stdout}");
+                }
+                if !stderr.is_empty() {
+                    eprint!("{stderr}");
+                }
+            }
+            bail!("{} host test crate(s) failed", failures.len());
+        }
+
+        Ok(())
+    })
 }
 
 /// Compile kernel integration test binaries.

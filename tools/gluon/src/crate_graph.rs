@@ -149,6 +149,68 @@ pub fn resolve_group_from_model(
     Ok(resolved)
 }
 
+/// Resolve all groups from all pipeline stages in a single pass.
+///
+/// Returns a deduplicated list of `(ResolvedCrate, has_config)` pairs covering
+/// every crate across all stages. Used by the unified global DAG scheduler to
+/// build a single cross-stage dependency graph.
+pub fn resolve_all_groups(
+    model: &crate::model::BuildModel,
+    root: &Path,
+    sysroot_src: &Path,
+    config_options: &std::collections::BTreeMap<String, crate::config::ResolvedValue>,
+) -> Result<Vec<(ResolvedCrate, bool)>> {
+    let mut all_crates = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+
+    for step in &model.pipeline.steps {
+        let groups = match step {
+            crate::model::PipelineStep::Stage { groups, .. } => groups,
+            _ => continue,
+        };
+
+        for gname in groups {
+            let group = model.groups.get(gname)
+                .with_context(|| format!("group '{gname}' not found in model"))?;
+
+            let resolved = resolve_group_from_model(model, gname, root, sysroot_src)?;
+
+            for krate in resolved {
+                // Skip sysroot crates — built by sysroot::build_sysroot().
+                if let Some(def) = model.crates.get(&krate.name) {
+                    if def.path.starts_with("{sysroot}/") {
+                        continue;
+                    }
+                }
+
+                // Crate gating: skip crates whose requires_config options are disabled.
+                if let Some(def) = model.crates.get(&krate.name) {
+                    let mut gated = false;
+                    for req in &def.requires_config {
+                        match config_options.get(req) {
+                            Some(crate::config::ResolvedValue::Bool(true)) => {}
+                            _ => {
+                                println!("  Skipping {} (requires config '{req}' which is disabled)", krate.name);
+                                gated = true;
+                                break;
+                            }
+                        }
+                    }
+                    if gated {
+                        continue;
+                    }
+                }
+
+                if seen.insert(krate.name.clone()) {
+                    all_crates.push((krate, group.config));
+                }
+            }
+        }
+    }
+
+    Ok(all_crates)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

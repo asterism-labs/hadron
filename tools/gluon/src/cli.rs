@@ -25,6 +25,10 @@ pub struct Cli {
     /// Enable verbose output with timing and cache diagnostics.
     #[arg(long, short = 'v', global = true)]
     pub verbose: bool,
+
+    /// Maximum number of parallel workers (0 or omitted = auto-detect from CPU count).
+    #[arg(long, short = 'j', global = true)]
+    pub jobs: Option<usize>,
 }
 
 /// Available subcommands.

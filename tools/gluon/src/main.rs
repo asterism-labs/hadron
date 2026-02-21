@@ -55,7 +55,7 @@ fn main() -> Result<()> {
         cli::Command::Clippy => cmd_clippy(&cli),
         cli::Command::Fmt(ref args) => fmt::cmd_fmt(args),
         cli::Command::Menuconfig => cmd_menuconfig(&cli),
-        cli::Command::Vendor(ref args) => cmd_vendor(args),
+        cli::Command::Vendor(ref args) => cmd_vendor(&cli, args),
         cli::Command::Perf(ref args) => perf_cmd::cmd_perf(args),
     }
 }
@@ -187,7 +187,7 @@ fn cmd_run(cli: &cli::Cli, extra_args: &[String]) -> Result<()> {
 /// Type-check all kernel crates without linking.
 fn cmd_check(cli: &cli::Cli) -> Result<()> {
     let (resolved, model) = resolve_config(cli)?;
-    let mut state = prepare_pipeline_state(resolved, cli.force)?;
+    let mut state = prepare_pipeline_state(resolved, cli.force, cli.jobs.unwrap_or(0))?;
 
     println!("\nChecking crates...");
     scheduler::execute_pipeline(&model, &mut state, CompileMode::Check)?;
@@ -202,7 +202,7 @@ fn cmd_check(cli: &cli::Cli) -> Result<()> {
 /// Run clippy lints on project crates.
 fn cmd_clippy(cli: &cli::Cli) -> Result<()> {
     let (resolved, model) = resolve_config(cli)?;
-    let mut state = prepare_pipeline_state(resolved, cli.force)?;
+    let mut state = prepare_pipeline_state(resolved, cli.force, cli.jobs.unwrap_or(0))?;
 
     println!("\nLinting crates with clippy...");
     scheduler::execute_pipeline(&model, &mut state, CompileMode::Clippy)?;
@@ -221,7 +221,7 @@ fn cmd_test(cli: &cli::Cli, args: &cli::TestArgs) -> Result<()> {
 
     if run_host {
         let (resolved, _model) = resolve_config(cli)?;
-        test::run_host_tests(&resolved)?;
+        test::run_host_tests(&resolved, cli.jobs.unwrap_or(0))?;
     }
 
     if run_kernel {
@@ -258,7 +258,7 @@ fn cmd_clean() -> Result<()> {
 }
 
 /// Vendor external dependencies.
-fn cmd_vendor(args: &cli::VendorArgs) -> Result<()> {
+fn cmd_vendor(cli: &cli::Cli, args: &cli::VendorArgs) -> Result<()> {
     let root = config::find_project_root()?;
     // Skip validation: vendor dirs may not exist yet.
     let model = load_model_inner(&root, false, true)?;
@@ -272,12 +272,14 @@ fn cmd_vendor(args: &cli::VendorArgs) -> Result<()> {
 
     println!("Resolving {} dependencies...", model.dependencies.len());
 
+    let build_dir = root.join("build");
+
     if args.check {
         // Verify mode: check lock file and vendor directory match.
         let lock = vendor::read_lock_file(&lock_path)?
             .ok_or_else(|| anyhow::anyhow!("gluon.lock not found — run `gluon vendor` first"))?;
 
-        let mut version_cache = vendor::VersionCache::new();
+        let mut version_cache = vendor::VersionCache::load(&build_dir);
         let resolved = vendor::resolve_transitive(&model.dependencies, &vendor_dir, &mut version_cache)?;
         let new_lock = vendor::build_lock_file(&resolved, &vendor_dir)?;
 
@@ -323,8 +325,32 @@ fn cmd_vendor(args: &cli::VendorArgs) -> Result<()> {
         return Ok(());
     }
 
-    // Fetch missing dependencies.
-    let mut version_cache = vendor::VersionCache::new();
+    // Fetch missing dependencies. Load persistent cache unless --force.
+    let mut version_cache = if cli.force {
+        vendor::VersionCache::new()
+    } else {
+        vendor::VersionCache::load(&build_dir)
+    };
+
+    // Prefetch version listings for all crates.io dependencies in parallel.
+    let prefetch_batch = cli.jobs.unwrap_or(8).max(1);
+    let crates_io_names: Vec<String> = model.dependencies.iter()
+        .filter_map(|(name, dep)| match &dep.source {
+            model::DepSource::CratesIo { version } if !version.is_empty() => {
+                // Only prefetch if version is a requirement, not an exact version.
+                if semver::Version::parse(version).is_err() {
+                    Some(name.clone())
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        })
+        .collect();
+    if !crates_io_names.is_empty() {
+        vendor::prefetch_versions(&crates_io_names, &mut version_cache, prefetch_batch)?;
+    }
+
     let mut fetched = 0;
     for (name, dep) in &model.dependencies {
         match &dep.source {
@@ -395,8 +421,9 @@ fn cmd_vendor(args: &cli::VendorArgs) -> Result<()> {
 
         let needed_fetch = !to_fetch.is_empty();
         if needed_fetch {
-            // Fetch in parallel, 4 at a time to respect rate limits.
-            let batch_size = 4;
+            // Fetch in parallel. CDN downloads have no meaningful per-IP
+            // concurrency limit; default to 12 or the user-specified -j value.
+            let batch_size = cli.jobs.unwrap_or(12).max(1);
             for chunk in to_fetch.chunks(batch_size) {
                 let results: Vec<Result<PathBuf>> = std::thread::scope(|s| {
                     let handles: Vec<_> = chunk.iter().map(|dep| {
@@ -430,6 +457,11 @@ fn cmd_vendor(args: &cli::VendorArgs) -> Result<()> {
             // All deps present — build and write lock file.
             let lock = vendor::build_lock_file(&resolved, &vendor_dir)?;
             vendor::write_lock_file(&lock_path, &lock)?;
+
+            // Persist the version cache for next run.
+            if let Err(e) = version_cache.save(&build_dir) {
+                verbose::vprintln!("  warning: failed to save version cache: {e}");
+            }
 
             println!("\nVendoring complete:");
             println!("  {} dependencies resolved", resolved.len());
@@ -516,6 +548,7 @@ fn cmd_bench(cli: &cli::Cli, args: &cli::BenchArgs) -> Result<()> {
 fn prepare_pipeline_state(
     resolved: config::ResolvedConfig,
     force: bool,
+    max_workers: usize,
 ) -> Result<scheduler::PipelineState> {
     use verbose::vprintln;
 
@@ -553,6 +586,7 @@ fn prepare_pipeline_state(
         kernel_binary_rebuilt: false,
         total_crates: 0,
         recompiled_crates: 0,
+        max_workers,
     })
 }
 
@@ -563,7 +597,7 @@ fn prepare_pipeline_state(
 fn do_build(cli: &cli::Cli) -> Result<(scheduler::PipelineState, model::BuildModel)> {
     let (resolved, model) = resolve_config(cli)?;
 
-    let mut state = prepare_pipeline_state(resolved, cli.force)?;
+    let mut state = prepare_pipeline_state(resolved, cli.force, cli.jobs.unwrap_or(0))?;
 
     println!("\nCompiling crates...");
     scheduler::execute_pipeline(&model, &mut state, CompileMode::Build)?;

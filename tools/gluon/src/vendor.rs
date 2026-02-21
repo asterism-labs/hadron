@@ -688,30 +688,90 @@ fn apply_member_overrides(resolved: &mut toml::Table, member: &toml::Table) {
 // Semver version resolution
 // ---------------------------------------------------------------------------
 
-/// In-memory cache for crates.io version listings.
+/// In-memory + persistent cache for crates.io version listings.
+///
+/// Optionally backed by `build/vendor-version-cache.json` to avoid redundant
+/// crates.io API queries across runs. Entries older than 24 hours are discarded.
 pub struct VersionCache {
     entries: std::collections::HashMap<String, Vec<CrateVersionEntry>>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct CrateVersionEntry {
     num: String,
     yanked: bool,
 }
 
+/// On-disk representation of the version cache.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PersistedVersionCache {
+    /// Unix epoch seconds when this cache was written.
+    written_at: u64,
+    entries: std::collections::HashMap<String, Vec<CrateVersionEntry>>,
+}
+
+/// Maximum age of the persisted cache before it is discarded (24 hours).
+const VERSION_CACHE_MAX_AGE_SECS: u64 = 24 * 60 * 60;
+
 impl VersionCache {
     pub fn new() -> Self {
         Self { entries: std::collections::HashMap::new() }
     }
-}
 
-/// Ensure crate version listings are present in the cache, fetching from
-/// crates.io if needed.
-fn ensure_versions_cached(name: &str, cache: &mut VersionCache) -> Result<()> {
-    if cache.entries.contains_key(name) {
-        return Ok(());
+    /// Load a persisted version cache from `<build_dir>/vendor-version-cache.json`.
+    ///
+    /// Returns a fresh empty cache if the file is missing, unreadable, or older
+    /// than [`VERSION_CACHE_MAX_AGE_SECS`].
+    pub fn load(build_dir: &Path) -> Self {
+        let path = build_dir.join("vendor-version-cache.json");
+        let Ok(data) = std::fs::read_to_string(&path) else {
+            return Self::new();
+        };
+        let Ok(persisted) = serde_json::from_str::<PersistedVersionCache>(&data) else {
+            return Self::new();
+        };
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        if now.saturating_sub(persisted.written_at) > VERSION_CACHE_MAX_AGE_SECS {
+            return Self::new();
+        }
+
+        crate::verbose::vprintln!(
+            "  loaded vendor version cache ({} entries)",
+            persisted.entries.len()
+        );
+        Self { entries: persisted.entries }
     }
 
+    /// Persist the current cache to `<build_dir>/vendor-version-cache.json`.
+    pub fn save(&self, build_dir: &Path) -> Result<()> {
+        std::fs::create_dir_all(build_dir)?;
+        let path = build_dir.join("vendor-version-cache.json");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        let persisted = PersistedVersionCache {
+            written_at: now,
+            entries: self.entries.clone(),
+        };
+
+        let json = serde_json::to_string_pretty(&persisted)?;
+        std::fs::write(&path, json)?;
+        Ok(())
+    }
+}
+
+/// Fetch the version listing for a single crate from crates.io.
+///
+/// Returns `(crate_name, version_entries)` on success. This function is
+/// self-contained and safe to call from worker threads.
+fn fetch_version_listing(name: &str) -> Result<(String, Vec<CrateVersionEntry>)> {
     let url = format!("https://crates.io/api/v1/crates/{name}");
     let output = std::process::Command::new("curl")
         .args(["-sSfL", "-H", "User-Agent: gluon-build-system", &url])
@@ -736,7 +796,61 @@ fn ensure_versions_cached(name: &str, cache: &mut VersionCache) -> Result<()> {
         Some(CrateVersionEntry { num, yanked })
     }).collect();
 
-    cache.entries.insert(name.to_string(), entries);
+    Ok((name.to_string(), entries))
+}
+
+/// Ensure crate version listings are present in the cache, fetching from
+/// crates.io if needed.
+fn ensure_versions_cached(name: &str, cache: &mut VersionCache) -> Result<()> {
+    if cache.entries.contains_key(name) {
+        return Ok(());
+    }
+
+    let (crate_name, entries) = fetch_version_listing(name)?;
+    cache.entries.insert(crate_name, entries);
+    Ok(())
+}
+
+/// Prefetch version listings for multiple crates in parallel.
+///
+/// Filters out names already present in the cache, then spawns parallel
+/// curl calls in batches. Results are merged into the cache.
+pub fn prefetch_versions(
+    names: &[String],
+    cache: &mut VersionCache,
+    batch_size: usize,
+) -> Result<()> {
+    let missing: Vec<&String> = names.iter()
+        .filter(|n| !cache.entries.contains_key(n.as_str()))
+        .collect();
+
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    crate::verbose::vprintln!(
+        "  prefetching version listings for {} crates ({} batches of {})",
+        missing.len(),
+        (missing.len() + batch_size - 1) / batch_size,
+        batch_size,
+    );
+
+    for chunk in missing.chunks(batch_size) {
+        let results: Vec<Result<(String, Vec<CrateVersionEntry>)>> =
+            std::thread::scope(|s| {
+                let handles: Vec<_> = chunk.iter().map(|name| {
+                    s.spawn(move || fetch_version_listing(name))
+                }).collect();
+
+                handles.into_iter().map(|h| h.join().unwrap()).collect()
+            });
+
+        for result in results {
+            let (name, entries) = result?;
+            cache.entries.insert(name, entries);
+        }
+    }
+
     Ok(())
 }
 
