@@ -395,7 +395,7 @@ fn write_usize_to_user<M: PageMapper<Size4KiB> + PageTranslator>(
     Ok(())
 }
 
-/// Writes startup data for the init process: argv=`["/init"]`, no envp.
+/// Writes startup data for the init process: argv=`["/bin/init"]`, no envp.
 ///
 /// This is a separate entry point for `spawn_init` which doesn't go through
 /// the full `spawn_process` flow.
@@ -407,7 +407,7 @@ pub fn write_argv_to_init_stack<M: PageMapper<Size4KiB> + PageTranslator>(
     address_space: &AddressSpace<M>,
     hhdm_offset: u64,
 ) -> Result<u64, BinaryError> {
-    write_startup_data(address_space, &["/init"], &[], hhdm_offset)
+    write_startup_data(address_space, &["/bin/init"], &[], hhdm_offset)
 }
 
 /// Spawns a new process from an ELF binary at the given VFS path.

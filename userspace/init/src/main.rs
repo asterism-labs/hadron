@@ -1,20 +1,24 @@
 //! Hadron init process — minimal launcher.
 //!
-//! Runs as PID 1 in userspace (ring 3). Spawns the `/shell` interactive
-//! shell and respawns it if it exits. If spawning fails, prints an error
-//! and exits.
+//! Runs as PID 1 in userspace (ring 3). Sets default environment variables,
+//! spawns the `/bin/sh` interactive shell, and respawns it if it exits.
 
 #![no_std]
 #![no_main]
 
-use lepton_syslib::{println, sys};
+use lepton_syslib::{env, println, sys};
 
 #[unsafe(no_mangle)]
 pub extern "C" fn main(_args: &[&str]) -> i32 {
+    // Set default environment variables.
+    env::setenv("PATH", "/bin");
+    env::setenv("PWD", "/");
+    env::setenv("HOME", "/");
+
     loop {
-        let ret = sys::spawn("/shell", &["/shell"]);
+        let ret = sys::spawn("/bin/sh", &["/bin/sh"]);
         if ret < 0 {
-            println!("init: failed to spawn /shell (error {})", ret);
+            println!("init: failed to spawn /bin/sh (error {})", ret);
             return 1;
         }
 

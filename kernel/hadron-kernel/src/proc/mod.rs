@@ -447,12 +447,12 @@ fn enter_userspace_resume_wrapper(process: &Process) {
 
 /// Loads and spawns the init process from the VFS.
 ///
-/// Reads the `/init` binary from the mounted root filesystem, creates a
+/// Reads the `/bin/init` binary from the mounted root filesystem, creates a
 /// process, and sets up fd 0/1/2 pointing to `/dev/console`.
 ///
 /// # Panics
 ///
-/// Panics if `/init` does not exist in the VFS or if the ELF binary
+/// Panics if `/bin/init` does not exist in the VFS or if the ELF binary
 /// cannot be loaded.
 pub fn spawn_init() {
     let init_elf = read_init_from_vfs();
@@ -460,7 +460,7 @@ pub fn spawn_init() {
     let (process, entry, _stack_top) =
         exec::create_process_from_binary(init_elf, None).expect("failed to load init binary");
 
-    // Write argv onto the init process's stack: ["/init"].
+    // Write argv onto the init process's stack: ["/bin/init"].
     let hhdm_offset = crate::mm::hhdm::offset();
     let stack_top = exec::write_argv_to_init_stack(process.address_space(), hhdm_offset)
         .expect("failed to write argv for init");
@@ -490,21 +490,22 @@ pub fn spawn_init() {
     crate::sched::spawn(process_task(process, entry, stack_top));
 }
 
-/// Reads the `/init` binary from the VFS.
+/// Reads the `/bin/init` binary from the VFS.
 ///
 /// Returns the file data as a leaked byte slice (lives for the kernel's lifetime).
 fn read_init_from_vfs() -> &'static [u8] {
     use crate::fs::{poll_immediate, vfs};
 
-    let inode = vfs::with_vfs(|vfs| vfs.resolve("/init").expect("VFS does not contain /init"));
+    let inode =
+        vfs::with_vfs(|vfs| vfs.resolve("/bin/init").expect("VFS does not contain /bin/init"));
 
     let file_size = inode.size();
-    kinfo!("Found /init in VFS: {} bytes", file_size);
+    kinfo!("Found /bin/init in VFS: {} bytes", file_size);
 
     let mut buf = alloc::vec![0u8; file_size];
     let bytes_read =
-        poll_immediate(inode.read(0, &mut buf)).expect("failed to read /init from VFS");
-    assert_eq!(bytes_read, file_size, "short read of /init");
+        poll_immediate(inode.read(0, &mut buf)).expect("failed to read /bin/init from VFS");
+    assert_eq!(bytes_read, file_size, "short read of /bin/init");
 
     // Leak the Vec to get a 'static slice — we only load one init
     // binary and it must live for the kernel's lifetime.

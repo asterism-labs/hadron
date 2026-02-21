@@ -3,7 +3,8 @@
 //! Dispatches to a built-in command based on `argv[0]` (symlink name) or
 //! the first argument when invoked as `coreutils <cmd>`.
 //!
-//! Supported commands: echo, cat, ls, uname, uptime, clear, true, false, yes.
+//! Supported commands: echo, cat, ls, uname, uptime, clear, true, false, yes,
+//! env, pwd.
 
 #![no_std]
 #![no_main]
@@ -42,6 +43,8 @@ pub extern "C" fn main(args: &[&str]) -> i32 {
         "true" => 0,
         "false" => 1,
         "yes" => cmd_yes(cmd_args),
+        "env" => cmd_env(),
+        "pwd" => cmd_pwd(),
         _ => {
             eprintln!("coreutils: unknown command: {}", cmd);
             127
@@ -197,5 +200,27 @@ fn cmd_yes(args: &[&str]) -> i32 {
     let text = args.first().copied().unwrap_or("y");
     loop {
         println!("{}", text);
+    }
+}
+
+/// `env` — print all environment variables.
+fn cmd_env() -> i32 {
+    lepton_syslib::env::for_each(|key, value| {
+        println!("{}={}", key, value);
+    });
+    0
+}
+
+/// `pwd` — print working directory from PWD environment variable.
+fn cmd_pwd() -> i32 {
+    match lepton_syslib::env::getenv("PWD") {
+        Some(pwd) => {
+            println!("{}", pwd);
+            0
+        }
+        None => {
+            eprintln!("pwd: PWD not set");
+            1
+        }
     }
 }
