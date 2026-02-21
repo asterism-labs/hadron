@@ -20,6 +20,7 @@ hadris-io = { workspace = true }
 hadris-iso = { workspace = true, features = [ "read", "alloc" ] }
 hadron-kernel = { workspace = true }
 hadron-linkset = { workspace = true }
+hadron-mmio = { workspace = true }
 
 [lints]
 workspace = true

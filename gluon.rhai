@@ -135,6 +135,11 @@ host.add("hadron-binparse-macros", "crates/hadron-binparse-macros")
     .crate_type(PROC_MACRO)
     .deps(#{ syn: "syn", quote: "quote", proc_macro2: "proc-macro2" });
 
+host.add("hadron-mmio-macros", "crates/hadron-mmio-macros")
+    .edition("2024")
+    .crate_type(PROC_MACRO)
+    .deps(#{ syn: "syn", quote: "quote", proc_macro2: "proc-macro2" });
+
 // ===========================================================================
 // Project kernel library crates
 // ===========================================================================
@@ -149,6 +154,9 @@ kernel_libs.add("hadron-binparse", "crates/binparse")
     .deps(#{ hadron_binparse_macros: #{ "crate": "hadron-binparse-macros", proc_macro: true } });
 kernel_libs.add("hadron-elf", "crates/elf");
 kernel_libs.add("hadron-dwarf", "crates/dwarf");
+kernel_libs.add("hadron-mmio", "crates/hadron-mmio")
+    .deps(#{ hadron_mmio_macros: #{ "crate": "hadron-mmio-macros", proc_macro: true } });
+
 kernel_libs.add("hadron-acpi", "crates/acpi")
     .deps(#{ hadron_binparse: "hadron-binparse" });
 
@@ -178,6 +186,7 @@ kernel_drivers.add("hadron-drivers", "kernel/hadron-drivers")
         hadris_iso: "hadris-iso",
         hadron_kernel: "hadron-kernel",
         hadron_linkset: "hadron-linkset",
+        hadron_mmio: "hadron-mmio",
         hadron_driver_macros: #{ "crate": "hadron-driver-macros", proc_macro: true }
     });
 

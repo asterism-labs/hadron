@@ -5,18 +5,26 @@
 
 use hadron_kernel::addr::VirtAddr;
 use hadron_kernel::driver_api::ClockSource;
+use hadron_mmio::register_block;
 
-// Register offsets.
-const REG_CAPABILITIES: u64 = 0x000;
-const REG_CONFIGURATION: u64 = 0x010;
-const REG_MAIN_COUNTER: u64 = 0x0F0;
+register_block! {
+    /// HPET timer MMIO registers.
+    HpetRegs {
+        /// General Capabilities and ID (read-only).
+        [0x000; u64; ro] capabilities,
+        /// General Configuration.
+        [0x010; u64; rw] configuration,
+        /// Main Counter Value.
+        [0x0F0; u64; rw] main_counter,
+    }
+}
 
 /// Femtoseconds per second.
 const FS_PER_SECOND: u64 = 1_000_000_000_000_000;
 
 /// HPET timer driver.
 pub struct Hpet {
-    base: VirtAddr,
+    regs: HpetRegs,
     /// Counter period in femtoseconds (from capabilities register bits 63:32).
     period_fs: u64,
 }
@@ -28,15 +36,11 @@ impl Hpet {
     ///
     /// `virt_base` must be a valid mapping of the HPET MMIO region.
     pub unsafe fn new(virt_base: VirtAddr) -> Self {
-        let caps = unsafe {
-            let ptr = (virt_base.as_u64() + REG_CAPABILITIES) as *const u64;
-            core::ptr::read_volatile(ptr)
-        };
+        // SAFETY: Caller guarantees virt_base is a valid HPET MMIO region.
+        let regs = unsafe { HpetRegs::new(virt_base) };
+        let caps = regs.capabilities();
         let period_fs = caps >> 32;
-        Self {
-            base: virt_base,
-            period_fs,
-        }
+        Self { regs, period_fs }
     }
 
     /// Returns the counter period in femtoseconds per tick.
@@ -54,27 +58,27 @@ impl Hpet {
 
     /// Returns the number of timer comparators from the capabilities register.
     pub fn num_comparators(&self) -> u8 {
-        let caps = self.read64(REG_CAPABILITIES);
+        let caps = self.regs.capabilities();
         (((caps >> 8) & 0x1F) + 1) as u8
     }
 
     /// Enables the HPET main counter.
     pub fn enable(&self) {
-        let mut config = self.read64(REG_CONFIGURATION);
+        let mut config = self.regs.configuration();
         config |= 1; // ENABLE_CNF bit
-        self.write64(REG_CONFIGURATION, config);
+        self.regs.set_configuration(config);
     }
 
     /// Disables the HPET main counter.
     pub fn disable(&self) {
-        let mut config = self.read64(REG_CONFIGURATION);
+        let mut config = self.regs.configuration();
         config &= !1;
-        self.write64(REG_CONFIGURATION, config);
+        self.regs.set_configuration(config);
     }
 
     /// Reads the HPET main counter value.
     pub fn read_counter(&self) -> u64 {
-        self.read64(REG_MAIN_COUNTER)
+        self.regs.main_counter()
     }
 
     /// Busy-waits for approximately `ms` milliseconds using the HPET counter.
@@ -88,27 +92,7 @@ impl Hpet {
 
     /// Returns the HPET virtual base address.
     pub fn base(&self) -> VirtAddr {
-        self.base
-    }
-
-    #[inline]
-    fn read64(&self, offset: u64) -> u64 {
-        // SAFETY: The caller of `Hpet::new` guarantees that `self.base` points to
-        // a valid HPET MMIO region. All register offsets used are within the mapped region.
-        unsafe {
-            let ptr = (self.base.as_u64() + offset) as *const u64;
-            core::ptr::read_volatile(ptr)
-        }
-    }
-
-    #[inline]
-    fn write64(&self, offset: u64, value: u64) {
-        // SAFETY: The caller of `Hpet::new` guarantees that `self.base` points to
-        // a valid HPET MMIO region. All register offsets used are within the mapped region.
-        unsafe {
-            let ptr = (self.base.as_u64() + offset) as *mut u64;
-            core::ptr::write_volatile(ptr, value);
-        }
+        self.regs.base()
     }
 }
 

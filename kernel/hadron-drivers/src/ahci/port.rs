@@ -15,7 +15,7 @@ use super::command::{
     CMD_FIS_LEN_DWORDS, CMD_FIS_OFFSET, CommandHeader, FisRegH2d, PRDT_OFFSET, PrdtEntry,
 };
 use super::hba::AhciHba;
-use super::regs::{self, FIS_TYPE_REG_H2D, PortCmd, PortIe, PortIs};
+use super::regs::{self, AhciPortRegs, FIS_TYPE_REG_H2D, PortCmd, PortIe, PortIs};
 use super::regs::{ATA_CMD_IDENTIFY, ATA_CMD_READ_DMA_EX, SSTS_DET_PRESENT, SSTS_IPM_ACTIVE};
 
 /// Page size for DMA allocations.
@@ -44,8 +44,8 @@ pub struct DeviceIdentity {
 
 /// Per-port AHCI state.
 pub struct AhciPort {
-    /// Virtual base address of this port's register block.
-    port_base: VirtAddr,
+    /// Typed register block for this port.
+    regs: AhciPortRegs,
     /// Port number (0-31).
     port_num: u8,
     /// Number of command slots supported by the HBA.
@@ -84,14 +84,17 @@ impl AhciPort {
     ) -> Option<Self> {
         let port_base = hba.port_base(port_num);
 
+        // SAFETY: port_base is derived from the validated HBA base + port offset.
+        let regs = unsafe { AhciPortRegs::new(port_base) };
+
         // Check device presence via SStatus.
-        let ssts = volatile_read32(port_base, regs::PORT_SSTS);
+        let ssts = regs.ssts();
         if regs::ssts_det(ssts) != SSTS_DET_PRESENT || regs::ssts_ipm(ssts) != SSTS_IPM_ACTIVE {
             return None;
         }
 
         // Stop command engine before reconfiguring.
-        stop_command_engine(port_base);
+        stop_command_engine(&regs);
 
         // Allocate one page for CLB (1024 bytes) + received FIS (256 bytes).
         let clb_fb_phys = dma
@@ -104,12 +107,12 @@ impl AhciPort {
         unsafe { ptr::write_bytes(clb_fb_virt as *mut u8, 0, PAGE_SIZE as usize) };
 
         // Write CLB and FB physical addresses to port registers.
-        volatile_write32(port_base, regs::PORT_CLB, clb_fb_phys as u32);
-        volatile_write32(port_base, regs::PORT_CLBU, (clb_fb_phys >> 32) as u32);
+        regs.set_clb(clb_fb_phys as u32);
+        regs.set_clbu((clb_fb_phys >> 32) as u32);
 
         let fb_phys = clb_fb_phys + CMD_LIST_SIZE;
-        volatile_write32(port_base, regs::PORT_FB, fb_phys as u32);
-        volatile_write32(port_base, regs::PORT_FBU, (fb_phys >> 32) as u32);
+        regs.set_fb(fb_phys as u32);
+        regs.set_fbu((fb_phys >> 32) as u32);
 
         // Allocate per-slot command tables (one page each for simplicity).
         let num_slots = hba.num_cmd_slots;
@@ -141,15 +144,15 @@ impl AhciPort {
         }
 
         // Clear SERR and configure interrupts.
-        volatile_write32(port_base, regs::PORT_SERR, 0xFFFF_FFFF);
+        regs.set_serr(0xFFFF_FFFF);
         let ie = PortIe::DHRE | PortIe::TFEE;
-        volatile_write32(port_base, regs::PORT_IE, ie.bits());
+        regs.set_ie(ie);
 
         // Start command engine.
-        start_command_engine(port_base);
+        start_command_engine(&regs);
 
         let mut port = Self {
-            port_base,
+            regs,
             port_num,
             num_cmd_slots: num_slots,
             clb_fb_phys,
@@ -314,18 +317,18 @@ impl AhciPort {
         let ci_bit = 1u32 << slot;
 
         // Clear port IS.
-        volatile_write32(self.port_base, regs::PORT_IS, 0xFFFF_FFFF);
+        self.regs.set_is(PortIs::all());
 
         // Issue command.
-        volatile_write32(self.port_base, regs::PORT_CI, ci_bit);
+        self.regs.set_ci(ci_bit);
 
         // Poll for completion.
         for _ in 0..PORT_SPIN_TIMEOUT {
-            let is = PortIs::from_bits_retain(volatile_read32(self.port_base, regs::PORT_IS));
+            let is = self.regs.is();
             if is.contains(PortIs::TFES) {
                 return Err(IoError::DeviceError);
             }
-            let ci = volatile_read32(self.port_base, regs::PORT_CI);
+            let ci = self.regs.ci();
             if ci & ci_bit == 0 {
                 return Ok(());
             }
@@ -344,16 +347,16 @@ impl AhciPort {
         let ci_bit = 1u32 << slot;
 
         // Clear port IS.
-        volatile_write32(self.port_base, regs::PORT_IS, 0xFFFF_FFFF);
+        self.regs.set_is(PortIs::all());
 
         // Issue command.
-        volatile_write32(self.port_base, regs::PORT_CI, ci_bit);
+        self.regs.set_ci(ci_bit);
 
         // Wait for IRQ, then check completion.
         loop {
             irq.wait().await;
 
-            let is = PortIs::from_bits_retain(volatile_read32(self.port_base, regs::PORT_IS));
+            let is = self.regs.is();
 
             if is.contains(PortIs::TFES) {
                 self.free_slot(slot);
@@ -362,9 +365,9 @@ impl AhciPort {
 
             if is.contains(PortIs::DHRS) || is.contains(PortIs::PSS) {
                 // Clear handled interrupt bits.
-                volatile_write32(self.port_base, regs::PORT_IS, is.bits());
+                self.regs.set_is(is);
 
-                let ci = volatile_read32(self.port_base, regs::PORT_CI);
+                let ci = self.regs.ci();
                 if ci & ci_bit == 0 {
                     return Ok(());
                 }
@@ -457,8 +460,8 @@ fn parse_identify(data: *const u16) -> DeviceIdentity {
 // ---------------------------------------------------------------------------
 
 /// Stops the command engine on a port.
-fn stop_command_engine(port_base: VirtAddr) {
-    let cmd = PortCmd::from_bits_retain(volatile_read32(port_base, regs::PORT_CMD));
+fn stop_command_engine(regs: &AhciPortRegs) {
+    let cmd = regs.cmd();
 
     // If already stopped, nothing to do.
     if !cmd.contains(PortCmd::ST) && !cmd.contains(PortCmd::FRE) {
@@ -466,12 +469,11 @@ fn stop_command_engine(port_base: VirtAddr) {
     }
 
     // Clear ST.
-    let new_cmd = cmd.bits() & !PortCmd::ST.bits();
-    volatile_write32(port_base, regs::PORT_CMD, new_cmd);
+    regs.set_cmd(cmd & !PortCmd::ST);
 
     // Wait for CR to clear.
     for _ in 0..PORT_SPIN_TIMEOUT {
-        let cmd = PortCmd::from_bits_retain(volatile_read32(port_base, regs::PORT_CMD));
+        let cmd = regs.cmd();
         if !cmd.contains(PortCmd::CR) {
             break;
         }
@@ -479,12 +481,12 @@ fn stop_command_engine(port_base: VirtAddr) {
     }
 
     // Clear FRE.
-    let cmd = volatile_read32(port_base, regs::PORT_CMD);
-    volatile_write32(port_base, regs::PORT_CMD, cmd & !PortCmd::FRE.bits());
+    let cmd = regs.cmd();
+    regs.set_cmd(cmd & !PortCmd::FRE);
 
     // Wait for FR to clear.
     for _ in 0..PORT_SPIN_TIMEOUT {
-        let cmd = PortCmd::from_bits_retain(volatile_read32(port_base, regs::PORT_CMD));
+        let cmd = regs.cmd();
         if !cmd.contains(PortCmd::FR) {
             break;
         }
@@ -493,10 +495,10 @@ fn stop_command_engine(port_base: VirtAddr) {
 }
 
 /// Starts the command engine on a port.
-fn start_command_engine(port_base: VirtAddr) {
+fn start_command_engine(regs: &AhciPortRegs) {
     // Wait until CR is clear before starting.
     for _ in 0..PORT_SPIN_TIMEOUT {
-        let cmd = PortCmd::from_bits_retain(volatile_read32(port_base, regs::PORT_CMD));
+        let cmd = regs.cmd();
         if !cmd.contains(PortCmd::CR) {
             break;
         }
@@ -504,36 +506,18 @@ fn start_command_engine(port_base: VirtAddr) {
     }
 
     // Set FRE first, then ST.
-    let cmd = volatile_read32(port_base, regs::PORT_CMD);
-    volatile_write32(port_base, regs::PORT_CMD, cmd | PortCmd::FRE.bits());
+    let cmd = regs.cmd();
+    regs.set_cmd(cmd | PortCmd::FRE);
 
     // Wait for FR to be set.
     for _ in 0..PORT_SPIN_TIMEOUT {
-        let cmd = PortCmd::from_bits_retain(volatile_read32(port_base, regs::PORT_CMD));
+        let cmd = regs.cmd();
         if cmd.contains(PortCmd::FR) {
             break;
         }
         core::hint::spin_loop();
     }
 
-    let cmd = volatile_read32(port_base, regs::PORT_CMD);
-    volatile_write32(port_base, regs::PORT_CMD, cmd | PortCmd::ST.bits());
-}
-
-// ---------------------------------------------------------------------------
-// Volatile MMIO helpers
-// ---------------------------------------------------------------------------
-
-/// Reads a 32-bit value from a port register.
-fn volatile_read32(port_base: VirtAddr, offset: u64) -> u32 {
-    let addr = (port_base.as_u64() + offset) as *const u32;
-    // SAFETY: port_base is within the mapped AHCI MMIO region.
-    unsafe { ptr::read_volatile(addr) }
-}
-
-/// Writes a 32-bit value to a port register.
-fn volatile_write32(port_base: VirtAddr, offset: u64, value: u32) {
-    let addr = (port_base.as_u64() + offset) as *mut u32;
-    // SAFETY: port_base is within the mapped AHCI MMIO region.
-    unsafe { ptr::write_volatile(addr, value) };
+    let cmd = regs.cmd();
+    regs.set_cmd(cmd | PortCmd::ST);
 }

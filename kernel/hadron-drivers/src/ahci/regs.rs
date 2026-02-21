@@ -4,24 +4,31 @@
 //! including generic host control registers and per-port register blocks.
 
 use bitflags::bitflags;
+use hadron_kernel::addr::VirtAddr;
+use hadron_mmio::register_block;
 
 // ---------------------------------------------------------------------------
-// Generic Host Control register offsets
+// Generic Host Control register block
 // ---------------------------------------------------------------------------
 
-/// Host Capabilities register offset.
-pub const HBA_CAP: u64 = 0x00;
-/// Global Host Control register offset.
-pub const HBA_GHC: u64 = 0x04;
-/// Interrupt Status register offset.
-pub const HBA_IS: u64 = 0x08;
-/// Ports Implemented register offset.
-pub const HBA_PI: u64 = 0x0C;
-/// AHCI Version register offset.
-pub const HBA_VS: u64 = 0x10;
+register_block! {
+    /// AHCI HBA generic host control registers.
+    pub AhciHbaRegs {
+        /// Host Capabilities (read-only).
+        [0x00; u32; ro] cap => HbaCap,
+        /// Global Host Control.
+        [0x04; u32; rw] ghc => HbaGhc,
+        /// Interrupt Status.
+        [0x08; u32; rw] is,
+        /// Ports Implemented (read-only).
+        [0x0C; u32; ro] pi,
+        /// AHCI Version (read-only).
+        [0x10; u32; ro] vs,
+    }
+}
 
 // ---------------------------------------------------------------------------
-// Per-port register offsets (base = 0x100 + port * 0x80)
+// Per-port register block (base = hba_base + 0x100 + port * 0x80)
 // ---------------------------------------------------------------------------
 
 /// Port register block size.
@@ -29,32 +36,37 @@ pub const PORT_REG_SIZE: u64 = 0x80;
 /// Base offset for port 0.
 pub const PORT_BASE: u64 = 0x100;
 
-/// Command List Base Address (low 32 bits).
-pub const PORT_CLB: u64 = 0x00;
-/// Command List Base Address (high 32 bits).
-pub const PORT_CLBU: u64 = 0x04;
-/// FIS Base Address (low 32 bits).
-pub const PORT_FB: u64 = 0x08;
-/// FIS Base Address (high 32 bits).
-pub const PORT_FBU: u64 = 0x0C;
-/// Interrupt Status.
-pub const PORT_IS: u64 = 0x10;
-/// Interrupt Enable.
-pub const PORT_IE: u64 = 0x14;
-/// Command and Status.
-pub const PORT_CMD: u64 = 0x18;
-/// Task File Data.
-pub const PORT_TFD: u64 = 0x20;
-/// Signature.
-pub const PORT_SIG: u64 = 0x24;
-/// SATA Status (SCR0: SStatus).
-pub const PORT_SSTS: u64 = 0x28;
-/// SATA Control (SCR2: SControl).
-pub const PORT_SCTL: u64 = 0x2C;
-/// SATA Error (SCR1: SError).
-pub const PORT_SERR: u64 = 0x30;
-/// Command Issue.
-pub const PORT_CI: u64 = 0x38;
+register_block! {
+    /// AHCI per-port registers.
+    pub AhciPortRegs {
+        /// Command List Base Address (low 32 bits).
+        [0x00; u32; rw] clb,
+        /// Command List Base Address (high 32 bits).
+        [0x04; u32; rw] clbu,
+        /// FIS Base Address (low 32 bits).
+        [0x08; u32; rw] fb,
+        /// FIS Base Address (high 32 bits).
+        [0x0C; u32; rw] fbu,
+        /// Interrupt Status.
+        [0x10; u32; rw] is => PortIs,
+        /// Interrupt Enable.
+        [0x14; u32; rw] ie => PortIe,
+        /// Command and Status.
+        [0x18; u32; rw] cmd => PortCmd,
+        /// Task File Data (read-only).
+        [0x20; u32; ro] tfd,
+        /// Signature (read-only).
+        [0x24; u32; ro] sig,
+        /// SATA Status (read-only).
+        [0x28; u32; ro] ssts,
+        /// SATA Control.
+        [0x2C; u32; rw] sctl,
+        /// SATA Error.
+        [0x30; u32; rw] serr,
+        /// Command Issue.
+        [0x38; u32; rw] ci,
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Bitflags

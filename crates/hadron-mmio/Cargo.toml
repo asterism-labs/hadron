@@ -1,0 +1,16 @@
+[package]
+name = "hadron-mmio"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+readme.workspace = true
+publish.workspace = true
+
+[dependencies]
+hadron-mmio-macros = { path = "../hadron-mmio-macros" }
+
+[lints]
+workspace = true

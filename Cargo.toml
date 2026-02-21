@@ -24,6 +24,8 @@ hadron-acpi = { path = "crates/acpi" }
 hadron-core = { path = "crates/hadron-core" }
 hadron-binparse = { path = "crates/binparse" }
 hadron-binparse-macros = { path = "crates/hadron-binparse-macros" }
+hadron-mmio = { path = "crates/hadron-mmio" }
+hadron-mmio-macros = { path = "crates/hadron-mmio-macros" }
 hadron-codegen = { path = "crates/hadron-codegen" }
 hadron-drivers = { path = "kernel/hadron-drivers" }
 hadron-dwarf = { path = "crates/dwarf" }
