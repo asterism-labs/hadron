@@ -512,6 +512,8 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
 
     // Initialize IRQ-driven keyboard input for /dev/console reads.
     crate::fs::console_input::init();
+    #[cfg(hadron_lock_debug)]
+    crate::fs::console_input::spawn_health_monitor();
 
     crate::proc::save_kernel_cr3();
 

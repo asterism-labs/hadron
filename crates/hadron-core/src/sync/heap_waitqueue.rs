@@ -42,6 +42,12 @@ impl HeapWaitQueue {
         self.waiters.lock().push_back(waker.clone());
     }
 
+    /// Returns `true` if there are registered waiters (diagnostic use only).
+    #[cfg(hadron_lock_debug)]
+    pub fn has_waiters(&self) -> bool {
+        !self.waiters.lock().is_empty()
+    }
+
     /// Wakes one waiting task (FIFO order, O(1)).
     pub fn wake_one(&self) {
         let waker = {

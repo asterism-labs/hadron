@@ -16,6 +16,34 @@ use crate::sync::IrqSpinLock;
 use crate::driver_api::input::KeyCode;
 use noalloc::ringbuf::RingBuf;
 
+/// Diagnostic counters for debugging keyboard input pipeline issues.
+///
+/// Tracks IRQ delivery, waker registration/firing, hardware polling, and data
+/// readiness to identify lost wakeups and pipeline stalls.
+#[cfg(hadron_lock_debug)]
+pub(crate) mod diag {
+    use core::sync::atomic::{AtomicU64, Ordering};
+
+    /// Number of keyboard IRQ handler invocations.
+    pub static IRQ_COUNT: AtomicU64 = AtomicU64::new(0);
+    /// Number of times the IRQ handler found a registered waker to fire.
+    pub static WAKER_FIRE_COUNT: AtomicU64 = AtomicU64::new(0);
+    /// Number of times the IRQ handler found no registered waker.
+    pub static WAKER_MISS_COUNT: AtomicU64 = AtomicU64::new(0);
+    /// Number of times `subscribe()` registered a waker.
+    pub static SUBSCRIBE_COUNT: AtomicU64 = AtomicU64::new(0);
+    /// Number of times `poll_keyboard_hardware()` was called.
+    pub static POLL_HW_COUNT: AtomicU64 = AtomicU64::new(0);
+    /// Number of times `try_read()` returned data (n > 0).
+    pub static DATA_READY_COUNT: AtomicU64 = AtomicU64::new(0);
+
+    /// Increment a counter by 1 (relaxed ordering is sufficient for diagnostics).
+    #[inline]
+    pub fn inc(counter: &AtomicU64) {
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 /// Single-waker slot for the console reader.
 ///
 /// Only one task reads from `/dev/console` at a time, so a single `Option<Waker>`
@@ -327,6 +355,9 @@ fn process_scancode(state: &mut ConsoleInputState, scancode: u8) -> Option<EchoA
 /// its own spinlock). This prevents an ABBA deadlock between `STATE` and the
 /// logger lock.
 pub fn poll_keyboard_hardware() {
+    #[cfg(hadron_lock_debug)]
+    diag::inc(&diag::POLL_HW_COUNT);
+
     // Phase 1: drain scancodes (interrupts disabled briefly).
     let mut raw = [0u8; SCANCODE_BUF_SIZE];
     let mut count = 0;
@@ -399,6 +430,10 @@ pub fn try_read(buf: &mut [u8]) -> usize {
             None => break,
         }
     }
+    #[cfg(hadron_lock_debug)]
+    if n > 0 {
+        diag::inc(&diag::DATA_READY_COUNT);
+    }
     n
 }
 
@@ -416,6 +451,15 @@ fn keyboard_irq_handler(_vector: u8) {
     }
     // Take the single waker (if any) and wake it outside the lock.
     let waker = INPUT_READY.lock().take();
+    #[cfg(hadron_lock_debug)]
+    {
+        diag::inc(&diag::IRQ_COUNT);
+        if waker.is_some() {
+            diag::inc(&diag::WAKER_FIRE_COUNT);
+        } else {
+            diag::inc(&diag::WAKER_MISS_COUNT);
+        }
+    }
     if let Some(w) = waker {
         w.wake();
     }
@@ -442,7 +486,42 @@ pub fn init() {
 /// Replaces any previously registered waker. Only one reader is expected
 /// at a time (`/dev/console` is single-consumer).
 pub fn subscribe(waker: &Waker) {
+    #[cfg(hadron_lock_debug)]
+    diag::inc(&diag::SUBSCRIBE_COUNT);
     *INPUT_READY.lock() = Some(waker.clone());
+}
+
+/// Spawns a background task that logs diagnostic counters every 5 seconds.
+///
+/// When the keyboard hang occurs, the counter values pinpoint which pipeline
+/// stage is stalled. See the `diag` module documentation for interpretation.
+#[cfg(hadron_lock_debug)]
+pub fn spawn_health_monitor() {
+    use core::sync::atomic::Ordering::Relaxed;
+
+    crate::sched::spawn_background("console-diag", async {
+        loop {
+            crate::sched::primitives::sleep_ms(5000).await;
+            let irq = diag::IRQ_COUNT.load(Relaxed);
+            let fire = diag::WAKER_FIRE_COUNT.load(Relaxed);
+            let miss = diag::WAKER_MISS_COUNT.load(Relaxed);
+            let sub = diag::SUBSCRIBE_COUNT.load(Relaxed);
+            let poll_hw = diag::POLL_HW_COUNT.load(Relaxed);
+            let data = diag::DATA_READY_COUNT.load(Relaxed);
+
+            use super::devfs::console_read_diag as crd;
+            let poll = crd::POLL_COUNT.load(Relaxed);
+            let first = crd::POLL_FIRST.load(Relaxed);
+            let subscribe = crd::POLL_SUBSCRIBE.load(Relaxed);
+            let ready = crd::POLL_DATA_READY.load(Relaxed);
+
+            crate::kinfo!(
+                "CONSOLE DIAG: irq={} fire={} miss={} sub={} poll_hw={} data={} | poll={} first={} subscribe={} ready={}",
+                irq, fire, miss, sub, poll_hw, data,
+                poll, first, subscribe, ready,
+            );
+        }
+    });
 }
 
 /// Translate a [`KeyCode`] to an ASCII byte, accounting for shift and caps lock.

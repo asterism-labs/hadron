@@ -263,6 +263,26 @@ impl Inode for DevZero {
 /// async executor to run other tasks while waiting for input.
 pub struct DevConsole;
 
+/// Diagnostic counters for `ConsoleReadFuture` poll phases.
+#[cfg(hadron_lock_debug)]
+pub(crate) mod console_read_diag {
+    use core::sync::atomic::{AtomicU64, Ordering};
+
+    /// Total number of `ConsoleReadFuture::poll` invocations.
+    pub static POLL_COUNT: AtomicU64 = AtomicU64::new(0);
+    /// Number of first-poll self-wakes (noop-waker avoidance phase).
+    pub static POLL_FIRST: AtomicU64 = AtomicU64::new(0);
+    /// Number of subscribe-phase polls (waker registered, waiting for IRQ).
+    pub static POLL_SUBSCRIBE: AtomicU64 = AtomicU64::new(0);
+    /// Number of polls that returned data successfully.
+    pub static POLL_DATA_READY: AtomicU64 = AtomicU64::new(0);
+
+    #[inline]
+    pub fn inc(counter: &AtomicU64) {
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 /// Future for reading from `/dev/console`.
 ///
 /// Uses a two-phase poll strategy to avoid registering noop wakers:
@@ -285,10 +305,15 @@ impl Future for ConsoleReadFuture<'_> {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
 
+        #[cfg(hadron_lock_debug)]
+        console_read_diag::inc(&console_read_diag::POLL_COUNT);
+
         // Always poll hardware and check for data first.
         super::console_input::poll_keyboard_hardware();
         let n = super::console_input::try_read(this.buf);
         if n > 0 {
+            #[cfg(hadron_lock_debug)]
+            console_read_diag::inc(&console_read_diag::POLL_DATA_READY);
             return Poll::Ready(Ok(n));
         }
 
@@ -297,17 +322,23 @@ impl Future for ConsoleReadFuture<'_> {
             // from try_poll_immediate. Self-wake ensures the .await path
             // re-polls us immediately so we can subscribe with the real waker.
             this.subscribed = true;
+            #[cfg(hadron_lock_debug)]
+            console_read_diag::inc(&console_read_diag::POLL_FIRST);
             cx.waker().wake_by_ref();
             return Poll::Pending;
         }
 
         // Subsequent polls: register waker for IRQ notification.
+        #[cfg(hadron_lock_debug)]
+        console_read_diag::inc(&console_read_diag::POLL_SUBSCRIBE);
         super::console_input::subscribe(cx.waker());
 
         // Re-check after registration (catches IRQs between check and subscribe).
         super::console_input::poll_keyboard_hardware();
         let n = super::console_input::try_read(this.buf);
         if n > 0 {
+            #[cfg(hadron_lock_debug)]
+            console_read_diag::inc(&console_read_diag::POLL_DATA_READY);
             return Poll::Ready(Ok(n));
         }
 

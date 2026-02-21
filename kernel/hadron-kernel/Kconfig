@@ -62,17 +62,23 @@ config lock_debug
 
 config lockdep
     bool "Lock dependency tracking"
+    default y
+    binding cfg
+
+config lockdep_warn
+    bool "Lockdep warn-only mode (log violations, do not panic)"
+    default y
+    depends on lockdep
+    binding cfg
+
+config no_work_steal
+    bool "Disable work stealing (debug)"
     default n
+    depends on smp
     binding cfg
 
 config lock_stat
     bool "Lock contention statistics"
-    default n
-    depends on lockdep
-    binding cfg
-
-config lockdep_warn
-    bool "Lockdep warning-only mode (no panic)"
     default n
     depends on lockdep
     binding cfg

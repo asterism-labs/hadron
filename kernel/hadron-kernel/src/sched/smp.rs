@@ -81,6 +81,11 @@ pub fn send_wake_ipi(target_cpu: u32) {
 /// The caller must insert the stolen entry into their local executor's task
 /// map and ready queue.
 pub(crate) fn try_steal() -> Option<(crate::task::TaskId, Priority, TaskEntry)> {
+    #[cfg(hadron_no_work_steal)]
+    return None;
+
+    #[cfg(not(hadron_no_work_steal))]
+    {
     let local_cpu = crate::percpu::current_cpu().get_cpu_id();
     let cpu_count = crate::percpu::cpu_count();
     if cpu_count <= 1 {
@@ -102,6 +107,7 @@ pub(crate) fn try_steal() -> Option<(crate::task::TaskId, Priority, TaskEntry)> 
     }
 
     None
+    }
 }
 
 /// Halts all other CPUs by sending a broadcast NMI.
