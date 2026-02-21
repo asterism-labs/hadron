@@ -4,11 +4,13 @@
 //! until Enter is pressed, then the completed line (with trailing newline) is
 //! copied into a ready buffer that userspace can read from.
 //!
-//! Keyboard input is driven by IRQ1: the interrupt handler wakes any futures
-//! waiting on the [`INPUT_READY`] wait queue, and the reader future polls the
-//! i8042 PS/2 controller for scancodes.
+//! Keyboard input is driven by IRQ1: the interrupt handler drains the PS/2
+//! hardware FIFO into a software ring buffer, then wakes futures waiting on
+//! the [`INPUT_READY`] wait queue. Deferred scancode processing (echo, line
+//! editing) happens in [`poll_keyboard_hardware`] when the reader future is
+//! polled by the executor.
 
-use crate::sync::SpinLock;
+use crate::sync::IrqSpinLock;
 use crate::driver_api::input::KeyCode;
 use noalloc::ringbuf::RingBuf;
 
@@ -23,8 +25,23 @@ const LINE_BUF_SIZE: usize = 256;
 /// Size of the ring buffer backing store (usable capacity is SIZE - 1).
 const READY_BUF_SIZE: usize = 512;
 
-/// Global console input state, protected by a spinlock.
-static STATE: SpinLock<ConsoleInputState> = SpinLock::new(ConsoleInputState::new());
+/// Capacity of the IRQ-filled scancode ring buffer.
+const SCANCODE_BUF_SIZE: usize = 64;
+
+/// Scancode ring buffer filled by the keyboard IRQ handler.
+///
+/// The IRQ handler drains the PS/2 hardware FIFO into this buffer so that
+/// scancodes are preserved even if a waker notification is lost (e.g. consumed
+/// by a noop waker from [`crate::fs::try_poll_immediate`]). Processing and
+/// echo happen later in [`poll_keyboard_hardware`].
+static SCANCODE_BUF: IrqSpinLock<RingBuf<u8, SCANCODE_BUF_SIZE>> =
+    IrqSpinLock::new(RingBuf::new());
+
+/// Global console input state, protected by an IRQ-safe spinlock.
+///
+/// Uses [`IrqSpinLock`] because [`poll_keyboard_hardware`] accesses this
+/// while the keyboard IRQ handler could fire on the same CPU.
+static STATE: IrqSpinLock<ConsoleInputState> = IrqSpinLock::new(ConsoleInputState::new());
 
 /// Internal state for the console input subsystem.
 struct ConsoleInputState {
@@ -174,90 +191,129 @@ fn extended_scancode_to_keycode(scancode: u8) -> Option<KeyCode> {
     }
 }
 
-/// Poll i8042 hardware directly, decode scancodes, and push ASCII into the buffer.
+/// Process a single raw scancode: decode, update modifier state, echo, and
+/// buffer the resulting character in cooked mode.
+fn process_scancode(state: &mut ConsoleInputState, scancode: u8) {
+    // Handle 0xE0 extended prefix.
+    if scancode == 0xE0 {
+        state.extended_prefix = true;
+        return;
+    }
+
+    let is_release = is_release(scancode);
+
+    let keycode = if state.extended_prefix {
+        state.extended_prefix = false;
+        extended_scancode_to_keycode(scancode)
+    } else {
+        scancode_to_keycode(scancode)
+    };
+
+    let Some(key) = keycode else {
+        return;
+    };
+
+    // Update modifier state.
+    match key {
+        KeyCode::LeftShift | KeyCode::RightShift => {
+            state.shift_held = !is_release;
+            return;
+        }
+        KeyCode::CapsLock => {
+            if !is_release {
+                state.caps_lock = !state.caps_lock;
+            }
+            return;
+        }
+        _ => {}
+    }
+
+    // Only process key presses, not releases.
+    if is_release {
+        return;
+    }
+
+    let shifted = state.shift_held;
+    let caps = state.caps_lock;
+
+    if let Some(ch) = keycode_to_ascii(key, shifted, caps) {
+        match ch {
+            b'\x08' => {
+                // Backspace: erase one character.
+                if state.line_len > 0 {
+                    state.line_len -= 1;
+                    // Echo: move cursor back, overwrite with space, move back again.
+                    crate::kprint!("\x08 \x08");
+                }
+            }
+            b'\n' => {
+                // Enter: copy line + newline into ready buffer.
+                let len = state.line_len;
+                for i in 0..len {
+                    let byte = state.line_buf[i];
+                    let _ = state.ready_buf.try_push(byte);
+                }
+                let _ = state.ready_buf.try_push(b'\n');
+                state.line_len = 0;
+                crate::kprint!("\n");
+            }
+            _ => {
+                // Printable character: append to line buffer if there's room.
+                let len = state.line_len;
+                if len < LINE_BUF_SIZE {
+                    state.line_buf[len] = ch;
+                    state.line_len += 1;
+                    crate::kprint!("{}", ch as char);
+                }
+            }
+        }
+    }
+}
+
+/// Drain buffered scancodes, decode them, and push ASCII into the line buffer.
 ///
-/// Reads all available scancodes from the PS/2 controller, translates them
-/// to ASCII using the current modifier state, and performs cooked-mode line
-/// editing (echo, backspace, enter).
+/// Processes scancodes from two sources:
+/// 1. The [`SCANCODE_BUF`] ring buffer (filled by the IRQ handler)
+/// 2. The PS/2 hardware FIFO directly (catches bytes from before IRQ setup)
+///
+/// Scancodes are collected with interrupts disabled to prevent races with
+/// the IRQ handler, then processed under the [`STATE`] lock (which echoes
+/// characters via `kprint!`).
 pub fn poll_keyboard_hardware() {
+    // Collect raw scancodes with interrupts disabled (no logger lock needed).
+    let mut raw = [0u8; SCANCODE_BUF_SIZE];
+    let mut count = 0;
+
+    {
+        let mut buf = SCANCODE_BUF.lock();
+
+        // Drain the IRQ-buffered scancodes.
+        while let Some(sc) = buf.pop() {
+            if count < raw.len() {
+                raw[count] = sc;
+                count += 1;
+            }
+        }
+
+        // Also drain hardware FIFO directly (catches bytes from before IRQ
+        // setup, or any that arrived between IRQ handler and this call).
+        // Interrupts are disabled (IrqSpinLock), so no race with the handler.
+        while let Some(sc) = try_read_keyboard_scancode() {
+            if count < raw.len() {
+                raw[count] = sc;
+                count += 1;
+            }
+        }
+    }
+
+    if count == 0 {
+        return;
+    }
+
+    // Process all collected scancodes (echo + line editing).
     let mut state = STATE.lock();
-
-    // Drain all available scancodes from the hardware.
-    while let Some(scancode) = try_read_keyboard_scancode() {
-        // Handle 0xE0 extended prefix.
-        if scancode == 0xE0 {
-            state.extended_prefix = true;
-            continue;
-        }
-
-        let is_release = is_release(scancode);
-
-        let keycode = if state.extended_prefix {
-            state.extended_prefix = false;
-            extended_scancode_to_keycode(scancode)
-        } else {
-            scancode_to_keycode(scancode)
-        };
-
-        let Some(key) = keycode else {
-            continue;
-        };
-
-        // Update modifier state.
-        match key {
-            KeyCode::LeftShift | KeyCode::RightShift => {
-                state.shift_held = !is_release;
-                continue;
-            }
-            KeyCode::CapsLock => {
-                if !is_release {
-                    state.caps_lock = !state.caps_lock;
-                }
-                continue;
-            }
-            _ => {}
-        }
-
-        // Only process key presses, not releases.
-        if is_release {
-            continue;
-        }
-
-        let shifted = state.shift_held;
-        let caps = state.caps_lock;
-
-        if let Some(ch) = keycode_to_ascii(key, shifted, caps) {
-            match ch {
-                b'\x08' => {
-                    // Backspace: erase one character.
-                    if state.line_len > 0 {
-                        state.line_len -= 1;
-                        // Echo: move cursor back, overwrite with space, move back again.
-                        crate::kprint!("\x08 \x08");
-                    }
-                }
-                b'\n' => {
-                    // Enter: copy line + newline into ready buffer.
-                    let len = state.line_len;
-                    for i in 0..len {
-                        let byte = state.line_buf[i];
-                        let _ = state.ready_buf.try_push(byte);
-                    }
-                    let _ = state.ready_buf.try_push(b'\n');
-                    state.line_len = 0;
-                    crate::kprint!("\n");
-                }
-                _ => {
-                    // Printable character: append to line buffer if there's room.
-                    let len = state.line_len;
-                    if len < LINE_BUF_SIZE {
-                        state.line_buf[len] = ch;
-                        state.line_len += 1;
-                        crate::kprint!("{}", ch as char);
-                    }
-                }
-            }
-        }
+    for &scancode in &raw[..count] {
+        process_scancode(&mut state, scancode);
     }
 }
 
@@ -280,8 +336,18 @@ pub fn try_read(buf: &mut [u8]) -> usize {
     n
 }
 
-/// Keyboard IRQ handler — just wakes all waiting readers.
+/// Keyboard IRQ handler — drains the PS/2 FIFO and wakes waiting readers.
+///
+/// Scancodes are buffered in [`SCANCODE_BUF`] for deferred processing by
+/// [`poll_keyboard_hardware`]. Echo and line editing happen there (in thread
+/// context) to avoid taking the logger lock from interrupt context.
 fn keyboard_irq_handler(_vector: u8) {
+    {
+        let mut buf = SCANCODE_BUF.lock();
+        while let Some(scancode) = try_read_keyboard_scancode() {
+            let _ = buf.try_push(scancode);
+        }
+    }
     INPUT_READY.wake_all();
 }
 
