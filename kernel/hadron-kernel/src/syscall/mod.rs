@@ -73,12 +73,18 @@ impl SyscallHandler for HadronDispatch {
         vfs::sys_vnode_readdir(fd, buf_ptr, buf_len)
     }
 
-    fn sys_mem_map(&self) -> isize {
-        memory::sys_mem_map()
+    fn sys_mem_map(
+        &self,
+        addr_hint: usize,
+        length: usize,
+        prot: usize,
+        flags: usize,
+    ) -> isize {
+        memory::sys_mem_map(addr_hint, length, prot, flags)
     }
 
-    fn sys_mem_unmap(&self) -> isize {
-        memory::sys_mem_unmap()
+    fn sys_mem_unmap(&self, addr: usize, length: usize) -> isize {
+        memory::sys_mem_unmap(addr, length)
     }
 
     fn sys_clock_gettime(&self, clock_id: usize, tp: usize) -> isize {

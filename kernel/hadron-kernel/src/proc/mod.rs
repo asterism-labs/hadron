@@ -18,7 +18,7 @@ use alloc::vec::Vec;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 
-use crate::addr::PhysAddr;
+use crate::addr::{PhysAddr, VirtAddr};
 use crate::arch::x86_64::paging::PageTableMapper;
 use crate::arch::x86_64::registers::control::Cr3;
 use crate::arch::x86_64::registers::model_specific::{IA32_GS_BASE, IA32_KERNEL_GS_BASE};
@@ -26,6 +26,8 @@ use crate::arch::x86_64::userspace::{
     UserRegisters, enter_userspace_resume, enter_userspace_save, restore_kernel_context,
 };
 use crate::mm::address_space::AddressSpace;
+use crate::mm::layout::VirtRegion;
+use crate::mm::region::FreeRegionAllocator;
 use crate::percpu::{CpuLocal, MAX_CPUS};
 use crate::sync::SpinLock;
 use crate::{kdebug, kinfo};
@@ -178,6 +180,17 @@ pub fn children_of(parent_pid: u32) -> Vec<u32> {
         .collect()
 }
 
+// ── User mmap region ────────────────────────────────────────────────
+
+/// Base address for user mmap allocations (middle of lower-half address space).
+const USER_MMAP_BASE: u64 = 0x0000_4000_0000_0000;
+
+/// Maximum size of the user mmap region: 256 TiB.
+const USER_MMAP_MAX_SIZE: u64 = 256 * 1024 * 1024 * 1024 * 1024;
+
+/// Maximum free-list entries for the per-process mmap allocator.
+const MMAP_FREE_LIST_CAPACITY: usize = 64;
+
 // ── Process struct ──────────────────────────────────────────────────
 
 /// A user-mode process.
@@ -197,6 +210,8 @@ pub struct Process {
     address_space: AddressSpace<PageTableMapper>,
     /// Per-process file descriptor table.
     pub fd_table: SpinLock<FileDescriptorTable>,
+    /// Virtual address region allocator for `sys_mem_map` mappings.
+    pub(crate) mmap_alloc: SpinLock<FreeRegionAllocator<MMAP_FREE_LIST_CAPACITY>>,
     /// Exit status, set when the process terminates.
     pub exit_status: SpinLock<Option<u64>>,
     /// Wait queue notified when this process exits.
@@ -212,12 +227,15 @@ impl Process {
     /// Creates a new process with the given address space and parent PID.
     pub fn new(address_space: AddressSpace<PageTableMapper>, parent_pid: Option<u32>) -> Self {
         let user_cr3 = address_space.root_phys();
+        let mmap_region =
+            VirtRegion::new(VirtAddr::new(USER_MMAP_BASE), USER_MMAP_MAX_SIZE);
         Self {
             pid: NEXT_PID.fetch_add(1, Ordering::Relaxed),
             parent_pid,
             user_cr3,
             address_space,
             fd_table: SpinLock::new(FileDescriptorTable::new()),
+            mmap_alloc: SpinLock::new(FreeRegionAllocator::new(mmap_region)),
             exit_status: SpinLock::new(None),
             exit_notify: HeapWaitQueue::new(),
         }

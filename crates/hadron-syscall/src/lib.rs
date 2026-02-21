@@ -136,6 +136,14 @@ hadron_syscall_macros::define_syscalls! {
         INODE_TYPE_CHARDEV: u8 = 2;
         /// Inode type: symbolic link.
         INODE_TYPE_SYMLINK: u8 = 3;
+        /// Memory protection: allow reads.
+        PROT_READ: usize = 0x1;
+        /// Memory protection: allow writes.
+        PROT_WRITE: usize = 0x2;
+        /// Memory protection: allow execution.
+        PROT_EXEC: usize = 0x4;
+        /// Memory mapping flag: anonymous (not file-backed).
+        MAP_ANONYMOUS: usize = 0x1;
     }
 
     /// Task management.
@@ -223,11 +231,21 @@ hadron_syscall_macros::define_syscalls! {
 
     /// Memory management.
     group memory(0x40..0x50) {
-        /// Map memory into the address space.
-        fn mem_map() = 0x00;
+        /// Map anonymous memory into the address space.
+        ///
+        /// `addr_hint` is ignored (kernel chooses address). `length` is the
+        /// requested size in bytes (rounded up to page alignment). `prot` is
+        /// a bitmask of `PROT_READ`/`PROT_WRITE`/`PROT_EXEC`. `flags` must
+        /// include `MAP_ANONYMOUS`.
+        ///
+        /// Returns the mapped virtual address on success, or negated errno.
+        fn mem_map(addr_hint: usize, length: usize, prot: usize, flags: usize) = 0x00;
 
         /// Unmap memory from the address space.
-        fn mem_unmap() = 0x01;
+        ///
+        /// `addr` must be the exact address returned by `mem_map`. `length`
+        /// must match the original mapping size.
+        fn mem_unmap(addr: usize, length: usize) = 0x01;
 
         /// Change memory protection flags.
         #[reserved(phase = 9)]

@@ -2,9 +2,10 @@
 
 use hadron_syscall::raw::{syscall0, syscall1, syscall2, syscall4};
 use hadron_syscall::{
-    CLOCK_MONOTONIC, KernelVersionInfo, MemoryInfo, QUERY_KERNEL_VERSION, QUERY_MEMORY,
-    QUERY_UPTIME, SYS_CLOCK_GETTIME, SYS_HANDLE_DUP, SYS_HANDLE_PIPE, SYS_QUERY, SYS_TASK_EXIT,
-    SYS_TASK_INFO, SYS_TASK_SPAWN, SYS_TASK_WAIT, SpawnArg, Timespec, UptimeInfo,
+    CLOCK_MONOTONIC, KernelVersionInfo, MAP_ANONYMOUS, MemoryInfo, PROT_READ, PROT_WRITE,
+    QUERY_KERNEL_VERSION, QUERY_MEMORY, QUERY_UPTIME, SYS_CLOCK_GETTIME, SYS_HANDLE_DUP,
+    SYS_HANDLE_PIPE, SYS_MEM_MAP, SYS_MEM_UNMAP, SYS_QUERY, SYS_TASK_EXIT, SYS_TASK_INFO,
+    SYS_TASK_SPAWN, SYS_TASK_WAIT, SpawnArg, Timespec, UptimeInfo,
 };
 
 // ── Functions ─────────────────────────────────────────────────────────
@@ -154,4 +155,33 @@ pub fn clock_gettime() -> Option<Timespec> {
     } else {
         None
     }
+}
+
+/// Map anonymous read-write memory into the process address space.
+///
+/// Returns a pointer to the mapped region, or `None` if the mapping failed.
+/// The returned pointer is page-aligned. `length` is rounded up to page size.
+pub fn mem_map(length: usize) -> Option<*mut u8> {
+    let ret = syscall4(
+        SYS_MEM_MAP,
+        0, // addr_hint (kernel chooses)
+        length,
+        PROT_READ | PROT_WRITE,
+        MAP_ANONYMOUS,
+    );
+    if ret > 0 {
+        Some(ret as *mut u8)
+    } else {
+        None
+    }
+}
+
+/// Unmap a previously mapped memory region.
+///
+/// `addr` must be the exact pointer returned by [`mem_map`]. `length` must
+/// match the original request.
+///
+/// Returns `true` on success.
+pub fn mem_unmap(addr: *mut u8, length: usize) -> bool {
+    syscall2(SYS_MEM_UNMAP, addr as usize, length) == 0
 }
