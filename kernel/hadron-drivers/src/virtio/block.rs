@@ -266,115 +266,124 @@ static ID_TABLE: [PciDeviceId; 2] = [
     PciDeviceId::new(VIRTIO_VENDOR, VIRTIO_BLK_DEVICE_TRANSITIONAL),
 ];
 
-#[cfg(target_os = "none")]
-hadron_kernel::pci_driver_entry!(
-    VIRTIO_BLK_PCI_DRIVER,
-    hadron_kernel::driver_api::registration::PciDriverEntry {
-        name: "virtio-blk",
-        id_table: &ID_TABLE,
-        probe: virtio_blk_probe,
-    }
-);
+/// VirtIO block driver registration type.
+struct VirtioBlkDriver;
 
-/// PCI probe function for VirtIO block devices.
-#[cfg(target_os = "none")]
-fn virtio_blk_probe(
-    ctx: hadron_kernel::driver_api::probe_context::PciProbeContext,
-) -> Result<hadron_kernel::driver_api::registration::PciDriverRegistration, DriverError> {
-    use hadron_kernel::driver_api::device_path::DevicePath;
-    use hadron_kernel::driver_api::registration::{DeviceSet, PciDriverRegistration};
+#[hadron_driver_macros::hadron_driver(
+    name = "virtio-blk",
+    kind = pci,
+    capabilities = [Irq, Mmio, Dma, PciConfig],
+    pci_ids = &ID_TABLE,
+)]
+impl VirtioBlkDriver {
+    /// PCI probe function for VirtIO block devices.
+    fn probe(
+        ctx: DriverContext,
+    ) -> Result<hadron_kernel::driver_api::registration::PciDriverRegistration, DriverError> {
+        use hadron_kernel::driver_api::capability::{
+            CapabilityAccess, DmaCapability, IrqCapability, MmioCapability, PciConfigCapability,
+        };
+        use hadron_kernel::driver_api::device_path::DevicePath;
+        use hadron_kernel::driver_api::registration::{DeviceSet, PciDriverRegistration};
 
-    hadron_kernel::kinfo!(
-        "virtio-blk: probing {:04x}:{:04x} at {}",
-        ctx.device.vendor_id,
-        ctx.device.device_id,
-        ctx.device.address
-    );
+        let info = ctx.device();
+        let pci_config = ctx.capability::<PciConfigCapability>();
+        let mmio_cap = ctx.capability::<MmioCapability>();
+        let irq_cap = ctx.capability::<IrqCapability>();
+        let dma = ctx.capability::<DmaCapability>();
 
-    // Enable bus mastering.
-    ctx.pci_config.enable_bus_mastering();
+        hadron_kernel::kinfo!(
+            "virtio-blk: probing {:04x}:{:04x} at {}",
+            info.vendor_id,
+            info.device_id,
+            info.address
+        );
 
-    // Initialize VirtIO PCI transport.
-    let transport = VirtioPciTransport::new(&ctx.device, &ctx.mmio)?;
+        // Enable bus mastering.
+        pci_config.enable_bus_mastering();
 
-    // Try MSI-X setup, fall back to legacy.
-    let (irq, msix_table) = setup_irq(&ctx.device, &transport, &ctx.irq, &ctx.mmio)?;
+        // Initialize VirtIO PCI transport.
+        let transport = VirtioPciTransport::new(info, mmio_cap)?;
 
-    // Initialize VirtIO device (steps 1-6).
-    // No device-specific feature bits needed for basic block I/O.
-    let device = VirtioDevice::init(transport, 0)?;
+        // Try MSI-X setup, fall back to legacy.
+        let (irq, msix_table) = setup_irq(info, &transport, irq_cap, mmio_cap)?;
 
-    // Read device config.
-    let capacity = device
-        .transport()
-        .device_cfg_read_u64(0)
-        .unwrap_or(0);
+        // Initialize VirtIO device (steps 1-6).
+        // No device-specific feature bits needed for basic block I/O.
+        let device = VirtioDevice::init(transport, 0)?;
 
-    // blk_size is at device config offset 20 (u32).
-    let blk_size = device
-        .transport()
-        .device_cfg_read_u32(20)
-        .unwrap_or(512);
+        // Read device config.
+        let capacity = device
+            .transport()
+            .device_cfg_read_u64(0)
+            .unwrap_or(0);
 
-    hadron_kernel::kinfo!(
-        "virtio-blk: capacity={} sectors, sector_size={}",
-        capacity,
-        blk_size
-    );
+        // blk_size is at device config offset 20 (u32).
+        let blk_size = device
+            .transport()
+            .device_cfg_read_u32(20)
+            .unwrap_or(512);
 
-    // Setup request queue (queue 0).
-    let vq = device.setup_queue(0, &ctx.dma)?;
+        hadron_kernel::kinfo!(
+            "virtio-blk: capacity={} sectors, sector_size={}",
+            capacity,
+            blk_size
+        );
 
-    // If using MSI-X, configure the queue's MSI-X vector.
-    if let Some(ref msix) = msix_table {
-        device.transport().set_queue_select(0);
-        device.transport().set_queue_msix_vector(0);
-        let readback = device.transport().queue_msix_vector();
-        if readback == VIRTIO_MSI_NO_VECTOR {
-            hadron_kernel::kwarn!("virtio-blk: failed to set queue MSI-X vector");
+        // Setup request queue (queue 0).
+        let vq = device.setup_queue(0, dma)?;
+
+        // If using MSI-X, configure the queue's MSI-X vector.
+        if let Some(ref msix) = msix_table {
+            device.transport().set_queue_select(0);
+            device.transport().set_queue_msix_vector(0);
+            let readback = device.transport().queue_msix_vector();
+            if readback == VIRTIO_MSI_NO_VECTOR {
+                hadron_kernel::kwarn!("virtio-blk: failed to set queue MSI-X vector");
+            }
+            // Unmask and enable MSI-X.
+            msix.unmask(0);
+            msix.enable();
         }
-        // Unmask and enable MSI-X.
-        msix.unmask(0);
-        msix.enable();
+
+        // Complete initialization.
+        device.set_driver_ok();
+
+        hadron_kernel::kinfo!("virtio-blk: device ready, irq vector {}", irq.vector());
+
+        let disk = VirtioBlkDisk {
+            device,
+            queue: SpinLock::new(vq),
+            irq,
+            dma: *dma,
+            capacity,
+            sector_size: blk_size,
+        };
+
+        // Register in the kernel device registry via DeviceSet.
+        let idx = {
+            let mut counter = DISK_INDEX.lock();
+            let i = *counter;
+            *counter += 1;
+            i
+        };
+
+        let mut devices = DeviceSet::new();
+        let path = DevicePath::pci(
+            info.address.bus,
+            info.address.device,
+            info.address.function,
+            "virtio-blk",
+            idx,
+        );
+        devices.add_block_device(path, disk);
+
+        hadron_kernel::kinfo!("virtio-blk: registered as \"virtio-blk-{}\"", idx);
+        Ok(PciDriverRegistration {
+            devices,
+            lifecycle: None,
+        })
     }
-
-    // Complete initialization.
-    device.set_driver_ok();
-
-    hadron_kernel::kinfo!("virtio-blk: device ready, irq vector {}", irq.vector());
-
-    let disk = VirtioBlkDisk {
-        device,
-        queue: SpinLock::new(vq),
-        irq,
-        dma: ctx.dma,
-        capacity,
-        sector_size: blk_size,
-    };
-
-    // Register in the kernel device registry via DeviceSet.
-    let idx = {
-        let mut counter = DISK_INDEX.lock();
-        let i = *counter;
-        *counter += 1;
-        i
-    };
-
-    let mut devices = DeviceSet::new();
-    let path = DevicePath::pci(
-        ctx.device.address.bus,
-        ctx.device.address.device,
-        ctx.device.address.function,
-        "virtio-blk",
-        idx,
-    );
-    devices.add_block_device(path, disk);
-
-    hadron_kernel::kinfo!("virtio-blk: registered as \"virtio-blk-{}\"", idx);
-    Ok(PciDriverRegistration {
-        devices,
-        lifecycle: None,
-    })
 }
 
 /// Sets up IRQ delivery (MSI-X preferred, legacy fallback).

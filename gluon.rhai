@@ -111,6 +111,11 @@ host.add("hadron-syscall-macros", "crates/hadron-syscall-macros")
     .crate_type(PROC_MACRO)
     .deps(#{ syn: "syn", quote: "quote", proc_macro2: "proc-macro2" });
 
+host.add("hadron-driver-macros", "crates/hadron-driver-macros")
+    .edition("2024")
+    .crate_type(PROC_MACRO)
+    .deps(#{ syn: "syn", quote: "quote", proc_macro2: "proc-macro2" });
+
 host.add("bytemuck_derive", "vendor/bytemuck_derive")
     .edition("2018")
     .crate_type(PROC_MACRO)
@@ -151,7 +156,8 @@ kernel_drivers.add("hadron-drivers", "kernel/hadron-drivers")
         hadris_fat: "hadris-fat",
         hadris_io: "hadris-io",
         hadris_iso: "hadris-iso",
-        hadron_kernel: "hadron-kernel"
+        hadron_kernel: "hadron-kernel",
+        hadron_driver_macros: #{ "crate": "hadron-driver-macros", proc_macro: true }
     });
 
 // ===========================================================================

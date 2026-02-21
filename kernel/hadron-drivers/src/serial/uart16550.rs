@@ -393,56 +393,59 @@ impl fmt::Write for Uart16550 {
 // Driver registration
 // ---------------------------------------------------------------------------
 
-// Platform driver entry for the 16550 UART.
-// Matched by compatible string "ns16550". The actual async setup happens
-// in hadron-kernel's AsyncSerial; this entry declares the driver's
-// existence to the registry.
-#[cfg(target_os = "none")]
-hadron_kernel::platform_driver_entry!(
-    UART16550_DRIVER,
-    hadron_kernel::driver_api::registration::PlatformDriverEntry {
-        name: "uart16550",
-        compatible: "ns16550",
-        init: uart16550_platform_init,
-    }
-);
+/// UART 16550 driver registration type.
+struct Uart16550Driver;
 
-#[cfg(target_os = "none")]
-fn uart16550_platform_init(
-    ctx: hadron_kernel::driver_api::probe_context::PlatformProbeContext,
-) -> Result<
-    hadron_kernel::driver_api::registration::PlatformDriverRegistration,
-    hadron_kernel::driver_api::error::DriverError,
-> {
-    use alloc::boxed::Box;
-    use core::pin::Pin;
-    use hadron_kernel::driver_api::registration::{DeviceSet, PlatformDriverRegistration};
+#[hadron_driver_macros::hadron_driver(
+    name = "uart16550",
+    kind = platform,
+    capabilities = [Irq, Spawner],
+    compatible = "ns16550",
+)]
+impl Uart16550Driver {
+    /// Platform init for the 16550 UART. Sets up async serial I/O on COM1.
+    fn probe(
+        ctx: DriverContext,
+    ) -> Result<
+        hadron_kernel::driver_api::registration::PlatformDriverRegistration,
+        hadron_kernel::driver_api::error::DriverError,
+    > {
+        use alloc::boxed::Box;
+        use core::pin::Pin;
+        use hadron_kernel::driver_api::capability::{
+            CapabilityAccess, IrqCapability, TaskSpawner,
+        };
+        use hadron_kernel::driver_api::registration::{DeviceSet, PlatformDriverRegistration};
 
-    // Create an async serial port wrapping COM1 with IRQ 4.
-    let uart = Uart16550::new(COM1);
-    let async_serial =
-        crate::serial::serial_async::AsyncSerial::new(uart, 4, &ctx.irq)?;
+        let irq_cap = ctx.capability::<IrqCapability>();
+        let spawner = ctx.capability::<TaskSpawner>();
 
-    // Spawn the serial echo task — reads bytes from the serial port and
-    // echoes them back. Useful for debugging via a serial terminal.
-    ctx.spawner.spawn(
-        "serial-echo",
-        Pin::from(Box::new(async move {
-            use hadron_kernel::driver_api::serial::SerialPort;
-            loop {
-                match async_serial.read_byte().await {
-                    Ok(byte) => {
-                        let _ = async_serial.write_byte(byte).await;
+        // Create an async serial port wrapping COM1 with IRQ 4.
+        let uart = Uart16550::new(COM1);
+        let async_serial =
+            crate::serial::serial_async::AsyncSerial::new(uart, 4, irq_cap)?;
+
+        // Spawn the serial echo task — reads bytes from the serial port and
+        // echoes them back. Useful for debugging via a serial terminal.
+        spawner.spawn(
+            "serial-echo",
+            Pin::from(Box::new(async move {
+                use hadron_kernel::driver_api::serial::SerialPort;
+                loop {
+                    match async_serial.read_byte().await {
+                        Ok(byte) => {
+                            let _ = async_serial.write_byte(byte).await;
+                        }
+                        Err(_) => break,
                     }
-                    Err(_) => break,
                 }
-            }
-        })),
-    );
+            })),
+        );
 
-    hadron_kernel::kinfo!("uart16550: serial echo task spawned for COM1");
-    Ok(PlatformDriverRegistration {
-        devices: DeviceSet::new(),
-        lifecycle: None,
-    })
+        hadron_kernel::kinfo!("uart16550: serial echo task spawned for COM1");
+        Ok(PlatformDriverRegistration {
+            devices: DeviceSet::new(),
+            lifecycle: None,
+        })
+    }
 }

@@ -6,8 +6,6 @@
 
 use hadron_kernel::driver_api::error::DriverError;
 use hadron_kernel::driver_api::pci::PciDeviceId;
-use hadron_kernel::driver_api::probe_context::PciProbeContext;
-use hadron_kernel::driver_api::registration::{DeviceSet, PciDriverRegistration};
 
 /// PCI device ID table for the ICH9 LPC/ISA bridge.
 #[cfg(target_os = "none")]
@@ -15,21 +13,25 @@ static ID_TABLE: [PciDeviceId; 1] = [
     PciDeviceId::new(0x8086, 0x2918), // ICH9 LPC/ISA bridge
 ];
 
-#[cfg(target_os = "none")]
-hadron_kernel::pci_driver_entry!(
-    PCI_STUB_DRIVER,
-    hadron_kernel::driver_api::registration::PciDriverEntry {
-        name: "ich9-lpc-stub",
-        id_table: &ID_TABLE,
-        probe: ich9_lpc_probe,
-    }
-);
+/// ICH9 LPC/ISA bridge stub driver registration type.
+struct Ich9LpcStubDriver;
 
-#[cfg(target_os = "none")]
-fn ich9_lpc_probe(_ctx: PciProbeContext) -> Result<PciDriverRegistration, DriverError> {
-    // Stub: validates the entire PCI pipeline. No actual hardware setup needed.
-    Ok(PciDriverRegistration {
-        devices: DeviceSet::new(),
-        lifecycle: None,
-    })
+#[hadron_driver_macros::hadron_driver(
+    name = "ich9-lpc-stub",
+    kind = pci,
+    capabilities = [],
+    pci_ids = &ID_TABLE,
+)]
+impl Ich9LpcStubDriver {
+    fn probe(
+        _ctx: DriverContext,
+    ) -> Result<hadron_kernel::driver_api::registration::PciDriverRegistration, DriverError> {
+        use hadron_kernel::driver_api::registration::{DeviceSet, PciDriverRegistration};
+
+        // Stub: validates the entire PCI pipeline. No actual hardware setup needed.
+        Ok(PciDriverRegistration {
+            devices: DeviceSet::new(),
+            lifecycle: None,
+        })
+    }
 }

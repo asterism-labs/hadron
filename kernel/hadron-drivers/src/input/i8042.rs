@@ -509,37 +509,38 @@ impl MousePacket {
 // Driver registration
 // ---------------------------------------------------------------------------
 
-// Platform driver entry for the i8042 PS/2 controller.
-// Matched by compatible string "i8042". The actual async setup happens
-// in hadron-kernel's AsyncKeyboard/AsyncMouse wrappers.
-#[cfg(all(target_os = "none", target_arch = "x86_64"))]
-hadron_kernel::platform_driver_entry!(
-    I8042_DRIVER,
-    hadron_kernel::driver_api::registration::PlatformDriverEntry {
-        name: "i8042",
-        compatible: "i8042",
-        init: i8042_platform_init,
+/// i8042 PS/2 controller driver registration type.
+#[cfg(target_arch = "x86_64")]
+struct I8042Driver;
+
+#[cfg(target_arch = "x86_64")]
+#[hadron_driver_macros::hadron_driver(
+    name = "i8042",
+    kind = platform,
+    capabilities = [],
+    compatible = "i8042",
+)]
+impl I8042Driver {
+    /// Platform init for the i8042 PS/2 controller.
+    fn probe(
+        _ctx: DriverContext,
+    ) -> Result<
+        hadron_kernel::driver_api::registration::PlatformDriverRegistration,
+        hadron_kernel::driver_api::error::DriverError,
+    > {
+        use hadron_kernel::driver_api::registration::{DeviceSet, PlatformDriverRegistration};
+
+        // Platform init hook — performs the actual controller initialization.
+        let ctrl = I8042::new();
+        // SAFETY: Called once during driver matching, ports 0x60/0x64 are valid i8042.
+        unsafe { ctrl.init() }
+            .map_err(|_| hadron_kernel::driver_api::error::DriverError::InitFailed)?;
+
+        Ok(PlatformDriverRegistration {
+            devices: DeviceSet::new(),
+            lifecycle: None,
+        })
     }
-);
-
-#[cfg(all(target_os = "none", target_arch = "x86_64"))]
-fn i8042_platform_init(
-    _ctx: hadron_kernel::driver_api::probe_context::PlatformProbeContext,
-) -> Result<
-    hadron_kernel::driver_api::registration::PlatformDriverRegistration,
-    hadron_kernel::driver_api::error::DriverError,
-> {
-    use hadron_kernel::driver_api::registration::{DeviceSet, PlatformDriverRegistration};
-
-    // Platform init hook — performs the actual controller initialization.
-    let ctrl = I8042::new();
-    // SAFETY: Called once during driver matching, ports 0x60/0x64 are valid i8042.
-    unsafe { ctrl.init() }.map_err(|_| hadron_kernel::driver_api::error::DriverError::InitFailed)?;
-
-    Ok(PlatformDriverRegistration {
-        devices: DeviceSet::new(),
-        lifecycle: None,
-    })
 }
 
 #[cfg(test)]

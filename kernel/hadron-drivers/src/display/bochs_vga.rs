@@ -279,41 +279,45 @@ impl Framebuffer for BochsVga {
 #[cfg(target_os = "none")]
 static ID_TABLE: [PciDeviceId; 1] = [PciDeviceId::new(BGA_VENDOR_ID, BGA_DEVICE_ID)];
 
-#[cfg(target_os = "none")]
-hadron_kernel::pci_driver_entry!(
-    BOCHS_VGA_DRIVER,
-    hadron_kernel::driver_api::registration::PciDriverEntry {
-        name: "bochs-vga",
-        id_table: &ID_TABLE,
-        probe: bochs_vga_probe,
+/// Bochs VGA driver registration type.
+struct BochsVgaDriver;
+
+#[hadron_driver_macros::hadron_driver(
+    name = "bochs-vga",
+    kind = pci,
+    capabilities = [Mmio],
+    pci_ids = &ID_TABLE,
+)]
+impl BochsVgaDriver {
+    /// PCI probe function for the Bochs VGA adapter.
+    fn probe(
+        ctx: DriverContext,
+    ) -> Result<hadron_kernel::driver_api::registration::PciDriverRegistration, DriverError> {
+        use hadron_kernel::driver_api::capability::{CapabilityAccess, MmioCapability};
+        use hadron_kernel::driver_api::device_path::DevicePath;
+        use hadron_kernel::driver_api::registration::{DeviceSet, PciDriverRegistration};
+
+        let info = ctx.device();
+        let mmio_cap = ctx.capability::<MmioCapability>();
+
+        let vga = BochsVga::init(info, mmio_cap, DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_BPP)?;
+
+        let vga_arc = alloc::sync::Arc::new(vga);
+
+        let mut devices = DeviceSet::new();
+        let path = DevicePath::pci(
+            info.address.bus,
+            info.address.device,
+            info.address.function,
+            "bochs-vga",
+            0,
+        );
+        devices.add_framebuffer(path, vga_arc);
+
+        hadron_kernel::kinfo!("bochs-vga: driver initialized successfully");
+        Ok(PciDriverRegistration {
+            devices,
+            lifecycle: None,
+        })
     }
-);
-
-/// PCI probe function for the Bochs VGA adapter.
-#[cfg(target_os = "none")]
-fn bochs_vga_probe(
-    ctx: hadron_kernel::driver_api::probe_context::PciProbeContext,
-) -> Result<hadron_kernel::driver_api::registration::PciDriverRegistration, DriverError> {
-    use hadron_kernel::driver_api::device_path::DevicePath;
-    use hadron_kernel::driver_api::registration::{DeviceSet, PciDriverRegistration};
-
-    let vga = BochsVga::init(&ctx.device, &ctx.mmio, DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_BPP)?;
-
-    let vga_arc = alloc::sync::Arc::new(vga);
-
-    let mut devices = DeviceSet::new();
-    let path = DevicePath::pci(
-        ctx.device.address.bus,
-        ctx.device.address.device,
-        ctx.device.address.function,
-        "bochs-vga",
-        0,
-    );
-    devices.add_framebuffer(path, vga_arc);
-
-    hadron_kernel::kinfo!("bochs-vga: driver initialized successfully");
-    Ok(PciDriverRegistration {
-        devices,
-        lifecycle: None,
-    })
 }

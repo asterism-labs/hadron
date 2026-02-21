@@ -55,9 +55,10 @@ pub fn match_pci_drivers(devices: &[PciDeviceInfo]) {
             for id in entry.id_table {
                 if id.matches(device) {
                     hadron_kernel::kprintln!(
-                        "PCI: matched {} -> driver '{}'",
+                        "PCI: matched {} -> driver '{}' [{}]",
                         device.address,
                         entry.name,
+                        entry.capabilities,
                     );
                     let ctx = probe_context::pci_probe_context(device);
                     match (entry.probe)(ctx) {
@@ -98,7 +99,12 @@ pub fn match_platform_drivers(devices: &[(&str, &str)]) {
     for &(name, compatible) in devices {
         for entry in entries {
             if entry.compatible == compatible {
-                hadron_kernel::kprintln!("Platform: matched '{}' -> driver '{}'", name, entry.name,);
+                hadron_kernel::kprintln!(
+                    "Platform: matched '{}' -> driver '{}' [{}]",
+                    name,
+                    entry.name,
+                    entry.capabilities,
+                );
                 let ctx = probe_context::platform_probe_context();
                 match (entry.init)(ctx) {
                     Ok(registration) => {

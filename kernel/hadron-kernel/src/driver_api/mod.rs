@@ -35,8 +35,8 @@ pub mod serial;
 // Re-export all public types at the module root for ergonomic imports.
 pub use block::{BlockDevice, IoError};
 pub use capability::{
-    DmaCapability, IrqCapability, MmioCapability, PciConfigCapability, TaskSpawner,
-    TimerCapability,
+    CapabilityAccess, CapabilityFlags, CapabilityToken, DmaCapability, HasCapability,
+    IrqCapability, MmioCapability, PciConfigCapability, TaskSpawner, TimerCapability,
 };
 pub use category::PlatformDriver;
 pub use device_path::DevicePath;

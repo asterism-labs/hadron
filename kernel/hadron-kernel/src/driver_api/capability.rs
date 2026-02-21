@@ -380,6 +380,91 @@ impl TimerCapability {
 }
 
 // ---------------------------------------------------------------------------
+// Capability bitmap for runtime auditing
+// ---------------------------------------------------------------------------
+
+bitflags::bitflags! {
+    /// Bitmap of capabilities a driver has requested.
+    ///
+    /// Stored in driver entries for runtime auditing and logging.
+    /// Compile-time enforcement is handled separately by generated context types.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct CapabilityFlags: u32 {
+        /// Interrupt management.
+        const IRQ          = 1 << 0;
+        /// MMIO mapping.
+        const MMIO         = 1 << 1;
+        /// DMA memory allocation.
+        const DMA          = 1 << 2;
+        /// PCI configuration space access.
+        const PCI_CONFIG   = 1 << 3;
+        /// Async task spawning.
+        const TASK_SPAWNER = 1 << 4;
+        /// Kernel timer access.
+        const TIMER        = 1 << 5;
+    }
+}
+
+impl core::fmt::Display for CapabilityFlags {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        bitflags::parser::to_writer(self, f)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Compile-time capability access traits
+// ---------------------------------------------------------------------------
+
+/// Proof that a driver context grants access to capability `C`.
+///
+/// Implemented by generated driver context types for each declared capability.
+/// Cannot be implemented outside `hadron-kernel` due to the sealed
+/// [`CapabilityToken`] bound.
+pub trait HasCapability<C: CapabilityToken> {
+    /// Returns a reference to the capability token.
+    fn get(&self) -> &C;
+}
+
+/// Provides the ergonomic `.capability::<T>()` method on all driver contexts.
+pub trait CapabilityAccess {
+    /// Returns a reference to capability `C` if this context grants it.
+    ///
+    /// Fails to compile if `C` was not declared in the driver's capabilities list.
+    fn capability<C: CapabilityToken>(&self) -> &C
+    where
+        Self: HasCapability<C>,
+    {
+        <Self as HasCapability<C>>::get(self)
+    }
+}
+
+/// Blanket impl — every type gets `.capability::<T>()`.
+impl<T> CapabilityAccess for T {}
+
+/// Sealed marker trait for capability types.
+///
+/// Prevents external crates from implementing [`HasCapability`] for arbitrary types.
+pub trait CapabilityToken: sealed::Sealed {}
+
+mod sealed {
+    pub trait Sealed {}
+}
+
+impl sealed::Sealed for IrqCapability {}
+impl sealed::Sealed for MmioCapability {}
+impl sealed::Sealed for DmaCapability {}
+impl sealed::Sealed for PciConfigCapability {}
+impl sealed::Sealed for TaskSpawner {}
+impl sealed::Sealed for TimerCapability {}
+
+impl CapabilityToken for IrqCapability {}
+impl CapabilityToken for MmioCapability {}
+impl CapabilityToken for DmaCapability {}
+impl CapabilityToken for PciConfigCapability {}
+impl CapabilityToken for TaskSpawner {}
+impl CapabilityToken for TimerCapability {}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 

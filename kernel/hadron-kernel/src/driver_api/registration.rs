@@ -1,9 +1,10 @@
 //! Linker-section-based driver registration types and macros.
 //!
-//! Driver crates use [`pci_driver_entry!`], [`platform_driver_entry!`],
-//! [`block_fs_entry!`], [`virtual_fs_entry!`], and [`initramfs_entry!`] to place
-//! static entries into dedicated linker sections. The kernel iterates these sections
-//! at boot to discover and match drivers to devices, and mount filesystems — no
+//! Driver crates use the `#[hadron_driver(...)]` attribute macro to declare
+//! PCI and platform drivers. Filesystem drivers use [`block_fs_entry!`],
+//! [`virtual_fs_entry!`], and [`initramfs_entry!`] to place static entries
+//! into dedicated linker sections. The kernel iterates these sections at boot
+//! to discover and match drivers to devices, and mount filesystems — no
 //! runtime registry needed.
 
 extern crate alloc;
@@ -27,14 +28,17 @@ use super::probe_context::{PciProbeContext, PlatformProbeContext};
 
 /// PCI driver entry placed in the `.hadron_pci_drivers` linker section.
 ///
-/// Contains the driver's name, supported device IDs, and a probe function.
-/// The kernel iterates these entries to match discovered PCI devices to drivers.
+/// Contains the driver's name, supported device IDs, declared capabilities,
+/// and a probe function. The kernel iterates these entries to match
+/// discovered PCI devices to drivers.
 #[repr(C)]
 pub struct PciDriverEntry {
     /// Driver name (for logging).
     pub name: &'static str,
     /// Device IDs this driver supports.
     pub id_table: &'static [PciDeviceId],
+    /// Declared capability flags for runtime auditing.
+    pub capabilities: super::capability::CapabilityFlags,
     /// Called when a matching device is found.
     ///
     /// Receives a [`PciProbeContext`] with typed capability tokens.
@@ -66,6 +70,8 @@ pub struct PlatformDriverEntry {
     pub name: &'static str,
     /// Compatible string for matching (e.g., "ns16550").
     pub compatible: &'static str,
+    /// Declared capability flags for runtime auditing.
+    pub capabilities: super::capability::CapabilityFlags,
     /// Initialization function called when matched.
     ///
     /// Receives a [`PlatformProbeContext`] with typed capability tokens.
@@ -185,46 +191,6 @@ unsafe impl Sync for BlockFsEntry {}
 unsafe impl Sync for VirtualFsEntry {}
 #[cfg(target_os = "none")]
 unsafe impl Sync for InitramFsEntry {}
-
-/// Register a PCI driver entry in the `.hadron_pci_drivers` linker section.
-///
-/// # Example
-///
-/// ```ignore
-/// hadron_kernel::pci_driver_entry!(MY_DRIVER, PciDriverEntry {
-///     name: "my_pci_driver",
-///     id_table: &[PciDeviceId::new(0x1234, 0x5678)],
-///     probe: my_probe_fn,
-/// });
-/// ```
-#[macro_export]
-macro_rules! pci_driver_entry {
-    ($name:ident, $entry:expr) => {
-        #[used]
-        #[unsafe(link_section = ".hadron_pci_drivers")]
-        static $name: $crate::driver_api::registration::PciDriverEntry = $entry;
-    };
-}
-
-/// Register a platform driver entry in the `.hadron_platform_drivers` linker section.
-///
-/// # Example
-///
-/// ```ignore
-/// hadron_kernel::platform_driver_entry!(MY_DRIVER, PlatformDriverEntry {
-///     name: "my_platform_driver",
-///     compatible: "ns16550",
-///     init: my_init_fn,
-/// });
-/// ```
-#[macro_export]
-macro_rules! platform_driver_entry {
-    ($name:ident, $entry:expr) => {
-        #[used]
-        #[unsafe(link_section = ".hadron_platform_drivers")]
-        static $name: $crate::driver_api::registration::PlatformDriverEntry = $entry;
-    };
-}
 
 /// Register a block filesystem entry in the `.hadron_block_fs` linker section.
 #[macro_export]

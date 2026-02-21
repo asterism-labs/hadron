@@ -137,127 +137,136 @@ static ID_TABLE: [PciDeviceId; 2] = [
     PciDeviceId::with_class_progif(PCI_CLASS_STORAGE, PCI_SUBCLASS_SATA, PCI_PROGIF_AHCI),
 ];
 
-#[cfg(target_os = "none")]
-hadron_kernel::pci_driver_entry!(
-    AHCI_PCI_DRIVER,
-    hadron_kernel::driver_api::registration::PciDriverEntry {
-        name: "ahci",
-        id_table: &ID_TABLE,
-        probe: ahci_probe,
-    }
-);
+/// AHCI driver registration type.
+struct AhciDriver;
 
-/// PCI probe function for AHCI controllers.
-#[cfg(target_os = "none")]
-fn ahci_probe(
-    ctx: hadron_kernel::driver_api::probe_context::PciProbeContext,
-) -> Result<hadron_kernel::driver_api::registration::PciDriverRegistration, DriverError> {
-    use hadron_kernel::driver_api::device_path::DevicePath;
-    use hadron_kernel::driver_api::registration::{DeviceSet, PciDriverRegistration};
+#[hadron_driver_macros::hadron_driver(
+    name = "ahci",
+    kind = pci,
+    capabilities = [Irq, Mmio, Dma, PciConfig],
+    pci_ids = &ID_TABLE,
+)]
+impl AhciDriver {
+    /// PCI probe function for AHCI controllers.
+    fn probe(
+        ctx: DriverContext,
+    ) -> Result<hadron_kernel::driver_api::registration::PciDriverRegistration, DriverError> {
+        use hadron_kernel::driver_api::capability::{
+            CapabilityAccess, DmaCapability, IrqCapability, MmioCapability, PciConfigCapability,
+        };
+        use hadron_kernel::driver_api::device_path::DevicePath;
+        use hadron_kernel::driver_api::registration::{DeviceSet, PciDriverRegistration};
 
-    let info = &ctx.device;
-    hadron_kernel::kinfo!(
-        "AHCI: probing {:04x}:{:04x} at {}",
-        info.vendor_id,
-        info.device_id,
-        info.address
-    );
+        let info = ctx.device();
+        let pci_config = ctx.capability::<PciConfigCapability>();
+        let mmio_cap = ctx.capability::<MmioCapability>();
+        let irq_cap = ctx.capability::<IrqCapability>();
+        let dma = ctx.capability::<DmaCapability>();
 
-    // BAR5 = ABAR (AHCI Base Memory Register).
-    let (abar_phys, abar_size) = match info.bars[5] {
-        PciBar::Memory { base, size, .. } => (base, size.max(AHCI_ABAR_MIN_SIZE)),
-        _ => {
-            hadron_kernel::kwarn!("AHCI: BAR5 is not a memory BAR");
-            return Err(DriverError::InitFailed);
-        }
-    };
+        hadron_kernel::kinfo!(
+            "AHCI: probing {:04x}:{:04x} at {}",
+            info.vendor_id,
+            info.device_id,
+            info.address
+        );
 
-    // Enable bus mastering + memory space.
-    ctx.pci_config.enable_bus_mastering();
+        // BAR5 = ABAR (AHCI Base Memory Register).
+        let (abar_phys, abar_size) = match info.bars[5] {
+            PciBar::Memory { base, size, .. } => (base, size.max(AHCI_ABAR_MIN_SIZE)),
+            _ => {
+                hadron_kernel::kwarn!("AHCI: BAR5 is not a memory BAR");
+                return Err(DriverError::InitFailed);
+            }
+        };
 
-    // Map ABAR.
-    let mmio = ctx.mmio.map_mmio(abar_phys, abar_size)?;
+        // Enable bus mastering + memory space.
+        pci_config.enable_bus_mastering();
 
-    // Initialize HBA.
-    // SAFETY: mmio.virt_base() points to the mapped AHCI ABAR.
-    let hba = unsafe { AhciHba::new(mmio.virt_base()) };
-    hba.enable();
+        // Map ABAR.
+        let mmio = mmio_cap.map_mmio(abar_phys, abar_size)?;
 
-    let (major, minor) = hba.version();
-    hadron_kernel::kinfo!("AHCI: version {}.{}", major, minor);
+        // Initialize HBA.
+        // SAFETY: mmio.virt_base() points to the mapped AHCI ABAR.
+        let hba = unsafe { AhciHba::new(mmio.virt_base()) };
+        hba.enable();
 
-    // Bind IRQ line for async completion.
-    let _irq = hadron_kernel::drivers::irq::IrqLine::bind_isa(info.interrupt_line, &ctx.irq)
-        .map_err(|_| DriverError::InitFailed)?;
+        let (major, minor) = hba.version();
+        hadron_kernel::kinfo!("AHCI: version {}.{}", major, minor);
 
-    // Unmask the IRQ.
-    ctx.irq
-        .unmask_irq(info.interrupt_line)
-        .map_err(|_| DriverError::InitFailed)?;
+        // Bind IRQ line for async completion.
+        let _irq = hadron_kernel::drivers::irq::IrqLine::bind_isa(info.interrupt_line, irq_cap)
+            .map_err(|_| DriverError::InitFailed)?;
 
-    // Enumerate ports.
-    let pi = hba.ports_implemented();
-    let mut disks = Vec::new();
+        // Unmask the IRQ.
+        irq_cap
+            .unmask_irq(info.interrupt_line)
+            .map_err(|_| DriverError::InitFailed)?;
 
-    for port_num in 0..32u8 {
-        if pi & (1 << port_num) == 0 {
-            continue;
-        }
+        // Enumerate ports.
+        let pi = hba.ports_implemented();
+        let mut disks = Vec::new();
 
-        hadron_kernel::kdebug!("AHCI: checking port {}", port_num);
+        for port_num in 0..32u8 {
+            if pi & (1 << port_num) == 0 {
+                continue;
+            }
 
-        if let Some(port) = AhciPort::init(&hba, port_num, &ctx.dma) {
-            if port.identity.is_some() {
-                hadron_kernel::kinfo!("AHCI: port {} has device", port_num);
+            hadron_kernel::kdebug!("AHCI: checking port {}", port_num);
 
-                // Clone the IRQ binding for each disk.
-                // All ports on the same HBA share the same IRQ.
-                let disk_irq = hadron_kernel::drivers::irq::IrqLine::bind_isa(info.interrupt_line, &ctx.irq)
-                    .unwrap_or_else(|_| {
-                        // If we can't bind a second time (already registered), reuse
-                        // by creating a new IrqLine that references the same vector.
-                        hadron_kernel::drivers::irq::IrqLine::from_vector(
-                            ctx.irq.isa_irq_vector(info.interrupt_line),
-                        )
+            if let Some(port) = AhciPort::init(&hba, port_num, dma) {
+                if port.identity.is_some() {
+                    hadron_kernel::kinfo!("AHCI: port {} has device", port_num);
+
+                    // Clone the IRQ binding for each disk.
+                    // All ports on the same HBA share the same IRQ.
+                    let disk_irq =
+                        hadron_kernel::drivers::irq::IrqLine::bind_isa(info.interrupt_line, irq_cap)
+                            .unwrap_or_else(|_| {
+                                // If we can't bind a second time (already registered), reuse
+                                // by creating a new IrqLine that references the same vector.
+                                hadron_kernel::drivers::irq::IrqLine::from_vector(
+                                    irq_cap.isa_irq_vector(info.interrupt_line),
+                                )
+                            });
+
+                    disks.push(AhciDisk {
+                        port,
+                        irq: disk_irq,
+                        dma: *dma,
                     });
-
-                disks.push(AhciDisk {
-                    port,
-                    irq: disk_irq,
-                    dma: ctx.dma,
-                });
+                }
             }
         }
-    }
 
-    if disks.is_empty() {
-        hadron_kernel::kwarn!("AHCI: no devices found on any port");
-    } else {
-        hadron_kernel::kinfo!("AHCI: {} disk(s) discovered", disks.len());
-    }
+        if disks.is_empty() {
+            hadron_kernel::kwarn!("AHCI: no devices found on any port");
+        } else {
+            hadron_kernel::kinfo!("AHCI: {} disk(s) discovered", disks.len());
+        }
 
-    // Register each disk via DeviceSet.
-    let mut devices = DeviceSet::new();
-    for disk in disks {
-        let idx = {
-            let mut counter = DISK_INDEX.lock();
-            let i = *counter;
-            *counter += 1;
-            i
-        };
-        let path = DevicePath::pci(
-            info.address.bus,
-            info.address.device,
-            info.address.function,
-            "ahci",
-            idx,
-        );
-        hadron_kernel::kinfo!("AHCI: registered as \"ahci-{}\"", idx);
-        devices.add_block_device(path, disk);
-    }
+        // Register each disk via DeviceSet.
+        let mut devices = DeviceSet::new();
+        for disk in disks {
+            let idx = {
+                let mut counter = DISK_INDEX.lock();
+                let i = *counter;
+                *counter += 1;
+                i
+            };
+            let path = DevicePath::pci(
+                info.address.bus,
+                info.address.device,
+                info.address.function,
+                "ahci",
+                idx,
+            );
+            hadron_kernel::kinfo!("AHCI: registered as \"ahci-{}\"", idx);
+            devices.add_block_device(path, disk);
+        }
 
-    Ok(PciDriverRegistration {
-        devices,
-        lifecycle: None,
-    })
+        Ok(PciDriverRegistration {
+            devices,
+            lifecycle: None,
+        })
+    }
 }
