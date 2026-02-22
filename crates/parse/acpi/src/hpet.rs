@@ -64,8 +64,7 @@ impl HpetTable {
     pub fn parse(handler: &impl AcpiHandler, phys: u64) -> Result<Self, AcpiError> {
         let table = crate::sdt::load_table(handler, phys, HPET_SIGNATURE)?;
 
-        let raw = HpetRaw::read_at(table.data, SdtHeader::SIZE)
-            .ok_or(AcpiError::TruncatedData)?;
+        let raw = HpetRaw::read_at(table.data, SdtHeader::SIZE).ok_or(AcpiError::TruncatedData)?;
 
         Ok(Self {
             event_timer_block_id: raw.event_timer_block_id,

@@ -2,9 +2,13 @@
 //!
 //! This crate provides types and functions for parsing the core ACPI tables
 //! that a kernel needs during early boot: RSDP, RSDT/XSDT, MADT, HPET,
-//! FADT, and MCFG. It does **not** depend on `alloc`; all table iteration
+//! FADT, MCFG, SRAT, SLIT, DMAR, IVRS, and BGRT. It also includes an AML
+//! bytecode walker for extracting the ACPI namespace from DSDT/SSDT tables.
+//!
+//! The crate does **not** depend on `alloc` by default; all table iteration
 //! is done through safe byte-slice iterators backed by an [`AcpiHandler`] that
-//! maps physical memory on demand.
+//! maps physical memory on demand. Enable the `alloc` feature to use the
+//! [`aml::NamespaceBuilder`] which collects namespace nodes into a `Vec`.
 //!
 //! # Usage
 //!
@@ -19,20 +23,32 @@
 #![no_std]
 #![warn(missing_docs)]
 
+pub mod aml;
+pub mod bgrt;
+pub mod dmar;
 pub mod fadt;
 pub mod hpet;
+pub mod ivrs;
 pub mod madt;
 pub mod mcfg;
 pub mod rsdp;
 pub mod rsdt;
 pub mod sdt;
+pub mod slit;
+pub mod srat;
 
 // Re-export key types at crate root for convenience.
+pub use bgrt::BgrtTable;
+pub use dmar::{DeviceScope, DeviceScopeIter, Dmar, DmarEntry, DmarEntryIter};
 pub use fadt::Fadt;
 pub use hpet::HpetTable;
+pub use ivrs::{Ivrs, IvrsEntry, IvrsEntryIter};
 pub use madt::{Madt, MadtEntry, MadtEntryIter};
 pub use mcfg::{Mcfg, McfgEntry};
+pub use rsdt::MatchingTableIter;
 pub use sdt::{SdtHeader, ValidatedTable};
+pub use slit::Slit;
+pub use srat::{Srat, SratEntry, SratEntryIter};
 
 /// Errors that can occur during ACPI table parsing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -165,6 +181,95 @@ impl<H: AcpiHandler> AcpiTables<H> {
             .find_table(mcfg::MCFG_SIGNATURE)
             .ok_or(AcpiError::TableNotFound)?;
         Mcfg::parse(&self.handler, phys)
+    }
+
+    /// Parse and return the SRAT (System Resource Affinity Table).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AcpiError::TableNotFound`] if no SRAT exists, or another
+    /// [`AcpiError`] variant if the table is malformed.
+    pub fn srat(&self) -> Result<Srat, AcpiError> {
+        let phys = self
+            .find_table(srat::SRAT_SIGNATURE)
+            .ok_or(AcpiError::TableNotFound)?;
+        Srat::parse(&self.handler, phys)
+    }
+
+    /// Parse and return the SLIT (System Locality Information Table).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AcpiError::TableNotFound`] if no SLIT exists, or another
+    /// [`AcpiError`] variant if the table is malformed.
+    pub fn slit(&self) -> Result<Slit, AcpiError> {
+        let phys = self
+            .find_table(slit::SLIT_SIGNATURE)
+            .ok_or(AcpiError::TableNotFound)?;
+        Slit::parse(&self.handler, phys)
+    }
+
+    /// Parse and return the DMAR (DMA Remapping Table) for Intel VT-d.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AcpiError::TableNotFound`] if no DMAR exists, or another
+    /// [`AcpiError`] variant if the table is malformed.
+    pub fn dmar(&self) -> Result<Dmar, AcpiError> {
+        let phys = self
+            .find_table(dmar::DMAR_SIGNATURE)
+            .ok_or(AcpiError::TableNotFound)?;
+        Dmar::parse(&self.handler, phys)
+    }
+
+    /// Parse and return the IVRS (I/O Virtualization Reporting Structure) for AMD-Vi.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AcpiError::TableNotFound`] if no IVRS exists, or another
+    /// [`AcpiError`] variant if the table is malformed.
+    pub fn ivrs(&self) -> Result<Ivrs, AcpiError> {
+        let phys = self
+            .find_table(ivrs::IVRS_SIGNATURE)
+            .ok_or(AcpiError::TableNotFound)?;
+        Ivrs::parse(&self.handler, phys)
+    }
+
+    /// Parse and return the BGRT (Boot Graphics Resource Table).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AcpiError::TableNotFound`] if no BGRT exists, or another
+    /// [`AcpiError`] variant if the table is malformed.
+    pub fn bgrt(&self) -> Result<BgrtTable, AcpiError> {
+        let phys = self
+            .find_table(bgrt::BGRT_SIGNATURE)
+            .ok_or(AcpiError::TableNotFound)?;
+        BgrtTable::parse(&self.handler, phys)
+    }
+
+    /// Load and return the DSDT (Differentiated System Description Table).
+    ///
+    /// The DSDT address is obtained from the FADT. Returns a [`ValidatedTable`]
+    /// whose `data` slice can be passed (after skipping the SDT header) to
+    /// [`aml::walk_aml`] for namespace extraction.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AcpiError::TableNotFound`] if the FADT does not contain a
+    /// DSDT address.
+    pub fn dsdt(&self) -> Result<ValidatedTable, AcpiError> {
+        let fadt = self.fadt()?;
+        let dsdt_addr = fadt.dsdt_address().ok_or(AcpiError::TableNotFound)?;
+        sdt::load_table(&self.handler, dsdt_addr, b"DSDT")
+    }
+
+    /// Returns an iterator over all SSDTs in the RSDT/XSDT.
+    ///
+    /// SSDTs (Secondary System Description Tables) supplement the DSDT with
+    /// additional AML bytecode. Multiple SSDTs may be present.
+    pub fn ssdts(&self) -> MatchingTableIter<'_, H> {
+        rsdt::find_all_tables_in_rsdt(&self.handler, self.rsdt_addr, self.is_xsdt, b"SSDT")
     }
 
     /// Returns a reference to the underlying [`AcpiHandler`].

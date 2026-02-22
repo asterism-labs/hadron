@@ -85,8 +85,7 @@ pub fn load_table(
 ) -> Result<ValidatedTable, super::AcpiError> {
     // SAFETY: Caller provides a valid table physical address.
     let header_data = unsafe { handler.map_physical_region(phys, SdtHeader::SIZE) };
-    let header =
-        SdtHeader::read_from_bytes(header_data).ok_or(super::AcpiError::TruncatedData)?;
+    let header = SdtHeader::read_from_bytes(header_data).ok_or(super::AcpiError::TruncatedData)?;
 
     if &header.signature() != expected_signature {
         return Err(super::AcpiError::InvalidSignature);

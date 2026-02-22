@@ -115,3 +115,64 @@ pub fn find_table_in_rsdt(
 
     None
 }
+
+/// Search the RSDT/XSDT for all tables whose SDT header matches `signature`.
+///
+/// Returns a [`MatchingTableIter`] that yields the physical address of every
+/// matching table. This is useful for discovering multiple SSDTs, which all
+/// share the signature `b"SSDT"`.
+pub fn find_all_tables_in_rsdt<'a, H: AcpiHandler>(
+    handler: &'a H,
+    rsdt_addr: u64,
+    is_xsdt: bool,
+    signature: &'a [u8; 4],
+) -> MatchingTableIter<'a, H> {
+    // Map the RSDT/XSDT header to learn the total table length.
+    // SAFETY: caller provides a valid physical address.
+    let header_data = unsafe { handler.map_physical_region(rsdt_addr, SdtHeader::SIZE) };
+    let total_len = SdtHeader::read_from_bytes(header_data)
+        .map(|h| h.length() as usize)
+        .unwrap_or(SdtHeader::SIZE);
+
+    let entries_data = if total_len > SdtHeader::SIZE {
+        // SAFETY: caller provides a valid physical address, total_len from header.
+        let table_data = unsafe { handler.map_physical_region(rsdt_addr, total_len) };
+        table_data.get(SdtHeader::SIZE..).unwrap_or(&[])
+    } else {
+        &[]
+    };
+
+    MatchingTableIter {
+        handler,
+        iter: RsdtIterator::new(entries_data, is_xsdt),
+        signature,
+    }
+}
+
+/// Iterator that yields physical addresses of all tables matching a given
+/// signature in the RSDT/XSDT.
+pub struct MatchingTableIter<'a, H: AcpiHandler> {
+    handler: &'a H,
+    iter: RsdtIterator<'a>,
+    signature: &'a [u8; 4],
+}
+
+impl<H: AcpiHandler> Iterator for MatchingTableIter<'_, H> {
+    type Item = u64;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        for entry_phys in self.iter.by_ref() {
+            // SAFETY: entry_phys is a physical address from the RSDT/XSDT.
+            let candidate_data = unsafe {
+                self.handler
+                    .map_physical_region(entry_phys, SdtHeader::SIZE)
+            };
+            if let Some(candidate) = SdtHeader::read_from_bytes(candidate_data) {
+                if &candidate.signature() == self.signature {
+                    return Some(entry_phys);
+                }
+            }
+        }
+        None
+    }
+}
