@@ -11,7 +11,7 @@
 
 use core::sync::atomic::{AtomicPtr, Ordering};
 
-use crate::id::IrqVector;
+use crate::id::{HwIrqVector, IrqVector};
 
 /// Number of hardware interrupt vectors (32-255).
 const NUM_VECTORS: usize = 224;
@@ -19,19 +19,76 @@ const NUM_VECTORS: usize = 224;
 /// Handler function signature: receives the vector number.
 pub type InterruptHandler = fn(IrqVector);
 
-/// Static dispatch table: one atomic function pointer per vector (32-255).
-/// Null means no handler registered.
-static HANDLERS: [AtomicPtr<()>; NUM_VECTORS] = {
-    // SAFETY: We're initializing an array of null AtomicPtrs.
-    const INIT: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
+// ---------------------------------------------------------------------------
+// HandlerSlot — encapsulated transmute for function pointers
+// ---------------------------------------------------------------------------
+
+/// A single slot in the hardware interrupt dispatch table.
+///
+/// Wraps an [`AtomicPtr<()>`] that stores either null (no handler) or a valid
+/// [`InterruptHandler`] function pointer cast to `*mut ()`. The transmute
+/// between `*mut ()` and `fn(IrqVector)` is encapsulated here with a
+/// documented invariant: only [`try_set`](HandlerSlot::try_set) can store
+/// non-null values, and it only accepts valid `InterruptHandler` pointers.
+#[repr(transparent)]
+struct HandlerSlot(AtomicPtr<()>);
+
+impl HandlerSlot {
+    /// An empty (no handler) slot.
+    const EMPTY: Self = Self(AtomicPtr::new(core::ptr::null_mut()));
+
+    /// Atomically sets the handler if the slot is currently empty.
+    ///
+    /// Returns `Ok(())` on success, `Err(())` if a handler is already registered.
+    fn try_set(&self, handler: InterruptHandler) -> Result<(), ()> {
+        self.0
+            .compare_exchange(
+                core::ptr::null_mut(),
+                handler as *mut (),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .map(|_| ())
+            .map_err(|_| ())
+    }
+
+    /// Clears the handler slot, setting it back to empty.
+    fn clear(&self) {
+        self.0.store(core::ptr::null_mut(), Ordering::Release);
+    }
+
+    /// Dispatches to the registered handler (if any).
+    ///
+    /// # Safety invariant
+    ///
+    /// The transmute is sound because [`try_set`](HandlerSlot::try_set) only
+    /// stores valid `InterruptHandler` function pointers, and
+    /// [`clear`](HandlerSlot::clear) only stores null.
+    fn dispatch(&self, vector: IrqVector) {
+        let ptr = self.0.load(Ordering::Acquire);
+        if !ptr.is_null() {
+            // SAFETY: `try_set` guarantees all non-null values are valid
+            // `InterruptHandler` pointers.
+            let f: InterruptHandler = unsafe { core::mem::transmute(ptr) };
+            f(vector);
+        }
+    }
+
+    /// Returns `true` if no handler is currently registered.
+    fn is_empty(&self) -> bool {
+        self.0.load(Ordering::Acquire).is_null()
+    }
+}
+
+/// Static dispatch table: one handler slot per vector (32-255).
+static HANDLERS: [HandlerSlot; NUM_VECTORS] = {
+    const INIT: HandlerSlot = HandlerSlot::EMPTY;
     [INIT; NUM_VECTORS]
 };
 
 /// Error type for interrupt registration.
 #[derive(Debug)]
 pub enum InterruptError {
-    /// Vector is outside the valid range (32-255).
-    InvalidVector,
     /// A handler is already registered for this vector.
     AlreadyRegistered,
     /// No free vectors in the dynamic allocation range.
@@ -41,56 +98,36 @@ pub enum InterruptError {
 impl core::fmt::Display for InterruptError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::InvalidVector => write!(f, "vector outside valid range 32-255"),
             Self::AlreadyRegistered => write!(f, "handler already registered for this vector"),
             Self::VectorExhausted => write!(f, "no free vectors in dynamic range"),
         }
     }
 }
 
-/// Registers a handler for the given interrupt vector (32-255).
+/// Registers a handler for the given hardware interrupt vector.
 ///
-/// Returns an error if the vector is out of range or already has a handler.
+/// Returns an error if the vector already has a handler.
 pub fn register_handler(
-    vector: IrqVector,
+    vector: HwIrqVector,
     handler: InterruptHandler,
 ) -> Result<(), InterruptError> {
-    let raw = vector.as_u8();
-    if raw < 32 {
-        return Err(InterruptError::InvalidVector);
-    }
-    let idx = (raw - 32) as usize;
-    if idx >= NUM_VECTORS {
-        return Err(InterruptError::InvalidVector);
-    }
-
-    let ptr = handler as *mut ();
-    let old = HANDLERS[idx].compare_exchange(
-        core::ptr::null_mut(),
-        ptr,
-        Ordering::AcqRel,
-        Ordering::Acquire,
+    debug_assert!(
+        handler as *const () != core::ptr::null(),
+        "register_handler: null handler function pointer"
     );
-
-    match old {
-        Ok(_) => {
+    match HANDLERS[vector.table_index()].try_set(handler) {
+        Ok(()) => {
             crate::ktrace_subsys!(irq, "registered handler for vector {}", vector);
             Ok(())
         }
-        Err(_) => Err(InterruptError::AlreadyRegistered),
+        Err(()) => Err(InterruptError::AlreadyRegistered),
     }
 }
 
-/// Unregisters the handler for the given interrupt vector.
-pub fn unregister_handler(vector: IrqVector) {
-    let raw = vector.as_u8();
-    if raw >= 32 {
-        let idx = (raw - 32) as usize;
-        if idx < NUM_VECTORS {
-            HANDLERS[idx].store(core::ptr::null_mut(), Ordering::Release);
-            crate::ktrace_subsys!(irq, "unregistered handler for vector {}", vector);
-        }
-    }
+/// Unregisters the handler for the given hardware interrupt vector.
+pub fn unregister_handler(vector: HwIrqVector) {
+    HANDLERS[vector.table_index()].clear();
+    crate::ktrace_subsys!(irq, "unregistered handler for vector {}", vector);
 }
 
 /// Common dispatch function called by all hardware interrupt stubs.
@@ -114,13 +151,7 @@ extern "C" fn dispatch_interrupt(vector: u8) {
 
     let idx = (vector - 32) as usize;
     if idx < NUM_VECTORS {
-        let handler = HANDLERS[idx].load(Ordering::Acquire);
-        if !handler.is_null() {
-            // SAFETY: The handler was registered via `register_handler` which
-            // takes a valid `fn(u8)` pointer.
-            let f: InterruptHandler = unsafe { core::mem::transmute(handler) };
-            f(IrqVector::new(vector));
-        }
+        HANDLERS[idx].dispatch(IrqVector::new(vector));
     }
 
     // Send LAPIC EOI. We access the LAPIC via the global reference set
@@ -207,283 +238,85 @@ macro_rules! make_stub {
     }};
 }
 
+/// Generates the complete stub table as a single array literal.
+///
+/// Rust macro invocations in expression position produce a single expression,
+/// so a `make_stub_group!` that expands to `a, b, c` cannot splice commas into
+/// an outer `[...]`. Instead, this macro takes the full list of offsets and
+/// produces the complete array in one expansion.
+macro_rules! make_stub_table {
+    ($($offset:expr),* $(,)?) => {
+        [$(make_stub!($offset)),*]
+    };
+}
+
 /// Table of all 224 stub functions, one per hardware interrupt vector.
 /// `STUBS[i]` handles vector `i + 32`.
-// Due to the lack of const generics over function addresses, we enumerate them
-// explicitly. Groups of 16 for readability.
-pub static STUBS: [StubFn; NUM_VECTORS] = [
-    // Vectors 32-47 (ISA IRQs)
-    make_stub!(0),
-    make_stub!(1),
-    make_stub!(2),
-    make_stub!(3),
-    make_stub!(4),
-    make_stub!(5),
-    make_stub!(6),
-    make_stub!(7),
-    make_stub!(8),
-    make_stub!(9),
-    make_stub!(10),
-    make_stub!(11),
-    make_stub!(12),
-    make_stub!(13),
-    make_stub!(14),
-    make_stub!(15),
-    // Vectors 48-63
-    make_stub!(16),
-    make_stub!(17),
-    make_stub!(18),
-    make_stub!(19),
-    make_stub!(20),
-    make_stub!(21),
-    make_stub!(22),
-    make_stub!(23),
-    make_stub!(24),
-    make_stub!(25),
-    make_stub!(26),
-    make_stub!(27),
-    make_stub!(28),
-    make_stub!(29),
-    make_stub!(30),
-    make_stub!(31),
-    // Vectors 64-79
-    make_stub!(32),
-    make_stub!(33),
-    make_stub!(34),
-    make_stub!(35),
-    make_stub!(36),
-    make_stub!(37),
-    make_stub!(38),
-    make_stub!(39),
-    make_stub!(40),
-    make_stub!(41),
-    make_stub!(42),
-    make_stub!(43),
-    make_stub!(44),
-    make_stub!(45),
-    make_stub!(46),
-    make_stub!(47),
-    // Vectors 80-95
-    make_stub!(48),
-    make_stub!(49),
-    make_stub!(50),
-    make_stub!(51),
-    make_stub!(52),
-    make_stub!(53),
-    make_stub!(54),
-    make_stub!(55),
-    make_stub!(56),
-    make_stub!(57),
-    make_stub!(58),
-    make_stub!(59),
-    make_stub!(60),
-    make_stub!(61),
-    make_stub!(62),
-    make_stub!(63),
-    // Vectors 96-111
-    make_stub!(64),
-    make_stub!(65),
-    make_stub!(66),
-    make_stub!(67),
-    make_stub!(68),
-    make_stub!(69),
-    make_stub!(70),
-    make_stub!(71),
-    make_stub!(72),
-    make_stub!(73),
-    make_stub!(74),
-    make_stub!(75),
-    make_stub!(76),
-    make_stub!(77),
-    make_stub!(78),
-    make_stub!(79),
+pub static STUBS: [StubFn; NUM_VECTORS] = make_stub_table![
+    // Vectors  32- 47 (ISA IRQs)
+      0,   1,   2,   3,   4,   5,   6,   7,   8,   9,  10,  11,  12,  13,  14,  15,
+    // Vectors  48- 63
+     16,  17,  18,  19,  20,  21,  22,  23,  24,  25,  26,  27,  28,  29,  30,  31,
+    // Vectors  64- 79
+     32,  33,  34,  35,  36,  37,  38,  39,  40,  41,  42,  43,  44,  45,  46,  47,
+    // Vectors  80- 95
+     48,  49,  50,  51,  52,  53,  54,  55,  56,  57,  58,  59,  60,  61,  62,  63,
+    // Vectors  96-111
+     64,  65,  66,  67,  68,  69,  70,  71,  72,  73,  74,  75,  76,  77,  78,  79,
     // Vectors 112-127
-    make_stub!(80),
-    make_stub!(81),
-    make_stub!(82),
-    make_stub!(83),
-    make_stub!(84),
-    make_stub!(85),
-    make_stub!(86),
-    make_stub!(87),
-    make_stub!(88),
-    make_stub!(89),
-    make_stub!(90),
-    make_stub!(91),
-    make_stub!(92),
-    make_stub!(93),
-    make_stub!(94),
-    make_stub!(95),
+     80,  81,  82,  83,  84,  85,  86,  87,  88,  89,  90,  91,  92,  93,  94,  95,
     // Vectors 128-143
-    make_stub!(96),
-    make_stub!(97),
-    make_stub!(98),
-    make_stub!(99),
-    make_stub!(100),
-    make_stub!(101),
-    make_stub!(102),
-    make_stub!(103),
-    make_stub!(104),
-    make_stub!(105),
-    make_stub!(106),
-    make_stub!(107),
-    make_stub!(108),
-    make_stub!(109),
-    make_stub!(110),
-    make_stub!(111),
+     96,  97,  98,  99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111,
     // Vectors 144-159
-    make_stub!(112),
-    make_stub!(113),
-    make_stub!(114),
-    make_stub!(115),
-    make_stub!(116),
-    make_stub!(117),
-    make_stub!(118),
-    make_stub!(119),
-    make_stub!(120),
-    make_stub!(121),
-    make_stub!(122),
-    make_stub!(123),
-    make_stub!(124),
-    make_stub!(125),
-    make_stub!(126),
-    make_stub!(127),
+    112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127,
     // Vectors 160-175
-    make_stub!(128),
-    make_stub!(129),
-    make_stub!(130),
-    make_stub!(131),
-    make_stub!(132),
-    make_stub!(133),
-    make_stub!(134),
-    make_stub!(135),
-    make_stub!(136),
-    make_stub!(137),
-    make_stub!(138),
-    make_stub!(139),
-    make_stub!(140),
-    make_stub!(141),
-    make_stub!(142),
-    make_stub!(143),
+    128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143,
     // Vectors 176-191
-    make_stub!(144),
-    make_stub!(145),
-    make_stub!(146),
-    make_stub!(147),
-    make_stub!(148),
-    make_stub!(149),
-    make_stub!(150),
-    make_stub!(151),
-    make_stub!(152),
-    make_stub!(153),
-    make_stub!(154),
-    make_stub!(155),
-    make_stub!(156),
-    make_stub!(157),
-    make_stub!(158),
-    make_stub!(159),
+    144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159,
     // Vectors 192-207
-    make_stub!(160),
-    make_stub!(161),
-    make_stub!(162),
-    make_stub!(163),
-    make_stub!(164),
-    make_stub!(165),
-    make_stub!(166),
-    make_stub!(167),
-    make_stub!(168),
-    make_stub!(169),
-    make_stub!(170),
-    make_stub!(171),
-    make_stub!(172),
-    make_stub!(173),
-    make_stub!(174),
-    make_stub!(175),
+    160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175,
     // Vectors 208-223
-    make_stub!(176),
-    make_stub!(177),
-    make_stub!(178),
-    make_stub!(179),
-    make_stub!(180),
-    make_stub!(181),
-    make_stub!(182),
-    make_stub!(183),
-    make_stub!(184),
-    make_stub!(185),
-    make_stub!(186),
-    make_stub!(187),
-    make_stub!(188),
-    make_stub!(189),
-    make_stub!(190),
-    make_stub!(191),
+    176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191,
     // Vectors 224-239
-    make_stub!(192),
-    make_stub!(193),
-    make_stub!(194),
-    make_stub!(195),
-    make_stub!(196),
-    make_stub!(197),
-    make_stub!(198),
-    make_stub!(199),
-    make_stub!(200),
-    make_stub!(201),
-    make_stub!(202),
-    make_stub!(203),
-    make_stub!(204),
-    make_stub!(205),
-    make_stub!(206),
-    make_stub!(207),
+    192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207,
     // Vectors 240-255 (IPI / timer / spurious)
-    make_stub!(208),
-    make_stub!(209),
-    make_stub!(210),
-    make_stub!(211),
-    make_stub!(212),
-    make_stub!(213),
-    make_stub!(214),
-    make_stub!(215),
-    make_stub!(216),
-    make_stub!(217),
-    make_stub!(218),
-    make_stub!(219),
-    make_stub!(220),
-    make_stub!(221),
-    make_stub!(222),
-    make_stub!(223),
+    208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223,
 ];
+
+hadron_core::static_assert!(STUBS.len() == NUM_VECTORS);
 
 /// Well-known vector assignments.
 pub mod vectors {
-    use crate::id::IrqVector;
+    use crate::id::HwIrqVector;
 
     /// LAPIC timer vector.
-    pub const TIMER: IrqVector = IrqVector::new(254);
+    pub const TIMER: HwIrqVector = HwIrqVector::new(254);
     /// Spurious interrupt vector.
-    pub const SPURIOUS: IrqVector = IrqVector::new(255);
+    pub const SPURIOUS: HwIrqVector = HwIrqVector::new(255);
     /// First vector available for dynamic allocation.
     pub const DYNAMIC_START: u8 = 48;
     /// Last vector available for dynamic allocation.
     pub const DYNAMIC_END: u8 = 239;
     /// First IPI vector.
-    pub const IPI_START: IrqVector = IrqVector::new(240);
+    pub const IPI_START: HwIrqVector = HwIrqVector::new(240);
     /// Last IPI vector.
-    pub const IPI_END: IrqVector = IrqVector::new(253);
+    pub const IPI_END: HwIrqVector = HwIrqVector::new(253);
 
     /// Returns the interrupt vector for an ISA IRQ (0-15).
     #[must_use]
-    pub const fn isa_irq_vector(irq: u8) -> IrqVector {
-        IrqVector::new(32 + irq)
+    pub const fn isa_irq_vector(irq: u8) -> HwIrqVector {
+        HwIrqVector::new(32 + irq)
     }
 }
 
 /// Allocates a free vector in the dynamic range (48-239).
 ///
 /// Performs a linear scan of the handler table for the first unregistered slot.
-pub fn alloc_vector() -> Result<IrqVector, InterruptError> {
+pub fn alloc_vector() -> Result<HwIrqVector, InterruptError> {
     for raw in vectors::DYNAMIC_START..=vectors::DYNAMIC_END {
         let idx = (raw - 32) as usize;
-        if HANDLERS[idx].load(Ordering::Acquire).is_null() {
-            return Ok(IrqVector::new(raw));
+        if HANDLERS[idx].is_empty() {
+            return Ok(HwIrqVector::new(raw));
         }
     }
     Err(InterruptError::VectorExhausted)

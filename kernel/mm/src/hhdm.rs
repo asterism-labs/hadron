@@ -45,11 +45,20 @@ pub fn offset() -> u64 {
 /// Converts a physical address to its HHDM virtual address.
 #[inline]
 pub fn phys_to_virt(phys: PhysAddr) -> VirtAddr {
-    VirtAddr::new_truncate(phys.as_u64() + HHDM_OFFSET.load(Ordering::Relaxed))
+    let offset = HHDM_OFFSET.load(Ordering::Relaxed);
+    debug_assert!(offset != HHDM_UNINIT, "HHDM not initialized");
+    VirtAddr::new_truncate(phys.as_u64() + offset)
 }
 
 /// Converts an HHDM virtual address back to a physical address.
 #[inline]
 pub fn virt_to_phys(virt: VirtAddr) -> PhysAddr {
-    PhysAddr::new(virt.as_u64() - HHDM_OFFSET.load(Ordering::Relaxed))
+    let offset = HHDM_OFFSET.load(Ordering::Relaxed);
+    hadron_core::assert_unsafe_precondition!(
+        virt.as_u64() >= offset,
+        "virt_to_phys: address {:#x} is below HHDM base {:#x}",
+        virt.as_u64(),
+        offset
+    );
+    PhysAddr::new(virt.as_u64() - offset)
 }

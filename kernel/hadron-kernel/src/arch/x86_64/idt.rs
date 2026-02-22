@@ -5,7 +5,7 @@ use crate::arch::x86_64::structures::idt::InterruptDescriptorTable;
 use crate::sync::LazyLock;
 
 use super::gdt::DOUBLE_FAULT_IST_INDEX;
-use super::interrupts::{dispatch, handlers, timer_stub};
+use super::interrupts::{dispatch, exception_table::exception_table, handlers, timer_stub};
 
 /// Static Interrupt Descriptor Table with all exception and hardware interrupt
 /// handlers wired.
@@ -13,60 +13,58 @@ static IDT: LazyLock<InterruptDescriptorTable> = LazyLock::new(|| {
     let mut idt = InterruptDescriptorTable::new();
 
     // --- CPU Exception Handlers (vectors 0-31) ---
+    //
+    // The exception_table! macro type-checks each handler against the expected
+    // signature at compile time. If a handler has the wrong type (e.g., a
+    // non-diverging double fault handler), compilation fails with a clear
+    // type mismatch error.
 
-    idt.divide_error.set_handler(handlers::divide_error);
-    idt.debug.set_handler(handlers::debug);
-    idt.nmi.set_handler(handlers::nmi);
-    idt.breakpoint.set_handler(handlers::breakpoint);
-    idt.overflow.set_handler(handlers::overflow);
-    idt.bound_range.set_handler(handlers::bound_range);
-    idt.invalid_opcode.set_handler(handlers::invalid_opcode);
-    idt.device_not_available
-        .set_handler(handlers::device_not_available);
-    idt.double_fault
-        .set_diverging_handler_with_err_code(handlers::double_fault)
-        .set_ist_index(DOUBLE_FAULT_IST_INDEX);
-    idt.invalid_tss
-        .set_handler_with_err_code(handlers::invalid_tss);
-    idt.segment_not_present
-        .set_handler_with_err_code(handlers::segment_not_present);
-    idt.stack_segment_fault
-        .set_handler_with_err_code(handlers::stack_segment_fault);
-    idt.general_protection
-        .set_handler_with_err_code(handlers::general_protection);
-    idt.page_fault
-        .set_handler_with_err_code(handlers::page_fault);
-    idt.x87_floating_point
-        .set_handler(handlers::x87_floating_point);
-    idt.alignment_check
-        .set_handler_with_err_code(handlers::alignment_check);
-    idt.machine_check
-        .set_diverging_handler(handlers::machine_check);
-    idt.simd_floating_point
-        .set_handler(handlers::simd_floating_point);
-    idt.virtualization.set_handler(handlers::virtualization);
-    idt.control_protection
-        .set_handler_with_err_code(handlers::control_protection);
-    idt.hypervisor_injection
-        .set_handler(handlers::hypervisor_injection);
-    idt.vmm_communication
-        .set_handler_with_err_code(handlers::vmm_communication);
-    idt.security_exception
-        .set_handler_with_err_code(handlers::security_exception);
+    exception_table! {
+        idt = idt;
+        divide_error          => plain(handlers::divide_error);
+        debug                 => plain(handlers::debug);
+        nmi                   => plain(handlers::nmi);
+        breakpoint            => plain(handlers::breakpoint), dpl = 3;
+        overflow              => plain(handlers::overflow);
+        bound_range           => plain(handlers::bound_range);
+        invalid_opcode        => plain(handlers::invalid_opcode);
+        device_not_available  => plain(handlers::device_not_available);
+        double_fault          => diverging_err(handlers::double_fault), ist = DOUBLE_FAULT_IST_INDEX;
+        invalid_tss           => with_err_code(handlers::invalid_tss);
+        segment_not_present   => with_err_code(handlers::segment_not_present);
+        stack_segment_fault   => with_err_code(handlers::stack_segment_fault);
+        general_protection    => with_err_code(handlers::general_protection);
+        page_fault            => with_err_code(handlers::page_fault);
+        x87_floating_point    => plain(handlers::x87_floating_point);
+        alignment_check       => with_err_code(handlers::alignment_check);
+        machine_check         => diverging(handlers::machine_check);
+        simd_floating_point   => plain(handlers::simd_floating_point);
+        virtualization        => plain(handlers::virtualization);
+        control_protection    => with_err_code(handlers::control_protection);
+        hypervisor_injection  => plain(handlers::hypervisor_injection);
+        vmm_communication     => with_err_code(handlers::vmm_communication);
+        security_exception    => with_err_code(handlers::security_exception);
+    }
 
     // --- Hardware Interrupt Stubs (vectors 32-255) ---
     //
-    // The stubs are naked functions (not `extern "x86-interrupt"`), so we
-    // must install them via raw addresses rather than typed handler pointers.
+    // Each stub is a naked function that handles swapgs, register save/restore,
+    // and dispatch. Installed via `set_naked_stub` for self-documenting intent.
 
     for (i, stub) in dispatch::STUBS.iter().enumerate() {
-        idt.interrupts[i].set_raw_handler_addr(*stub as *const () as u64);
+        // SAFETY: Each stub follows the hardware interrupt calling convention
+        // (swapgs, scratch reg save/restore, dispatch call, iretq).
+        unsafe { idt.interrupts[i].set_naked_stub(*stub) };
     }
 
     // Override vector 254 (LAPIC timer) with the custom preemption-aware
     // stub that saves user register state on ring-3 interrupts.
-    idt.interrupts[(dispatch::vectors::TIMER.as_u8() - 32) as usize]
-        .set_raw_handler_addr(timer_stub::timer_preempt_stub as *const () as u64);
+    // SAFETY: timer_preempt_stub follows the interrupt stub convention with
+    // additional full-register-state save for userspace preemption.
+    unsafe {
+        idt.interrupts[dispatch::vectors::TIMER.table_index()]
+            .set_naked_stub(timer_stub::timer_preempt_stub);
+    }
 
     idt
 });

@@ -305,13 +305,13 @@ fn init_ap_lapic(cpu_id: CpuId) {
 
     // SAFETY: lapic_virt was mapped by BSP and is valid for this CPU's LAPIC.
     let lapic = unsafe { LocalApic::new(lapic_virt) };
-    lapic.enable(vectors::SPURIOUS);
+    lapic.enable(vectors::SPURIOUS.as_irq_vector());
     lapic.set_tpr(0);
 
     // Start periodic timer using BSP's calibrated values.
     let (initial_count, divide) = super::acpi::lapic_timer_config();
     if initial_count > 0 {
-        lapic.start_timer_periodic(vectors::TIMER, initial_count, divide);
+        lapic.start_timer_periodic(vectors::TIMER.as_irq_vector(), initial_count, divide);
         kdebug!(
             "SMP: AP {} LAPIC timer started (initial_count={}, divide={})",
             cpu_id,

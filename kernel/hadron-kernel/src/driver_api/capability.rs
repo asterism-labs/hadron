@@ -12,7 +12,7 @@ use core::pin::Pin;
 
 use super::error::DriverError;
 use super::resource::MmioRegion;
-use crate::id::IrqVector;
+use crate::id::{HwIrqVector, IrqVector};
 
 // ---------------------------------------------------------------------------
 // IrqCapability
@@ -34,10 +34,10 @@ impl IrqCapability {
         Self { _private: () }
     }
 
-    /// Registers an interrupt handler for the given vector.
+    /// Registers an interrupt handler for the given hardware vector.
     pub fn register_handler(
         &self,
-        vector: IrqVector,
+        vector: HwIrqVector,
         handler: fn(IrqVector),
     ) -> Result<(), DriverError> {
         #[cfg(target_os = "none")]
@@ -53,27 +53,27 @@ impl IrqCapability {
     }
 
     /// Unregisters a previously registered interrupt handler.
-    pub fn unregister_handler(&self, vector: IrqVector) {
+    pub fn unregister_handler(&self, vector: HwIrqVector) {
         #[cfg(target_os = "none")]
         crate::arch::interrupts::unregister_handler(vector);
         #[cfg(not(target_os = "none"))]
         let _ = vector;
     }
 
-    /// Returns the interrupt vector for a given ISA IRQ number.
-    pub fn isa_irq_vector(&self, irq: u8) -> IrqVector {
+    /// Returns the hardware interrupt vector for a given ISA IRQ number.
+    pub fn isa_irq_vector(&self, irq: u8) -> HwIrqVector {
         #[cfg(target_os = "none")]
         {
             crate::arch::interrupts::vectors::isa_irq_vector(irq)
         }
         #[cfg(not(target_os = "none"))]
         {
-            IrqVector::new(irq + 32)
+            HwIrqVector::new(irq + 32)
         }
     }
 
-    /// Allocates a free interrupt vector.
-    pub fn alloc_vector(&self) -> Result<IrqVector, DriverError> {
+    /// Allocates a free hardware interrupt vector.
+    pub fn alloc_vector(&self) -> Result<HwIrqVector, DriverError> {
         #[cfg(target_os = "none")]
         {
             crate::arch::interrupts::alloc_vector().map_err(interrupt_error_to_driver_error)
@@ -228,6 +228,11 @@ impl DmaCapability {
     /// The caller must ensure that no DMA operations reference these frames
     /// and that `phys_base` and `count` match a previous allocation.
     pub unsafe fn free_frames(&self, phys_base: u64, count: usize) {
+        hadron_core::assert_unsafe_precondition!(
+            phys_base % 4096 == 0,
+            "DmaCapability::free_frames: phys_base {:#x} is not page-aligned",
+            phys_base
+        );
         #[cfg(target_os = "none")]
         {
             use crate::paging::{PhysFrame, Size4KiB};
@@ -480,7 +485,6 @@ impl CapabilityToken for TimerCapability {}
 fn interrupt_error_to_driver_error(e: crate::arch::interrupts::InterruptError) -> DriverError {
     use crate::arch::interrupts::InterruptError;
     match e {
-        InterruptError::InvalidVector => DriverError::InitFailed,
         InterruptError::AlreadyRegistered => DriverError::InvalidState,
         InterruptError::VectorExhausted => DriverError::InitFailed,
     }

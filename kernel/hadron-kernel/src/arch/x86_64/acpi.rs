@@ -163,7 +163,7 @@ pub fn with_io_apic<R>(f: impl FnOnce(&IoApic) -> R) -> Option<R> {
 /// Performs the timer tick logic (increment counter, wake sleepers, set
 /// preempt flag) and sends LAPIC EOI.
 pub(crate) extern "C" fn timer_tick_and_eoi() {
-    timer_handler(vectors::TIMER);
+    timer_handler(vectors::TIMER.as_irq_vector());
     send_lapic_eoi();
 }
 
@@ -545,7 +545,7 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
 
     // SAFETY: lapic_virt was just mapped to the LAPIC MMIO region.
     let lapic = unsafe { LocalApic::new(lapic_virt) };
-    lapic.enable(vectors::SPURIOUS);
+    lapic.enable(vectors::SPURIOUS.as_irq_vector());
     lapic.set_tpr(0); // Accept all interrupts
 
     // Initialize per-CPU state
@@ -726,7 +726,7 @@ fn calibrate_and_start_timer(lapic: &LocalApic, hpet: Option<&Hpet>) {
 
     // Calibration: measure how many LAPIC timer ticks occur in 10ms.
     let divide = 16u8;
-    lapic.start_timer_oneshot(vectors::TIMER, u32::MAX, divide);
+    lapic.start_timer_oneshot(vectors::TIMER.as_irq_vector(), u32::MAX, divide);
 
     // Wait 10ms using HPET or PIT.
     if let Some(hpet) = hpet {
@@ -761,7 +761,7 @@ fn calibrate_and_start_timer(lapic: &LocalApic, hpet: Option<&Hpet>) {
         LAPIC_TIMER_INITIAL_COUNT.store(initial_count, Ordering::Release);
         LAPIC_TIMER_DIVIDE.store(divide, Ordering::Release);
 
-        lapic.start_timer_periodic(vectors::TIMER, initial_count, divide);
+        lapic.start_timer_periodic(vectors::TIMER.as_irq_vector(), initial_count, divide);
         crate::kinfo!("Timer: LAPIC periodic timer started (1ms interval)");
     } else {
         crate::kwarn!("Timer: Calibration returned 0 ticks, timer not started");

@@ -30,6 +30,49 @@ const PAGE_OFFSET_MASK: u64 = 0xFFF;
 /// Mask for a 9-bit page table index (used by all paging levels).
 const PAGE_TABLE_INDEX_MASK: usize = 0x1FF;
 
+/// A page table index guaranteed to be in the range [0, 512).
+///
+/// Returned by [`VirtAddr::pml4_index`], [`VirtAddr::pdpt_index`], etc.
+/// The bit masking already guarantees the range, but the newtype makes the
+/// invariant explicit in the type system and prevents accidental use as a
+/// raw index into the wrong array.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct PageTableIndex(u16);
+
+impl PageTableIndex {
+    /// Creates a new `PageTableIndex`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index >= 512`.
+    pub const fn new(index: u16) -> Self {
+        assert!(index < 512, "PageTableIndex must be < 512");
+        Self(index)
+    }
+
+    /// Creates a new `PageTableIndex`, truncating to 9 bits.
+    pub const fn new_truncate(index: u16) -> Self {
+        Self(index & 0x1FF)
+    }
+
+    /// Returns the index as `usize`.
+    pub const fn as_usize(self) -> usize {
+        self.0 as usize
+    }
+
+    /// Returns the index as `u16`.
+    pub const fn as_u16(self) -> u16 {
+        self.0
+    }
+}
+
+impl fmt::Display for PageTableIndex {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 impl VirtAddr {
     /// Creates a new `VirtAddr`, sign-extending from bit 47 to enforce
     /// canonical form. Panics in debug mode if the address is not canonical.
@@ -124,26 +167,26 @@ impl VirtAddr {
 impl VirtAddr {
     /// Returns the PML4 table index (bits 39..47).
     #[inline]
-    pub const fn pml4_index(self) -> usize {
-        ((self.0 >> 39) as usize) & PAGE_TABLE_INDEX_MASK
+    pub const fn pml4_index(self) -> PageTableIndex {
+        PageTableIndex::new_truncate((self.0 >> 39) as u16)
     }
 
     /// Returns the Page Directory Pointer Table index (bits 30..38).
     #[inline]
-    pub const fn pdpt_index(self) -> usize {
-        ((self.0 >> 30) as usize) & PAGE_TABLE_INDEX_MASK
+    pub const fn pdpt_index(self) -> PageTableIndex {
+        PageTableIndex::new_truncate((self.0 >> 30) as u16)
     }
 
     /// Returns the Page Directory index (bits 21..29).
     #[inline]
-    pub const fn pd_index(self) -> usize {
-        ((self.0 >> 21) as usize) & PAGE_TABLE_INDEX_MASK
+    pub const fn pd_index(self) -> PageTableIndex {
+        PageTableIndex::new_truncate((self.0 >> 21) as u16)
     }
 
     /// Returns the Page Table index (bits 12..20).
     #[inline]
-    pub const fn pt_index(self) -> usize {
-        ((self.0 >> 12) as usize) & PAGE_TABLE_INDEX_MASK
+    pub const fn pt_index(self) -> PageTableIndex {
+        PageTableIndex::new_truncate((self.0 >> 12) as u16)
     }
 }
 
@@ -386,7 +429,7 @@ mod tests {
     fn virt_addr_page_indices() {
         // Address 0xFFFF_8000_0020_1000 — canonical high-half address.
         let addr = VirtAddr::new(0xFFFF_8000_0020_1000);
-        assert_eq!(addr.pml4_index(), 256); // bit 39..47 of this address
+        assert_eq!(addr.pml4_index().as_usize(), 256); // bit 39..47 of this address
         assert_eq!(addr.page_offset(), 0);
     }
 
@@ -435,5 +478,49 @@ mod tests {
         let addr = PhysAddr::new(0x2000);
         assert_eq!((addr + 0x100).as_u64(), 0x2100);
         assert_eq!((addr - 0x100).as_u64(), 0x1F00);
+    }
+
+    // --- PageTableIndex tests ---
+
+    #[test]
+    fn page_table_index_new() {
+        let idx = PageTableIndex::new(0);
+        assert_eq!(idx.as_usize(), 0);
+        let idx = PageTableIndex::new(511);
+        assert_eq!(idx.as_usize(), 511);
+    }
+
+    #[test]
+    #[should_panic(expected = "PageTableIndex must be < 512")]
+    fn page_table_index_rejects_512() {
+        let _ = PageTableIndex::new(512);
+    }
+
+    #[test]
+    fn page_table_index_truncate() {
+        // 512 (0x200) truncated to 9 bits → 0
+        assert_eq!(PageTableIndex::new_truncate(512).as_usize(), 0);
+        // 513 (0x201) truncated → 1
+        assert_eq!(PageTableIndex::new_truncate(513).as_usize(), 1);
+        // 0x1FF (511) stays 511
+        assert_eq!(PageTableIndex::new_truncate(511).as_usize(), 511);
+    }
+
+    #[test]
+    fn page_table_index_as_u16() {
+        let idx = PageTableIndex::new(256);
+        assert_eq!(idx.as_u16(), 256);
+    }
+
+    #[test]
+    fn page_table_index_display() {
+        let idx = PageTableIndex::new(42);
+        assert_eq!(format!("{idx}"), "42");
+    }
+
+    #[test]
+    fn page_table_index_ordering() {
+        assert!(PageTableIndex::new(0) < PageTableIndex::new(1));
+        assert!(PageTableIndex::new(511) > PageTableIndex::new(0));
     }
 }

@@ -145,11 +145,30 @@ impl IdtEntry {
         self.set_raw_handler_addr(handler as u64)
     }
 
+    /// Installs a naked interrupt stub.
+    ///
+    /// This is the preferred way to install hardware interrupt stubs that
+    /// use a custom calling convention (C ABI with manual register
+    /// save/restore) rather than `extern "x86-interrupt"`.
+    ///
+    /// # Safety
+    ///
+    /// The stub must follow the hardware interrupt stub calling convention:
+    /// save/restore scratch registers, handle `swapgs` for ring transitions,
+    /// and return via `iretq`.
+    pub unsafe fn set_naked_stub(
+        &mut self,
+        stub: unsafe extern "C" fn(),
+    ) -> &mut EntryOptions {
+        self.set_raw_handler_addr(stub as *const () as u64)
+    }
+
     /// Sets a raw handler address directly.
     ///
     /// Used for custom naked stubs that don't match the standard
     /// `x86-interrupt` ABI signatures.
     pub fn set_raw_handler_addr(&mut self, addr: u64) -> &mut EntryOptions {
+        debug_assert!(addr != 0, "IDT: null handler address");
         self.offset_low = addr as u16;
         self.offset_mid = (addr >> 16) as u16;
         self.offset_high = (addr >> 32) as u32;

@@ -74,6 +74,11 @@ impl PageTableMapper {
     /// `phys` must point to a valid, 4 KiB-aligned physical frame that is
     /// accessible through the HHDM.
     unsafe fn table_at(&self, phys: PhysAddr) -> &mut PageTable {
+        hadron_core::assert_unsafe_precondition!(
+            phys.is_aligned(4096),
+            "table_at: physical address {:#x} is not page-aligned",
+            phys.as_u64()
+        );
         unsafe { &mut *(self.phys_to_virt(phys) as *mut PageTable) }
     }
 
@@ -133,9 +138,14 @@ impl PageTableMapper {
         flags: PageTableFlags,
         alloc: &mut (impl FnMut() -> PhysFrame<Size4KiB> + ?Sized),
     ) {
-        let pml4_idx = virt_addr.pml4_index();
-        let pdpt_idx = virt_addr.pdpt_index();
-        let pd_idx = virt_addr.pd_index();
+        hadron_core::assert_unsafe_precondition!(
+            phys_addr.is_aligned(0x20_0000),
+            "map_2mib: physical address {:#x} is not 2 MiB aligned",
+            phys_addr.as_u64()
+        );
+        let pml4_idx = virt_addr.pml4_index().as_usize();
+        let pdpt_idx = virt_addr.pdpt_index().as_usize();
+        let pd_idx = virt_addr.pd_index().as_usize();
 
         // Derive intermediate flags: PRESENT | WRITABLE, plus USER if leaf has USER.
         let intermediate = Self::intermediate_flags_for(flags);
@@ -163,8 +173,13 @@ impl PageTableMapper {
         flags: PageTableFlags,
         alloc: &mut (impl FnMut() -> PhysFrame<Size4KiB> + ?Sized),
     ) {
-        let pml4_idx = virt_addr.pml4_index();
-        let pdpt_idx = virt_addr.pdpt_index();
+        hadron_core::assert_unsafe_precondition!(
+            phys_addr.is_aligned(0x4000_0000),
+            "map_1gib: physical address {:#x} is not 1 GiB aligned",
+            phys_addr.as_u64()
+        );
+        let pml4_idx = virt_addr.pml4_index().as_usize();
+        let pdpt_idx = virt_addr.pdpt_index().as_usize();
 
         let intermediate = Self::intermediate_flags_for(flags);
         // SAFETY: Caller guarantees pml4_phys is valid.
@@ -190,10 +205,15 @@ impl PageTableMapper {
         flags: PageTableFlags,
         alloc: &mut (impl FnMut() -> PhysFrame<Size4KiB> + ?Sized),
     ) {
-        let pml4_idx = virt_addr.pml4_index();
-        let pdpt_idx = virt_addr.pdpt_index();
-        let pd_idx = virt_addr.pd_index();
-        let pt_idx = virt_addr.pt_index();
+        hadron_core::assert_unsafe_precondition!(
+            phys_addr.is_aligned(4096),
+            "map_4k: physical address {:#x} is not 4 KiB aligned",
+            phys_addr.as_u64()
+        );
+        let pml4_idx = virt_addr.pml4_index().as_usize();
+        let pdpt_idx = virt_addr.pdpt_index().as_usize();
+        let pd_idx = virt_addr.pd_index().as_usize();
+        let pt_idx = virt_addr.pt_index().as_usize();
 
         let intermediate = Self::intermediate_flags_for(flags);
         let pdpt_phys = unsafe { self.ensure_table(pml4_phys, pml4_idx, intermediate, alloc) };
@@ -216,10 +236,10 @@ impl PageTableMapper {
         pml4_phys: PhysAddr,
         virt_addr: VirtAddr,
     ) -> Result<PhysFrame<Size4KiB>, UnmapError> {
-        let pml4_idx = virt_addr.pml4_index();
-        let pdpt_idx = virt_addr.pdpt_index();
-        let pd_idx = virt_addr.pd_index();
-        let pt_idx = virt_addr.pt_index();
+        let pml4_idx = virt_addr.pml4_index().as_usize();
+        let pdpt_idx = virt_addr.pdpt_index().as_usize();
+        let pd_idx = virt_addr.pd_index().as_usize();
+        let pt_idx = virt_addr.pt_index().as_usize();
 
         let pml4 = unsafe { self.table_at(pml4_phys) };
         let pml4e = pml4.entries[pml4_idx];
@@ -261,10 +281,10 @@ impl PageTableMapper {
     /// # Safety
     /// `pml4_phys` must point to a valid PML4 table.
     pub unsafe fn translate(&self, pml4_phys: PhysAddr, virt_addr: VirtAddr) -> TranslateResult {
-        let pml4_idx = virt_addr.pml4_index();
-        let pdpt_idx = virt_addr.pdpt_index();
-        let pd_idx = virt_addr.pd_index();
-        let pt_idx = virt_addr.pt_index();
+        let pml4_idx = virt_addr.pml4_index().as_usize();
+        let pdpt_idx = virt_addr.pdpt_index().as_usize();
+        let pd_idx = virt_addr.pd_index().as_usize();
+        let pt_idx = virt_addr.pt_index().as_usize();
 
         let pml4 = unsafe { self.table_at(pml4_phys) };
         let pml4e = pml4.entries[pml4_idx];
@@ -347,10 +367,10 @@ impl PageTableMapper {
         virt_addr: VirtAddr,
         new_flags: PageTableFlags,
     ) -> Result<(), UnmapError> {
-        let pml4_idx = virt_addr.pml4_index();
-        let pdpt_idx = virt_addr.pdpt_index();
-        let pd_idx = virt_addr.pd_index();
-        let pt_idx = virt_addr.pt_index();
+        let pml4_idx = virt_addr.pml4_index().as_usize();
+        let pdpt_idx = virt_addr.pdpt_index().as_usize();
+        let pd_idx = virt_addr.pd_index().as_usize();
+        let pt_idx = virt_addr.pt_index().as_usize();
 
         let pml4 = unsafe { self.table_at(pml4_phys) };
         let pml4e = pml4.entries[pml4_idx];
@@ -398,9 +418,9 @@ impl PageTableMapper {
         pml4_phys: PhysAddr,
         virt_addr: VirtAddr,
     ) -> Result<PhysFrame<Size2MiB>, UnmapError> {
-        let pml4_idx = virt_addr.pml4_index();
-        let pdpt_idx = virt_addr.pdpt_index();
-        let pd_idx = virt_addr.pd_index();
+        let pml4_idx = virt_addr.pml4_index().as_usize();
+        let pdpt_idx = virt_addr.pdpt_index().as_usize();
+        let pd_idx = virt_addr.pd_index().as_usize();
 
         let pml4 = unsafe { self.table_at(pml4_phys) };
         let pml4e = pml4.entries[pml4_idx];
@@ -443,8 +463,8 @@ impl PageTableMapper {
         pml4_phys: PhysAddr,
         virt_addr: VirtAddr,
     ) -> Result<PhysFrame<Size1GiB>, UnmapError> {
-        let pml4_idx = virt_addr.pml4_index();
-        let pdpt_idx = virt_addr.pdpt_index();
+        let pml4_idx = virt_addr.pml4_index().as_usize();
+        let pdpt_idx = virt_addr.pdpt_index().as_usize();
 
         let pml4 = unsafe { self.table_at(pml4_phys) };
         let pml4e = pml4.entries[pml4_idx];
@@ -479,9 +499,9 @@ impl PageTableMapper {
         virt_addr: VirtAddr,
         new_flags: PageTableFlags,
     ) -> Result<(), UnmapError> {
-        let pml4_idx = virt_addr.pml4_index();
-        let pdpt_idx = virt_addr.pdpt_index();
-        let pd_idx = virt_addr.pd_index();
+        let pml4_idx = virt_addr.pml4_index().as_usize();
+        let pdpt_idx = virt_addr.pdpt_index().as_usize();
+        let pd_idx = virt_addr.pd_index().as_usize();
 
         let pml4 = unsafe { self.table_at(pml4_phys) };
         let pml4e = pml4.entries[pml4_idx];
@@ -525,8 +545,8 @@ impl PageTableMapper {
         virt_addr: VirtAddr,
         new_flags: PageTableFlags,
     ) -> Result<(), UnmapError> {
-        let pml4_idx = virt_addr.pml4_index();
-        let pdpt_idx = virt_addr.pdpt_index();
+        let pml4_idx = virt_addr.pml4_index().as_usize();
+        let pdpt_idx = virt_addr.pdpt_index().as_usize();
 
         let pml4 = unsafe { self.table_at(pml4_phys) };
         let pml4e = pml4.entries[pml4_idx];

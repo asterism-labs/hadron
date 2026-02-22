@@ -425,7 +425,7 @@ fn try_setup_msix(
     let irq = IrqLine::bind(vector, irq_cap)?;
 
     // Configure MSI-X entry 0 for CPU 0.
-    msix_table.set_entry(0, vector, 0);
+    msix_table.set_entry(0, vector.as_irq_vector(), 0);
 
     Ok((irq, msix_table))
 }

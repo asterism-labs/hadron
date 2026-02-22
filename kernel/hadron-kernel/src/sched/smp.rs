@@ -19,7 +19,7 @@ use crate::task::Priority;
 use crate::arch::x86_64::interrupts::dispatch::vectors;
 
 /// IPI vector used to wake a CPU from HLT.
-const IPI_WAKE_VECTOR: crate::id::IrqVector = vectors::IPI_START; // 240
+const IPI_WAKE_VECTOR: crate::id::HwIrqVector = vectors::IPI_START; // 240
 
 /// Global flag set by the panic handler to signal all CPUs to halt.
 ///
@@ -72,7 +72,7 @@ pub fn send_wake_ipi(target_cpu: CpuId) {
         // registered during bootstrap. IPI_WAKE_VECTOR has a registered
         // handler (no-op) so the interrupt will be handled normally.
         let lapic = unsafe { LocalApic::new(lapic_virt) };
-        unsafe { lapic.send_ipi(target_apic_id, IPI_WAKE_VECTOR) };
+        unsafe { lapic.send_ipi(target_apic_id, IPI_WAKE_VECTOR.as_irq_vector()) };
     }
 }
 

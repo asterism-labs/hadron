@@ -71,6 +71,7 @@ impl MmioRegion {
     /// - The virtual mapping is valid for the lifetime of the region.
     #[must_use]
     pub const unsafe fn new(phys_base: PhysAddr, virt_base: VirtAddr, size: u64) -> Self {
+        assert!(size > 0, "MmioRegion::new: size must be > 0");
         Self {
             phys_base,
             virt_base,
@@ -188,5 +189,14 @@ mod tests {
         // SAFETY: test-only, no real hardware.
         let irq = unsafe { IrqLine::new(10) };
         assert_eq!(irq.gsi(), 10);
+    }
+
+    #[test]
+    #[should_panic(expected = "MmioRegion::new: size must be > 0")]
+    fn mmio_region_rejects_zero_size() {
+        let phys = PhysAddr::new(0x1000);
+        let virt = VirtAddr::new(0x1000);
+        // SAFETY: test-only, verifying assertion fires.
+        let _ = unsafe { MmioRegion::new(phys, virt, 0) };
     }
 }
