@@ -8,6 +8,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, RwLock, mpsc};
+use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
 
@@ -37,6 +38,8 @@ pub struct PipelineState {
     pub recompiled_crates: usize,
     /// Maximum number of parallel workers (0 = auto-detect from CPU count).
     pub max_workers: usize,
+    /// Total wall-clock time for the DAG pipeline execution.
+    pub pipeline_elapsed: Option<Duration>,
 }
 
 // ---------------------------------------------------------------------------
@@ -62,6 +65,7 @@ enum CompileOutcome {
         node_idx: usize,
         artifact: PathBuf,
         flags_hash: String,
+        duration: Duration,
     },
     /// Crate compilation failed.
     Error {
@@ -266,7 +270,7 @@ pub fn execute_pipeline(
     let shared_artifacts_ref = &shared_artifacts;
     let job_rx_ref = &job_rx;
 
-    let dag_result: Result<()> = std::thread::scope(|s| {
+    let dag_result: Result<(Vec<(String, Duration)>, Duration)> = std::thread::scope(|s| {
         // Spawn worker threads for crate compilation.
         for _ in 0..num_workers {
             let tx = result_tx.clone();
@@ -295,6 +299,7 @@ pub fn execute_pipeline(
                     };
 
                     let arts = shared_artifacts_ref.read().unwrap();
+                    let start = Instant::now();
                     let result = compile::compile_crate(
                         krate,
                         config_ref,
@@ -305,6 +310,7 @@ pub fn execute_pipeline(
                         None,
                         job.mode,
                     );
+                    let elapsed = start.elapsed();
                     drop(arts);
 
                     let outcome = match result {
@@ -312,6 +318,7 @@ pub fn execute_pipeline(
                             node_idx: job.node_idx,
                             artifact,
                             flags_hash: job.flags_hash,
+                            duration: elapsed,
                         },
                         Err(error) => CompileOutcome::Error {
                             node_idx: job.node_idx,
@@ -331,6 +338,8 @@ pub fn execute_pipeline(
         // --- Main thread: process DAG nodes ---
         let mut completed_count = 0usize;
         let mut in_flight = 0usize;
+        let mut crate_timings: Vec<(String, Duration)> = Vec::new();
+        let pipeline_start = Instant::now();
 
         while completed_count < total {
             // Process all ready nodes.
@@ -453,7 +462,7 @@ pub fn execute_pipeline(
                                     &dep_names,
                                 );
                                 if freshness.is_fresh() {
-                                    println!("  Skipping {} (unchanged)", krate.name);
+                                    crate::verbose::vprintln!("  Skipping {} (unchanged)", krate.name);
                                     if krate.name == boot_binary_name {
                                         state.kernel_binary = Some(artifact_path.clone());
                                     }
@@ -486,7 +495,7 @@ pub fn execute_pipeline(
                             CompileMode::Clippy => "Checking",
                         };
                         let ctx_tag = if is_host { " (host)" } else { "" };
-                        println!("  {verb} {}{}...", krate.name, ctx_tag);
+                        crate::verbose::dprintln!("  {verb} {}{}...", krate.name, ctx_tag);
 
                         let _ = job_tx.send(CompileJob {
                             node_idx: idx,
@@ -516,7 +525,7 @@ pub fn execute_pipeline(
 
             // Wait for one compilation result.
             match result_rx.recv() {
-                Ok(CompileOutcome::Compiled { node_idx, artifact, flags_hash }) => {
+                Ok(CompileOutcome::Compiled { node_idx, artifact, flags_hash, duration }) => {
                     in_flight -= 1;
                     completed_count += 1;
 
@@ -525,6 +534,7 @@ pub fn execute_pipeline(
                         _ => unreachable!("CompileOutcome from non-Crate node"),
                     };
                     let (krate, _) = &all_crates[krate_idx];
+                    crate_timings.push((krate.name.clone(), duration));
                     let dep_info_path = compile::crate_dep_info_path(krate, &root, None);
 
                     // Update cache.
@@ -580,7 +590,7 @@ pub fn execute_pipeline(
 
         // Close job channel to shut down workers.
         drop(job_tx);
-        Ok(())
+        Ok((crate_timings, pipeline_start.elapsed()))
     });
 
     // Move state back from RwLocks.
@@ -589,7 +599,25 @@ pub fn execute_pipeline(
     state.sysroots = shared_sysroots.into_inner().unwrap();
     state.config_rlibs = shared_config_rlibs.into_inner().unwrap();
 
-    dag_result
+    let (crate_timings, total_elapsed) = dag_result?;
+
+    // Print timing summary if any crates were compiled.
+    if !crate_timings.is_empty() {
+        let top_n = if crate::verbose::is_verbose() { 5 } else { 3 };
+        let mut sorted = crate_timings;
+        sorted.sort_by(|a, b| b.1.cmp(&a.1));
+        sorted.truncate(top_n);
+
+        crate::verbose::dprintln!("");
+        crate::verbose::dprintln!("  Slowest crates:");
+        for (name, dur) in &sorted {
+            crate::verbose::dprintln!("    {:<24} {:.1?}", name, dur);
+        }
+    }
+
+    state.pipeline_elapsed = Some(total_elapsed);
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -624,13 +652,15 @@ fn ensure_sysroot(
         .insert(target.to_string(), target_spec);
 
     // Build or reuse sysroot.
-    println!("  Building sysroot for {target}...");
+    crate::verbose::dprintln!("  Building sysroot for {target}...");
+    let sysroot_src = sysroot::sysroot_src_dir()?;
+    let sources_hash = crate::cache::hash_sysroot_sources(&sysroot_src);
     let sysroot_dir = if !force
         && cache
-            .is_sysroot_fresh(target, config.profile.opt_level)
+            .is_sysroot_fresh(target, config.profile.opt_level, &sources_hash)
             .is_fresh()
     {
-        println!("  Sysroot unchanged, skipping.");
+        crate::verbose::vprintln!("  Sysroot unchanged, skipping.");
         sysroot::sysroot_output_paths(root, target).sysroot_dir
     } else {
         let sysroot_output = sysroot::build_sysroot(
@@ -645,8 +675,9 @@ fn ensure_sysroot(
             sysroot_output.core_rlib,
             sysroot_output.compiler_builtins_rlib,
             sysroot_output.alloc_rlib,
+            sources_hash,
         );
-        println!("  Sysroot ready.");
+        crate::verbose::dprintln!("  Sysroot ready.");
         sysroot_output.sysroot_dir
     };
 
@@ -685,7 +716,7 @@ fn ensure_config_crate(
         .ok_or_else(|| anyhow::anyhow!("sysroot for '{target}' not built"))?
         .clone();
 
-    println!("  Generating hadron_config for {target}...");
+    crate::verbose::dprintln!("  Generating hadron_config for {target}...");
     let config_dep_info = compile::config_crate_dep_info_path(config);
 
     let config_flags_hash = {
@@ -710,15 +741,37 @@ fn ensure_config_crate(
     };
 
     let config_rlib = if config_needs_rebuild {
-        let rlib = compile::build_config_crate(config, &target_spec, &sysroot_dir)?;
         let key = format!("hadron_config_{target}");
-        if let Ok(entry) = CrateEntry::from_compilation(config_flags_hash, &rlib, &config_dep_info) {
+        // Snapshot the old artifact hash before rebuilding.
+        let old_entry_unchanged = cache.entries.get(&key)
+            .map(|e| e.artifact_content_unchanged())
+            .unwrap_or(false);
+        let old_hash = cache.entries.get(&key)
+            .and_then(|e| e.artifact_hash.clone());
+
+        let rlib = compile::build_config_crate(config, &target_spec, &sysroot_dir)?;
+        let new_hash = crate::cache::hash_file(&rlib).ok();
+
+        if let Ok(mut entry) = CrateEntry::from_compilation(config_flags_hash, &rlib, &config_dep_info) {
+            entry.artifact_hash = new_hash.clone();
             cache.entries.insert(key, entry);
         }
-        rebuilt.insert(format!("hadron_config_{target}"));
+
+        // Only mark as rebuilt if the artifact binary actually changed.
+        let content_changed = match (&old_hash, &new_hash) {
+            (Some(old), Some(new)) if old_entry_unchanged => old != new,
+            _ => true, // No previous hash or file was already stale — assume changed.
+        };
+        if content_changed {
+            rebuilt.insert(format!("hadron_config_{target}"));
+        } else {
+            crate::verbose::vprintln!(
+                "  hadron_config binary unchanged, skipping cascade for {target}"
+            );
+        }
         rlib
     } else {
-        println!("  Skipping hadron_config (unchanged)");
+        crate::verbose::vprintln!("  Skipping hadron_config (unchanged)");
         config_rlib_path
     };
 

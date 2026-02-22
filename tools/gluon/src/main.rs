@@ -42,7 +42,7 @@ use compile::{ArtifactMap, CompileMode};
 
 fn main() -> Result<()> {
     let cli = cli::Cli::parse();
-    verbose::init(cli.verbose);
+    verbose::init(cli.quiet, cli.verbose);
 
     match cli.command {
         cli::Command::Configure => cmd_configure(&cli),
@@ -87,19 +87,19 @@ fn load_model(root: &PathBuf, force: bool) -> Result<model::BuildModel> {
 /// `gluon vendor` uses `validate = false` because vendor directories may not
 /// exist yet — the whole point of the command is to create them.
 fn load_model_inner(root: &PathBuf, validate: bool, force: bool) -> Result<model::BuildModel> {
-    use verbose::vprintln;
+    use verbose::{dprintln, vprintln};
 
     let _t = verbose::Timer::start("model loading (total)");
 
     // Try the model cache first (unless forced).
     if !force {
         if let Some(model) = model_cache::load_cached_model(root) {
-            println!("Using cached build model.");
+            vprintln!("Using cached build model.");
             return Ok(model);
         }
     }
 
-    println!("Loading gluon.rhai...");
+    dprintln!("Loading gluon.rhai...");
 
     let mut model = {
         let _t = verbose::Timer::start("script evaluation");
@@ -208,13 +208,20 @@ fn cmd_check(cli: &cli::Cli) -> Result<()> {
     let (resolved, model) = resolve_config(cli)?;
     let mut state = prepare_pipeline_state(resolved, cli.force, cli.jobs.unwrap_or(0))?;
 
-    println!("\nChecking crates...");
+    verbose::dprintln!("\nChecking crates...");
     scheduler::execute_pipeline(&model, &mut state, CompileMode::Check)?;
     state.cache.save(&state.config.root)?;
-    println!(
-        "\nCheck complete. ({} of {} crates checked)",
-        state.recompiled_crates, state.total_crates
-    );
+    if let Some(elapsed) = state.pipeline_elapsed {
+        println!(
+            "\nCheck complete. ({} of {} crates checked) in {:.1?}",
+            state.recompiled_crates, state.total_crates, elapsed
+        );
+    } else {
+        println!(
+            "\nCheck complete. ({} of {} crates checked)",
+            state.recompiled_crates, state.total_crates
+        );
+    }
     Ok(())
 }
 
@@ -223,13 +230,20 @@ fn cmd_clippy(cli: &cli::Cli) -> Result<()> {
     let (resolved, model) = resolve_config(cli)?;
     let mut state = prepare_pipeline_state(resolved, cli.force, cli.jobs.unwrap_or(0))?;
 
-    println!("\nLinting crates with clippy...");
+    verbose::dprintln!("\nLinting crates with clippy...");
     scheduler::execute_pipeline(&model, &mut state, CompileMode::Clippy)?;
     state.cache.save(&state.config.root)?;
-    println!(
-        "\nClippy complete. ({} of {} crates linted)",
-        state.recompiled_crates, state.total_crates
-    );
+    if let Some(elapsed) = state.pipeline_elapsed {
+        println!(
+            "\nClippy complete. ({} of {} crates linted) in {:.1?}",
+            state.recompiled_crates, state.total_crates, elapsed
+        );
+    } else {
+        println!(
+            "\nClippy complete. ({} of {} crates linted)",
+            state.recompiled_crates, state.total_crates
+        );
+    }
     Ok(())
 }
 
@@ -618,6 +632,7 @@ fn prepare_pipeline_state(
         total_crates: 0,
         recompiled_crates: 0,
         max_workers,
+        pipeline_elapsed: None,
     })
 }
 
@@ -637,14 +652,21 @@ fn do_build(cli: &cli::Cli) -> Result<(scheduler::PipelineState, model::BuildMod
 
     let mut state = prepare_pipeline_state(resolved, cli.force, cli.jobs.unwrap_or(0))?;
 
-    println!("\nCompiling crates...");
+    verbose::dprintln!("\nCompiling crates...");
     scheduler::execute_pipeline(&model, &mut state, CompileMode::Build)?;
 
     state.cache.save(&state.config.root)?;
-    println!(
-        "\nBuild complete. ({} of {} crates recompiled)",
-        state.recompiled_crates, state.total_crates
-    );
+    if let Some(elapsed) = state.pipeline_elapsed {
+        println!(
+            "\nBuild complete. ({} of {} crates recompiled) in {:.1?}",
+            state.recompiled_crates, state.total_crates, elapsed
+        );
+    } else {
+        println!(
+            "\nBuild complete. ({} of {} crates recompiled)",
+            state.recompiled_crates, state.total_crates
+        );
+    }
 
     Ok((state, model))
 }

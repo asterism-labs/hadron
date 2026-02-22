@@ -60,6 +60,9 @@ pub struct SysrootEntry {
     pub core_rlib: PathBuf,
     pub compiler_builtins_rlib: PathBuf,
     pub alloc_rlib: PathBuf,
+    /// SHA-256 hash of concatenated sysroot source entry points.
+    #[serde(default)]
+    pub sources_hash: String,
 }
 
 /// Cache entry for the initrd output.
@@ -82,6 +85,9 @@ pub struct CrateEntry {
     pub artifact_mtime_secs: i64,
     /// Source files and their recorded state, from dep-info.
     pub sources: HashMap<PathBuf, SourceRecord>,
+    /// SHA-256 of the artifact content (used for config cascade avoidance).
+    #[serde(default)]
+    pub artifact_hash: Option<String>,
 }
 
 /// Recorded state of a single source file dependency.
@@ -137,7 +143,12 @@ impl CacheManifest {
     }
 
     /// Check if a sysroot for the given target is still fresh.
-    pub fn is_sysroot_fresh(&self, target_name: &str, opt_level: u32) -> FreshResult {
+    pub fn is_sysroot_fresh(
+        &self,
+        target_name: &str,
+        opt_level: u32,
+        current_sources_hash: &str,
+    ) -> FreshResult {
         let entry = match self.sysroots.get(target_name) {
             Some(e) => e,
             None => return FreshResult::Stale(format!("no cached sysroot for {target_name}")),
@@ -148,6 +159,11 @@ impl CacheManifest {
                 "opt-level changed ({} -> {opt_level})",
                 entry.opt_level
             ));
+        }
+
+        // Empty stored hash (old manifest) or mismatch triggers rebuild.
+        if entry.sources_hash.is_empty() || entry.sources_hash != current_sources_hash {
+            return FreshResult::Stale("sysroot sources changed".into());
         }
 
         for path in [&entry.core_rlib, &entry.compiler_builtins_rlib, &entry.alloc_rlib] {
@@ -170,6 +186,7 @@ impl CacheManifest {
         core_rlib: PathBuf,
         compiler_builtins_rlib: PathBuf,
         alloc_rlib: PathBuf,
+        sources_hash: String,
     ) {
         self.sysroots.insert(
             target_name.to_string(),
@@ -178,6 +195,7 @@ impl CacheManifest {
                 core_rlib,
                 compiler_builtins_rlib,
                 alloc_rlib,
+                sources_hash,
             },
         );
     }
@@ -228,6 +246,20 @@ impl CacheManifest {
 }
 
 impl CrateEntry {
+    /// Check if the artifact file is byte-identical to the previously recorded hash.
+    ///
+    /// Returns `true` if both a stored hash and the current file exist and match.
+    pub fn artifact_content_unchanged(&self) -> bool {
+        let stored = match &self.artifact_hash {
+            Some(h) if !h.is_empty() => h,
+            _ => return false,
+        };
+        match hash_file(&self.artifact_path) {
+            Ok(current) => current == *stored,
+            Err(_) => false,
+        }
+    }
+
     /// Check whether this crate's cached artifact is still fresh.
     ///
     /// `rebuilt_deps` contains the names of crates that were recompiled in this
@@ -344,6 +376,7 @@ impl CrateEntry {
             artifact_path: artifact.to_path_buf(),
             artifact_mtime_secs: artifact_mtime,
             sources,
+            artifact_hash: None,
         })
     }
 }
@@ -351,6 +384,27 @@ impl CrateEntry {
 /// Compute a SHA-256 hash of the `rustc -vV` output to detect toolchain changes.
 pub fn get_rustc_version_hash() -> Result<String> {
     Ok(hash_bytes(crate::rustc_info::version_output().as_bytes()))
+}
+
+/// Compute a SHA-256 hash of sysroot library entry-point sources.
+///
+/// Hashes the `lib.rs` files for core, compiler_builtins, and alloc to detect
+/// source-level changes that wouldn't be caught by `rustc -vV` alone (e.g.
+/// manual patching or toolchain updates with the same version string).
+pub fn hash_sysroot_sources(sysroot_src: &Path) -> String {
+    let entries = [
+        "core/src/lib.rs",
+        "compiler_builtins/src/lib.rs",
+        "alloc/src/lib.rs",
+    ];
+    let mut hasher = Sha256::new();
+    for entry in &entries {
+        let path = sysroot_src.join(entry);
+        if let Ok(content) = fs::read(&path) {
+            hasher.update(&content);
+        }
+    }
+    format!("{:x}", hasher.finalize())
 }
 
 /// Parse a Makefile-style `.d` dep-info file into a list of source paths.
@@ -431,14 +485,14 @@ pub fn file_mtime_secs(path: &Path) -> Option<i64> {
 }
 
 /// SHA-256 hash of a file's contents, returned as a hex string.
-fn hash_file(path: &Path) -> Result<String> {
+pub fn hash_file(path: &Path) -> Result<String> {
     let data = fs::read(path)
         .with_context(|| format!("failed to read file for hashing: {}", path.display()))?;
     Ok(hash_bytes(&data))
 }
 
 /// SHA-256 hash of a byte slice, returned as a hex string.
-fn hash_bytes(data: &[u8]) -> String {
+pub fn hash_bytes(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(data);
     format!("{:x}", hasher.finalize())
@@ -617,6 +671,7 @@ mod tests {
             artifact_path: artifact.to_path_buf(),
             artifact_mtime_secs: artifact_mtime,
             sources: src_map,
+            artifact_hash: None,
         }
     }
 
@@ -730,7 +785,7 @@ mod tests {
     #[test]
     fn sysroot_fresh_no_cached_entry_is_stale() {
         let manifest = CacheManifest::new("rustc_hash".into());
-        let result = manifest.is_sysroot_fresh("x86_64-unknown-hadron", 2);
+        let result = manifest.is_sysroot_fresh("x86_64-unknown-hadron", 2, "hash");
         assert!(!result.is_fresh());
     }
 
@@ -751,10 +806,64 @@ mod tests {
             core_rlib,
             cb_rlib,
             alloc_rlib,
+            "src_hash".into(),
         );
 
         // Ask for opt-level 2, but recorded 1.
-        let result = manifest.is_sysroot_fresh("x86_64-unknown-hadron", 2);
+        let result = manifest.is_sysroot_fresh("x86_64-unknown-hadron", 2, "src_hash");
+        assert!(!result.is_fresh());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sysroot_fresh_sources_changed_is_stale() {
+        let dir = make_test_dir("sysroot_src_changed");
+        let core_rlib = dir.join("libcore.rlib");
+        let cb_rlib = dir.join("libcompiler_builtins.rlib");
+        let alloc_rlib = dir.join("liballoc.rlib");
+        fs::write(&core_rlib, b"core").unwrap();
+        fs::write(&cb_rlib, b"cb").unwrap();
+        fs::write(&alloc_rlib, b"alloc").unwrap();
+
+        let mut manifest = CacheManifest::new("rustc_hash".into());
+        manifest.record_sysroot(
+            "x86_64-unknown-hadron",
+            2,
+            core_rlib,
+            cb_rlib,
+            alloc_rlib,
+            "old_src_hash".into(),
+        );
+
+        let result = manifest.is_sysroot_fresh("x86_64-unknown-hadron", 2, "new_src_hash");
+        assert!(!result.is_fresh());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sysroot_fresh_empty_stored_hash_is_stale() {
+        let dir = make_test_dir("sysroot_empty_hash");
+        let core_rlib = dir.join("libcore.rlib");
+        let cb_rlib = dir.join("libcompiler_builtins.rlib");
+        let alloc_rlib = dir.join("liballoc.rlib");
+        fs::write(&core_rlib, b"core").unwrap();
+        fs::write(&cb_rlib, b"cb").unwrap();
+        fs::write(&alloc_rlib, b"alloc").unwrap();
+
+        let mut manifest = CacheManifest::new("rustc_hash".into());
+        // Simulate old manifest with empty sources_hash (migration case).
+        manifest.record_sysroot(
+            "x86_64-unknown-hadron",
+            2,
+            core_rlib,
+            cb_rlib,
+            alloc_rlib,
+            String::new(),
+        );
+
+        let result = manifest.is_sysroot_fresh("x86_64-unknown-hadron", 2, "any_hash");
         assert!(!result.is_fresh());
 
         let _ = fs::remove_dir_all(&dir);
@@ -777,12 +886,13 @@ mod tests {
             core_rlib.clone(),
             cb_rlib,
             alloc_rlib,
+            "src_hash".into(),
         );
 
         // Remove one rlib.
         fs::remove_file(&core_rlib).unwrap();
 
-        let result = manifest.is_sysroot_fresh("x86_64-unknown-hadron", 2);
+        let result = manifest.is_sysroot_fresh("x86_64-unknown-hadron", 2, "src_hash");
         assert!(!result.is_fresh());
 
         let _ = fs::remove_dir_all(&dir);
@@ -805,9 +915,10 @@ mod tests {
             core_rlib,
             cb_rlib,
             alloc_rlib,
+            "src_hash".into(),
         );
 
-        let result = manifest.is_sysroot_fresh("x86_64-unknown-hadron", 2);
+        let result = manifest.is_sysroot_fresh("x86_64-unknown-hadron", 2, "src_hash");
         assert!(result.is_fresh());
 
         let _ = fs::remove_dir_all(&dir);

@@ -22,6 +22,10 @@ pub struct Cli {
     #[arg(long, short = 'f', global = true)]
     pub force: bool,
 
+    /// Suppress per-crate output; show only errors and the final summary.
+    #[arg(long, short = 'q', global = true, conflicts_with = "verbose")]
+    pub quiet: bool,
+
     /// Enable verbose output with timing and cache diagnostics.
     #[arg(long, short = 'v', global = true)]
     pub verbose: bool,
