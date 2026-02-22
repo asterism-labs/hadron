@@ -66,6 +66,8 @@ pub mod sched;
 pub mod syscall;
 #[cfg(target_os = "none")]
 pub mod time;
+#[cfg(target_os = "none")]
+pub mod tty;
 
 #[cfg(all(target_os = "none", ktest))]
 pub mod ktest;
