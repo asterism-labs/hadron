@@ -426,10 +426,10 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
     #[cfg(any(hadron_profile_sample, hadron_profile_ftrace))]
     crate::profiling::init();
 
-    // 9. Switch framebuffer sink to the fbcon (framebuffer console) if a
-    //    device-registry framebuffer was registered during driver probing
-    //    (e.g., Bochs VGA). The fbcon provides cell-based rendering with
-    //    ANSI color and cursor support.
+    // 9. Create per-VT framebuffer console instances if a device-registry
+    //    framebuffer was registered during driver probing (e.g., Bochs VGA).
+    //    Each VT gets its own FbCon with an independent cell buffer; only the
+    //    active VT (tty0) renders to the physical framebuffer.
     #[cfg(target_arch = "x86_64")]
     if let Some(fb) = crate::drivers::device_registry::with_device_registry(|dr| {
         dr.take_framebuffer("bochs-vga-0")
@@ -439,13 +439,21 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
         // SAFETY: Entire framebuffer is within the mapped MMIO region.
         unsafe { fb.fill_zero(0, total) };
 
-        let fbcon = alloc::sync::Arc::new(crate::drivers::fbcon::FbCon::new(fb));
-        let fbcon_sink = Box::new(crate::drivers::fbcon::FbConSink::new(
-            fbcon,
+        // Create a per-VT fbcon instance for each virtual terminal.
+        for i in 0..crate::tty::MAX_TTYS {
+            let fbcon = alloc::sync::Arc::new(crate::drivers::fbcon::FbCon::new(
+                fb.clone(),
+                i == 0, // Only tty0 starts active.
+            ));
+            crate::tty::set_vt_fbcon(i, fbcon);
+        }
+
+        // Register a VT-aware console sink that routes to the active VT.
+        let vt_sink = Box::new(crate::tty::VtConsoleSink::new(
             crate::log::LogLevel::Info,
         ));
-        if crate::log::replace_sink_by_name("framebuffer", fbcon_sink) {
-            crate::kinfo!("Switched display to fbcon (framebuffer console)");
+        if crate::log::replace_sink_by_name("framebuffer", vt_sink) {
+            crate::kinfo!("Switched display to per-VT fbcon (6 virtual terminals)");
         }
     }
 
