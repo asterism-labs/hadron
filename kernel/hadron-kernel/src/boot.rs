@@ -418,10 +418,10 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
     #[cfg(any(hadron_profile_sample, hadron_profile_ftrace))]
     crate::profiling::init();
 
-    // 9. Switch framebuffer sink to a device-registry framebuffer if one was
-    //    registered during driver probing (e.g., Bochs VGA). The early FB sink
-    //    wrote to the same physical framebuffer (via HHDM) but the driver may
-    //    have re-initialized it, so we re-zero and reset the cursor.
+    // 9. Switch framebuffer sink to the fbcon (framebuffer console) if a
+    //    device-registry framebuffer was registered during driver probing
+    //    (e.g., Bochs VGA). The fbcon provides cell-based rendering with
+    //    ANSI color and cursor support.
     #[cfg(target_arch = "x86_64")]
     if let Some(fb) = crate::drivers::device_registry::with_device_registry(|dr| {
         dr.take_framebuffer("bochs-vga-0")
@@ -431,18 +431,13 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
         // SAFETY: Entire framebuffer is within the mapped MMIO region.
         unsafe { fb.fill_zero(0, total) };
 
-        // Reset cursor so the new sink starts at the top-left corner.
-        {
-            let mut cursor = crate::drivers::early_fb::CURSOR.lock();
-            cursor.col = 0;
-            cursor.row = 0;
-        }
-        let dev_fb_sink = Box::new(crate::log::DeviceFramebufferSink::new(
-            fb,
+        let fbcon = alloc::sync::Arc::new(crate::drivers::fbcon::FbCon::new(fb));
+        let fbcon_sink = Box::new(crate::drivers::fbcon::FbConSink::new(
+            fbcon,
             crate::log::LogLevel::Info,
         ));
-        if crate::log::replace_sink_by_name("framebuffer", dev_fb_sink) {
-            crate::kinfo!("Switched display to device framebuffer");
+        if crate::log::replace_sink_by_name("framebuffer", fbcon_sink) {
+            crate::kinfo!("Switched display to fbcon (framebuffer console)");
         }
     }
 
