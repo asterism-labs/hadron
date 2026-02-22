@@ -26,17 +26,43 @@ pub fn cpu_init() {
 pub fn platform_init(boot_info: &impl crate::boot::BootInfo) {
     #[cfg(target_arch = "x86_64")]
     {
+        use hadron_acpi::aml::value::AmlValue;
+        use crate::driver_api::acpi_device::AcpiDeviceInfo;
+
         // 1. Initialize ACPI, interrupt controllers, and timers.
         x86_64::acpi::init(boot_info.rsdp_address());
 
-        // 2. PCI enumeration and device tree.
-        let pci_devices = crate::pci::enumerate::enumerate();
+        // 2. PCI enumeration + _PRT routing.
+        let mut pci_devices = crate::pci::enumerate::enumerate();
         crate::kinfo!("PCI: found {} devices", pci_devices.len());
+        crate::pci::enumerate::apply_prt_routing(&mut pci_devices);
 
-        let tree = crate::bus::DeviceTree::build(&pci_devices);
+        // 3. Build ACPI platform device list from namespace.
+        let acpi_devices: alloc::vec::Vec<AcpiDeviceInfo> =
+            x86_64::acpi::with_namespace(|ns| {
+                ns.devices()
+                    .filter(|d| d.hid.is_some())
+                    .filter(|d| !matches!(&d.hid, Some(AmlValue::Unresolved)))
+                    .map(|d| AcpiDeviceInfo {
+                        path: d.path,
+                        hid: d.hid.unwrap(),
+                        cid: d.cid,
+                        uid: match d.uid {
+                            Some(AmlValue::Integer(v)) => Some(v),
+                            _ => None,
+                        },
+                        resources: d.resources.clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        crate::kinfo!("Platform: {} ACPI devices with _HID", acpi_devices.len());
+
+        // 4. Build and print device tree.
+        let tree = crate::bus::DeviceTree::build(&pci_devices, &acpi_devices);
         tree.print();
 
-        // 3. Driver discovery and matching.
+        // 5. Driver discovery and matching.
         let pci_entries = crate::drivers::registry::pci_driver_entries();
         let platform_entries = crate::drivers::registry::platform_driver_entries();
         crate::kinfo!(
@@ -46,8 +72,7 @@ pub fn platform_init(boot_info: &impl crate::boot::BootInfo) {
         );
 
         crate::drivers::registry::match_pci_drivers(&pci_devices);
-        let platform_devs: alloc::vec::Vec<_> = tree.platform_devices().collect();
-        crate::drivers::registry::match_platform_drivers(&platform_devs);
+        crate::drivers::registry::match_platform_drivers(&acpi_devices);
     }
     #[cfg(target_arch = "aarch64")]
     {

@@ -9,4 +9,6 @@ pub mod cam;
 #[cfg(target_arch = "x86_64")]
 pub mod caps;
 #[cfg(target_arch = "x86_64")]
+pub mod ecam;
+#[cfg(target_arch = "x86_64")]
 pub mod enumerate;

@@ -518,10 +518,13 @@ struct I8042Driver;
     name = "i8042",
     kind = platform,
     capabilities = [],
-    compatible = "i8042",
+    acpi_ids = &[
+        hadron_kernel::driver_api::AcpiMatchId::eisa("PNP0303"),
+        hadron_kernel::driver_api::AcpiMatchId::eisa("PNP0F13"),
+    ],
 )]
 impl I8042Driver {
-    /// Platform init for the i8042 PS/2 controller.
+    /// Platform probe for the i8042 PS/2 controller.
     fn probe(
         _ctx: DriverContext,
     ) -> Result<

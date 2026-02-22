@@ -15,6 +15,7 @@
 
 extern crate alloc;
 
+pub mod acpi_device;
 pub mod block;
 pub mod capability;
 pub mod category;
@@ -33,6 +34,7 @@ pub mod resource;
 pub mod serial;
 
 // Re-export all public types at the module root for ergonomic imports.
+pub use acpi_device::{AcpiDeviceId, AcpiDeviceInfo, AcpiMatchId};
 pub use block::{BlockDevice, IoError};
 pub use capability::{
     CapabilityAccess, CapabilityFlags, CapabilityToken, DmaCapability, HasCapability,

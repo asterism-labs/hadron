@@ -1,11 +1,13 @@
 //! Hierarchical device tree built during boot.
 //!
-//! Organizes discovered PCI devices, known platform devices, and bus
-//! placeholders into a tree structure for logging and driver matching.
+//! Organizes discovered PCI devices, ACPI-enumerated platform devices, and
+//! bus placeholders into a tree structure for logging and driver matching.
 
-use crate::driver_api::pci::PciDeviceInfo;
 use alloc::string::String;
 use alloc::vec::Vec;
+
+use crate::driver_api::acpi_device::AcpiDeviceInfo;
+use crate::driver_api::pci::PciDeviceInfo;
 
 use crate::pci::enumerate::class_name;
 
@@ -20,12 +22,10 @@ pub enum DeviceInfo {
     },
     /// Discovered PCI device/function.
     PciDevice(PciDeviceInfo),
-    /// Platform device (firmware-described or hardcoded).
-    PlatformDevice {
-        /// Device name (e.g., "com1").
-        name: &'static str,
-        /// Compatible string for driver matching (e.g., "ns16550").
-        compatible: &'static str,
+    /// ACPI-discovered platform device.
+    AcpiDevice {
+        /// Human-readable HID string for display.
+        hid_string: String,
     },
     /// Platform bus grouping node for firmware-described devices.
     PlatformBus,
@@ -50,19 +50,11 @@ pub struct DeviceTree {
     root: DeviceNode,
 }
 
-/// Known x86_64 platform devices.
-const PLATFORM_DEVICES: &[(&str, &str)] = &[
-    ("com1", "ns16550"),
-    ("com2", "ns16550"),
-    ("i8042", "i8042"),
-    ("hpet0", "hpet"),
-];
-
 impl DeviceTree {
-    /// Builds the device tree from enumerated PCI devices and hardcoded
-    /// platform knowledge.
+    /// Builds the device tree from enumerated PCI devices and ACPI
+    /// namespace platform devices.
     #[must_use]
-    pub fn build(pci_devices: &[PciDeviceInfo]) -> Self {
+    pub fn build(pci_devices: &[PciDeviceInfo], acpi_devices: &[AcpiDeviceInfo]) -> Self {
         let mut root = DeviceNode {
             name: String::from("root"),
             info: DeviceInfo::Root,
@@ -97,17 +89,17 @@ impl DeviceTree {
             });
         }
 
-        // Add platform devices.
-        let platform_children: Vec<DeviceNode> = PLATFORM_DEVICES
+        // Add platform devices from ACPI namespace.
+        let platform_children: Vec<DeviceNode> = acpi_devices
             .iter()
-            .map(|&(name, compat)| DeviceNode {
-                name: String::from(name),
-                info: DeviceInfo::PlatformDevice {
-                    name,
-                    compatible: compat,
-                },
-                driver_name: None,
-                children: Vec::new(),
+            .map(|dev| {
+                let hid_string = format_hid(&dev.hid);
+                DeviceNode {
+                    name: alloc::format!("{}", dev.path),
+                    info: DeviceInfo::AcpiDevice { hid_string },
+                    driver_name: None,
+                    children: Vec::new(),
+                }
             })
             .collect();
 
@@ -146,17 +138,26 @@ impl DeviceTree {
                 _ => None,
             })
     }
+}
 
-    /// Iterates all platform devices in the tree, yielding `(name, compatible)` pairs.
-    pub fn platform_devices(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.root
-            .children
-            .iter()
-            .flat_map(|group| group.children.iter())
-            .filter_map(|node| match &node.info {
-                DeviceInfo::PlatformDevice { name, compatible } => Some((*name, *compatible)),
-                _ => None,
-            })
+/// Format an AML value as a human-readable HID string.
+///
+/// ACPI `_HID` values can be EISA IDs (Buffer or Integer) or plain strings.
+/// Integer `_HID` values are compressed EISA IDs per ACPI spec §6.1.5.
+fn format_hid(value: &hadron_acpi::aml::value::AmlValue) -> String {
+    use hadron_acpi::aml::value::{AmlValue, EisaId};
+    match value {
+        AmlValue::EisaId(id) => {
+            let decoded = id.decode();
+            String::from(core::str::from_utf8(&decoded).unwrap_or("?"))
+        }
+        AmlValue::Integer(v) => {
+            let id = EisaId { raw: *v as u32 };
+            let decoded = id.decode();
+            String::from(core::str::from_utf8(&decoded).unwrap_or("?"))
+        }
+        AmlValue::String(s) => String::from(s.as_str()),
+        _ => String::from("?"),
     }
 }
 
@@ -182,8 +183,8 @@ fn print_children(children: &[DeviceNode], prefix: &str) {
                     dev.device_id,
                 );
             }
-            DeviceInfo::PlatformDevice { compatible, .. } => {
-                crate::kprintln!("{prefix}{connector}{} ({compatible})", child.name);
+            DeviceInfo::AcpiDevice { hid_string } => {
+                crate::kprintln!("{prefix}{connector}{} ({hid_string})", child.name);
             }
             DeviceInfo::PlatformBus | DeviceInfo::UsbBus => {
                 if child.children.is_empty() {

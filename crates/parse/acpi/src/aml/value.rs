@@ -59,15 +59,15 @@ impl EisaId {
     pub fn decode(&self) -> [u8; 7] {
         // The EISA ID is stored big-endian in AML. After byte-swapping to
         // native order, the encoding is:
-        //   Bits 31-26: first char - 'A' + 1
+        //   Bits 30-26: first char - 'A' + 1
         //   Bits 25-21: second char - 'A' + 1
         //   Bits 20-16: third char - 'A' + 1
         //   Bits 15-0:  product ID as 4 hex digits
         let swapped = self.raw.swap_bytes();
-        let c1 = (((swapped >> 10) & 0x1F) as u8) + b'@';
-        let c2 = (((swapped >> 5) & 0x1F) as u8) + b'@';
-        let c3 = ((swapped & 0x1F) as u8) + b'@';
-        let product = (swapped >> 16) as u16;
+        let c1 = (((swapped >> 26) & 0x1F) as u8) + b'@';
+        let c2 = (((swapped >> 21) & 0x1F) as u8) + b'@';
+        let c3 = (((swapped >> 16) & 0x1F) as u8) + b'@';
+        let product = swapped as u16;
 
         let hex_digit = |nibble: u8| -> u8 {
             if nibble < 10 {

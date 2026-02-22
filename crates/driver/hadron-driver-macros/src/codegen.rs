@@ -60,10 +60,17 @@ fn gen_context_struct(def: &DriverDef, ctx_name: &Ident) -> TokenStream {
 
     let mut fields = Vec::new();
 
-    // PCI drivers get a `device` field.
+    // PCI drivers get a PciDeviceInfo field.
     if def.kind == DriverKind::Pci {
         fields.push(quote! {
             device: hadron_kernel::driver_api::pci::PciDeviceInfo
+        });
+    }
+
+    // Platform drivers get an AcpiDeviceInfo field.
+    if def.kind == DriverKind::Platform {
+        fields.push(quote! {
+            device: hadron_kernel::driver_api::acpi_device::AcpiDeviceInfo
         });
     }
 
@@ -107,18 +114,29 @@ fn gen_has_capability_impls(def: &DriverDef, ctx_name: &Ident) -> TokenStream {
     quote! { #(#impls)* }
 }
 
-/// Generates the `device()` method for PCI drivers.
+/// Generates the `device()` method for PCI and platform drivers.
 fn gen_device_method(def: &DriverDef, ctx_name: &Ident) -> TokenStream {
-    if def.kind != DriverKind::Pci {
-        return TokenStream::new();
-    }
-
-    quote! {
-        #[cfg(target_os = "none")]
-        impl #ctx_name {
-            /// Returns information about the matched PCI device.
-            pub fn device(&self) -> &hadron_kernel::driver_api::pci::PciDeviceInfo {
-                &self.device
+    match def.kind {
+        DriverKind::Pci => {
+            quote! {
+                #[cfg(target_os = "none")]
+                impl #ctx_name {
+                    /// Returns information about the matched PCI device.
+                    pub fn device(&self) -> &hadron_kernel::driver_api::pci::PciDeviceInfo {
+                        &self.device
+                    }
+                }
+            }
+        }
+        DriverKind::Platform => {
+            quote! {
+                #[cfg(target_os = "none")]
+                impl #ctx_name {
+                    /// Returns ACPI information about the matched platform device.
+                    pub fn device(&self) -> &hadron_kernel::driver_api::acpi_device::AcpiDeviceInfo {
+                        &self.device
+                    }
+                }
             }
         }
     }
@@ -155,9 +173,8 @@ fn gen_wrapper_fn(def: &DriverDef, struct_name: &Ident, ctx_name: &Ident) -> Tok
 
     // Build field initializers for the context struct.
     let mut field_inits = Vec::new();
-    if def.kind == DriverKind::Pci {
-        field_inits.push(quote! { device: __ctx.device });
-    }
+    // Both PCI and platform drivers get a `device` field from the probe context.
+    field_inits.push(quote! { device: __ctx.device });
     for cap in &def.capabilities {
         let field = cap.field_ident();
         let src_field = cap.probe_context_field();
@@ -251,7 +268,7 @@ fn gen_linker_entry(def: &DriverDef, struct_name: &Ident) -> TokenStream {
             }
         }
         DriverKind::Platform => {
-            let compatible = def.compatible.as_ref().expect("validated in parse");
+            let acpi_ids = def.acpi_ids.as_ref().expect("validated in parse");
             quote! {
                 #[cfg(target_os = "none")]
                 #[used]
@@ -259,9 +276,9 @@ fn gen_linker_entry(def: &DriverDef, struct_name: &Ident) -> TokenStream {
                 static #entry_name: hadron_kernel::driver_api::registration::PlatformDriverEntry =
                     hadron_kernel::driver_api::registration::PlatformDriverEntry {
                         name: #driver_name,
-                        compatible: #compatible,
+                        id_table: #acpi_ids,
                         capabilities: #flags_expr,
-                        init: #wrapper_name,
+                        probe: #wrapper_name,
                     };
             }
         }

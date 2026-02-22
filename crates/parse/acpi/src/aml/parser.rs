@@ -168,6 +168,9 @@ fn parse_term_obj(
     }
 }
 
+/// `_PRT` name segment for detecting PCI routing tables.
+const PRT_SEG: NameSeg = NameSeg(*b"_PRT");
+
 /// Parse DefName: 0x08 NameString DataRefObject
 fn parse_def_name(
     reader: &mut BinaryReader<'_>,
@@ -175,9 +178,106 @@ fn parse_def_name(
     visitor: &mut impl AmlVisitor,
 ) -> Result<(), AmlError> {
     let name = read_name_seg(reader)?;
-    let value = resolve_data_object(reader);
+
+    // Check if this is _PRT and the next byte is a Package opcode.
+    if name == PRT_SEG {
+        let remaining = reader.remaining();
+        if !remaining.is_empty() && (remaining[0] == 0x12 || remaining[0] == 0x13) {
+            return parse_prt_package(reader, path, visitor);
+        }
+    }
+
+    let ResolvedData { value, resource_template } = resolve_data_object(reader);
     visitor.name_object(path, name, &value);
+    if let Some(rt_data) = resource_template {
+        visitor.resource_template(path, name, rt_data);
+    }
     Ok(())
+}
+
+/// Parse a `_PRT` Package: each element is a Package of 4 elements:
+/// `(Address:Integer, Pin:Integer, Source:NameOrZero, SourceIndex:Integer)`.
+///
+/// For hardwired routing (Source = 0), the GSI = SourceIndex directly.
+/// For link-device routing (Source = Name), we skip the entry since resolving
+/// link devices requires method evaluation.
+fn parse_prt_package(
+    reader: &mut BinaryReader<'_>,
+    path: &AmlPath,
+    visitor: &mut impl AmlVisitor,
+) -> Result<(), AmlError> {
+    // Outer package: 0x12/0x13 PkgLength NumElements PackageElement...
+    reader.skip(1); // skip Package opcode
+    let (pkg_remaining, _) = decode_pkg_length(reader)?;
+    let outer_end = reader.position() + pkg_remaining;
+
+    // NumElements
+    let _count = reader.read::<u8>().ok_or(AmlError::UnexpectedEnd)?;
+
+    // Parse inner packages
+    while reader.position() < outer_end && !reader.is_at_end() {
+        let remaining = reader.remaining();
+        if remaining.is_empty() || (remaining[0] != 0x12 && remaining[0] != 0x13) {
+            break;
+        }
+        reader.skip(1); // inner Package opcode
+        let (inner_remaining, _) = decode_pkg_length(reader)?;
+        let inner_end = reader.position() + inner_remaining;
+        let _inner_count = reader.read::<u8>().ok_or(AmlError::UnexpectedEnd)?;
+
+        // Element 0: Address (Integer)
+        let address = read_prt_integer(reader);
+        // Element 1: Pin (Integer)
+        let pin = read_prt_integer(reader);
+        // Element 2: Source (NameString or Zero)
+        let source_is_zero = match reader.remaining().first() {
+            Some(&0x00) => {
+                reader.skip(1);
+                true
+            }
+            _ => {
+                // It's a name reference — skip it
+                let _ = skip_name_string(reader);
+                false
+            }
+        };
+        // Element 3: SourceIndex (Integer)
+        let source_index = read_prt_integer(reader);
+
+        if source_is_zero {
+            if let (Some(addr), Some(p), Some(gsi)) = (address, pin, source_index) {
+                visitor.prt_entry(path, addr, p as u8, gsi as u32);
+            }
+        }
+
+        skip_to(reader, inner_end);
+    }
+
+    skip_to(reader, outer_end);
+    Ok(())
+}
+
+/// Read an integer from a _PRT package element. Handles common AML integer encodings.
+fn read_prt_integer(reader: &mut BinaryReader<'_>) -> Option<u64> {
+    let remaining = reader.remaining();
+    match remaining.first()? {
+        0x00 => { reader.skip(1); Some(0) }
+        0x01 => { reader.skip(1); Some(1) }
+        0xFF => { reader.skip(1); Some(u64::MAX) }
+        0x0A => { reader.skip(1); reader.read::<u8>().map(u64::from) }
+        0x0B => { reader.skip(1); reader.read::<u16>().map(u64::from) }
+        0x0C => { reader.skip(1); reader.read::<u32>().map(u64::from) }
+        0x0E => { reader.skip(1); reader.read::<u64>() }
+        _ => None,
+    }
+}
+
+/// Result of resolving a data object, which may include resource template data.
+struct ResolvedData<'a> {
+    value: AmlValue,
+    /// If the data object was a Buffer containing a resource template,
+    /// this holds a reference to the raw descriptor bytes.
+    resource_template: Option<&'a [u8]>,
 }
 
 /// Parse DefScope: 0x10 PkgLength NameString TermList
@@ -524,13 +624,13 @@ fn decode_pkg_length(reader: &mut BinaryReader<'_>) -> Result<(usize, usize), Am
 // ─── Data object resolution ────────────────────────────────────────────────
 
 /// Try to resolve a DataRefObject (the value part of a DefName).
-fn resolve_data_object(reader: &mut BinaryReader<'_>) -> AmlValue {
+fn resolve_data_object<'a>(reader: &mut BinaryReader<'a>) -> ResolvedData<'a> {
     let remaining = reader.remaining();
     if remaining.is_empty() {
-        return AmlValue::Unresolved;
+        return ResolvedData { value: AmlValue::Unresolved, resource_template: None };
     }
 
-    match remaining[0] {
+    let value = match remaining[0] {
         // ZeroOp
         0x00 => {
             reader.skip(1);
@@ -588,8 +688,8 @@ fn resolve_data_object(reader: &mut BinaryReader<'_>) -> AmlValue {
                 None => AmlValue::Unresolved,
             }
         }
-        // Buffer — check for EISAID pattern
-        0x11 => try_resolve_eisaid(reader),
+        // Buffer — check for EISAID or resource template
+        0x11 => return try_resolve_buffer(reader),
         // Package / VarPackage
         0x12 | 0x13 => {
             reader.skip(1);
@@ -607,23 +707,21 @@ fn resolve_data_object(reader: &mut BinaryReader<'_>) -> AmlValue {
             }
         }
         _ => AmlValue::Unresolved,
-    }
+    };
+    ResolvedData { value, resource_template: None }
 }
 
-/// Try to resolve an EisaId from a Buffer data object.
+/// Try to resolve a Buffer data object as either an EISAID or resource template.
 ///
 /// EISAID encoding: `Buffer(4) { DWordConst }` where the DWord is the
-/// compressed EISA ID. In AML bytecode this appears as:
-/// `0x11 PkgLen 0x0C DWordData`
-fn try_resolve_eisaid(reader: &mut BinaryReader<'_>) -> AmlValue {
-    let pos = reader.position();
+/// compressed EISA ID. Resource templates: buffers containing small/large
+/// resource descriptors terminated by an End Tag (0x79).
+fn try_resolve_buffer<'a>(reader: &mut BinaryReader<'a>) -> ResolvedData<'a> {
     reader.skip(1); // skip 0x11 (Buffer op)
 
-    // Decode the PkgLength
     let pkg_result = decode_pkg_length(reader);
     let Ok((pkg_remaining, _)) = pkg_result else {
-        // Rewind isn't possible with BinaryReader, return Unresolved
-        return AmlValue::Unresolved;
+        return ResolvedData { value: AmlValue::Unresolved, resource_template: None };
     };
 
     let body_end = reader.position() + pkg_remaining;
@@ -632,7 +730,7 @@ fn try_resolve_eisaid(reader: &mut BinaryReader<'_>) -> AmlValue {
     let remaining = reader.remaining();
     if remaining.is_empty() {
         skip_to(reader, body_end);
-        return AmlValue::Unresolved;
+        return ResolvedData { value: AmlValue::Unresolved, resource_template: None };
     }
 
     let buf_size = match remaining[0] {
@@ -652,27 +750,41 @@ fn try_resolve_eisaid(reader: &mut BinaryReader<'_>) -> AmlValue {
     };
 
     if buf_size == Some(4) {
-        // Read the initializer — should be a DWordConst
+        // Read the initializer — should be a DWordConst (EISAID)
         let remaining = reader.remaining();
         if remaining.first() == Some(&0x0C) {
             reader.skip(1);
             if let Some(raw) = reader.read::<u32>() {
                 skip_to(reader, body_end);
-                return AmlValue::EisaId(EisaId { raw });
+                return ResolvedData {
+                    value: AmlValue::EisaId(EisaId { raw }),
+                    resource_template: None,
+                };
             }
         } else if remaining.len() >= 4 {
-            // Might be raw byte data
             if let Some(raw) = reader.read::<u32>() {
                 skip_to(reader, body_end);
-                return AmlValue::EisaId(EisaId { raw });
+                return ResolvedData {
+                    value: AmlValue::EisaId(EisaId { raw }),
+                    resource_template: None,
+                };
             }
         }
     }
 
-    // Not an EISAID pattern — skip the rest of the buffer
+    // Not an EISAID — check if the remaining buffer body is a resource template.
+    let data_start = reader.position();
+    let data_end = body_end.min(reader.len());
+    let buf_data = reader.data().get(data_start..data_end).unwrap_or(&[]);
+
+    let rt_data = if crate::resource::looks_like_resource_template(buf_data) {
+        Some(buf_data)
+    } else {
+        None
+    };
+
     skip_to(reader, body_end);
-    let _ = pos; // suppress unused warning
-    AmlValue::Unresolved
+    ResolvedData { value: AmlValue::Unresolved, resource_template: rt_data }
 }
 
 /// Skip a data object (used when we need to skip TermArgs like in Return).

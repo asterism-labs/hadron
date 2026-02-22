@@ -141,7 +141,56 @@ fn read_device_info(bus: u8, dev: u8, func: u8) -> PciDeviceInfo {
         subsystem_device_id,
         interrupt_line,
         interrupt_pin,
+        gsi: None,
         bars,
+    }
+}
+
+/// Applies ACPI `_PRT` interrupt routing to enumerated PCI devices.
+///
+/// For each device with an interrupt pin, looks up the corresponding GSI
+/// in the PCI host bridge's `_PRT` table from the ACPI namespace.
+pub fn apply_prt_routing(devices: &mut [PciDeviceInfo]) {
+    use hadron_acpi::aml::value::AmlValue;
+
+    let prt_entries = crate::arch::x86_64::acpi::with_namespace(|ns| {
+        // Find PCI host bridge (PNP0A03 = PCI bus, PNP0A08 = PCIe bus).
+        // _HID can be either an EisaId (Buffer) or Integer.
+        ns.devices()
+            .find(|d| {
+                let raw = match &d.hid {
+                    Some(AmlValue::EisaId(id)) => Some(id.raw),
+                    Some(AmlValue::Integer(v)) => Some(*v as u32),
+                    _ => None,
+                };
+                raw.is_some_and(|r| {
+                    use hadron_acpi::aml::value::EisaId;
+                    let decoded = EisaId { raw: r }.decode();
+                    &decoded == b"PNP0A03" || &decoded == b"PNP0A08"
+                })
+            })
+            .map(|d| d.prt.clone())
+    })
+    .flatten()
+    .unwrap_or_default();
+
+    if prt_entries.is_empty() {
+        return;
+    }
+
+    crate::kdebug!("PCI: applying {} _PRT routing entries", prt_entries.len());
+
+    for device in devices.iter_mut() {
+        if device.interrupt_pin > 0 {
+            let dev_addr = ((device.address.device as u64) << 16) | 0xFFFF;
+            let pin = device.interrupt_pin - 1; // 1-based → 0-based
+            if let Some(entry) = prt_entries
+                .iter()
+                .find(|e| e.address == dev_addr && e.pin == pin)
+            {
+                device.gsi = Some(entry.gsi);
+            }
+        }
     }
 }
 

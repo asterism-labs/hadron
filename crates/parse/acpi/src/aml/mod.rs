@@ -22,4 +22,4 @@ pub use value::{AmlError, AmlValue, EisaId, InlineString};
 pub use visitor::AmlVisitor;
 
 #[cfg(feature = "alloc")]
-pub use namespace::{Namespace, NamespaceBuilder, NamespaceNode, NodeKind};
+pub use namespace::{Namespace, NamespaceBuilder, NamespaceNode, NodeKind, PrtEntry};

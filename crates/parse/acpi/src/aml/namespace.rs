@@ -11,6 +11,7 @@ use alloc::vec::Vec;
 use super::path::{AmlPath, NameSeg};
 use super::value::AmlValue;
 use super::visitor::AmlVisitor;
+use crate::resource::{self, AcpiResource};
 
 /// Kind of a namespace node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,6 +49,10 @@ pub struct NamespaceNode {
     pub adr: Option<AmlValue>,
     /// `_UID` value, if this is a device with a unique ID.
     pub uid: Option<AmlValue>,
+    /// Decoded resources from `_CRS`.
+    pub resources: Vec<AcpiResource>,
+    /// PCI interrupt routing entries from `_PRT`.
+    pub prt: Vec<PrtEntry>,
 }
 
 /// The collected ACPI namespace.
@@ -94,6 +99,17 @@ impl Namespace {
     }
 }
 
+/// A PCI interrupt routing entry from `_PRT`.
+#[derive(Debug, Clone, Copy)]
+pub struct PrtEntry {
+    /// Device address (high word = device number, low word = function or 0xFFFF).
+    pub address: u64,
+    /// Interrupt pin: 0 = INTA, 1 = INTB, 2 = INTC, 3 = INTD.
+    pub pin: u8,
+    /// Global System Interrupt number.
+    pub gsi: u32,
+}
+
 /// `_HID` name segment.
 const HID_SEG: NameSeg = NameSeg(*b"_HID");
 /// `_CID` name segment.
@@ -102,6 +118,8 @@ const CID_SEG: NameSeg = NameSeg(*b"_CID");
 const ADR_SEG: NameSeg = NameSeg(*b"_ADR");
 /// `_UID` name segment.
 const UID_SEG: NameSeg = NameSeg(*b"_UID");
+/// `_CRS` name segment.
+const CRS_SEG: NameSeg = NameSeg(*b"_CRS");
 
 /// Visitor that builds a [`Namespace`] from an AML walk.
 pub struct NamespaceBuilder {
@@ -138,6 +156,8 @@ impl AmlVisitor for NamespaceBuilder {
             cid: None,
             adr: None,
             uid: None,
+            resources: Vec::new(),
+            prt: Vec::new(),
         });
     }
 
@@ -158,6 +178,26 @@ impl AmlVisitor for NamespaceBuilder {
         }
     }
 
+    fn resource_template(&mut self, _path: &AmlPath, name: NameSeg, data: &[u8]) {
+        // Attach _CRS resources to the most recent device.
+        if name == CRS_SEG {
+            if let Some(device) = self.nodes.last_mut() {
+                if device.kind == NodeKind::Device {
+                    device.resources = resource::parse_resource_template(data).collect();
+                }
+            }
+        }
+    }
+
+    fn prt_entry(&mut self, _path: &AmlPath, address: u64, pin: u8, gsi: u32) {
+        // Attach _PRT entries to the most recent device.
+        if let Some(device) = self.nodes.last_mut() {
+            if device.kind == NodeKind::Device {
+                device.prt.push(PrtEntry { address, pin, gsi });
+            }
+        }
+    }
+
     fn method(&mut self, path: &AmlPath, name: NameSeg, _arg_count: u8, _serialized: bool) {
         self.nodes.push(NamespaceNode {
             path: *path,
@@ -167,6 +207,8 @@ impl AmlVisitor for NamespaceBuilder {
             cid: None,
             adr: None,
             uid: None,
+            resources: Vec::new(),
+            prt: Vec::new(),
         });
     }
 
@@ -179,6 +221,8 @@ impl AmlVisitor for NamespaceBuilder {
             cid: None,
             adr: None,
             uid: None,
+            resources: Vec::new(),
+            prt: Vec::new(),
         });
     }
 
@@ -191,6 +235,8 @@ impl AmlVisitor for NamespaceBuilder {
             cid: None,
             adr: None,
             uid: None,
+            resources: Vec::new(),
+            prt: Vec::new(),
         });
     }
 
@@ -203,6 +249,8 @@ impl AmlVisitor for NamespaceBuilder {
             cid: None,
             adr: None,
             uid: None,
+            resources: Vec::new(),
+            prt: Vec::new(),
         });
     }
 }

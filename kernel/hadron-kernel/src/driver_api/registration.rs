@@ -63,20 +63,21 @@ pub struct PciDriverRegistration {
 
 /// Platform driver entry placed in the `.hadron_platform_drivers` linker section.
 ///
-/// Platform drivers are matched by compatible string (e.g., "ns16550").
+/// Platform drivers are matched by ACPI `_HID`/`_CID` values using an
+/// [`AcpiMatchId`] table.
 #[repr(C)]
 pub struct PlatformDriverEntry {
     /// Driver name (for logging).
     pub name: &'static str,
-    /// Compatible string for matching (e.g., "ns16550").
-    pub compatible: &'static str,
+    /// ACPI ID table for matching against device `_HID`/`_CID`.
+    pub id_table: &'static [super::acpi_device::AcpiMatchId],
     /// Declared capability flags for runtime auditing.
     pub capabilities: super::capability::CapabilityFlags,
-    /// Initialization function called when matched.
+    /// Probe function called when a matching device is found.
     ///
     /// Receives a [`PlatformProbeContext`] with typed capability tokens.
     /// Returns a [`PlatformDriverRegistration`] describing the devices created.
-    pub init: fn(PlatformProbeContext) -> Result<PlatformDriverRegistration, DriverError>,
+    pub probe: fn(PlatformProbeContext) -> Result<PlatformDriverRegistration, DriverError>,
 }
 
 /// Registration bundle returned by a platform driver's init function.

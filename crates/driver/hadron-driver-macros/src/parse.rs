@@ -76,8 +76,8 @@ pub struct DriverDef {
     pub capabilities: Vec<Capability>,
     /// PCI ID table expression (required for `kind = pci`).
     pub pci_ids: Option<Expr>,
-    /// Compatible string (required for `kind = platform`).
-    pub compatible: Option<LitStr>,
+    /// ACPI ID table expression (required for `kind = platform`).
+    pub acpi_ids: Option<Expr>,
 }
 
 impl Parse for DriverDef {
@@ -86,7 +86,7 @@ impl Parse for DriverDef {
         let mut kind: Option<DriverKind> = None;
         let mut capabilities: Option<Vec<Capability>> = None;
         let mut pci_ids: Option<Expr> = None;
-        let mut compatible: Option<LitStr> = None;
+        let mut acpi_ids: Option<Expr> = None;
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -139,15 +139,15 @@ impl Parse for DriverDef {
                 "pci_ids" => {
                     pci_ids = Some(input.parse()?);
                 }
-                "compatible" => {
-                    compatible = Some(input.parse()?);
+                "acpi_ids" => {
+                    acpi_ids = Some(input.parse()?);
                 }
                 _ => {
                     return Err(syn::Error::new(
                         key.span(),
                         format!(
                             "unknown attribute `{}`; expected one of: \
-                             name, kind, capabilities, pci_ids, compatible",
+                             name, kind, capabilities, pci_ids, acpi_ids",
                             key
                         ),
                     ));
@@ -180,10 +180,10 @@ impl Parse for DriverDef {
                 "`pci_ids` is required for `kind = pci`",
             ));
         }
-        if kind == DriverKind::Platform && compatible.is_none() {
+        if kind == DriverKind::Platform && acpi_ids.is_none() {
             return Err(syn::Error::new(
                 Span::call_site(),
-                "`compatible` is required for `kind = platform`",
+                "`acpi_ids` is required for `kind = platform`",
             ));
         }
 
@@ -192,7 +192,7 @@ impl Parse for DriverDef {
             kind,
             capabilities,
             pci_ids,
-            compatible,
+            acpi_ids,
         })
     }
 }

@@ -25,6 +25,18 @@ pub trait AmlVisitor {
     /// Called when a DefName object is encountered with a resolved value.
     fn name_object(&mut self, path: &AmlPath, name: NameSeg, value: &AmlValue) {}
 
+    /// Called when a DefName contains a resource template buffer (e.g., `_CRS`).
+    ///
+    /// `data` is the raw resource descriptor bytes suitable for parsing with
+    /// [`crate::resource::parse_resource_template`].
+    fn resource_template(&mut self, path: &AmlPath, name: NameSeg, data: &[u8]) {}
+
+    /// Called when a `_PRT` (PCI Routing Table) package is parsed.
+    ///
+    /// Each entry is an `(address, pin, gsi)` tuple representing a PCI interrupt
+    /// routing from the ACPI namespace.
+    fn prt_entry(&mut self, path: &AmlPath, address: u64, pin: u8, gsi: u32) {}
+
     /// Called when a DefMethod is encountered.
     fn method(&mut self, path: &AmlPath, name: NameSeg, arg_count: u8, serialized: bool) {}
 

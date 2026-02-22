@@ -11,7 +11,6 @@ publish = true
 
 [lib]
 bench = false
-test = false
 doctest = false
 
 [features]

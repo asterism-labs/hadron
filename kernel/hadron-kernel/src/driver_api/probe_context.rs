@@ -4,6 +4,7 @@
 //! with exactly the capabilities a driver needs, then passes it to the
 //! driver's probe/init function.
 
+use super::acpi_device::AcpiDeviceInfo;
 use super::capability::{
     DmaCapability, IrqCapability, MmioCapability, PciConfigCapability, TaskSpawner, TimerCapability,
 };
@@ -32,9 +33,11 @@ pub struct PciProbeContext {
 
 /// Probe context for platform drivers.
 ///
-/// Platform drivers don't need PCI config access or device info, but do
-/// need interrupt, MMIO, task spawning, and timer capabilities.
+/// Contains the ACPI device info (with parsed resources from `_CRS`) plus
+/// capabilities for interrupt, MMIO, task spawning, and timer access.
 pub struct PlatformProbeContext {
+    /// ACPI device information with parsed resources.
+    pub device: AcpiDeviceInfo,
     /// Interrupt management capability.
     pub irq: IrqCapability,
     /// MMIO mapping capability.
@@ -69,10 +72,11 @@ pub(crate) fn pci_probe_context(info: &PciDeviceInfo) -> PciProbeContext {
 /// Constructs a [`PlatformProbeContext`] for a platform device.
 ///
 /// Called by the kernel's driver matching logic before invoking a platform
-/// driver's init function.
+/// driver's probe function.
 #[cfg(target_os = "none")]
-pub(crate) fn platform_probe_context() -> PlatformProbeContext {
+pub(crate) fn platform_probe_context(device: AcpiDeviceInfo) -> PlatformProbeContext {
     PlatformProbeContext {
+        device,
         irq: IrqCapability::new(),
         mmio: MmioCapability::new(),
         spawner: TaskSpawner::new(),

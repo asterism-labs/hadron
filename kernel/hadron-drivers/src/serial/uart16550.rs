@@ -400,10 +400,11 @@ struct Uart16550Driver;
     name = "uart16550",
     kind = platform,
     capabilities = [Irq, Spawner],
-    compatible = "ns16550",
+    acpi_ids = &[hadron_kernel::driver_api::AcpiMatchId::eisa("PNP0501")],
 )]
 impl Uart16550Driver {
-    /// Platform init for the 16550 UART. Sets up async serial I/O on COM1.
+    /// Platform probe for the 16550 UART. Reads I/O port and IRQ from ACPI
+    /// `_CRS` resources and sets up async serial I/O.
     fn probe(
         ctx: DriverContext,
     ) -> Result<
@@ -415,12 +416,17 @@ impl Uart16550Driver {
         use hadron_kernel::driver_api::capability::{CapabilityAccess, IrqCapability, TaskSpawner};
         use hadron_kernel::driver_api::registration::{DeviceSet, PlatformDriverRegistration};
 
+        let device = ctx.device();
         let irq_cap = ctx.capability::<IrqCapability>();
         let spawner = ctx.capability::<TaskSpawner>();
 
-        // Create an async serial port wrapping COM1 with IRQ 4.
-        let uart = Uart16550::new(COM1);
-        let async_serial = crate::serial::serial_async::AsyncSerial::new(uart, 4, irq_cap)?;
+        // Read I/O port from ACPI _CRS resources (fall back to COM1 if absent).
+        let io_base = device.io_port().map(|(base, _)| base).unwrap_or(COM1);
+        // Read IRQ from _CRS (fall back to IRQ 4 for COM1).
+        let irq = device.irq().unwrap_or(4);
+
+        let uart = Uart16550::new(io_base);
+        let async_serial = crate::serial::serial_async::AsyncSerial::new(uart, irq, irq_cap)?;
 
         // Spawn the serial echo task — reads bytes from the serial port and
         // echoes them back. Useful for debugging via a serial terminal.
@@ -439,7 +445,10 @@ impl Uart16550Driver {
             })),
         );
 
-        hadron_kernel::kinfo!("uart16550: serial echo task spawned for COM1");
+        hadron_kernel::kinfo!(
+            "uart16550: serial echo task spawned (I/O {:#x}, IRQ {})",
+            io_base, irq
+        );
         Ok(PlatformDriverRegistration {
             devices: DeviceSet::new(),
             lifecycle: None,

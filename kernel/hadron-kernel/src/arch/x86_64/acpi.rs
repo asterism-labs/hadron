@@ -6,6 +6,10 @@
 
 use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 
+use hadron_acpi::aml::namespace::NamespaceBuilder;
+use hadron_acpi::aml::{self, AmlValue, Namespace};
+use hadron_acpi::{AcpiHandler, AcpiTables, SdtHeader, madt};
+
 use crate::addr::{PhysAddr, VirtAddr};
 use crate::arch::x86_64::hw::hpet::Hpet;
 use crate::arch::x86_64::hw::io_apic::{
@@ -15,9 +19,6 @@ use crate::arch::x86_64::hw::local_apic::LocalApic;
 use crate::id::IrqVector;
 use crate::mm::hhdm;
 use crate::sync::IrqSpinLock;
-use hadron_acpi::aml::namespace::NamespaceBuilder;
-use hadron_acpi::aml::{self, AmlValue, EisaId};
-use hadron_acpi::{AcpiHandler, AcpiTables, SdtHeader, madt};
 
 use crate::arch::x86_64::interrupts::dispatch::vectors;
 
@@ -73,6 +74,42 @@ static LAPIC_TIMER_DIVIDE: AtomicU8 = AtomicU8::new(0);
 /// allows lock-free access to the LAPIC for EOI, IPI, and other hot-path
 /// operations without acquiring the PLATFORM lock.
 static LAPIC_BASE: AtomicU64 = AtomicU64::new(0);
+
+/// ACPI namespace, stored after AML parsing for use by platform device discovery.
+///
+/// Level 12 avoids nesting with PLATFORM (level 11) since `with_namespace` is
+/// only called during boot/driver probe and never while holding PLATFORM.
+static ACPI_NAMESPACE: IrqSpinLock<Option<Namespace>> = IrqSpinLock::leveled("ACPI_NS", 12, None);
+
+/// ECAM (Enhanced Configuration Access Mechanism) base info from MCFG.
+static ECAM_INFO: IrqSpinLock<Option<EcamInfo>> = IrqSpinLock::leveled("ECAM", 12, None);
+
+/// ECAM region info for PCI Express memory-mapped config access.
+#[derive(Clone, Copy)]
+pub struct EcamInfo {
+    /// Physical base address of the ECAM region.
+    pub phys_base: u64,
+    /// PCI segment group number.
+    pub segment: u16,
+    /// First PCI bus number covered.
+    pub start_bus: u8,
+    /// Last PCI bus number covered.
+    pub end_bus: u8,
+}
+
+/// Runs a closure with access to the ACPI namespace, if available.
+pub fn with_namespace<R>(f: impl FnOnce(&Namespace) -> R) -> Option<R> {
+    let lock = ACPI_NAMESPACE.lock();
+    let ns = lock.as_ref()?;
+    Some(f(ns))
+}
+
+/// Runs a closure with access to the ECAM info, if available.
+pub fn with_ecam<R>(f: impl FnOnce(&EcamInfo) -> R) -> Option<R> {
+    let lock = ECAM_INFO.lock();
+    let info = lock.as_ref()?;
+    Some(f(info))
+}
 
 /// Sends LAPIC EOI if the LAPIC has been initialized.
 ///
@@ -234,10 +271,23 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
         }
     };
 
-    // Parse MCFG
+    // Parse MCFG and store ECAM info for PCI Express config access.
     match tables.mcfg() {
         Ok(m) => {
             crate::kdebug!("ACPI: MCFG with {} entries", m.entry_count());
+            if let Some(entry) = m.entries().next() {
+                let info = EcamInfo {
+                    phys_base: entry.base_address,
+                    segment: entry.segment_group,
+                    start_bus: entry.start_bus,
+                    end_bus: entry.end_bus,
+                };
+                *ECAM_INFO.lock() = Some(info);
+                crate::kinfo!(
+                    "ACPI: ECAM at {:#x}, segment {}, buses {}-{}",
+                    info.phys_base, info.segment, info.start_bus, info.end_bus
+                );
+            }
         }
         Err(_) => {
             crate::kdebug!("ACPI: MCFG not found");
@@ -480,9 +530,11 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
         }
     }
 
-    // Walk DSDT/SSDT AML namespace
+    // Walk DSDT/SSDT AML namespace and persist for platform device discovery.
     if fadt.is_some() {
-        parse_aml_namespace(&tables);
+        if let Some(ns) = parse_aml_namespace(&tables) {
+            *ACPI_NAMESPACE.lock() = Some(ns);
+        }
     }
 
     // --- 2. Disable legacy PIC ---
@@ -732,12 +784,15 @@ fn calibrate_and_start_timer(lapic: &LocalApic, hpet: Option<&Hpet>) {
 }
 
 /// Walks the DSDT and any SSDTs to extract the AML namespace.
-fn parse_aml_namespace(tables: &AcpiTables<HhdmAcpiHandler>) {
+///
+/// Returns the namespace for persistence. The caller stores it in
+/// `ACPI_NAMESPACE` for later use by platform device discovery.
+fn parse_aml_namespace(tables: &AcpiTables<HhdmAcpiHandler>) -> Option<Namespace> {
     let dsdt = match tables.dsdt() {
         Ok(d) => d,
         Err(_) => {
             crate::kdebug!("ACPI: DSDT not available");
-            return;
+            return None;
         }
     };
 
@@ -748,7 +803,7 @@ fn parse_aml_namespace(tables: &AcpiTables<HhdmAcpiHandler>) {
         Some(d) if !d.is_empty() => d,
         _ => {
             crate::kdebug!("ACPI: DSDT has no AML data");
-            return;
+            return None;
         }
     };
 
@@ -788,19 +843,34 @@ fn parse_aml_namespace(tables: &AcpiTables<HhdmAcpiHandler>) {
     }
 
     for dev in ns.devices() {
+        let resource_count = dev.resources.len();
+        let prt_count = dev.prt.len();
         match &dev.hid {
             Some(AmlValue::EisaId(id)) => {
                 let decoded = id.decode();
                 let hid_str = core::str::from_utf8(&decoded).unwrap_or("?");
-                crate::kdebug!("ACPI: AML: {} _HID={}", dev.path, hid_str);
+                if resource_count > 0 {
+                    crate::kdebug!("ACPI: AML: {} _HID={} ({} resources)", dev.path, hid_str, resource_count);
+                } else {
+                    crate::kdebug!("ACPI: AML: {} _HID={}", dev.path, hid_str);
+                }
             }
             Some(AmlValue::String(s)) => {
-                crate::kdebug!("ACPI: AML: {} _HID=\"{}\"", dev.path, s.as_str());
+                if resource_count > 0 {
+                    crate::kdebug!("ACPI: AML: {} _HID=\"{}\" ({} resources)", dev.path, s.as_str(), resource_count);
+                } else {
+                    crate::kdebug!("ACPI: AML: {} _HID=\"{}\"", dev.path, s.as_str());
+                }
             }
             Some(AmlValue::Integer(v)) => {
                 crate::kdebug!("ACPI: AML: {} _HID={:#x}", dev.path, v);
             }
             _ => {}
         }
+        if prt_count > 0 {
+            crate::kdebug!("ACPI: AML: {} has {} _PRT entries", dev.path, prt_count);
+        }
     }
+
+    Some(ns)
 }

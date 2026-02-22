@@ -31,6 +31,7 @@ pub mod hpet;
 pub mod ivrs;
 pub mod madt;
 pub mod mcfg;
+pub mod resource;
 pub mod rsdp;
 pub mod rsdt;
 pub mod sdt;
@@ -47,6 +48,7 @@ pub use madt::{Madt, MadtEntry, MadtEntryIter};
 pub use mcfg::{Mcfg, McfgEntry};
 pub use rsdt::MatchingTableIter;
 pub use sdt::{SdtHeader, ValidatedTable};
+pub use resource::{AcpiResource, ResourceIter};
 pub use slit::Slit;
 pub use srat::{Srat, SratEntry, SratEntryIter};
 

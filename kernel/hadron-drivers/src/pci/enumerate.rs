@@ -123,6 +123,7 @@ fn read_device_info(bus: u8, dev: u8, func: u8) -> PciDeviceInfo {
         subsystem_device_id,
         interrupt_line,
         interrupt_pin,
+        gsi: None,
         bars,
     }
 }

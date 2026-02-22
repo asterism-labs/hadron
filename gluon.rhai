@@ -356,6 +356,7 @@ benchmarks()
 
 tests()
     .host_testable([
+        "hadron-acpi",
         "hadron-binparse",
         "hadron-core",
         "hadron-dwarf",

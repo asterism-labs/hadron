@@ -155,6 +155,8 @@ pub struct PciDeviceInfo {
     pub interrupt_line: u8,
     /// Interrupt pin (0 = none, 1 = INTA, ..., 4 = INTD).
     pub interrupt_pin: u8,
+    /// Resolved GSI from ACPI `_PRT` routing (`None` = use `interrupt_line` fallback).
+    pub gsi: Option<u32>,
     /// Base Address Registers (up to 6 for type 0, 2 for type 1).
     pub bars: [PciBar; 6],
 }
@@ -181,6 +183,7 @@ mod tests {
             subsystem_device_id: 0,
             interrupt_line: 0,
             interrupt_pin: 0,
+            gsi: None,
             bars: [PciBar::Unused; 6],
         }
     }

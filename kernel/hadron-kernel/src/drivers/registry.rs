@@ -75,21 +75,32 @@ pub fn match_pci_drivers(devices: &[PciDeviceInfo]) {
     }
 }
 
-/// Matches platform devices against registered platform drivers.
+/// Matches ACPI-discovered platform devices against registered platform drivers.
 ///
-/// Compares each platform device's compatible string against driver entries.
-/// Calls `init` with a [`PlatformProbeContext`](crate::driver_api::probe_context::PlatformProbeContext)
-/// on the first match. Registers resulting devices in the device registry.
-pub fn match_platform_drivers(devices: &[(&str, &str)]) {
+/// For each device, compares its `_HID` and `_CID` against each driver's
+/// [`AcpiMatchId`] table. Calls `probe` with a [`PlatformProbeContext`] on
+/// the first match.
+pub fn match_platform_drivers(devices: &[crate::driver_api::acpi_device::AcpiDeviceInfo]) {
     let entries = platform_driver_entries();
-    for &(name, compatible) in devices {
+    for device in devices {
         for entry in entries {
-            if entry.compatible == compatible {
-                crate::kprintln!("Platform: matched '{}' -> driver '{}'", name, entry.name,);
-                let ctx = probe_context::platform_probe_context();
-                match (entry.init)(ctx) {
+            let matched = entry.id_table.iter().any(|id| {
+                id.matches_hid(&device.hid)
+                    || device
+                        .cid
+                        .as_ref()
+                        .is_some_and(|cid| id.matches_hid(cid))
+            });
+            if matched {
+                crate::kprintln!(
+                    "Platform: matched '{}' -> driver '{}'",
+                    device.path,
+                    entry.name,
+                );
+                let ctx = probe_context::platform_probe_context(device.clone());
+                match (entry.probe)(ctx) {
                     Ok(registration) => {
-                        crate::kprintln!("Platform: driver '{}' init OK", entry.name);
+                        crate::kprintln!("Platform: driver '{}' probe OK", entry.name);
                         crate::drivers::device_registry::with_device_registry_mut(|dr| {
                             dr.register_driver(
                                 entry.name,
@@ -99,7 +110,11 @@ pub fn match_platform_drivers(devices: &[(&str, &str)]) {
                         });
                     }
                     Err(e) => {
-                        crate::kprintln!("Platform: driver '{}' init failed: {}", name, e,);
+                        crate::kprintln!(
+                            "Platform: driver '{}' probe failed: {}",
+                            device.path,
+                            e,
+                        );
                     }
                 }
                 break;
