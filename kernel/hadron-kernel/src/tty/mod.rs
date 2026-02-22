@@ -90,8 +90,11 @@ impl Tty {
     /// Write output to this TTY's framebuffer console.
     ///
     /// If no fbcon is attached, the output is silently discarded.
+    /// Clones the `Arc<FbCon>` so the TTY fbcon lock is released before the
+    /// (potentially slow) write — matching the pattern used by [`switch_vt`].
     pub fn write_output(&self, s: &str) {
-        if let Some(ref fbcon) = *self.fbcon.lock() {
+        let fbcon = self.fbcon.lock().clone();
+        if let Some(ref fbcon) = fbcon {
             fbcon.write_str(s);
         }
     }
@@ -113,8 +116,14 @@ impl Tty {
     }
 
     /// Wake the registered reader (called from IRQ context or after processing).
+    ///
+    /// Takes the waker out of the lock before invoking it so the
+    /// `input_waker` IrqSpinLock is not held while `waker.wake()` acquires
+    /// the executor's `ready_queues` IrqSpinLock. This matches the pattern
+    /// used by [`HeapWaitQueue`](crate::sync::HeapWaitQueue).
     fn wake(&self) {
-        if let Some(w) = self.input_waker.lock().take() {
+        let waker = self.input_waker.lock().take();
+        if let Some(w) = waker {
             w.wake();
         }
     }
@@ -125,9 +134,18 @@ impl Tty {
     /// 1. The shared [`SCANCODE_BUF`] ring buffer (filled by the IRQ handler)
     /// 2. The PS/2 hardware FIFO directly (catches bytes from before IRQ setup)
     ///
+    /// Only the active VT drains scancodes — inactive VTs return immediately
+    /// to avoid stealing input from the active terminal.
+    ///
     /// Echo output is deferred until after the ldisc lock is released to avoid
     /// holding an IRQ-disabling lock while writing to the logger.
     pub fn poll_hardware(&self) {
+        // Only the active VT should drain the shared keyboard scancode buffer.
+        let active_vt = ACTIVE_VT.load(Ordering::Acquire);
+        if !core::ptr::eq(self, &TTY_TABLE[active_vt]) {
+            return;
+        }
+
         // Phase 1: drain scancodes (interrupts disabled briefly).
         let mut raw = [0u8; SCANCODE_BUF_SIZE];
         let mut count = 0;
@@ -155,6 +173,13 @@ impl Tty {
         if count == 0 {
             return;
         }
+
+        crate::kdebug!(
+            "TTY: tty{} received {} scancode(s): {:02x?}",
+            active_vt,
+            count,
+            &raw[..count]
+        );
 
         // Phase 2: process under ldisc lock, collect actions.
         let mut actions: [Option<LdiscAction>; SCANCODE_BUF_SIZE] =
