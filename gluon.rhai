@@ -171,6 +171,7 @@ kernel_libs.add("hadron-mmio", "crates/driver/hadron-mmio")
     .deps(#{ hadron_mmio_macros: #{ "crate": "hadron-mmio-macros", proc_macro: true } });
 
 kernel_libs.add("hadron-acpi", "crates/parse/acpi")
+    .features(["alloc"])
     .deps(#{ hadron_binparse: "hadron-binparse" });
 
 kernel_libs.add("limine", "crates/boot/limine")

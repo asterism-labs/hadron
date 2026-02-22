@@ -1,12 +1,14 @@
 //! Kernel-side ACPI integration.
 //!
 //! Provides the [`AcpiHandler`] implementation using HHDM address translation,
-//! and stores parsed ACPI information (MADT, HPET, MCFG) for use by the
-//! interrupt controller and timer subsystems.
+//! and stores parsed ACPI information (MADT, HPET, MCFG, FADT, SRAT, SLIT,
+//! DMAR, IVRS, BGRT, DSDT/SSDT) for use by kernel subsystems.
 
 use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 
-use hadron_acpi::{AcpiHandler, AcpiTables, madt};
+use hadron_acpi::{AcpiHandler, AcpiTables, SdtHeader, madt};
+use hadron_acpi::aml::{self, AmlValue, EisaId};
+use hadron_acpi::aml::namespace::NamespaceBuilder;
 use crate::addr::{PhysAddr, VirtAddr};
 use crate::id::IrqVector;
 use crate::mm::hhdm;
@@ -155,7 +157,7 @@ fn timer_handler(_vector: IrqVector) {
 ///
 /// This is the main Phase 5 init function, called from `kernel_setup` after
 /// the heap is ready. It:
-/// 1. Parses ACPI tables (RSDP -> MADT, HPET, MCFG)
+/// 1. Parses ACPI tables (RSDP -> MADT, HPET, MCFG, FADT, SRAT, SLIT, DMAR, IVRS, BGRT, DSDT/SSDT)
 /// 2. Disables legacy PIC
 /// 3. Maps and enables Local APIC (BSP)
 /// 4. Maps and configures I/O APIC
@@ -239,6 +241,195 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
         Err(_) => {
             crate::kdebug!("ACPI: MCFG not found");
         }
+    }
+
+    // Parse FADT
+    let fadt = match tables.fadt() {
+        Ok(f) => {
+            crate::kinfo!("ACPI: FADT: PM timer port {:#x}, boot arch flags {:#x}",
+                f.pm_timer_block, f.boot_architecture_flags);
+            if let Some(dsdt) = f.dsdt_address() {
+                crate::kdebug!("ACPI: FADT: DSDT at {:#x}", dsdt);
+            }
+            if let Some(facs) = f.facs_address() {
+                crate::kdebug!("ACPI: FADT: FACS at {:#x}", facs);
+            }
+            Some(f)
+        }
+        Err(_) => {
+            crate::kdebug!("ACPI: FADT not present");
+            None
+        }
+    };
+
+    // Parse SRAT (NUMA topology)
+    match tables.srat() {
+        Ok(srat) => {
+            let mut domains = 0u32;
+            let mut mem_regions = 0u32;
+            let mut cpu_count = 0u32;
+            let mut max_domain = 0u32;
+
+            for entry in srat.entries() {
+                match entry {
+                    hadron_acpi::SratEntry::ProcessorLocalApicAffinity { flags, proximity_domain_lo, proximity_domain_hi, .. } => {
+                        if flags & 1 != 0 {
+                            cpu_count += 1;
+                            let domain = u32::from(proximity_domain_lo)
+                                | (u32::from(proximity_domain_hi[0]) << 8)
+                                | (u32::from(proximity_domain_hi[1]) << 16)
+                                | (u32::from(proximity_domain_hi[2]) << 24);
+                            if domain > max_domain {
+                                max_domain = domain;
+                            }
+                        }
+                    }
+                    hadron_acpi::SratEntry::MemoryAffinity { proximity_domain, base_address, length, flags } => {
+                        if flags & 1 != 0 {
+                            mem_regions += 1;
+                            crate::kdebug!(
+                                "ACPI: SRAT: memory domain {} base {:#x} length {:#x}",
+                                proximity_domain, base_address, length
+                            );
+                            if proximity_domain > max_domain {
+                                max_domain = proximity_domain;
+                            }
+                        }
+                    }
+                    hadron_acpi::SratEntry::X2ApicAffinity { flags, proximity_domain, .. } => {
+                        if flags & 1 != 0 {
+                            cpu_count += 1;
+                            if proximity_domain > max_domain {
+                                max_domain = proximity_domain;
+                            }
+                        }
+                    }
+                    hadron_acpi::SratEntry::Unknown { .. } => {}
+                }
+            }
+
+            if cpu_count > 0 || mem_regions > 0 {
+                domains = max_domain + 1;
+            }
+            crate::kinfo!(
+                "ACPI: SRAT: {} proximity domains, {} CPUs, {} memory regions",
+                domains, cpu_count, mem_regions
+            );
+        }
+        Err(_) => {
+            crate::kdebug!("ACPI: SRAT not present");
+        }
+    }
+
+    // Parse SLIT (NUMA distances)
+    match tables.slit() {
+        Ok(slit) => {
+            let n = slit.num_localities();
+            crate::kinfo!("ACPI: SLIT: {} localities", n);
+            if n <= 8 {
+                for from in 0..n {
+                    for to in 0..n {
+                        if let Some(d) = slit.distance(from, to) {
+                            crate::kdebug!("ACPI: SLIT: [{} -> {}] = {}", from, to, d);
+                        }
+                    }
+                }
+            }
+        }
+        Err(_) => {
+            crate::kdebug!("ACPI: SLIT not present");
+        }
+    }
+
+    // Parse DMAR (Intel VT-d)
+    match tables.dmar() {
+        Ok(dmar) => {
+            let mut drhd_count = 0u32;
+            let mut rmrr_count = 0u32;
+            crate::kdebug!(
+                "ACPI: DMAR: host address width {}, flags {:#x}",
+                dmar.host_address_width, dmar.flags
+            );
+            for entry in dmar.entries() {
+                match entry {
+                    hadron_acpi::DmarEntry::Drhd { flags, segment, register_base_address, .. } => {
+                        drhd_count += 1;
+                        crate::kdebug!(
+                            "ACPI: DMAR: DRHD segment {} base {:#x} flags {:#x}",
+                            segment, register_base_address, flags
+                        );
+                    }
+                    hadron_acpi::DmarEntry::Rmrr { segment, base_address, limit_address, .. } => {
+                        rmrr_count += 1;
+                        crate::kdebug!(
+                            "ACPI: DMAR: RMRR segment {} range {:#x}-{:#x}",
+                            segment, base_address, limit_address
+                        );
+                    }
+                    hadron_acpi::DmarEntry::Atsr { flags, segment, .. } => {
+                        crate::kdebug!(
+                            "ACPI: DMAR: ATSR segment {} flags {:#x}",
+                            segment, flags
+                        );
+                    }
+                    hadron_acpi::DmarEntry::Unknown { .. } => {}
+                }
+            }
+            crate::kinfo!("ACPI: DMAR: {} DRHDs, {} RMRRs", drhd_count, rmrr_count);
+        }
+        Err(_) => {
+            crate::kdebug!("ACPI: DMAR not present");
+        }
+    }
+
+    // Parse IVRS (AMD-Vi)
+    match tables.ivrs() {
+        Ok(ivrs) => {
+            let mut ivhd_count = 0u32;
+            let mut ivmd_count = 0u32;
+            crate::kdebug!("ACPI: IVRS: iv_info {:#x}", ivrs.iv_info);
+            for entry in ivrs.entries() {
+                match entry {
+                    hadron_acpi::IvrsEntry::Ivhd { ivhd_type, iommu_base_address, segment_group, device_id, .. } => {
+                        ivhd_count += 1;
+                        crate::kdebug!(
+                            "ACPI: IVRS: IVHD type {:#x} IOMMU base {:#x} segment {} device {:#x}",
+                            ivhd_type, iommu_base_address, segment_group, device_id
+                        );
+                    }
+                    hadron_acpi::IvrsEntry::Ivmd { ivmd_type, start_address, memory_block_length, .. } => {
+                        ivmd_count += 1;
+                        crate::kdebug!(
+                            "ACPI: IVRS: IVMD type {:#x} start {:#x} length {:#x}",
+                            ivmd_type, start_address, memory_block_length
+                        );
+                    }
+                    hadron_acpi::IvrsEntry::Unknown { .. } => {}
+                }
+            }
+            crate::kinfo!("ACPI: IVRS: {} IVHDs, {} IVMDs", ivhd_count, ivmd_count);
+        }
+        Err(_) => {
+            crate::kdebug!("ACPI: IVRS not present");
+        }
+    }
+
+    // Parse BGRT
+    match tables.bgrt() {
+        Ok(bgrt) => {
+            crate::kinfo!(
+                "ACPI: BGRT: image at {:#x} type {} offset ({}, {})",
+                bgrt.image_address, bgrt.image_type, bgrt.image_offset_x, bgrt.image_offset_y
+            );
+        }
+        Err(_) => {
+            crate::kdebug!("ACPI: BGRT not present");
+        }
+    }
+
+    // Walk DSDT/SSDT AML namespace
+    if fadt.is_some() {
+        parse_aml_namespace(&tables);
     }
 
     // --- 2. Disable legacy PIC ---
@@ -486,5 +677,78 @@ fn calibrate_and_start_timer(lapic: &LocalApic, hpet: Option<&Hpet>) {
         crate::kinfo!("Timer: LAPIC periodic timer started (1ms interval)");
     } else {
         crate::kwarn!("Timer: Calibration returned 0 ticks, timer not started");
+    }
+}
+
+/// Walks the DSDT and any SSDTs to extract the AML namespace.
+fn parse_aml_namespace(tables: &AcpiTables<HhdmAcpiHandler>) {
+    let dsdt = match tables.dsdt() {
+        Ok(d) => d,
+        Err(_) => {
+            crate::kdebug!("ACPI: DSDT not available");
+            return;
+        }
+    };
+
+    let mut builder = NamespaceBuilder::new();
+
+    // Walk DSDT AML (skip the SDT header to get raw AML bytecode).
+    let aml_data = match dsdt.data.get(SdtHeader::SIZE..) {
+        Some(d) if !d.is_empty() => d,
+        _ => {
+            crate::kdebug!("ACPI: DSDT has no AML data");
+            return;
+        }
+    };
+
+    if let Err(e) = aml::walk_aml(aml_data, &mut builder) {
+        crate::kdebug!("ACPI: DSDT AML walk error: {:?}", e);
+    }
+
+    // Walk any SSDTs and merge into the same namespace.
+    let mut ssdt_count = 0u32;
+    for ssdt_phys in tables.ssdts() {
+        match hadron_acpi::sdt::load_table(tables.handler(), ssdt_phys, b"SSDT") {
+            Ok(ssdt) => {
+                if let Some(aml) = ssdt.data.get(SdtHeader::SIZE..) {
+                    if let Err(e) = aml::walk_aml(aml, &mut builder) {
+                        crate::kdebug!("ACPI: SSDT AML walk error: {:?}", e);
+                    }
+                    ssdt_count += 1;
+                }
+            }
+            Err(e) => {
+                crate::kdebug!("ACPI: Failed to load SSDT at {:#x}: {:?}", ssdt_phys, e);
+            }
+        }
+    }
+
+    let ns = builder.build();
+    let device_count = ns.devices().count();
+
+    if ssdt_count > 0 {
+        crate::kinfo!(
+            "ACPI: AML namespace: {} devices (DSDT + {} SSDTs)",
+            device_count, ssdt_count
+        );
+    } else {
+        crate::kinfo!("ACPI: AML namespace: {} devices (DSDT)", device_count);
+    }
+
+    for dev in ns.devices() {
+        match &dev.hid {
+            Some(AmlValue::EisaId(id)) => {
+                let decoded = id.decode();
+                let hid_str = core::str::from_utf8(&decoded).unwrap_or("?");
+                crate::kdebug!("ACPI: AML: {} _HID={}", dev.path, hid_str);
+            }
+            Some(AmlValue::String(s)) => {
+                crate::kdebug!("ACPI: AML: {} _HID=\"{}\"", dev.path, s.as_str());
+            }
+            Some(AmlValue::Integer(v)) => {
+                crate::kdebug!("ACPI: AML: {} _HID={:#x}", dev.path, v);
+            }
+            _ => {}
+        }
     }
 }
