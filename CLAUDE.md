@@ -70,3 +70,7 @@ Never commit without using the `hadron-git-workflow` skill to understand guideli
 ## Development Phases
 
 Phases 0-7 are complete (boot, serial, CPU init, PMM, VMM, interrupts, async executor, syscalls). The 8 remaining phases are documented in `docs/src/phases/`. Phase 6 introduced an async cooperative executor, so all remaining phases are designed around the async model (async VFS, async block devices, per-CPU executors for SMP). See `docs/src/SUMMARY.md` for the full phase listing.
+
+## Known Issues
+
+See [`docs/src/reference/known-issues.md`](docs/src/reference/known-issues.md) for tracked bugs, limitations, and the lock ordering reference table.
