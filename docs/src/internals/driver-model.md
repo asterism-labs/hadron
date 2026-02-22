@@ -79,7 +79,7 @@ The kernel's internal `pci_probe_context()` and `platform_probe_context()` funct
 
 ## The `#[hadron_driver]` Proc Macro
 
-The `hadron-driver-macros` crate (at `crates/hadron-driver-macros/`) provides the `#[hadron_driver(...)]` attribute macro that generates all boilerplate for driver registration. Drivers declare their capabilities, and the macro generates:
+The `hadron-driver-macros` crate (at `crates/driver/hadron-driver-macros/`) provides the `#[hadron_driver(...)]` attribute macro that generates all boilerplate for driver registration. Drivers declare their capabilities, and the macro generates:
 
 1. A per-driver context struct containing only the declared capability fields
 2. `HasCapability<T>` impls for each declared capability

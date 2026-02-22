@@ -13,14 +13,31 @@ hadron/
 │   └── x86_64-unknown-hadron.ld                  # Kernel linker script
 │
 ├── crates/
-│   ├── limine/                                   # Limine boot protocol bindings
-│   ├── noalloc/                                  # Allocation-free data structures
-│   ├── hadron-test/                              # Test framework (QEMU exit)
-│   ├── hadron-syscall/                           # Syscall numbers and ABI definitions
-│   ├── acpi/                                     # ACPI table parsing (hadron-acpi)
-│   ├── dwarf/                                    # DWARF debug info (hadron-dwarf)
-│   ├── elf/                                      # ELF64 parser (hadron-elf)
-│   └── uefi/                                     # UEFI bindings
+│   ├── parse/
+│   │   ├── acpi/                                 # ACPI table parsing (hadron-acpi)
+│   │   ├── binparse/                             # Binary format parser (hadron-binparse)
+│   │   ├── hadron-binparse-macros/               # Companion proc-macro
+│   │   ├── dwarf/                                # DWARF debug info (hadron-dwarf)
+│   │   └── elf/                                  # ELF64 parser (hadron-elf)
+│   ├── boot/
+│   │   ├── limine/                               # Limine boot protocol bindings
+│   │   └── uefi/                                 # UEFI bindings
+│   ├── core/
+│   │   ├── hadron-core/                          # Core kernel abstractions
+│   │   └── linkset/                              # Linker-section set collections
+│   ├── driver/
+│   │   ├── hadron-driver-macros/                 # #[hadron_driver] proc-macro
+│   │   ├── hadron-mmio/                          # MMIO register abstraction
+│   │   └── hadron-mmio-macros/                   # Companion proc-macro
+│   ├── syscall/
+│   │   ├── hadron-syscall/                       # Syscall numbers and ABI definitions
+│   │   └── hadron-syscall-macros/                # Companion proc-macro
+│   ├── test/
+│   │   ├── hadron-test/                          # Test framework (QEMU exit)
+│   │   └── hadron-bench/                         # Benchmark framework
+│   └── tools/
+│       ├── hadron-codegen/                       # Code generation utilities
+│       └── hadron-perf/                          # Performance analysis tools
 │
 ├── kernel/
 │   ├── hadron-kernel/                            # Monolithic kernel crate

@@ -47,7 +47,7 @@ Scope is **required** on every commit. Use the most specific scope that covers t
 `hadron-drivers`, `hadron-drivers/ahci`, `hadron-drivers/virtio`, `hadron-drivers/serial`, `hadron-drivers/input`, `hadron-drivers/display`, `hadron-drivers/timer`, `hadron-drivers/pci`, `hadron-drivers/fs`
 
 ### Crates
-`hadron-acpi`, `hadron-elf`, `hadron-dwarf`, `hadron-test`, `hadron-core`, `hadron-bench`, `hadron-codegen`, `hadron-binparse`, `hadron-mmio`, `hadron-syscall`, `hadron-driver-macros`, `noalloc`, `linkset`, `limine`
+`hadron-acpi`, `hadron-elf`, `hadron-dwarf`, `hadron-test`, `hadron-core`, `hadron-bench`, `hadron-codegen`, `hadron-binparse`, `hadron-mmio`, `hadron-syscall`, `hadron-driver-macros`, `planck-noalloc`, `linkset`, `limine`
 
 ### Userspace
 `lepton-init`, `lepton-shell`, `lepton-syslib`, `lepton-coreutils`

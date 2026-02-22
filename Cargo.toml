@@ -37,11 +37,11 @@ hadron-syscall-macros = { path = "crates/syscall/hadron-syscall-macros" }
 hadron-bench = { path = "crates/test/hadron-bench", default-features = false }
 hadron-test = { path = "crates/test/hadron-test", default-features = false }
 limine = { path = "crates/boot/limine" }
-planck-noalloc = { path = "crates/core/planck-noalloc" }
 uefi = { path = "crates/boot/uefi" }
 
 # External dependencies
 bitflags = "2"
+planck-noalloc = { version = "0.1.1", default-features = false }
 hadris-cpio = { version = "1.0.1", default-features = false }
 hadris-fat = { version = "1.0.1", default-features = false }
 hadris-io = { version = "1.0.1", default-features = false }

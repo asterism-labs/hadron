@@ -25,7 +25,7 @@
 The project is in its early stages. What exists today:
 
 - **Workspace structure**: `hadron-kernel` (monolithic kernel), `hadron-drivers` (pluggable drivers), `limine` crate, and build tool (`gluon`)
-- **Limine protocol bindings**: Complete `crates/limine/` with request/response types, memory map, framebuffer, MP support
+- **Limine protocol bindings**: Complete `crates/boot/limine/` with request/response types, memory map, framebuffer, MP support
 - **Kernel core**: `hadron-kernel` with `BootInfo` trait for boot handoff, arch abstractions, memory management, async executor, syscall interface
 - **Linker script**: `targets/x86_64-unknown-hadron.ld` for ELF64 kernel image
 - **Toolchain**: Nightly Rust targeting `x86_64-unknown-none` with `rust-src` and `llvm-tools-preview`

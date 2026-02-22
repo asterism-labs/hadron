@@ -197,11 +197,11 @@ Use UEFI Boot Services to allocate page table frames and gather system info **be
 
 ### High-Level Steps
 
-1. **`efi_main(handle, system_table)`** — Entry point. Wrap raw pointers with `SystemTable<Boot>` from `crates/uefi/`.
+1. **`efi_main(handle, system_table)`** — Entry point. Wrap raw pointers with `SystemTable<Boot>` from `crates/boot/uefi/`.
 
 2. **Disable watchdog timer** — Prevent the firmware from resetting the machine during boot.
 
-3. **Query GOP** — Use `GraphicsOutputProtocol` (via `crates/uefi/src/protocol/gop.rs`) to get framebuffer address and mode info.
+3. **Query GOP** — Use `GraphicsOutputProtocol` (via `crates/boot/uefi/src/protocol/gop.rs`) to get framebuffer address and mode info.
 
 4. **Find ACPI RSDP** — Search the UEFI Configuration Table for the ACPI 2.0 RSDP GUID.
 
@@ -217,7 +217,7 @@ Use UEFI Boot Services to allocate page table frames and gather system info **be
    - Identity map of the transition code
    - Stack mapping in the higher half
 
-9. **Exit Boot Services** — Use `SystemTable::exit_boot_services()` (in `crates/uefi/src/api/mod.rs`) with retry logic for stale map keys.
+9. **Exit Boot Services** — Use `SystemTable::exit_boot_services()` (in `crates/boot/uefi/src/api/mod.rs`) with retry logic for stale map keys.
 
 10. **Post-ExitBootServices setup**:
     - Init serial (COM1) for panic output

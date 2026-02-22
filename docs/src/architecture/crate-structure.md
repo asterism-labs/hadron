@@ -45,14 +45,31 @@ hadron/
 │       └── limine/         # Limine boot stub binary (hadron-boot-limine)
 │
 ├── crates/
-│   ├── limine/             # Limine boot protocol bindings
-│   ├── noalloc/            # Allocation-free data structures
-│   ├── hadron-test/        # Test framework (QEMU isa-debug-exit)
-│   ├── hadron-syscall/     # Syscall numbers and ABI definitions
-│   ├── acpi/               # ACPI table parsing (hadron-acpi)
-│   ├── dwarf/              # DWARF debug info (hadron-dwarf)
-│   ├── elf/                # ELF parser (hadron-elf)
-│   └── uefi/               # UEFI bindings
+│   ├── parse/
+│   │   ├── acpi/                     # ACPI table parsing (hadron-acpi)
+│   │   ├── binparse/                 # Binary format parser (hadron-binparse)
+│   │   ├── hadron-binparse-macros/   # Companion proc-macro
+│   │   ├── dwarf/                    # DWARF debug info (hadron-dwarf)
+│   │   └── elf/                      # ELF64 parser (hadron-elf)
+│   ├── boot/
+│   │   ├── limine/                   # Limine boot protocol bindings
+│   │   └── uefi/                     # UEFI bindings
+│   ├── core/
+│   │   ├── hadron-core/              # Core kernel abstractions
+│   │   └── linkset/                  # Linker-section set collections (hadron-linkset)
+│   ├── driver/
+│   │   ├── hadron-driver-macros/     # #[hadron_driver] proc-macro
+│   │   ├── hadron-mmio/              # MMIO register abstraction
+│   │   └── hadron-mmio-macros/       # Companion proc-macro
+│   ├── syscall/
+│   │   ├── hadron-syscall/           # Syscall numbers and ABI definitions
+│   │   └── hadron-syscall-macros/    # Companion proc-macro
+│   ├── test/
+│   │   ├── hadron-test/              # Test framework (QEMU isa-debug-exit)
+│   │   └── hadron-bench/             # Benchmark framework
+│   └── tools/
+│       ├── hadron-codegen/           # Code generation utilities
+│       └── hadron-perf/              # Performance analysis tools
 │
 ├── userspace/
 │   ├── init/               # Init process (lepton-init)
@@ -73,8 +90,8 @@ hadron/
 ```
 kernel/boot/limine ──┬──> kernel/hadron-kernel
                      ├──> kernel/hadron-drivers
-                     ├──> crates/limine
-                     └──> crates/noalloc
+                     ├──> crates/boot/limine
+                     └──> planck-noalloc (external)
 
 kernel/hadron-drivers ──┬──> kernel/hadron-kernel
                         ├──> bitflags
@@ -84,14 +101,13 @@ kernel/hadron-drivers ──┬──> kernel/hadron-kernel
 kernel/hadron-kernel ──┬──> bitflags
                        ├──> hadris-io
                        ├──> hadron-acpi, hadron-elf, hadron-syscall
-                       └──> noalloc
+                       └──> planck-noalloc (external)
 
-crates/limine      ──> (no deps)
-crates/noalloc     ──> (no deps)
-crates/hadron-test ──> (no deps)
+crates/boot/limine      ──> (no deps)
+crates/test/hadron-test ──> (no deps)
 ```
 
-Key design principle: **`crates/*` are standalone, no_std libraries** that can be tested independently and reused in other projects.
+Key design principle: **`crates/*/*` are standalone, no_std libraries** that can be tested independently and reused in other projects.
 
 ## Crate Responsibilities
 
@@ -137,18 +153,25 @@ Hardware driver implementations registered via linker-section macros (`pci_drive
 | `block/` | Ramdisk block device |
 | `fs/` | FAT, ISO9660, ramfs, initramfs filesystem implementations |
 
-### `crates/*` — Reusable Libraries
+### `crates/*/*` — Reusable Libraries
 
-| Crate | Purpose |
-|-------|---------|
-| `limine` | Limine boot protocol bindings |
-| `noalloc` | Allocation-free data structures (ring buffer, array vec) |
-| `hadron-test` | Test framework (QEMU isa-debug-exit, test runner) |
-| `hadron-syscall` | Syscall numbers and ABI definitions (shared kernel/userspace) |
-| `hadron-acpi` | ACPI table parsing (RSDP, MADT, HPET, FADT) |
-| `hadron-dwarf` | DWARF debug info parsing |
-| `hadron-elf` | ELF64 parser (program headers, sections, entry point) |
-| `uefi` | UEFI bindings |
+| Crate | Group | Purpose |
+|-------|-------|---------|
+| `hadron-acpi` | parse | ACPI table parsing (RSDP, MADT, HPET, FADT) |
+| `hadron-binparse` | parse | Binary format parser with derive macro |
+| `hadron-dwarf` | parse | DWARF debug info parsing |
+| `hadron-elf` | parse | ELF64 parser (program headers, sections, entry point) |
+| `limine` | boot | Limine boot protocol bindings |
+| `uefi` | boot | UEFI bindings |
+| `hadron-core` | core | Core kernel abstractions (sync primitives, wait queues) |
+| `hadron-linkset` | core | Linker-section set collections |
+| `hadron-mmio` | driver | MMIO register abstraction with derive macro |
+| `hadron-driver-macros` | driver | `#[hadron_driver]` proc-macro |
+| `hadron-syscall` | syscall | Syscall numbers and ABI definitions (shared kernel/userspace) |
+| `hadron-test` | test | Test framework (QEMU isa-debug-exit, test runner) |
+| `hadron-bench` | test | Benchmark framework |
+
+**External dependency**: `planck-noalloc` — allocation-free data structures (ring buffer, array vec) — published on crates.io, vendored via gluon.
 
 ### `kernel/boot/*` — Boot Stubs
 

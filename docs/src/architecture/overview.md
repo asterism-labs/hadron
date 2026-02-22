@@ -19,7 +19,7 @@ This is conceptually similar to a microkernel's separation of concerns, but with
 | **Safe Services** | `hadron-kernel::fs`, `sched`, `syscall`, `proc`, etc. | Safe Rust only | Executor, VFS, syscall dispatch, process management |
 | **Drivers** | `hadron-drivers` | Safe Rust (uses driver API traits) | AHCI, VirtIO, serial, display, input, filesystem implementations |
 | **Boot Stubs** | `kernel/boot/{limine}/` | `unsafe` (entry) | Bootloader-specific entry, translates to `BootInfo` |
-| **Reusable Crates** | `crates/{limine,noalloc,hadron-test,acpi,elf,...}/` | Varies | Standalone no_std libraries and protocol bindings |
+| **Reusable Crates** | `crates/{parse,boot,core,driver,syscall,test,tools}/` | Varies | Standalone no_std libraries and protocol bindings |
 
 ## Safety Model
 

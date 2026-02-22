@@ -19,13 +19,13 @@ hadron/
 │   └── boot/
 │       └── limine/         # Limine boot stub binary (hadron-boot-limine)
 ├── crates/
-│   ├── limine/             # Limine boot protocol bindings
-│   ├── noalloc/            # Allocation-free data structures
-│   ├── hadron-test/        # Test framework (QEMU isa-debug-exit)
-│   ├── acpi/               # ACPI table parsing (hadron-acpi)
-│   ├── dwarf/              # DWARF debug info (hadron-dwarf)
-│   ├── elf/                # ELF parser (hadron-elf)
-│   └── uefi/               # UEFI bindings
+│   ├── parse/              # Binary format parsers (acpi, binparse, dwarf, elf + macros)
+│   ├── boot/               # Boot protocol bindings (limine, uefi)
+│   ├── core/               # Core abstractions (hadron-core, linkset)
+│   ├── driver/             # Driver framework (hadron-driver-macros, hadron-mmio + macros)
+│   ├── syscall/            # Syscall interface (hadron-syscall + macros)
+│   ├── test/               # Test/bench harnesses (hadron-test, hadron-bench)
+│   └── tools/              # Host build tools (hadron-codegen, hadron-perf)
 ├── userspace/
 │   ├── init/               # Init process (lepton-init)
 │   ├── lepton-syslib/      # Userspace syscall library

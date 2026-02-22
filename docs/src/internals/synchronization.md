@@ -216,7 +216,7 @@ pub struct WaitQueue {
 }
 ```
 
-The internal storage is a `noalloc::ArrayVec<Waker, 32>` protected by an
+The internal storage is a `planck_noalloc::ArrayVec<Waker, 32>` protected by an
 `IrqSpinLock`, so `WaitQueue` is usable before the heap allocator is
 available and is safe to wake from interrupt context.
 

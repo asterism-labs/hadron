@@ -16,11 +16,11 @@ Limine bootloader -> kernel/boot/limine (hadron-boot-limine)
 
 ## Key Dependencies
 
-- `hadron-kernel` depends on `bitflags`, `hadris-io`, `hadron-acpi`, `hadron-elf`, `hadron-syscall`, `noalloc`
+- `hadron-kernel` depends on `bitflags`, `hadris-io`, `hadron-acpi`, `hadron-elf`, `hadron-syscall`, `planck-noalloc`
 - `hadron-drivers` depends on `hadron-kernel`, `bitflags`, `hadris-cpio`, `hadris-fat`, `hadris-io`, `hadris-iso`
-- Boot stub depends on `hadron-kernel`, `hadron-drivers`, `limine`, `noalloc`
+- Boot stub depends on `hadron-kernel`, `hadron-drivers`, `limine`, `planck-noalloc`
 - Driver registration uses linker sections (`.hadron_pci_drivers`, `.hadron_platform_drivers`, `.hadron_block_fs`, etc.)
-- All `crates/*` are standalone no_std libraries
+- All `crates/*/*` are standalone no_std libraries
 
 ## Custom Target
 

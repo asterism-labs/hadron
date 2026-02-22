@@ -126,6 +126,12 @@ source = "crates-io"
 checksum = "7ea18a98c3f06efad7d9f3b407c13f8da4828bbf7e489141d506c2e83623e0e6"
 
 [[package]]
+name = "planck-noalloc"
+version = "0.1.1"
+source = "crates-io"
+checksum = "672ac4e66d2588992f7d99fba3c8a37fffe4bf9757316f2d91eb5229f84162a2"
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.106"
 source = "crates-io"

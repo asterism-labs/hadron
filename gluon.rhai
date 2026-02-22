@@ -115,6 +115,7 @@ dependency("quote").version("1.0.35");
 // Kernel no_std dependencies — bitflags is a direct dep of project crates.
 // Transitive deps (cfg-if, bytemuck, bytemuck_derive) are auto-resolved.
 dependency("bitflags").version("2.11.0");
+dependency("planck-noalloc").version("0.1.1").no_default_features();
 
 // Hadris ecosystem — direct deps of hadron-drivers. Transitive deps
 // (hadris-common, hadris-part) are auto-resolved from their Cargo.toml.
@@ -159,7 +160,6 @@ host.add("hadron-mmio-macros", "crates/driver/hadron-mmio-macros")
 
 let kernel_libs = group("kernel-libs").target("x86_64-unknown-hadron").edition("2024").config(true);
 
-kernel_libs.add("planck-noalloc", "crates/core/planck-noalloc");
 kernel_libs.add("hadron-core", "crates/core/hadron-core")
     .deps(#{ planck_noalloc: "planck-noalloc" });
 kernel_libs.add("hadron-linkset", "crates/core/linkset");
@@ -359,7 +359,6 @@ tests()
         "hadron-core",
         "hadron-dwarf",
         "hadron-elf",
-        "planck-noalloc",
         "hadron-drivers",
         "hadron-kernel"
     ])
