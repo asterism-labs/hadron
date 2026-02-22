@@ -174,6 +174,9 @@ kernel_libs.add("hadron-acpi", "crates/parse/acpi")
     .features(["alloc"])
     .deps(#{ hadron_binparse: "hadron-binparse" });
 
+kernel_libs.add("hadron-fdt", "crates/parse/fdt")
+    .deps(#{ hadron_binparse: "hadron-binparse" });
+
 kernel_libs.add("limine", "crates/boot/limine")
     .deps(#{ bitflags: "bitflags" });
 
@@ -361,6 +364,7 @@ tests()
         "hadron-core",
         "hadron-dwarf",
         "hadron-elf",
+        "hadron-fdt",
         "hadron-drivers",
         "hadron-kernel"
     ])
