@@ -447,13 +447,15 @@ pub fn spawn_process(
     let stack_top = write_startup_data(process.address_space(), args, envs, hhdm_offset)?;
 
     // Inherit fd 0/1/2 from parent, or fall back to /dev/console.
+    // Resolve /dev/console BEFORE locking any fd_table to maintain the
+    // VFS -> fd_table ordering (same as spawn_init).
     {
-        let parent = super::lookup_process(parent_pid).expect("spawn_process: parent not found");
-        let parent_fds = parent.fd_table.lock();
         let console = vfs::with_vfs(|vfs| {
             vfs.resolve("/dev/console")
                 .expect("spawn_process: /dev/console not found")
         });
+        let parent = super::lookup_process(parent_pid).expect("spawn_process: parent not found");
+        let parent_fds = parent.fd_table.lock();
         let mut fd_table = process.fd_table.lock();
         for fd_num in 0..=2usize {
             if let Some(parent_fd) = parent_fds.get(fd_num) {

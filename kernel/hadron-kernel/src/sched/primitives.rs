@@ -24,6 +24,8 @@ impl Future for YieldNow {
             Poll::Ready(())
         } else {
             self.0 = true;
+            #[cfg(hadron_lock_stress)]
+            hadron_core::sync::stress::stress_delay();
             cx.waker().wake_by_ref();
             Poll::Pending
         }

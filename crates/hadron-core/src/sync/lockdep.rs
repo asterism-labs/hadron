@@ -23,9 +23,47 @@
 //!
 //! Gated behind `cfg(hadron_lockdep)`.
 
-use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use core::fmt;
+use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicU16, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 use crate::cpu_local::{CpuLocal, MAX_CPUS};
+
+// ---------------------------------------------------------------------------
+// Reporting callback (for hadron_lockdep_warn mode)
+// ---------------------------------------------------------------------------
+
+/// Function signature for the lockdep violation reporting callback.
+///
+/// `hadron-core` cannot depend on the kernel's logging subsystem, so the
+/// kernel registers a writer function during early init. In warn mode,
+/// violations are routed through this callback instead of panicking.
+pub type LockdepWriteFn = fn(fmt::Arguments<'_>);
+
+/// Registered reporting callback. `null` means no reporter installed yet
+/// (violations are silently dropped until the kernel sets one).
+static REPORT_FN: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
+
+/// Registers a lockdep violation reporting function.
+///
+/// # Safety
+///
+/// The provided function must be safe to call from any context (including
+/// interrupt handlers) and must not acquire any lock tracked by lockdep.
+pub unsafe fn set_report_fn(f: LockdepWriteFn) {
+    REPORT_FN.store(f as *mut (), Ordering::Release);
+}
+
+/// Writes a formatted message to the registered reporting callback.
+///
+/// If no callback is registered, the message is silently dropped.
+pub(crate) fn report_write(args: fmt::Arguments<'_>) {
+    let ptr = REPORT_FN.load(Ordering::Acquire);
+    if !ptr.is_null() {
+        // SAFETY: The pointer was set by `set_report_fn` from a valid `LockdepWriteFn`.
+        let f: LockdepWriteFn = unsafe { core::mem::transmute(ptr) };
+        f(args);
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -152,6 +190,8 @@ struct LockClassEntry {
     key_addr: AtomicUsize,
     /// Subclass index.
     subclass: AtomicU8,
+    /// Lock ordering level (0 = unassigned, higher = acquired later).
+    level: AtomicU8,
     /// Human-readable name (e.g. `"PMM"`).
     name: &'static str,
     /// The kind of lock this class represents.
@@ -165,6 +205,7 @@ impl LockClassEntry {
         Self {
             key_addr: AtomicUsize::new(0),
             subclass: AtomicU8::new(0),
+            level: AtomicU8::new(0),
             name: "",
             kind: LockKind::SpinLock,
             irq_usage: AtomicU8::new(0),
@@ -478,7 +519,21 @@ fn in_irq_context() -> bool {
 /// This is the original registration function using the lock instance's
 /// address as the class identity. Each static lock instance gets its own class.
 pub fn get_or_register(addr: usize, name: &'static str, kind: LockKind) -> LockClassId {
-    get_or_register_with_subclass(addr, 0, name, kind)
+    get_or_register_full(addr, 0, 0, name, kind)
+}
+
+/// Registers a lock class by address with a lock ordering level.
+///
+/// `level` is used for level-based ordering checks: a lock at level N may
+/// only be acquired while holding locks at levels <= N. Level 0 means
+/// "unassigned" — no ordering check is performed.
+pub fn get_or_register_leveled(
+    addr: usize,
+    level: u8,
+    name: &'static str,
+    kind: LockKind,
+) -> LockClassId {
+    get_or_register_full(addr, 0, level, name, kind)
 }
 
 /// Registers a lock class by key address and subclass. Returns the class ID.
@@ -488,6 +543,17 @@ pub fn get_or_register(addr: usize, name: &'static str, kind: LockKind) -> LockC
 pub fn get_or_register_with_subclass(
     key_addr: usize,
     subclass: u8,
+    name: &'static str,
+    kind: LockKind,
+) -> LockClassId {
+    get_or_register_full(key_addr, subclass, 0, name, kind)
+}
+
+/// Full registration function with all parameters.
+fn get_or_register_full(
+    key_addr: usize,
+    subclass: u8,
+    level: u8,
     name: &'static str,
     kind: LockKind,
 ) -> LockClassId {
@@ -525,6 +591,7 @@ pub fn get_or_register_with_subclass(
     // per slot, so we cast away the shared reference to write them.
     CLASSES[count].key_addr.store(key_addr, Ordering::Relaxed);
     CLASSES[count].subclass.store(subclass, Ordering::Relaxed);
+    CLASSES[count].level.store(level, Ordering::Relaxed);
     // SAFETY: This slot is being initialized for the first time, and we hold
     // the graph lock so no concurrent writer exists. Readers only access
     // slots below CLASS_COUNT, which we haven't incremented yet.
@@ -602,6 +669,23 @@ pub fn lock_acquired(class: LockClassId) {
     // its own HeldLocks. Interrupts may fire but the reentrancy guard
     // prevents them from re-entering this code path.
     let held = unsafe { &mut *HELD.get().get() };
+
+    // Level ordering check: new lock's level must be >= all held locks' levels.
+    // Level 0 means "unassigned" — no check is performed.
+    let new_level = CLASSES[class.index()].level.load(Ordering::Relaxed);
+    if new_level > 0 {
+        for i in 0..held.depth {
+            let h = held.stack[i].class;
+            if h == LockClassId::NONE || h == class {
+                continue;
+            }
+            let held_level = CLASSES[h.index()].level.load(Ordering::Relaxed);
+            if held_level > 0 && new_level < held_level {
+                report_level_violation(h, class, held_level, new_level, held);
+                break;
+            }
+        }
+    }
 
     // Record edges: for each currently held lock H, add edge H → class.
     for i in 0..held.depth {
@@ -761,11 +845,25 @@ fn report_cycle(held: LockClassId, acquiring: LockClassId, held_stack: &HeldLock
 
     #[cfg(hadron_lockdep_warn)]
     {
-        // Warning-only mode: log but don't panic.
-        // On kernel, this would go to serial. On host, we can't easily log
-        // without allocating. The best we can do is... nothing useful without
-        // a logging callback. The panic message below serves as documentation.
-        let _ = (held_name, held_kind, acq_name, acq_kind, depth);
+        report_write(format_args!(
+            "lockdep: potential deadlock detected!\n\
+             Held: \"{}\" ({}) | Acquiring: \"{}\" ({})\n\
+             Held-lock stack (depth {}):",
+            held_name,
+            held_kind.as_str(),
+            acq_name,
+            acq_kind.as_str(),
+            depth,
+        ));
+        for i in 0..depth {
+            let entry_class = held_stack.stack[i].class;
+            report_write(format_args!(
+                "  [{}] \"{}\" ({})",
+                i,
+                class_name(entry_class),
+                class_kind(entry_class).as_str(),
+            ));
+        }
         return;
     }
 
@@ -793,7 +891,13 @@ fn report_irq_safety(class: LockClassId) {
 
     #[cfg(hadron_lockdep_warn)]
     {
-        let _ = (name, kind);
+        report_write(format_args!(
+            "lockdep: IRQ-safety violation!\n\
+             Lock \"{}\" ({}) used in both IRQ and non-IRQ contexts.\n\
+             Use IrqSpinLock if this lock must be shared with interrupt handlers.",
+            name,
+            kind.as_str(),
+        ));
         return;
     }
 
@@ -804,6 +908,66 @@ fn report_irq_safety(class: LockClassId) {
          Use IrqSpinLock if this lock must be shared with interrupt handlers.",
         name,
         kind.as_str(),
+    );
+}
+
+/// Reports a lock level ordering violation.
+///
+/// The lock being acquired has a lower level than a currently held lock,
+/// indicating an ordering inversion that could lead to deadlock.
+fn report_level_violation(
+    held: LockClassId,
+    acquiring: LockClassId,
+    held_level: u8,
+    acq_level: u8,
+    held_stack: &HeldLocks,
+) {
+    let held_name = class_name(held);
+    let held_kind = class_kind(held);
+    let acq_name = class_name(acquiring);
+    let acq_kind = class_kind(acquiring);
+    let depth = held_stack.depth;
+
+    #[cfg(hadron_lockdep_warn)]
+    {
+        report_write(format_args!(
+            "lockdep: lock level ordering violation!\n\
+             Acquiring \"{}\" ({}, level {}) while holding \"{}\" ({}, level {})\n\
+             Held-lock stack (depth {}):",
+            acq_name,
+            acq_kind.as_str(),
+            acq_level,
+            held_name,
+            held_kind.as_str(),
+            held_level,
+            depth,
+        ));
+        for i in 0..depth {
+            let entry_class = held_stack.stack[i].class;
+            let entry_level = CLASSES[entry_class.index()].level.load(Ordering::Relaxed);
+            report_write(format_args!(
+                "  [{}] \"{}\" ({}, level {})",
+                i,
+                class_name(entry_class),
+                class_kind(entry_class).as_str(),
+                entry_level,
+            ));
+        }
+        return;
+    }
+
+    #[cfg(not(hadron_lockdep_warn))]
+    panic!(
+        "lockdep: lock level ordering violation!\n\
+         Acquiring \"{}\" ({}, level {}) while holding \"{}\" ({}, level {})\n\
+         Held-lock stack depth: {}",
+        acq_name,
+        acq_kind.as_str(),
+        acq_level,
+        held_name,
+        held_kind.as_str(),
+        held_level,
+        depth,
     );
 }
 
@@ -888,6 +1052,7 @@ pub fn reset_lockdep_state() {
     for cls in &CLASSES {
         cls.key_addr.store(0, Ordering::Relaxed);
         cls.subclass.store(0, Ordering::Relaxed);
+        cls.level.store(0, Ordering::Relaxed);
         cls.irq_usage.store(0, Ordering::Relaxed);
     }
 

@@ -13,19 +13,6 @@ use crate::sync::SpinLock;
 const FRAME_SIZE: u64 = 4096;
 const BITS_PER_WORD: usize = 64;
 
-struct BitmapAllocatorInner {
-    /// Bitmap stored as a static mutable slice of u64 words in HHDM-mapped memory.
-    bitmap: &'static mut [u64],
-    /// Total number of frames tracked by the bitmap.
-    total_frames: usize,
-    /// Number of currently free frames.
-    free_count: usize,
-    /// Word index hint for next allocation search (amortized O(1)).
-    search_hint: usize,
-    /// HHDM offset for physical-to-virtual translation (used by page poisoning).
-    hhdm_offset: u64,
-}
-
 // ---------------------------------------------------------------------------
 // PMM page poisoning helpers (always defined for cfg!() type-checking)
 // ---------------------------------------------------------------------------
@@ -69,15 +56,20 @@ fn check_page_poison(phys_addr: u64, hhdm_offset: u64) -> bool {
 
 /// A bitmap-based physical frame allocator.
 ///
-/// Uses interior mutability via [`SpinLock`] so all public methods take `&self`.
+/// All mutation goes through `&mut self`; the outer `PMM: SpinLock<Option<…>>`
+/// provides thread safety, so no interior `SpinLock` is needed.
 pub struct BitmapAllocator {
-    inner: SpinLock<BitmapAllocatorInner>,
+    /// Bitmap stored as a static mutable slice of u64 words in HHDM-mapped memory.
+    bitmap: &'static mut [u64],
+    /// Total number of frames tracked by the bitmap.
+    total_frames: usize,
+    /// Number of currently free frames.
+    free_count: usize,
+    /// Word index hint for next allocation search (amortized O(1)).
+    search_hint: usize,
+    /// HHDM offset for physical-to-virtual translation (used by page poisoning).
+    hhdm_offset: u64,
 }
-
-// SAFETY: The mutable slice in BitmapAllocatorInner is only accessed under the
-// SpinLock, and u64 is Send. The SpinLock ensures mutual exclusion.
-unsafe impl Send for BitmapAllocator {}
-unsafe impl Sync for BitmapAllocator {}
 
 impl BitmapAllocator {
     /// Creates a new bitmap allocator from a slice of physical memory regions.
@@ -160,30 +152,27 @@ impl BitmapAllocator {
         }
 
         Ok(Self {
-            inner: SpinLock::new(BitmapAllocatorInner {
-                bitmap,
-                total_frames,
-                free_count,
-                search_hint: 0,
-                hhdm_offset,
-            }),
+            bitmap,
+            total_frames,
+            free_count,
+            search_hint: 0,
+            hhdm_offset,
         })
     }
 
     /// Allocates a single 4 KiB physical frame.
-    pub fn allocate_frame(&self) -> Option<PhysFrame<Size4KiB>> {
-        let mut inner = self.inner.lock();
-        if inner.free_count == 0 {
+    pub fn allocate_frame(&mut self) -> Option<PhysFrame<Size4KiB>> {
+        if self.free_count == 0 {
             return None;
         }
 
         // Scan from search_hint, wrapping around if needed.
-        let start = inner.search_hint;
-        let words = inner.bitmap.len();
+        let start = self.search_hint;
+        let words = self.bitmap.len();
 
         for offset in 0..words {
             let word_idx = (start + offset) % words;
-            let word = inner.bitmap[word_idx];
+            let word = self.bitmap[word_idx];
 
             // If all bits set, this word has no free frames.
             if word == u64::MAX {
@@ -194,28 +183,29 @@ impl BitmapAllocator {
             let bit_idx = (!word).trailing_zeros() as usize;
             let frame_idx = word_idx * BITS_PER_WORD + bit_idx;
 
-            if frame_idx >= inner.total_frames {
+            if frame_idx >= self.total_frames {
                 continue;
             }
 
             // Mark as allocated.
-            inner.bitmap[word_idx] |= 1u64 << bit_idx;
-            inner.free_count -= 1;
-            inner.search_hint = word_idx;
+            self.bitmap[word_idx] |= 1u64 << bit_idx;
+            self.free_count -= 1;
+            self.search_hint = word_idx;
 
             let phys_addr = frame_idx as u64 * FRAME_SIZE;
 
             // Verify poison pattern is intact (detects use-after-free).
+            // NOTE: No logging here — PMM lock is held and logging would
+            // acquire LOGGER, creating a PMM → LOGGER lock ordering violation.
             if cfg!(hadron_debug_pmm_poison)
-                && !check_page_poison(phys_addr, inner.hhdm_offset)
+                && !check_page_poison(phys_addr, self.hhdm_offset)
             {
-                crate::kwarn!(
+                panic!(
                     "PMM: page at {:#x} modified after free (use-after-free)",
                     phys_addr
                 );
             }
 
-            crate::ktrace_subsys!(mm, "PMM: allocated frame at {:#x}", phys_addr);
             return Some(PhysFrame::containing_address(PhysAddr::new(phys_addr)));
         }
 
@@ -223,7 +213,7 @@ impl BitmapAllocator {
     }
 
     /// Allocates `count` contiguous 4 KiB physical frames. Returns the first frame.
-    pub fn allocate_frames(&self, count: usize) -> Option<PhysFrame<Size4KiB>> {
+    pub fn allocate_frames(&mut self, count: usize) -> Option<PhysFrame<Size4KiB>> {
         if count == 0 {
             return None;
         }
@@ -231,8 +221,7 @@ impl BitmapAllocator {
             return self.allocate_frame();
         }
 
-        let mut inner = self.inner.lock();
-        if inner.free_count < count {
+        if self.free_count < count {
             return None;
         }
 
@@ -241,9 +230,9 @@ impl BitmapAllocator {
         let mut run_len = 0usize;
 
         let mut frame_idx = 0usize;
-        while frame_idx < inner.total_frames {
+        while frame_idx < self.total_frames {
             let word_idx = frame_idx / BITS_PER_WORD;
-            let word = inner.bitmap[word_idx];
+            let word = self.bitmap[word_idx];
 
             if word == u64::MAX {
                 // Entire word allocated, skip it.
@@ -256,7 +245,7 @@ impl BitmapAllocator {
             if word == 0 {
                 // Entire word free, extend run by up to 64 frames.
                 let extend =
-                    core::cmp::min(BITS_PER_WORD, inner.total_frames - word_idx * BITS_PER_WORD);
+                    core::cmp::min(BITS_PER_WORD, self.total_frames - word_idx * BITS_PER_WORD);
                 if run_len == 0 {
                     run_start = word_idx * BITS_PER_WORD;
                 }
@@ -272,7 +261,7 @@ impl BitmapAllocator {
             let bit_start = frame_idx % BITS_PER_WORD;
             for bit in bit_start..BITS_PER_WORD {
                 let fi = word_idx * BITS_PER_WORD + bit;
-                if fi >= inner.total_frames {
+                if fi >= self.total_frames {
                     break;
                 }
                 if word & (1u64 << bit) != 0 {
@@ -305,21 +294,22 @@ impl BitmapAllocator {
             let fi = run_start + i;
             let word_idx = fi / BITS_PER_WORD;
             let bit_idx = fi % BITS_PER_WORD;
-            inner.bitmap[word_idx] |= 1u64 << bit_idx;
+            self.bitmap[word_idx] |= 1u64 << bit_idx;
 
             // Verify poison pattern is intact (detects use-after-free).
+            // NOTE: No logging here — PMM lock is held (see allocate_frame).
             if cfg!(hadron_debug_pmm_poison) {
                 let phys_addr = (fi as u64) * FRAME_SIZE;
-                if !check_page_poison(phys_addr, inner.hhdm_offset) {
-                    crate::kwarn!(
+                if !check_page_poison(phys_addr, self.hhdm_offset) {
+                    panic!(
                         "PMM: page at {:#x} modified after free (use-after-free)",
                         phys_addr
                     );
                 }
             }
         }
-        inner.free_count -= count;
-        inner.search_hint = (run_start + count) / BITS_PER_WORD;
+        self.free_count -= count;
+        self.search_hint = (run_start + count) / BITS_PER_WORD;
 
         let phys = PhysAddr::new(run_start as u64 * FRAME_SIZE);
         Some(PhysFrame::containing_address(phys))
@@ -331,11 +321,10 @@ impl BitmapAllocator {
     ///
     /// The frame must have been previously allocated by this allocator and
     /// must not be in use.
-    pub unsafe fn deallocate_frame(&self, frame: PhysFrame<Size4KiB>) -> Result<(), PmmError> {
-        let mut inner = self.inner.lock();
+    pub unsafe fn deallocate_frame(&mut self, frame: PhysFrame<Size4KiB>) -> Result<(), PmmError> {
         let frame_idx = (frame.start_address().as_u64() / FRAME_SIZE) as usize;
 
-        if frame_idx >= inner.total_frames {
+        if frame_idx >= self.total_frames {
             return Err(PmmError::InvalidFrame);
         }
 
@@ -343,23 +332,21 @@ impl BitmapAllocator {
         let bit_idx = frame_idx % BITS_PER_WORD;
 
         debug_assert!(
-            inner.bitmap[word_idx] & (1u64 << bit_idx) != 0,
+            self.bitmap[word_idx] & (1u64 << bit_idx) != 0,
             "double free of frame {:#x}",
             frame.start_address().as_u64()
         );
-        inner.bitmap[word_idx] &= !(1u64 << bit_idx);
-        inner.free_count += 1;
-
-        crate::ktrace_subsys!(mm, "PMM: freed frame at {:#x}", frame.start_address().as_u64());
+        self.bitmap[word_idx] &= !(1u64 << bit_idx);
+        self.free_count += 1;
 
         // Poison the freed page so use-after-free is detectable on re-allocation.
         if cfg!(hadron_debug_pmm_poison) {
-            poison_page(frame.start_address().as_u64(), inner.hhdm_offset);
+            poison_page(frame.start_address().as_u64(), self.hhdm_offset);
         }
 
         // Update hint to potentially speed up next allocation.
-        if word_idx < inner.search_hint {
-            inner.search_hint = word_idx;
+        if word_idx < self.search_hint {
+            self.search_hint = word_idx;
         }
 
         Ok(())
@@ -372,14 +359,13 @@ impl BitmapAllocator {
     /// All frames in the range must have been previously allocated by this
     /// allocator and must not be in use.
     pub unsafe fn deallocate_frames(
-        &self,
+        &mut self,
         frame: PhysFrame<Size4KiB>,
         count: usize,
     ) -> Result<(), PmmError> {
-        let mut inner = self.inner.lock();
         let start_idx = (frame.start_address().as_u64() / FRAME_SIZE) as usize;
 
-        if start_idx + count > inner.total_frames {
+        if start_idx + count > self.total_frames {
             return Err(PmmError::InvalidFrame);
         }
 
@@ -388,22 +374,22 @@ impl BitmapAllocator {
             let word_idx = fi / BITS_PER_WORD;
             let bit_idx = fi % BITS_PER_WORD;
             debug_assert!(
-                inner.bitmap[word_idx] & (1u64 << bit_idx) != 0,
+                self.bitmap[word_idx] & (1u64 << bit_idx) != 0,
                 "double free of frame {:#x}",
                 (fi as u64) * FRAME_SIZE
             );
-            inner.bitmap[word_idx] &= !(1u64 << bit_idx);
-            inner.free_count += 1;
+            self.bitmap[word_idx] &= !(1u64 << bit_idx);
+            self.free_count += 1;
 
             // Poison each freed page.
             if cfg!(hadron_debug_pmm_poison) {
-                poison_page((fi as u64) * FRAME_SIZE, inner.hhdm_offset);
+                poison_page((fi as u64) * FRAME_SIZE, self.hhdm_offset);
             }
         }
 
         let hint_word = start_idx / BITS_PER_WORD;
-        if hint_word < inner.search_hint {
-            inner.search_hint = hint_word;
+        if hint_word < self.search_hint {
+            self.search_hint = hint_word;
         }
 
         Ok(())
@@ -411,20 +397,18 @@ impl BitmapAllocator {
 
     /// Returns the number of free frames.
     pub fn free_frames(&self) -> usize {
-        self.inner.lock().free_count
+        self.free_count
     }
 
     /// Returns the total number of tracked frames.
     pub fn total_frames(&self) -> usize {
-        self.inner.lock().total_frames
+        self.total_frames
     }
 }
 
-/// Wrapper that implements `FrameAllocator` for `&BitmapAllocator`.
-///
-/// This allows the bitmap allocator (which uses interior mutability) to be
-/// used with APIs that require `&mut impl FrameAllocator<Size4KiB>`.
-pub struct BitmapFrameAllocRef<'a>(pub &'a BitmapAllocator);
+/// Wrapper that implements `FrameAllocator` / `FrameDeallocator` by
+/// forwarding to `&mut BitmapAllocator`.
+pub struct BitmapFrameAllocRef<'a>(pub &'a mut BitmapAllocator);
 
 unsafe impl FrameAllocator<Size4KiB> for BitmapFrameAllocRef<'_> {
     fn allocate_frame(&mut self) -> Option<PhysFrame<Size4KiB>> {
@@ -445,7 +429,7 @@ unsafe impl FrameDeallocator<Size4KiB> for BitmapFrameAllocRef<'_> {
 use crate::boot::{BootInfo, MemoryRegionKind};
 
 /// Global physical memory manager.
-static PMM: SpinLock<Option<BitmapAllocator>> = SpinLock::named("PMM", None); // Lock level 1
+static PMM: SpinLock<Option<BitmapAllocator>> = SpinLock::leveled("PMM", 2, None);
 
 /// Initializes the PMM from boot info.
 ///
@@ -485,23 +469,23 @@ pub fn init(boot_info: &impl BootInfo) {
     *pmm = Some(allocator);
 }
 
-/// Executes a closure with a reference to the global PMM.
+/// Executes a closure with an exclusive reference to the global PMM.
 ///
 /// # Panics
 ///
 /// Panics if the PMM has not been initialized.
-pub fn with_pmm<R>(f: impl FnOnce(&BitmapAllocator) -> R) -> R {
-    let pmm = PMM.lock();
-    f(pmm.as_ref().expect("PMM not initialized"))
+pub fn with_pmm<R>(f: impl FnOnce(&mut BitmapAllocator) -> R) -> R {
+    let mut pmm = PMM.lock();
+    f(pmm.as_mut().expect("PMM not initialized"))
 }
 
-/// Attempts to execute a closure with a reference to the global PMM.
+/// Attempts to execute a closure with an exclusive reference to the global PMM.
 ///
 /// Returns `None` if the PMM lock is already held (avoiding deadlock in
 /// fault handlers) or if the PMM has not been initialized yet.
-pub fn try_with_pmm<R>(f: impl FnOnce(&BitmapAllocator) -> R) -> Option<R> {
-    let pmm = PMM.try_lock()?;
-    Some(f(pmm.as_ref()?))
+pub fn try_with_pmm<R>(f: impl FnOnce(&mut BitmapAllocator) -> R) -> Option<R> {
+    let mut pmm = PMM.try_lock()?;
+    Some(f(pmm.as_mut()?))
 }
 
 #[cfg(test)]

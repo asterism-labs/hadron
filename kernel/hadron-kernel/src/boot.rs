@@ -313,6 +313,15 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
     // 1. Arch-specific CPU init.
     crate::arch::cpu_init();
 
+    // 1b. Register lockdep reporting callback (lock-free serial output).
+    // Must happen before any locks are acquired so violations are visible.
+    #[cfg(hadron_lockdep)]
+    {
+        // SAFETY: `lockdep_serial_report` is a lock-free function that writes
+        // directly to COM1 via EarlySerial — safe from any context.
+        unsafe { crate::sync::lockdep::set_report_fn(lockdep_serial_report) };
+    }
+
     // 2. Initialize HHDM global offset.
     crate::mm::hhdm::init(boot_info.hhdm_offset());
     crate::kinfo!("HHDM initialized at offset {:#x}", boot_info.hhdm_offset());
@@ -322,16 +331,15 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
 
     // 3. Initialize PMM (bitmap from memory map).
     crate::mm::pmm::init(boot_info);
-    crate::mm::pmm::with_pmm(|pmm| {
-        let free = pmm.free_frames();
-        let total = pmm.total_frames();
-        crate::kinfo!(
-            "PMM: {} MiB free / {} MiB total",
-            free * 4 / 1024,
-            total * 4 / 1024
-        );
-        crate::kdebug!("PMM: {} free frames", free);
+    let (free, total) = crate::mm::pmm::with_pmm(|pmm| {
+        (pmm.free_frames(), pmm.total_frames())
     });
+    crate::kinfo!(
+        "PMM: {} MiB free / {} MiB total",
+        free * 4 / 1024,
+        total * 4 / 1024
+    );
+    crate::kdebug!("PMM: {} free frames", free);
 
     // 4. Initialize VMM (wraps root page table, creates memory layout).
     crate::mm::vmm::init(boot_info);
@@ -339,18 +347,13 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
     // 4b. Allocate a guarded kernel syscall stack (replaces the early BSS stack).
     {
         use crate::mm::pmm::BitmapFrameAllocRef;
-        crate::mm::pmm::with_pmm(|pmm| {
+        let (bottom, top, guard) = crate::mm::pmm::with_pmm(|pmm| {
             let mut alloc = BitmapFrameAllocRef(pmm);
             crate::mm::vmm::with_vmm(|vmm| {
                 let stack = vmm
                     .alloc_kernel_stack(&mut alloc, None)
                     .expect("failed to allocate guarded kernel stack");
-                crate::kinfo!(
-                    "Guarded kernel stack: {:#x}..{:#x} (guard at {:#x})",
-                    stack.bottom().as_u64(),
-                    stack.top().as_u64(),
-                    stack.guard().as_u64(),
-                );
+                let info = (stack.bottom().as_u64(), stack.top().as_u64(), stack.guard().as_u64());
                 // SAFETY: The stack was just allocated and mapped. Setting
                 // kernel_rsp and RSP0 to its top is safe because no
                 // syscall or interrupt will use the old stack between
@@ -359,8 +362,14 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
                     crate::percpu::set_kernel_rsp(stack.top().as_u64());
                     crate::arch::x86_64::gdt::set_tss_rsp0(stack.top().as_u64());
                 }
-            });
+                info
+            })
         });
+        // Log after releasing PMM + VMM locks to avoid ordering violations.
+        crate::kinfo!(
+            "Guarded kernel stack: {:#x}..{:#x} (guard at {:#x})",
+            bottom, top, guard,
+        );
     }
 
     // 5. Map initial heap and initialize the heap allocator.
@@ -386,7 +395,19 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
     // 8. Arch-specific platform init (ACPI, PCI, drivers, etc.).
     crate::arch::platform_init(boot_info);
 
-    // 8a. Auto-start profiling if configured (sampling profiler / ftrace).
+    // 8a. Initialize lock stress delays (after HPET is available).
+    #[cfg(hadron_lock_stress)]
+    {
+        hadron_core::sync::stress::init(
+            crate::config::LOCK_STRESS_MAX_US,
+            crate::time::boot_nanos(),
+        );
+        // SAFETY: `boot_nanos` is a lock-free function reading HPET via MMIO.
+        unsafe { hadron_core::sync::stress::set_nanos_fn(crate::time::boot_nanos) };
+        crate::kinfo!("Lock stress delays enabled (max {}µs)", crate::config::LOCK_STRESS_MAX_US);
+    }
+
+    // 8b. Auto-start profiling if configured (sampling profiler / ftrace).
     #[cfg(any(hadron_profile_sample, hadron_profile_ftrace))]
     crate::profiling::init();
 
@@ -477,7 +498,9 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
             (ramfs_entry.create)()
         };
         let ramfs_root = ramfs.root();
+        let ramfs_name = ramfs.name();
         fs::vfs::with_vfs_mut(|vfs| vfs.mount("/", ramfs));
+        crate::kinfo!("VFS: Mounted {} at /", ramfs_name);
 
         // Unpack initrd CPIO archive into the root filesystem using the
         // registered initramfs unpacker.
@@ -493,7 +516,9 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
 
         // Mount devfs at /dev (kernel-internal, not from driver registry).
         let devfs = Arc::new(fs::devfs::DevFs::new());
+        let devfs_name = devfs.name();
         fs::vfs::with_vfs_mut(|vfs| vfs.mount("/dev", devfs));
+        crate::kinfo!("VFS: Mounted {} at /dev", devfs_name);
 
         // Mount block-device-backed filesystems discovered from the registry.
         // Each block device is passed to registered block FS drivers until one succeeds.
@@ -566,7 +591,9 @@ fn mount_block_device(
     for entry in block_fs_entries {
         match (entry.mount)(disk) {
             Ok(fs_instance) => {
+                let fs_name = fs_instance.name();
                 crate::fs::vfs::with_vfs_mut(|vfs| vfs.mount(mount_point, fs_instance));
+                crate::kinfo!("VFS: Mounted {} at {}", fs_name, mount_point);
                 return;
             }
             Err(e) => {
@@ -582,4 +609,20 @@ fn mount_block_device(
         }
     }
     crate::kinfo!("No filesystem driver for {}", device_name);
+}
+
+/// Lock-free lockdep violation reporter: writes directly to COM1.
+///
+/// Used as the [`crate::sync::lockdep::LockdepWriteFn`] callback. Because
+/// `EarlySerial` uses bare I/O port writes with no locks, this is safe to
+/// call from any context including interrupt handlers.
+#[cfg(hadron_lockdep)]
+fn lockdep_serial_report(args: core::fmt::Arguments<'_>) {
+    use core::fmt::Write;
+    use crate::drivers::early_console::{COM1, EarlySerial};
+    use crate::log::SerialWriter;
+
+    let mut w = SerialWriter(EarlySerial::new(COM1));
+    let _ = w.write_fmt(args);
+    let _ = w.write_str("\n");
 }

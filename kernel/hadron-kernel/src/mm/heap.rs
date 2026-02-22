@@ -220,7 +220,7 @@ impl LinkedListAllocator {
     /// Creates a new, uninitialized allocator. Must call `init()` before use.
     pub const fn new() -> Self {
         Self {
-            inner: SpinLock::named("HEAP", LinkedListAllocatorInner {
+            inner: SpinLock::leveled("HEAP", 1, LinkedListAllocatorInner {
                 head: ptr::null_mut(),
                 heap_start: 0,
                 heap_end: 0,

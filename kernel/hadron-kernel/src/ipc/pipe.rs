@@ -23,7 +23,7 @@ const PIPE_BUF_SIZE: usize = 64 * 1024;
 /// Creates a new pipe, returning the reader and writer halves as `Arc<dyn Inode>`.
 pub fn pipe() -> (Arc<dyn Inode>, Arc<dyn Inode>) {
     let inner = Arc::new(PipeInner {
-        buffer: SpinLock::new(CircularBuffer::new(PIPE_BUF_SIZE)),
+        buffer: SpinLock::named("pipe_buffer", CircularBuffer::new(PIPE_BUF_SIZE)),
         read_wq: HeapWaitQueue::new(),
         write_wq: HeapWaitQueue::new(),
         readers: AtomicUsize::new(1),
@@ -146,21 +146,35 @@ impl Inode for PipeReader {
     ) -> Pin<Box<dyn Future<Output = Result<usize, FsError>> + Send + 'a>> {
         Box::pin(async move {
             loop {
-                {
-                    let mut buffer = self.0.buffer.lock();
-                    if !buffer.is_empty() {
-                        let n = buffer.read(buf);
-                        // Wake writers waiting for space.
-                        self.0.write_wq.wake_one();
-                        return Ok(n);
+                // Wait for data or EOF using register-before-check to
+                // prevent lost wakeups on multi-CPU.
+                core::future::poll_fn(|cx| {
+                    self.0.read_wq.register_waker(cx.waker());
+                    let buffer = self.0.buffer.lock();
+                    if !buffer.is_empty()
+                        || self.0.writers.load(Ordering::Acquire) == 0
+                    {
+                        core::task::Poll::Ready(())
+                    } else {
+                        core::task::Poll::Pending
                     }
-                    // Buffer empty — check if all writers are gone.
-                    if self.0.writers.load(Ordering::Acquire) == 0 {
-                        return Ok(0); // EOF
-                    }
+                })
+                .await;
+
+                // Perform actual read under lock.
+                let mut buffer = self.0.buffer.lock();
+                if !buffer.is_empty() {
+                    let n = buffer.read(buf);
+                    drop(buffer);
+                    // Wake writers waiting for space.
+                    self.0.write_wq.wake_one();
+                    return Ok(n);
                 }
-                // Buffer empty and writers exist — wait.
-                self.0.read_wq.wait().await;
+                // Buffer empty — check if all writers are gone.
+                if self.0.writers.load(Ordering::Acquire) == 0 {
+                    return Ok(0); // EOF
+                }
+                // Spurious wake — retry.
             }
         })
     }
@@ -233,21 +247,35 @@ impl Inode for PipeWriter {
     ) -> Pin<Box<dyn Future<Output = Result<usize, FsError>> + Send + 'a>> {
         Box::pin(async move {
             loop {
-                {
-                    let mut buffer = self.0.buffer.lock();
-                    // Check if readers are gone.
-                    if self.0.readers.load(Ordering::Acquire) == 0 {
-                        return Err(FsError::IoError); // EPIPE
+                // Wait for space or broken pipe using register-before-check
+                // to prevent lost wakeups on multi-CPU.
+                core::future::poll_fn(|cx| {
+                    self.0.write_wq.register_waker(cx.waker());
+                    let buffer = self.0.buffer.lock();
+                    if self.0.readers.load(Ordering::Acquire) == 0
+                        || !buffer.is_full()
+                    {
+                        core::task::Poll::Ready(())
+                    } else {
+                        core::task::Poll::Pending
                     }
-                    if !buffer.is_full() {
-                        let n = buffer.write(buf);
-                        // Wake readers waiting for data.
-                        self.0.read_wq.wake_one();
-                        return Ok(n);
-                    }
+                })
+                .await;
+
+                // Perform actual write under lock.
+                let mut buffer = self.0.buffer.lock();
+                // Check if readers are gone.
+                if self.0.readers.load(Ordering::Acquire) == 0 {
+                    return Err(FsError::IoError); // EPIPE
                 }
-                // Buffer full and readers exist — wait.
-                self.0.write_wq.wait().await;
+                if !buffer.is_full() {
+                    let n = buffer.write(buf);
+                    drop(buffer);
+                    // Wake readers waiting for data.
+                    self.0.read_wq.wake_one();
+                    return Ok(n);
+                }
+                // Spurious wake — retry.
             }
         })
     }

@@ -78,14 +78,12 @@ impl DeviceRegistry {
 
         for (path, fb) in devices.framebuffers {
             let leaf = path.leaf().to_string();
-            crate::kinfo!("DeviceRegistry: registered framebuffer '{}'", leaf);
             device_paths.push(path);
             self.framebuffers.insert(leaf, fb);
         }
 
         for (path, dev) in devices.block_devices {
             let leaf = path.leaf().to_string();
-            crate::kinfo!("DeviceRegistry: registered block device '{}'", leaf);
             device_paths.push(path);
             self.block_devices.insert(leaf, dev);
         }
@@ -100,7 +98,6 @@ impl DeviceRegistry {
 
     /// Registers a framebuffer device directly (backward-compat).
     pub fn register_framebuffer(&mut self, name: &str, fb: Arc<dyn Framebuffer>) {
-        crate::kinfo!("DeviceRegistry: registered framebuffer '{}'", name);
         self.framebuffers.insert(name.to_string(), fb);
     }
 
@@ -116,7 +113,6 @@ impl DeviceRegistry {
 
     /// Registers a block device directly (backward-compat).
     pub fn register_block_device(&mut self, name: &str, dev: Box<dyn DynBlockDevice>) {
-        crate::kinfo!("DeviceRegistry: registered block device '{}'", name);
         self.block_devices.insert(name.to_string(), dev);
     }
 
@@ -154,7 +150,6 @@ impl DeviceRegistry {
                 continue;
             }
             if let Some(ref lifecycle) = entry.lifecycle {
-                crate::kinfo!("DeviceRegistry: shutting down driver '{}'", entry.name);
                 lifecycle.shutdown();
                 entry.state = DriverState::Shutdown;
             }
@@ -163,7 +158,7 @@ impl DeviceRegistry {
 }
 
 /// Global device registry instance.
-static DEVICE_REGISTRY: SpinLock<Option<DeviceRegistry>> = SpinLock::named("DEVICE_REGISTRY", None); // Lock level 3
+static DEVICE_REGISTRY: SpinLock<Option<DeviceRegistry>> = SpinLock::leveled("DEVICE_REGISTRY", 4, None);
 
 /// Initializes the global device registry.
 ///

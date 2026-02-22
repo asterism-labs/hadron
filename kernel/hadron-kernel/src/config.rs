@@ -25,6 +25,10 @@ pub const MAX_CPUS: usize = hadron_config::MAX_CPUS as usize;
 /// Kernel heap size in bytes.
 pub const KERNEL_HEAP_SIZE: u64 = hadron_config::KERNEL_HEAP_SIZE;
 
+/// Maximum stress delay in microseconds (Kconfig default: 10).
+#[cfg(hadron_lock_stress)]
+pub const LOCK_STRESS_MAX_US: u32 = hadron_config::LOCK_STRESS_MAX_US;
+
 /// Sampling profiler: sample rate in Hz (Kconfig default: 100).
 #[cfg(hadron_profile_sample)]
 pub const PROFILE_SAMPLE_RATE: u32 = hadron_config::PROFILE_SAMPLE_RATE;

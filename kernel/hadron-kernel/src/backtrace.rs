@@ -66,7 +66,7 @@ struct HkifSections {
 // ---------------------------------------------------------------------------
 
 /// The raw HKIF data slice and parsed section info, set once at boot.
-static HKIF_STATE: SpinLock<Option<HkifState>> = SpinLock::named("HKIF_STATE", None); // Lock level 3
+static HKIF_STATE: SpinLock<Option<HkifState>> = SpinLock::leveled("HKIF_STATE", 4, None);
 
 /// Kernel virtual base address for offset-to-address conversion.
 static KERNEL_VIRT_BASE: AtomicU64 = AtomicU64::new(0);

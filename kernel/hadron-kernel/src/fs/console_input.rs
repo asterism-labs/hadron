@@ -67,16 +67,14 @@ const SCANCODE_BUF_SIZE: usize = 64;
 /// scancodes are preserved even if a waker notification is lost (e.g. consumed
 /// by a noop waker from [`crate::fs::try_poll_immediate`]). Processing and
 /// echo happen later in [`poll_keyboard_hardware`].
-// Lock level IRQ-0
 static SCANCODE_BUF: IrqSpinLock<RingBuf<u8, SCANCODE_BUF_SIZE>> =
-    IrqSpinLock::named("SCANCODE_BUF", RingBuf::new());
+    IrqSpinLock::leveled("SCANCODE_BUF", 10, RingBuf::new());
 
 /// Global console input state, protected by an IRQ-safe spinlock.
 ///
 /// Uses [`IrqSpinLock`] because [`poll_keyboard_hardware`] accesses this
 /// while the keyboard IRQ handler could fire on the same CPU.
-// Lock level IRQ-0
-static STATE: IrqSpinLock<ConsoleInputState> = IrqSpinLock::named("STATE", ConsoleInputState::new());
+static STATE: IrqSpinLock<ConsoleInputState> = IrqSpinLock::leveled("STATE", 10, ConsoleInputState::new());
 
 /// Internal state for the console input subsystem.
 struct ConsoleInputState {

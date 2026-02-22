@@ -643,7 +643,7 @@ impl Logger {
     /// [`init_with_serial`](Self::init_with_serial) is called.
     const fn new() -> Self {
         Self {
-            inner: SpinLock::named("LOGGER", None),
+            inner: SpinLock::leveled("LOGGER", 5, None),
         }
     }
 

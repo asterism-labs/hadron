@@ -12,6 +12,8 @@ mod lazy;
 #[cfg(hadron_lockdep)]
 pub mod lockdep;
 mod mutex;
+#[cfg(hadron_lock_stress)]
+pub mod stress;
 mod rwlock;
 mod semaphore;
 mod seqlock;

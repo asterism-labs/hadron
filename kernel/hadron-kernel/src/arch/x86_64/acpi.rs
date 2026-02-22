@@ -46,8 +46,10 @@ struct AcpiPlatformState {
 }
 
 /// APIC platform state: `None` before init, `Some` after.
-// Lock level IRQ-1
-static PLATFORM: IrqSpinLock<Option<AcpiPlatformState>> = IrqSpinLock::named("PLATFORM", None);
+///
+/// Now only used for I/O APIC operations (`with_io_apic`). The LAPIC base
+/// address is cached in `LAPIC_BASE` for lock-free access on hot paths.
+static PLATFORM: IrqSpinLock<Option<AcpiPlatformState>> = IrqSpinLock::leveled("PLATFORM", 11, None);
 
 /// Timer tick counter, incremented by the LAPIC timer handler.
 /// Kept separate from `PLATFORM` because it is on the hot path (every ISR).
@@ -60,18 +62,28 @@ static LAPIC_TIMER_INITIAL_COUNT: AtomicU32 = AtomicU32::new(0);
 /// LAPIC timer divide value, stored after BSP calibration for AP reuse.
 static LAPIC_TIMER_DIVIDE: AtomicU8 = AtomicU8::new(0);
 
+/// Cached LAPIC virtual base address, set once during ACPI init.
+///
+/// All CPUs share the same virtual address for LAPIC MMIO; the hardware
+/// routes each access to the requesting CPU's local APIC. This atomic
+/// allows lock-free access to the LAPIC for EOI, IPI, and other hot-path
+/// operations without acquiring the PLATFORM lock.
+static LAPIC_BASE: AtomicU64 = AtomicU64::new(0);
+
 /// Sends LAPIC EOI if the LAPIC has been initialized.
 ///
 /// Called by the interrupt dispatch subsystem after every hardware interrupt.
-/// Uses `try_lock` to avoid deadlock if called from an ISR that interrupted
-/// code holding the platform lock.
+/// Reads the cached `LAPIC_BASE` atomic — no lock, EOI is never dropped.
 pub fn send_lapic_eoi() {
-    if let Some(guard) = PLATFORM.try_lock() {
-        if let Some(state) = guard.as_ref() {
-            // SAFETY: The LAPIC was mapped during init and the mapping is permanent.
-            let lapic = unsafe { LocalApic::new(state.lapic_base) };
-            lapic.eoi();
-        }
+    let base = LAPIC_BASE.load(Ordering::Acquire);
+    debug_assert!(
+        base != 0 || TIMER_TICKS.load(Ordering::Relaxed) == 0,
+        "send_lapic_eoi: LAPIC_BASE not set but timer ticks > 0 (boot ordering bug)"
+    );
+    if base != 0 {
+        // SAFETY: The LAPIC was mapped during init and the mapping is permanent.
+        let lapic = unsafe { LocalApic::new(VirtAddr::new(base)) };
+        lapic.eoi();
     }
 }
 
@@ -93,11 +105,16 @@ pub fn lapic_timer_config() -> (u32, u8) {
 
 /// Returns the LAPIC virtual base address, if initialized.
 ///
+/// Reads the cached `LAPIC_BASE` atomic — no lock required.
 /// All CPUs share the same virtual address for LAPIC MMIO; the hardware
 /// routes each access to the requesting CPU's local APIC.
 pub fn lapic_virt() -> Option<VirtAddr> {
-    let lock = PLATFORM.lock();
-    lock.as_ref().map(|state| state.lapic_base)
+    let base = LAPIC_BASE.load(Ordering::Acquire);
+    if base != 0 {
+        Some(VirtAddr::new(base))
+    } else {
+        None
+    }
 }
 
 /// Runs a closure with a reference to the I/O APIC, if initialized.
@@ -302,12 +319,15 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
         }
     }
 
-    // Persist the platform state for later use by interrupt dispatch and drivers.
+    // Persist the platform state for later use by I/O APIC operations.
     *PLATFORM.lock() = Some(AcpiPlatformState {
         lapic_base: lapic_virt,
         io_apic_base: io_apic_virt,
         gsi_base: io_apic_gsi_base,
     });
+
+    // Cache LAPIC base address for lock-free access by EOI, IPI, etc.
+    LAPIC_BASE.store(lapic_virt.as_u64(), Ordering::Release);
 
     // --- 5. Initialize HPET ---
     let hpet = hpet_info.and_then(|info| {

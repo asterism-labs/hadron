@@ -21,6 +21,8 @@ pub struct RwLock<T> {
     state: AtomicU32,
     #[cfg(hadron_lockdep)]
     name: &'static str,
+    #[cfg(hadron_lockdep)]
+    level: u8,
     data: UnsafeCell<T>,
 }
 
@@ -37,6 +39,8 @@ impl<T> RwLock<T> {
             state: AtomicU32::new(0),
             #[cfg(hadron_lockdep)]
             name: "<unnamed>",
+            #[cfg(hadron_lockdep)]
+            level: 0,
             data: UnsafeCell::new(value),
         }
     }
@@ -47,12 +51,33 @@ impl<T> RwLock<T> {
             state: AtomicU32::new(0),
             #[cfg(hadron_lockdep)]
             name,
+            #[cfg(hadron_lockdep)]
+            level: 0,
+            data: UnsafeCell::new(value),
+        }
+    }
+
+    /// Creates a new unlocked `RwLock` with a name and lock ordering level.
+    ///
+    /// `level` is used for lockdep ordering checks: a lock at level N may
+    /// only be acquired while holding locks at levels <= N.
+    /// Level 0 means "unassigned" (no ordering check).
+    pub const fn leveled(name: &'static str, level: u8, value: T) -> Self {
+        Self {
+            state: AtomicU32::new(0),
+            #[cfg(hadron_lockdep)]
+            name,
+            #[cfg(hadron_lockdep)]
+            level,
             data: UnsafeCell::new(value),
         }
     }
 
     /// Acquires a shared read lock, spinning until no writer holds the lock.
     pub fn read(&self) -> RwLockReadGuard<'_, T> {
+        #[cfg(hadron_lock_stress)]
+        super::stress::stress_delay();
+
         loop {
             let s = self.state.load(Ordering::Relaxed);
             if s != WRITE_LOCKED {
@@ -78,6 +103,9 @@ impl<T> RwLock<T> {
     /// Acquires an exclusive write lock, spinning until no readers or writers
     /// hold the lock.
     pub fn write(&self) -> RwLockWriteGuard<'_, T> {
+        #[cfg(hadron_lock_stress)]
+        super::stress::stress_delay();
+
         loop {
             if self
                 .state
@@ -142,8 +170,9 @@ impl<T> RwLock<T> {
     /// Registers this lock with lockdep and records the acquisition.
     #[cfg(hadron_lockdep)]
     fn lockdep_acquire(&self) -> LockClassId {
-        let class = super::lockdep::get_or_register(
+        let class = super::lockdep::get_or_register_leveled(
             self as *const _ as usize,
+            self.level,
             self.name,
             super::lockdep::LockKind::RwLock,
         );
@@ -153,11 +182,15 @@ impl<T> RwLock<T> {
 }
 
 /// RAII guard for a shared read lock on an [`RwLock`].
+///
+/// `!Send` — holding across `.await` would block writers while suspended.
 pub struct RwLockReadGuard<'a, T> {
     lock: &'a RwLock<T>,
     #[cfg(hadron_lockdep)]
     class: LockClassId,
 }
+
+impl<T> !Send for RwLockReadGuard<'_, T> {}
 
 impl<T> Deref for RwLockReadGuard<'_, T> {
     type Target = T;
@@ -172,6 +205,9 @@ impl<T> Drop for RwLockReadGuard<'_, T> {
     fn drop(&mut self) {
         self.lock.state.fetch_sub(1, Ordering::Release);
 
+        #[cfg(hadron_lock_stress)]
+        super::stress::stress_delay();
+
         #[cfg(hadron_lockdep)]
         if self.class != LockClassId::NONE {
             super::lockdep::lock_released(self.class);
@@ -180,11 +216,15 @@ impl<T> Drop for RwLockReadGuard<'_, T> {
 }
 
 /// RAII guard for an exclusive write lock on an [`RwLock`].
+///
+/// `!Send` — holding across `.await` would block all readers/writers while suspended.
 pub struct RwLockWriteGuard<'a, T> {
     lock: &'a RwLock<T>,
     #[cfg(hadron_lockdep)]
     class: LockClassId,
 }
+
+impl<T> !Send for RwLockWriteGuard<'_, T> {}
 
 impl<T> Deref for RwLockWriteGuard<'_, T> {
     type Target = T;
@@ -205,6 +245,9 @@ impl<T> DerefMut for RwLockWriteGuard<'_, T> {
 impl<T> Drop for RwLockWriteGuard<'_, T> {
     fn drop(&mut self) {
         self.lock.state.store(0, Ordering::Release);
+
+        #[cfg(hadron_lock_stress)]
+        super::stress::stress_delay();
 
         #[cfg(hadron_lockdep)]
         if self.class != LockClassId::NONE {

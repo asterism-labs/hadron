@@ -47,6 +47,16 @@ profile("stress")
     .qemu_cores(4)
     .test_timeout(120);
 
+profile("lock-stress")
+    .inherits("stress")
+    .config(#{
+        lock_stress: true,
+        LOCK_STRESS_MAX_US: 10,
+        lockdep: true,
+        lock_debug: true,
+        lock_stat: true,
+    });
+
 profile("debug-gdb")
     .inherits("default")
     .qemu_memory(512)
@@ -99,6 +109,8 @@ dependency("syn").version("2.0.116")
     .features(["full", "extra-traits", "parsing", "printing", "clone-impls", "proc-macro", "derive"]);
 dependency("proc-macro2").version("1.0.106")
     .cfg_flags(["wrap_proc_macro"]);
+dependency("quote").version("1.0.35");
+dependency("unicode-ident").version("1.0.24");
 
 // Kernel no_std dependencies.
 dependency("bitflags").version("2.11.0");

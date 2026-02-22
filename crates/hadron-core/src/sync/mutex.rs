@@ -168,6 +168,9 @@ impl<'a, T> Future for MutexLockFuture<'a, T> {
             }
         }
 
+        #[cfg(hadron_lock_stress)]
+        super::stress::stress_delay();
+
         // Fast path: try to acquire directly.
         if self
             .mutex

@@ -13,7 +13,7 @@ use crate::arch::x86_64::hw::hpet::Hpet;
 
 /// Global HPET driver instance, stored after ACPI init and timer calibration.
 /// Provides the [`crate::driver_api::ClockSource`] trait interface.
-static HPET_DRIVER: SpinLock<Option<Hpet>> = SpinLock::named("HPET_DRIVER", None); // Lock level 3
+static HPET_DRIVER: SpinLock<Option<Hpet>> = SpinLock::leveled("HPET_DRIVER", 4, None);
 
 /// HPET MMIO virtual base address. Zero means "not yet initialized".
 static HPET_BASE: AtomicU64 = AtomicU64::new(0);

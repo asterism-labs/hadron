@@ -77,6 +77,20 @@ config no_work_steal
     depends on smp
     binding cfg
 
+config lock_stress
+    bool "Lock contention stress delays"
+    default n
+    depends on lockdep
+    binding cfg
+    help "Inject random spin delays around lock acquire/release to surface race conditions"
+
+config LOCK_STRESS_MAX_US
+    u32 "Maximum stress delay (microseconds)"
+    default 10
+    range 1 100
+    depends on lock_stress
+    binding const
+
 config lock_stat
     bool "Lock contention statistics"
     default n

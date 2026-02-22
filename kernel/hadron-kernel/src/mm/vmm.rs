@@ -386,7 +386,7 @@ type KernelMapper = crate::arch::aarch64::paging::AArch64PageMapper;
 pub type KernelVmm = Vmm<KernelMapper>;
 
 /// Global virtual memory manager.
-static VMM: SpinLock<Option<KernelVmm>> = SpinLock::named("VMM", None); // Lock level 2
+static VMM: SpinLock<Option<KernelVmm>> = SpinLock::leveled("VMM", 3, None);
 
 /// Initializes the VMM from boot info and the PMM.
 ///
@@ -418,14 +418,16 @@ pub fn map_initial_heap() -> (usize, usize) {
     let mut vmm = VMM.lock();
     let vmm = vmm.as_mut().expect("VMM not initialized");
 
-    super::pmm::with_pmm(|pmm| {
+    let result = super::pmm::with_pmm(|pmm| {
         let mut alloc = BitmapFrameAllocRef(pmm);
         let (base, size) = vmm
             .map_initial_heap(&mut alloc)
             .expect("failed to map initial heap");
-        crate::ktrace_subsys!(mm, "VMM: mapped initial heap at {:#x}, size {:#x}", base.as_u64(), size);
         (base.as_u64() as usize, size as usize)
-    })
+    });
+    // Log after releasing PMM lock to avoid PMM → LOGGER ordering violation.
+    crate::ktrace_subsys!(mm, "VMM: mapped initial heap at {:#x}, size {:#x}", result.0, result.1);
+    result
 }
 
 /// Grows the kernel heap by at least `min_bytes`.
@@ -435,12 +437,16 @@ pub fn grow_heap(min_bytes: usize) -> Option<(*mut u8, usize)> {
     let mut vmm = VMM.lock();
     let vmm = vmm.as_mut()?;
 
-    super::pmm::with_pmm(|pmm| {
+    let result = super::pmm::with_pmm(|pmm| {
         let mut alloc = BitmapFrameAllocRef(pmm);
         let (base, size) = vmm.grow_heap(min_bytes as u64, &mut alloc).ok()?;
-        crate::ktrace_subsys!(mm, "VMM: grew heap by {:#x} bytes at {:#x}", size, base.as_u64());
         Some((base.as_mut_ptr::<u8>(), size as usize))
-    })
+    });
+    // Log after releasing PMM lock to avoid PMM → LOGGER ordering violation.
+    if let Some((ptr, size)) = result {
+        crate::ktrace_subsys!(mm, "VMM: grew heap by {:#x} bytes at {:#p}", size, ptr);
+    }
+    result
 }
 
 /// Executes a closure with a mutable reference to the global VMM.
@@ -454,17 +460,18 @@ pub fn with_vmm<R>(f: impl FnOnce(&mut KernelVmm) -> R) -> R {
 /// Convenience wrapper that acquires both VMM and PMM locks internally.
 /// Returns the virtual base address of the mapping.
 pub fn map_mmio_region(phys: PhysAddr, size: u64) -> VirtAddr {
-    with_vmm(|vmm| {
+    let virt = with_vmm(|vmm| {
         super::pmm::with_pmm(|pmm| {
             let mut alloc = BitmapFrameAllocRef(pmm);
             let mapping = vmm
                 .map_mmio(phys, size, &mut alloc, None)
                 .expect("failed to map MMIO region");
-            let virt = mapping.virt_base();
-            crate::ktrace_subsys!(mm, "VMM: mapped MMIO phys={:#x} size={:#x} -> virt={:#x}", phys.as_u64(), size, virt.as_u64());
-            virt
+            mapping.virt_base()
         })
-    })
+    });
+    // Log after releasing PMM + VMM locks to avoid ordering violations.
+    crate::ktrace_subsys!(mm, "VMM: mapped MMIO phys={:#x} size={:#x} -> virt={:#x}", phys.as_u64(), size, virt.as_u64());
+    virt
 }
 
 /// Attempts to execute a closure with a mutable reference to the global VMM.

@@ -42,12 +42,25 @@ pub(super) fn irq_lock_depth() -> u32 {
     }
 }
 
+/// Nesting depth threshold above which a warning is emitted. Deep nesting
+/// increases contention windows and deadlock risk.
+#[cfg(all(hadron_lock_debug, target_os = "none"))]
+const IRQ_NESTING_WARN_THRESHOLD: u32 = 3;
+
 #[cfg(all(hadron_lock_debug, target_os = "none"))]
 fn increment_irq_depth() {
     if !crate::cpu_local::cpu_is_initialized() {
         return;
     }
-    IRQ_LOCK_DEPTH.get().fetch_add(1, Ordering::Relaxed);
+    let prev = IRQ_LOCK_DEPTH.get().fetch_add(1, Ordering::Relaxed);
+    #[cfg(hadron_lockdep)]
+    if prev + 1 > IRQ_NESTING_WARN_THRESHOLD {
+        super::lockdep::report_write(format_args!(
+            "lockdep: IrqSpinLock nesting depth {} exceeds threshold {}",
+            prev + 1,
+            IRQ_NESTING_WARN_THRESHOLD,
+        ));
+    }
 }
 
 #[cfg(all(hadron_lock_debug, target_os = "none"))]
@@ -63,6 +76,8 @@ pub struct IrqSpinLock<T> {
     locked: AtomicBool,
     #[cfg(hadron_lockdep)]
     name: &'static str,
+    #[cfg(hadron_lockdep)]
+    level: u8,
     data: UnsafeCell<T>,
 }
 
@@ -77,6 +92,8 @@ impl<T> IrqSpinLock<T> {
             locked: AtomicBool::new(false),
             #[cfg(hadron_lockdep)]
             name: "<unnamed>",
+            #[cfg(hadron_lockdep)]
+            level: 0,
             data: UnsafeCell::new(value),
         }
     }
@@ -87,6 +104,24 @@ impl<T> IrqSpinLock<T> {
             locked: AtomicBool::new(false),
             #[cfg(hadron_lockdep)]
             name,
+            #[cfg(hadron_lockdep)]
+            level: 0,
+            data: UnsafeCell::new(value),
+        }
+    }
+
+    /// Creates a new unlocked `IrqSpinLock` with a name and lock ordering level.
+    ///
+    /// `level` is used for lockdep ordering checks: a lock at level N may
+    /// only be acquired while holding locks at levels <= N.
+    /// Level 0 means "unassigned" (no ordering check).
+    pub const fn leveled(name: &'static str, level: u8, value: T) -> Self {
+        Self {
+            locked: AtomicBool::new(false),
+            #[cfg(hadron_lockdep)]
+            name,
+            #[cfg(hadron_lockdep)]
+            level,
             data: UnsafeCell::new(value),
         }
     }
@@ -95,6 +130,9 @@ impl<T> IrqSpinLock<T> {
     pub fn lock(&self) -> IrqSpinLockGuard<'_, T> {
         // Save current RFLAGS and disable interrupts.
         let saved_flags = save_flags_and_cli();
+
+        #[cfg(hadron_lock_stress)]
+        super::stress::stress_delay();
 
         // TTAS spin to acquire.
         loop {
@@ -152,8 +190,9 @@ impl<T> IrqSpinLock<T> {
     /// Registers this lock with lockdep and records the acquisition.
     #[cfg(hadron_lockdep)]
     fn lockdep_acquire(&self) -> LockClassId {
-        let class = super::lockdep::get_or_register(
+        let class = super::lockdep::get_or_register_leveled(
             self as *const _ as usize,
+            self.level,
             self.name,
             super::lockdep::LockKind::IrqSpinLock,
         );
@@ -188,6 +227,9 @@ impl<T> DerefMut for IrqSpinLockGuard<'_, T> {
 impl<T> Drop for IrqSpinLockGuard<'_, T> {
     fn drop(&mut self) {
         self.lock.locked.store(false, Ordering::Release);
+
+        #[cfg(hadron_lock_stress)]
+        super::stress::stress_delay();
 
         #[cfg(hadron_lockdep)]
         if self.class != LockClassId::NONE {

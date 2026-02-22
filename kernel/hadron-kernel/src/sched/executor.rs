@@ -154,8 +154,8 @@ impl Executor {
     /// Creates a new executor with no tasks.
     pub fn new() -> Self {
         Self {
-            tasks: IrqSpinLock::named("Executor.tasks", BTreeMap::new()),         // Lock level IRQ-3
-            ready_queues: IrqSpinLock::named("Executor.ready_queues", ReadyQueues::new()), // Lock level IRQ-3
+            tasks: IrqSpinLock::leveled("Executor.tasks", 13, BTreeMap::new()),
+            ready_queues: IrqSpinLock::leveled("Executor.ready_queues", 13, ReadyQueues::new()),
             next_id: AtomicU64::new(0),
         }
     }
@@ -218,6 +218,13 @@ impl Executor {
     /// Main executor loop. Called once per CPU, never returns.
     pub fn run(&self) -> ! {
         loop {
+            // Clear preempt_pending before polling. The timer interrupt that
+            // woke us from HLT calls set_preempt_pending(), but since we run
+            // poll_ready_tasks() with IF=0, that stale flag would cause the
+            // batch to break after just one task — stranding newly-queued
+            // tasks (e.g. shell woken by exit_notify) until the next timer.
+            super::clear_preempt_pending();
+
             self.poll_ready_tasks();
 
             // Try to steal work from another CPU before halting.
@@ -253,9 +260,12 @@ impl Executor {
     /// Polls all tasks currently in the ready queues, highest priority first.
     ///
     /// The task is removed from `self.tasks` before polling so the lock is
-    /// dropped and interrupts are re-enabled during `future.poll()`. This
-    /// allows timer interrupts to fire mid-poll, making the `preempt_pending`
-    /// budget check effective.
+    /// dropped during `future.poll()`. Note: interrupts remain disabled
+    /// (IF=0) throughout the batch because `IrqSpinLock` save/restore
+    /// preserves the IF state from the caller (`run()` disables interrupts
+    /// after HLT). The `preempt_pending` budget check is only effective
+    /// when a ring-3 timer trap fires during a `process_task` poll (which
+    /// re-enters the executor via longjmp with `preempt_pending` set).
     ///
     /// If a waker fires while the task is out for polling, the task ID is
     /// pushed into the ready queue again. The next iteration will call
@@ -277,9 +287,11 @@ impl Executor {
                 let mut tasks = self.tasks.lock();
                 tasks.remove(&id)
             };
-            // Lock dropped here — interrupts re-enabled.
+            // Lock dropped here (IF stays 0 — IrqSpinLock restores saved flags).
 
-            // Poll with interrupts enabled. Timer CAN fire here.
+            // Poll the future. Interrupts are disabled (IF=0) so no timer
+            // can fire here. However, a ring-3 timer trap inside
+            // process_task will longjmp back with preempt_pending set.
             if let Some(mut entry) = entry {
                 match entry.future.as_mut().poll(&mut cx) {
                     Poll::Ready(()) => {
@@ -292,8 +304,8 @@ impl Executor {
                 }
             }
 
-            // Budget check: if timer fired during this batch, yield to main loop.
-            // Now actually works because timer can fire during poll above.
+            // Budget check: if a ring-3 timer preemption set the flag during
+            // this batch, yield to the main loop so we re-check for steals/HLT.
             if super::preempt_pending() {
                 super::clear_preempt_pending();
                 break;

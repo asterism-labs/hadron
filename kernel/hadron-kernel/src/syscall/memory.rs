@@ -77,7 +77,7 @@ pub(super) fn sys_mem_map(
             let mut alloc = BitmapFrameAllocRef(pmm);
             for i in 0..page_count {
                 let page_vaddr = base_vaddr.as_u64() + (i as u64) * PAGE_SIZE as u64;
-                let frame = match pmm.allocate_frame() {
+                let frame = match alloc.0.allocate_frame() {
                     Some(f) => f,
                     None => return Err(i), // Out of memory — need to unwind.
                 };

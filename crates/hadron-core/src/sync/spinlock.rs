@@ -17,6 +17,8 @@ pub struct SpinLock<T> {
     locked: AtomicBool,
     #[cfg(hadron_lockdep)]
     name: &'static str,
+    #[cfg(hadron_lockdep)]
+    level: u8,
     data: UnsafeCell<T>,
 }
 
@@ -32,6 +34,8 @@ impl<T> SpinLock<T> {
             locked: AtomicBool::new(false),
             #[cfg(hadron_lockdep)]
             name: "<unnamed>",
+            #[cfg(hadron_lockdep)]
+            level: 0,
             data: UnsafeCell::new(value),
         }
     }
@@ -42,6 +46,24 @@ impl<T> SpinLock<T> {
             locked: AtomicBool::new(false),
             #[cfg(hadron_lockdep)]
             name,
+            #[cfg(hadron_lockdep)]
+            level: 0,
+            data: UnsafeCell::new(value),
+        }
+    }
+
+    /// Creates a new unlocked `SpinLock` with a name and lock ordering level.
+    ///
+    /// `level` is used for lockdep ordering checks: a lock at level N may
+    /// only be acquired while holding locks at levels <= N.
+    /// Level 0 means "unassigned" (no ordering check).
+    pub const fn leveled(name: &'static str, level: u8, value: T) -> Self {
+        Self {
+            locked: AtomicBool::new(false),
+            #[cfg(hadron_lockdep)]
+            name,
+            #[cfg(hadron_lockdep)]
+            level,
             data: UnsafeCell::new(value),
         }
     }
@@ -56,6 +78,9 @@ impl<T> SpinLock<T> {
                 panic!("SpinLock::lock() called while holding IrqSpinLock");
             }
         }
+
+        #[cfg(hadron_lock_stress)]
+        super::stress::stress_delay();
 
         loop {
             // Fast path: try to acquire directly.
@@ -142,8 +167,9 @@ impl<T> SpinLock<T> {
     /// Registers this lock with lockdep and records the acquisition.
     #[cfg(hadron_lockdep)]
     fn lockdep_acquire(&self) -> LockClassId {
-        let class = super::lockdep::get_or_register(
+        let class = super::lockdep::get_or_register_leveled(
             self as *const _ as usize,
+            self.level,
             self.name,
             super::lockdep::LockKind::SpinLock,
         );
@@ -158,6 +184,10 @@ pub struct SpinLockGuard<'a, T> {
     #[cfg(hadron_lockdep)]
     class: LockClassId,
 }
+
+// !Send — holding a SpinLock guard across .await would block other
+// tasks from acquiring the lock while the holding task is suspended.
+impl<T> !Send for SpinLockGuard<'_, T> {}
 
 impl<'a, T> SpinLockGuard<'a, T> {
     /// Returns a reference to the underlying [`SpinLock`].
@@ -187,6 +217,9 @@ impl<T> DerefMut for SpinLockGuard<'_, T> {
 impl<T> Drop for SpinLockGuard<'_, T> {
     fn drop(&mut self) {
         self.lock.locked.store(false, Ordering::Release);
+
+        #[cfg(hadron_lock_stress)]
+        super::stress::stress_delay();
 
         #[cfg(hadron_lockdep)]
         if self.class != LockClassId::NONE {

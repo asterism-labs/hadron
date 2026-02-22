@@ -112,12 +112,28 @@ impl Inode for RamInode {
             if self.itype == InodeType::Directory {
                 return Err(FsError::IsADirectory);
             }
-            let mut data = self.data.lock();
             let end = offset + buf.len();
-            if end > data.len() {
-                data.resize(end, 0);
+
+            // Check whether growth is needed. Pre-allocate outside the data
+            // lock to avoid the RamInode.data → (heap grow) → VMM → PMM chain.
+            let current_len = self.data.lock().len();
+            if end > current_len {
+                let mut pre = Vec::with_capacity(end);
+
+                let mut data = self.data.lock();
+                if end > data.len() {
+                    // Swap in the pre-allocated buffer. extend_from_slice and
+                    // resize work within the existing capacity (no realloc).
+                    pre.extend_from_slice(&data);
+                    pre.resize(end, 0);
+                    *data = pre;
+                }
+                data[offset..end].copy_from_slice(buf);
+            } else {
+                let mut data = self.data.lock();
+                data[offset..end].copy_from_slice(buf);
             }
-            data[offset..end].copy_from_slice(buf);
+
             Ok(buf.len())
         })
     }

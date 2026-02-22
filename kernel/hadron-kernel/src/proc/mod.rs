@@ -71,7 +71,7 @@ static PROCESS_EXIT_STATUS: CpuLocal<AtomicU64> =
 /// Per-CPU currently running user-mode process.
 /// Set before entering userspace, cleared after returning.
 static CURRENT_PROCESS: CpuLocal<SpinLock<Option<Arc<Process>>>> =
-    CpuLocal::new([const { SpinLock::new(None) }; MAX_CPUS]);
+    CpuLocal::new([const { SpinLock::named("CURRENT_PROCESS", None) }; MAX_CPUS]);
 
 /// Wrapper to make `UnsafeCell<UserRegisters>` usable in a `static`.
 ///
@@ -167,7 +167,7 @@ pub fn foreground_pid() -> u32 {
 /// Global process table mapping PID → `Arc<Process>`.
 ///
 /// Processes are inserted on spawn and removed after exit + reaping.
-static PROCESS_TABLE: SpinLock<BTreeMap<u32, Arc<Process>>> = SpinLock::named("PROCESS_TABLE", BTreeMap::new()); // Lock level 3
+static PROCESS_TABLE: SpinLock<BTreeMap<u32, Arc<Process>>> = SpinLock::leveled("PROCESS_TABLE", 4, BTreeMap::new());
 
 /// Registers a process in the global table.
 pub fn register_process(process: &Arc<Process>) {
@@ -253,10 +253,10 @@ impl Process {
             parent_pid,
             user_cr3,
             address_space,
-            fd_table: SpinLock::new(FileDescriptorTable::new()),
-            mmap_alloc: SpinLock::new(FreeRegionAllocator::new(mmap_region)),
+            fd_table: SpinLock::named("fd_table", FileDescriptorTable::new()),
+            mmap_alloc: SpinLock::named("mmap_alloc", FreeRegionAllocator::new(mmap_region)),
             signals: signal::SignalState::new(),
-            exit_status: SpinLock::new(None),
+            exit_status: SpinLock::named("exit_status", None),
             exit_notify: HeapWaitQueue::new(),
         }
     }
@@ -967,18 +967,33 @@ async fn handle_wait(parent_pid: u32, target_pid: u32) -> (isize, u64) {
         return (-(crate::syscall::EINVAL), 0);
     }
 
-    // Wait for the child to exit (may already be done).
-    loop {
-        {
-            let status = child.exit_status.lock();
-            if let Some(exit_code) = *status {
-                // Reap: remove child from the process table now that
-                // the parent has collected the exit status.
-                unregister_process(child.pid);
-                return (child.pid as isize, exit_code);
-            }
+    // Wait for the child to exit using the double-check pattern to
+    // avoid a lost wakeup race: register the waker *before* re-checking
+    // exit_status so a concurrent wake_all() is never missed.
+    let (pid, exit_code) = core::future::poll_fn(|cx| {
+        // Fast path: child already exited.
+        let status = child.exit_status.lock();
+        if let Some(exit_code) = *status {
+            return core::task::Poll::Ready((child.pid as isize, exit_code));
         }
-        // Not exited yet — wait for notification.
-        child.exit_notify.wait().await;
-    }
+        drop(status);
+
+        // Register waker BEFORE re-checking — eliminates the race window.
+        child.exit_notify.register_waker(cx.waker());
+
+        // Re-check: child may have exited between our check and registration.
+        let status = child.exit_status.lock();
+        if let Some(exit_code) = *status {
+            return core::task::Poll::Ready((child.pid as isize, exit_code));
+        }
+        drop(status);
+
+        core::task::Poll::Pending
+    })
+    .await;
+
+    // Reap: remove child from the process table now that the parent
+    // has collected the exit status.
+    unregister_process(child.pid);
+    (pid, exit_code)
 }
