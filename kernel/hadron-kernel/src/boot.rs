@@ -528,10 +528,17 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
         }
 
         // Mount devfs at /dev (kernel-internal, not from driver registry).
-        let devfs = Arc::new(fs::devfs::DevFs::with_extra_devices([(
-            "console",
-            Arc::new(fs::devfs::DevConsole) as Arc<dyn fs::Inode>,
-        )]));
+        let devfs = Arc::new(fs::devfs::DevFs::with_extra_devices([
+            (
+                "console",
+                Arc::new(fs::devfs::DevConsole) as Arc<dyn fs::Inode>,
+            ),
+            (
+                "tty0",
+                Arc::new(crate::tty::device::DevTty::new(crate::tty::active_tty()))
+                    as Arc<dyn fs::Inode>,
+            ),
+        ]));
         let devfs_name = devfs.name();
         fs::vfs::with_vfs_mut(|vfs| vfs.mount("/dev", devfs));
         crate::kinfo!("VFS: Mounted {} at /dev", devfs_name);
@@ -555,10 +562,8 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
         }
     }
 
-    // Initialize IRQ-driven keyboard input for /dev/console reads.
-    crate::fs::console_input::init();
-    #[cfg(hadron_lock_debug)]
-    crate::fs::console_input::spawn_health_monitor();
+    // Initialize TTY subsystem (keyboard IRQ, line discipline).
+    crate::tty::init();
 
     crate::proc::save_kernel_cr3();
 

@@ -211,22 +211,9 @@ static IO_BUF_LEN: CpuLocal<AtomicU64> = CpuLocal::new([const { AtomicU64::new(0
 /// Per-CPU I/O direction for TRAP_IO: 0 = read, 1 = write.
 static IO_IS_WRITE: CpuLocal<AtomicU8> = CpuLocal::new([const { AtomicU8::new(0) }; MAX_CPUS]);
 
-/// Process group ID of the current foreground group (receives Ctrl+C).
-///
-/// Set to the child's PGID in TRAP_WAIT before await, reset to 0 after.
-/// Accessed from the keyboard input handler to deliver SIGINT to all
-/// processes in the foreground group.
-static FOREGROUND_PGID: AtomicU32 = AtomicU32::new(0);
-
-/// Sets the foreground process group ID.
+/// Sets the foreground process group ID on the active TTY.
 pub fn set_foreground_pgid(pgid: u32) {
-    FOREGROUND_PGID.store(pgid, Ordering::Release);
-}
-
-/// Returns the current foreground process group ID, or `None` if none.
-pub fn foreground_pgid() -> Option<u32> {
-    let raw = FOREGROUND_PGID.load(Ordering::Acquire);
-    if raw == 0 { None } else { Some(raw) }
+    crate::tty::active_tty().set_foreground_pgid(pgid);
 }
 
 /// Send a signal to all processes in a process group.

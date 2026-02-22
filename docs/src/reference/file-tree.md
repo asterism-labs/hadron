@@ -89,8 +89,7 @@ hadron/
 │   │       ├── fs/
 │   │       │   ├── vfs.rs                         # Mount table, path resolution
 │   │       │   ├── file.rs                        # File descriptors
-│   │       │   ├── devfs.rs                       # /dev nodes
-│   │       │   ├── console_input.rs               # Console input device
+│   │       │   ├── devfs.rs                       # /dev nodes (DevConsole delegates to active TTY)
 │   │       │   ├── block_adapter.rs               # Block device to FS bridge
 │   │       │   └── path.rs                        # Path utilities
 │   │       │
@@ -98,6 +97,11 @@ hadron/
 │   │       │   ├── mod.rs                         # Process struct
 │   │       │   ├── binfmt.rs                      # ELF loader
 │   │       │   └── exec.rs                        # Process execution
+│   │       │
+│   │       ├── tty/
+│   │       │   ├── mod.rs                         # Tty struct, TTY_TABLE, IRQ handler
+│   │       │   ├── ldisc.rs                       # LineDiscipline (cooked-mode editing)
+│   │       │   └── device.rs                      # DevTty inode (/dev/ttyN)
 │   │       │
 │   │       ├── syscall/
 │   │       │   ├── mod.rs                         # Dispatch table

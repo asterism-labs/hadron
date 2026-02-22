@@ -29,6 +29,21 @@ impl DevTty {
     }
 }
 
+/// Create a boxed read future for the given TTY.
+///
+/// Used by [`DevConsole`](crate::fs::devfs::DevConsole) to delegate reads to
+/// the active TTY without constructing a temporary `DevTty`.
+pub fn tty_read_future<'a>(
+    tty: &'static Tty,
+    buf: &'a mut [u8],
+) -> Pin<Box<dyn Future<Output = Result<usize, FsError>> + Send + 'a>> {
+    Box::pin(TtyReadFuture {
+        tty,
+        buf,
+        subscribed: false,
+    })
+}
+
 /// Future for reading from a TTY.
 ///
 /// Uses a two-phase poll strategy to avoid registering noop wakers:

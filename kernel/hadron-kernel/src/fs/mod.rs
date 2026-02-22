@@ -16,6 +16,5 @@ pub use hadron_fs::path;
 
 // Kernel-extended modules.
 pub mod block_adapter;
-pub mod console_input;
 pub mod devfs;
 pub mod vfs;
