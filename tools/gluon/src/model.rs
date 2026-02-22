@@ -20,6 +20,8 @@ pub struct BuildModel {
     pub config_options: BTreeMap<String, ConfigOptionDef>,
     /// Menu category ordering for TUI menuconfig (first-appearance order).
     pub menu_order: Vec<String>,
+    /// Named config presets loaded from Kconfig `preset` blocks.
+    pub presets: BTreeMap<String, PresetDef>,
     pub profiles: BTreeMap<String, ProfileDef>,
     pub crates: BTreeMap<String, CrateDef>,
     pub groups: BTreeMap<String, GroupDef>,
@@ -142,6 +144,15 @@ impl Default for ConfigValue {
     }
 }
 
+/// A named configuration preset (defined in Kconfig files).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PresetDef {
+    pub name: String,
+    pub inherits: Option<String>,
+    pub help: Option<String>,
+    pub overrides: BTreeMap<String, ConfigValue>,
+}
+
 /// A build profile definition.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProfileDef {
@@ -153,6 +164,8 @@ pub struct ProfileDef {
     pub debug_info: Option<bool>,
     pub lto: Option<String>,
     pub boot_binary: Option<String>,
+    /// Named preset to apply (from Kconfig `preset` blocks).
+    pub preset: Option<String>,
     pub config: BTreeMap<String, ConfigValue>,
     pub qemu_memory: Option<u32>,
     pub qemu_cores: Option<u32>,

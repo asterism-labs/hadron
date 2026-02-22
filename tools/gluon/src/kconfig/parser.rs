@@ -46,6 +46,7 @@ impl Parser {
             TokenKind::Config => Ok(Some(self.parse_config(menu_title)?)),
             TokenKind::Menu => Ok(Some(self.parse_menu()?)),
             TokenKind::Source => Ok(Some(self.parse_source()?)),
+            TokenKind::Preset => Ok(Some(self.parse_preset()?)),
             TokenKind::EndMenu => Ok(None), // handled by parse_menu
             _ => {
                 let tok = self.peek();
@@ -82,7 +83,8 @@ impl Parser {
                 TokenKind::Config
                 | TokenKind::Menu
                 | TokenKind::EndMenu
-                | TokenKind::Source => break,
+                | TokenKind::Source
+                | TokenKind::Preset => break,
 
                 TokenKind::Bool => {
                     self.advance();
@@ -236,6 +238,59 @@ impl Parser {
         let path = self.expect_string()?;
         self.expect_newline()?;
         Ok(KconfigItem::Source(path))
+    }
+
+    /// Parse a `preset NAME` block.
+    fn parse_preset(&mut self) -> Result<KconfigItem, String> {
+        self.expect(TokenKind::Preset)?;
+        let name = self.expect_ident()?;
+        self.expect_newline()?;
+
+        let mut block = PresetBlock {
+            name,
+            inherits: None,
+            help: None,
+            overrides: Vec::new(),
+        };
+
+        loop {
+            self.skip_newlines();
+            if self.at_eof() {
+                break;
+            }
+            match self.peek_kind() {
+                // Top-level keywords terminate the preset block.
+                TokenKind::Config
+                | TokenKind::Menu
+                | TokenKind::EndMenu
+                | TokenKind::Source
+                | TokenKind::Preset => break,
+
+                TokenKind::Inherits => {
+                    self.advance();
+                    block.inherits = Some(self.expect_ident()?);
+                    self.expect_newline()?;
+                }
+                TokenKind::Help => {
+                    self.advance();
+                    block.help = self.try_string();
+                    self.expect_newline()?;
+                }
+                TokenKind::Set => {
+                    self.advance();
+                    let opt_name = self.expect_ident()?;
+                    let value = self.parse_default_value()?;
+                    block.overrides.push(PresetOverride {
+                        name: opt_name,
+                        value,
+                    });
+                    self.expect_newline()?;
+                }
+                _ => break,
+            }
+        }
+
+        Ok(KconfigItem::Preset(block))
     }
 
     /// Parse a default value: `y`, `n`, integer, or quoted string.
@@ -632,6 +687,69 @@ config RELEASE
         } else {
             panic!("expected Menu item");
         }
+    }
+
+    #[test]
+    fn parse_preset_basic() {
+        let file = parse_str(r#"
+preset debug
+    help "Debug defaults"
+    set lock_debug y
+    set LOG_LEVEL "debug"
+    set MAX_CPUS 4
+"#);
+        assert_eq!(file.items.len(), 1);
+        if let KconfigItem::Preset(ref block) = file.items[0] {
+            assert_eq!(block.name, "debug");
+            assert!(block.inherits.is_none());
+            assert_eq!(block.help.as_deref(), Some("Debug defaults"));
+            assert_eq!(block.overrides.len(), 3);
+            assert_eq!(block.overrides[0].name, "lock_debug");
+            assert!(matches!(block.overrides[0].value, DefaultValue::Bool(true)));
+            assert_eq!(block.overrides[1].name, "LOG_LEVEL");
+            assert!(matches!(&block.overrides[1].value, DefaultValue::Str(s) if s == "debug"));
+            assert_eq!(block.overrides[2].name, "MAX_CPUS");
+            assert!(matches!(block.overrides[2].value, DefaultValue::Integer(4)));
+        } else {
+            panic!("expected Preset item");
+        }
+    }
+
+    #[test]
+    fn parse_preset_with_inheritance() {
+        let file = parse_str(r#"
+preset base
+    set serial_log y
+
+preset child
+    inherits base
+    help "Child preset"
+    set lock_debug y
+"#);
+        assert_eq!(file.items.len(), 2);
+        if let KconfigItem::Preset(ref block) = file.items[1] {
+            assert_eq!(block.name, "child");
+            assert_eq!(block.inherits.as_deref(), Some("base"));
+            assert_eq!(block.help.as_deref(), Some("Child preset"));
+            assert_eq!(block.overrides.len(), 1);
+        } else {
+            panic!("expected Preset item");
+        }
+    }
+
+    #[test]
+    fn parse_preset_after_config() {
+        let file = parse_str(r#"
+config SMP
+    bool "Enable SMP"
+    default y
+
+preset debug
+    set SMP y
+"#);
+        assert_eq!(file.items.len(), 2);
+        assert!(matches!(&file.items[0], KconfigItem::Config(_)));
+        assert!(matches!(&file.items[1], KconfigItem::Preset(_)));
     }
 
     #[test]

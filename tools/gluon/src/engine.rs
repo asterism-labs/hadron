@@ -603,6 +603,14 @@ fn register_profile_api(engine: &mut Engine, model: SharedModel) {
         }
     );
 
+    builder_method!(engine, "preset", ProfileBuilder,
+        |builder, model, preset_name: &str| {
+            if let Some(p) = model.profiles.get_mut(&builder.name) {
+                p.preset = Some(preset_name.into());
+            }
+        }
+    );
+
     builder_method!(engine, "config", ProfileBuilder,
         |builder, model, overrides: Map| {
             if let Some(p) = model.profiles.get_mut(&builder.name) {
@@ -1321,7 +1329,7 @@ fn register_kconfig_api(engine: &mut Engine, model: SharedModel, root: &Path) {
     let m = model;
     let root_path = root.to_path_buf();
     engine.register_fn("kconfig", move |path: &str| {
-        let (options, order, files) = crate::kconfig::load_kconfig(&root_path, path)
+        let (options, order, presets, files) = crate::kconfig::load_kconfig(&root_path, path)
             .unwrap_or_else(|e| panic!("kconfig error: {e}"));
         let mut model = m.lock().unwrap();
         model.config_options.extend(options);
@@ -1330,6 +1338,7 @@ fn register_kconfig_api(engine: &mut Engine, model: SharedModel, root: &Path) {
                 model.menu_order.push(menu);
             }
         }
+        model.presets.extend(presets);
         // Track kconfig files for model cache invalidation.
         model.input_files.extend(files);
     });

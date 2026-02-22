@@ -47,6 +47,9 @@ pub enum TokenKind {
     Binding,
     Help,
     Prompt,
+    Preset,
+    Set,
+    Inherits,
 
     // Literals
     /// Quoted string content (quotes stripped).
@@ -291,6 +294,9 @@ pub fn tokenize(source: &str, file: PathBuf) -> Result<Vec<Token>, String> {
                     "binding" => TokenKind::Binding,
                     "help" => TokenKind::Help,
                     "prompt" => TokenKind::Prompt,
+                    "preset" => TokenKind::Preset,
+                    "set" => TokenKind::Set,
+                    "inherits" => TokenKind::Inherits,
                     "y" => TokenKind::Yes,
                     "n" => TokenKind::No,
                     "on" => TokenKind::Ident(word.to_string()),
@@ -409,6 +415,33 @@ config SMP
         let tokens = tokenize(src, PathBuf::from("test")).unwrap();
         // The \n in the source should be converted to an actual newline character
         assert!(tokens.iter().any(|t| t.kind == TokenKind::String("hello\nworld".to_string())));
+    }
+
+    #[test]
+    fn tokenize_preset_block() {
+        let src = r#"
+preset debug
+    inherits base
+    help "Debug defaults"
+    set lock_debug y
+    set LOG_LEVEL "debug"
+    set MAX_CPUS 4
+"#;
+        let tokens = tokenize(src, PathBuf::from("test")).unwrap();
+        let kinds: Vec<_> = tokens.iter().map(|t| &t.kind).collect();
+
+        assert!(kinds.contains(&&TokenKind::Preset));
+        assert!(kinds.contains(&&TokenKind::Ident("debug".to_string())));
+        assert!(kinds.contains(&&TokenKind::Inherits));
+        assert!(kinds.contains(&&TokenKind::Ident("base".to_string())));
+        assert!(kinds.contains(&&TokenKind::Help));
+        assert!(kinds.contains(&&TokenKind::String("Debug defaults".to_string())));
+        assert!(kinds.contains(&&TokenKind::Set));
+        assert!(kinds.contains(&&TokenKind::Ident("lock_debug".to_string())));
+        assert!(kinds.contains(&&TokenKind::Yes));
+        assert!(kinds.contains(&&TokenKind::Ident("LOG_LEVEL".to_string())));
+        assert!(kinds.contains(&&TokenKind::String("debug".to_string())));
+        assert!(kinds.contains(&&TokenKind::Integer(4)));
     }
 
     #[test]

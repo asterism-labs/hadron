@@ -11,30 +11,31 @@ pub mod parser;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::model::{ConfigOptionDef, ConfigType, ConfigValue};
+use crate::model::{ConfigOptionDef, ConfigType, ConfigValue, PresetDef};
 
 use ast::*;
 use parser::Parser;
 
 /// Parse a root Kconfig file and all sourced sub-files.
 ///
-/// Returns the parsed config options, the menu ordering, and all file paths loaded.
+/// Returns the parsed config options, the menu ordering, presets, and all file paths loaded.
 pub fn load_kconfig(
     root_path: &Path,
     kconfig_path: &str,
-) -> Result<(BTreeMap<String, ConfigOptionDef>, Vec<String>, Vec<PathBuf>), String> {
+) -> Result<(BTreeMap<String, ConfigOptionDef>, Vec<String>, BTreeMap<String, PresetDef>, Vec<PathBuf>), String> {
     crate::verbose::vprintln!("  loading kconfig: {}", kconfig_path);
     let abs_path = root_path.join(kconfig_path);
     let file = parse_file(&abs_path)?;
 
     let mut options = BTreeMap::new();
     let mut menu_order = Vec::new();
+    let mut presets = BTreeMap::new();
     let mut loaded_files = vec![abs_path];
 
-    process_items(&file.items, root_path, None, &mut options, &mut menu_order, &mut loaded_files)?;
-    crate::verbose::vprintln!("  kconfig: {} options from {} files", options.len(), loaded_files.len());
+    process_items(&file.items, root_path, None, &mut options, &mut menu_order, &mut presets, &mut loaded_files)?;
+    crate::verbose::vprintln!("  kconfig: {} options, {} presets from {} files", options.len(), presets.len(), loaded_files.len());
 
-    Ok((options, menu_order, loaded_files))
+    Ok((options, menu_order, presets, loaded_files))
 }
 
 /// Parse a single Kconfig file into an AST.
@@ -53,6 +54,7 @@ fn process_items(
     menu_title: Option<&str>,
     options: &mut BTreeMap<String, ConfigOptionDef>,
     menu_order: &mut Vec<String>,
+    presets: &mut BTreeMap<String, PresetDef>,
     loaded_files: &mut Vec<PathBuf>,
 ) -> Result<(), String> {
     // Track menu for ordering
@@ -69,18 +71,47 @@ fn process_items(
                 options.insert(opt.name.clone(), opt);
             }
             KconfigItem::Menu(menu) => {
-                process_items(&menu.items, root_path, Some(&menu.title), options, menu_order, loaded_files)?;
+                process_items(&menu.items, root_path, Some(&menu.title), options, menu_order, presets, loaded_files)?;
             }
             KconfigItem::Source(path) => {
                 let abs_path = root_path.join(path);
                 let sub_file = parse_file(&abs_path)?;
                 loaded_files.push(abs_path);
-                process_items(&sub_file.items, root_path, menu_title, options, menu_order, loaded_files)?;
+                process_items(&sub_file.items, root_path, menu_title, options, menu_order, presets, loaded_files)?;
+            }
+            KconfigItem::Preset(block) => {
+                let preset = convert_preset_block(block);
+                presets.insert(preset.name.clone(), preset);
             }
         }
     }
 
     Ok(())
+}
+
+/// Convert a parsed [`PresetBlock`] into a [`PresetDef`].
+fn convert_preset_block(block: &PresetBlock) -> PresetDef {
+    let mut overrides = BTreeMap::new();
+    for ov in &block.overrides {
+        let value = match &ov.value {
+            DefaultValue::Bool(v) => ConfigValue::Bool(*v),
+            DefaultValue::Integer(v) => {
+                if *v <= u32::MAX as u64 {
+                    ConfigValue::U32(*v as u32)
+                } else {
+                    ConfigValue::U64(*v)
+                }
+            }
+            DefaultValue::Str(s) => ConfigValue::Str(s.clone()),
+        };
+        overrides.insert(ov.name.clone(), value);
+    }
+    PresetDef {
+        name: block.name.clone(),
+        inherits: block.inherits.clone(),
+        help: block.help.clone(),
+        overrides,
+    }
 }
 
 /// Convert a parsed [`ConfigBlock`] into a [`ConfigOptionDef`].
@@ -271,6 +302,62 @@ mod tests {
         assert_eq!(opt.ty, ConfigType::U64);
         assert!(matches!(opt.default, ConfigValue::U64(0xFF0000)));
         assert_eq!(opt.menu, Some("Display".to_string()));
+    }
+
+    #[test]
+    fn convert_preset_block_basic() {
+        let block = PresetBlock {
+            name: "debug".to_string(),
+            inherits: None,
+            help: Some("Debug defaults".to_string()),
+            overrides: vec![
+                PresetOverride { name: "lock_debug".to_string(), value: DefaultValue::Bool(true) },
+                PresetOverride { name: "LOG_LEVEL".to_string(), value: DefaultValue::Str("debug".to_string()) },
+                PresetOverride { name: "MAX_CPUS".to_string(), value: DefaultValue::Integer(4) },
+            ],
+        };
+
+        let preset = convert_preset_block(&block);
+        assert_eq!(preset.name, "debug");
+        assert!(preset.inherits.is_none());
+        assert_eq!(preset.help.as_deref(), Some("Debug defaults"));
+        assert!(matches!(preset.overrides.get("lock_debug"), Some(ConfigValue::Bool(true))));
+        assert!(matches!(preset.overrides.get("LOG_LEVEL"), Some(ConfigValue::Str(s)) if s == "debug"));
+        assert!(matches!(preset.overrides.get("MAX_CPUS"), Some(ConfigValue::U32(4))));
+    }
+
+    #[test]
+    fn convert_preset_with_inheritance() {
+        let block = PresetBlock {
+            name: "child".to_string(),
+            inherits: Some("parent".to_string()),
+            help: None,
+            overrides: vec![
+                PresetOverride { name: "smp".to_string(), value: DefaultValue::Bool(true) },
+            ],
+        };
+
+        let preset = convert_preset_block(&block);
+        assert_eq!(preset.inherits.as_deref(), Some("parent"));
+        assert_eq!(preset.overrides.len(), 1);
+    }
+
+    #[test]
+    fn convert_preset_large_integer_to_u64() {
+        let block = PresetBlock {
+            name: "test".to_string(),
+            inherits: None,
+            help: None,
+            overrides: vec![
+                PresetOverride {
+                    name: "BIG_VALUE".to_string(),
+                    value: DefaultValue::Integer(0x1_0000_0000), // > u32::MAX
+                },
+            ],
+        };
+
+        let preset = convert_preset_block(&block);
+        assert!(matches!(preset.overrides.get("BIG_VALUE"), Some(ConfigValue::U64(0x1_0000_0000))));
     }
 
     #[test]

@@ -303,7 +303,9 @@ pub fn resolve_from_model(
 }
 
 /// Collect merged config overrides from a profile's inheritance chain.
-/// Parent config is applied first, then child overrides on top.
+///
+/// Resolution priority (lowest → highest):
+/// parent profile → preset (with inheritance) → profile `.config()`
 fn collect_profile_config(
     model: &BuildModel,
     name: &str,
@@ -317,7 +319,28 @@ fn collect_profile_config(
         BTreeMap::new()
     };
 
+    // Apply preset overrides (between parent config and this profile's .config()).
+    if let Some(ref preset_name) = profile.preset {
+        merged.extend(resolve_preset(model, preset_name)?);
+    }
+
     merged.extend(profile.config.clone());
+    Ok(merged)
+}
+
+/// Resolve a preset's overrides, including inherited presets.
+fn resolve_preset(
+    model: &BuildModel,
+    name: &str,
+) -> Result<BTreeMap<String, ConfigValue>> {
+    let preset = model.presets.get(name)
+        .with_context(|| format!("preset '{name}' not found"))?;
+    let mut merged = if let Some(ref parent) = preset.inherits {
+        resolve_preset(model, parent)?
+    } else {
+        BTreeMap::new()
+    };
+    merged.extend(preset.overrides.clone());
     Ok(merged)
 }
 
@@ -515,6 +538,10 @@ fn coerce_overrides(
             // Str override for a Choice option → coerce to Choice.
             (ConfigType::Choice, ConfigValue::Str(s)) => {
                 *val = ConfigValue::Choice(s.clone());
+            }
+            // U32 override for a U64 option → widen to U64.
+            (ConfigType::U64, ConfigValue::U32(v)) => {
+                *val = ConfigValue::U64(*v as u64);
             }
             _ => {}
         }
@@ -943,6 +970,139 @@ list_opt = [\"a\", \"b\"]
 
         // Clean up temp files.
         let _ = std::fs::remove_dir_all(&tmp_dir);
+    }
+
+    #[test]
+    fn preset_resolution_basic() {
+        use crate::model::{BuildModel, PresetDef, TargetDef, ProfileDef};
+
+        let mut model = BuildModel::default();
+        model.targets.insert("x86_64".into(), TargetDef {
+            name: "x86_64".into(),
+            spec: "x86_64-unknown-hadron".into(),
+        });
+
+        let mut overrides = std::collections::BTreeMap::new();
+        overrides.insert("serial_log".into(), ConfigValue::Bool(true));
+        overrides.insert("lock_debug".into(), ConfigValue::Bool(true));
+        model.presets.insert("debug".into(), PresetDef {
+            name: "debug".into(),
+            overrides,
+            ..Default::default()
+        });
+
+        model.profiles.insert("default".into(), ProfileDef {
+            name: "default".into(),
+            target: Some("x86_64".into()),
+            preset: Some("debug".into()),
+            ..Default::default()
+        });
+
+        let result = collect_profile_config(&model, "default").unwrap();
+        assert!(matches!(result.get("serial_log"), Some(ConfigValue::Bool(true))));
+        assert!(matches!(result.get("lock_debug"), Some(ConfigValue::Bool(true))));
+    }
+
+    #[test]
+    fn preset_inheritance_merges() {
+        use crate::model::{BuildModel, PresetDef, TargetDef, ProfileDef};
+
+        let mut model = BuildModel::default();
+        model.targets.insert("x86_64".into(), TargetDef {
+            name: "x86_64".into(),
+            spec: "x86_64-unknown-hadron".into(),
+        });
+
+        let mut base_overrides = std::collections::BTreeMap::new();
+        base_overrides.insert("serial_log".into(), ConfigValue::Bool(true));
+        base_overrides.insert("lock_debug".into(), ConfigValue::Bool(false));
+        model.presets.insert("base".into(), PresetDef {
+            name: "base".into(),
+            overrides: base_overrides,
+            ..Default::default()
+        });
+
+        let mut child_overrides = std::collections::BTreeMap::new();
+        child_overrides.insert("lock_debug".into(), ConfigValue::Bool(true));
+        model.presets.insert("debug".into(), PresetDef {
+            name: "debug".into(),
+            inherits: Some("base".into()),
+            overrides: child_overrides,
+            ..Default::default()
+        });
+
+        model.profiles.insert("default".into(), ProfileDef {
+            name: "default".into(),
+            target: Some("x86_64".into()),
+            preset: Some("debug".into()),
+            ..Default::default()
+        });
+
+        let result = collect_profile_config(&model, "default").unwrap();
+        // base sets serial_log=true, child inherits it
+        assert!(matches!(result.get("serial_log"), Some(ConfigValue::Bool(true))));
+        // base sets lock_debug=false, child overrides to true
+        assert!(matches!(result.get("lock_debug"), Some(ConfigValue::Bool(true))));
+    }
+
+    #[test]
+    fn profile_config_overrides_preset() {
+        use crate::model::{BuildModel, PresetDef, TargetDef, ProfileDef};
+
+        let mut model = BuildModel::default();
+        model.targets.insert("x86_64".into(), TargetDef {
+            name: "x86_64".into(),
+            spec: "x86_64-unknown-hadron".into(),
+        });
+
+        let mut preset_overrides = std::collections::BTreeMap::new();
+        preset_overrides.insert("lock_debug".into(), ConfigValue::Bool(true));
+        model.presets.insert("debug".into(), PresetDef {
+            name: "debug".into(),
+            overrides: preset_overrides,
+            ..Default::default()
+        });
+
+        let mut profile_config = std::collections::BTreeMap::new();
+        profile_config.insert("lock_debug".into(), ConfigValue::Bool(false));
+        model.profiles.insert("default".into(), ProfileDef {
+            name: "default".into(),
+            target: Some("x86_64".into()),
+            preset: Some("debug".into()),
+            config: profile_config,
+            ..Default::default()
+        });
+
+        let result = collect_profile_config(&model, "default").unwrap();
+        // Profile .config() overrides preset
+        assert!(matches!(result.get("lock_debug"), Some(ConfigValue::Bool(false))));
+    }
+
+    #[test]
+    fn coerce_u32_to_u64() {
+        let mut defs = BTreeMap::new();
+        defs.insert("big_value".into(), ConfigOptionDef {
+            name: "big_value".into(),
+            ty: ConfigType::U64,
+            default: ConfigValue::U64(0),
+            help: None,
+            depends_on: vec![],
+            selects: vec![],
+            range: None,
+            choices: None,
+            menu: None,
+            bindings: Vec::new(),
+        });
+
+        let mut overrides = BTreeMap::new();
+        overrides.insert("big_value".into(), ConfigValue::U32(42));
+
+        coerce_overrides(&mut overrides, &defs);
+
+        assert!(
+            matches!(overrides.get("big_value"), Some(ConfigValue::U64(42))),
+            "expected U32 to be coerced to U64"
+        );
     }
 
     #[test]

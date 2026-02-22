@@ -17,6 +17,7 @@ pub fn validate_model(model: &BuildModel) -> Result<()> {
     validate_project(model)?;
     validate_targets(model)?;
     validate_config_options(model)?;
+    validate_presets(model)?;
     validate_profiles(model)?;
     validate_groups(model)?;
     validate_crates(model)?;
@@ -143,6 +144,46 @@ fn validate_config_options(model: &BuildModel) -> Result<()> {
     Ok(())
 }
 
+fn validate_presets(model: &BuildModel) -> Result<()> {
+    for (name, preset) in &model.presets {
+        // Inheritance target must exist.
+        if let Some(ref parent) = preset.inherits {
+            ensure!(
+                model.presets.contains_key(parent),
+                "preset '{name}' inherits from '{parent}', which is not defined"
+            );
+        }
+
+        // Override keys must reference defined config options.
+        for key in preset.overrides.keys() {
+            ensure!(
+                model.config_options.contains_key(key),
+                "preset '{name}' overrides config '{key}', which is not defined"
+            );
+        }
+    }
+
+    // Check for inheritance cycles.
+    for name in model.presets.keys() {
+        let mut visited = BTreeSet::new();
+        let mut current = name.as_str();
+        loop {
+            if !visited.insert(current.to_string()) {
+                bail!("preset inheritance cycle detected involving '{name}'");
+            }
+            match model.presets.get(current) {
+                Some(preset) => match &preset.inherits {
+                    Some(parent) => current = parent,
+                    None => break,
+                },
+                None => bail!("preset '{current}' not found"),
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn validate_profiles(model: &BuildModel) -> Result<()> {
     ensure!(
         model.profiles.contains_key("default"),
@@ -175,6 +216,14 @@ fn validate_profiles(model: &BuildModel) -> Result<()> {
 
     // Config overrides in profiles must reference existing options.
     for (pname, profile) in &model.profiles {
+        // Preset reference must exist.
+        if let Some(ref preset_name) = profile.preset {
+            ensure!(
+                model.presets.contains_key(preset_name),
+                "profile '{pname}' references preset '{preset_name}', which is not defined"
+            );
+        }
+
         for key in profile.config.keys() {
             ensure!(
                 model.config_options.contains_key(key),
@@ -437,8 +486,8 @@ mod tests {
     use super::*;
     use crate::model::{
         BuildModel, ConfigOptionDef, ConfigType, ConfigValue, CrateDef, CrateType, DepDef,
-        DepSource, ExternalDepDef, GitRef, GroupDef, PipelineStep, ProfileDef, RuleDef,
-        RuleHandler, TargetDef,
+        DepSource, ExternalDepDef, GitRef, GroupDef, PipelineStep, PresetDef, ProfileDef,
+        RuleDef, RuleHandler, TargetDef,
     };
     use std::collections::BTreeMap;
 
@@ -916,5 +965,122 @@ mod tests {
             .push(PipelineStep::Rule("link_kernel".into()));
 
         validate_model(&model).expect("full-featured model should pass validation");
+    }
+
+    // -----------------------------------------------------------------------
+    // 14. preset_inheritance_cycle_detected
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn preset_inheritance_cycle_detected() {
+        let mut model = minimal_model();
+        model.config_options.insert("opt".into(), bool_opt("opt", false));
+
+        model.presets.insert("a".into(), PresetDef {
+            name: "a".into(),
+            inherits: Some("b".into()),
+            ..Default::default()
+        });
+        model.presets.insert("b".into(), PresetDef {
+            name: "b".into(),
+            inherits: Some("a".into()),
+            ..Default::default()
+        });
+
+        let err = validate_model(&model).unwrap_err();
+        assert!(
+            err.to_string().contains("cycle"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // 15. preset_undefined_parent_fails
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn preset_undefined_parent_fails() {
+        let mut model = minimal_model();
+        model.presets.insert("child".into(), PresetDef {
+            name: "child".into(),
+            inherits: Some("nonexistent".into()),
+            ..Default::default()
+        });
+
+        let err = validate_model(&model).unwrap_err();
+        assert!(
+            err.to_string().contains("not defined"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // 16. preset_undefined_config_key_fails
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn preset_undefined_config_key_fails() {
+        let mut model = minimal_model();
+        let mut overrides = BTreeMap::new();
+        overrides.insert("nonexistent_option".into(), ConfigValue::Bool(true));
+        model.presets.insert("bad".into(), PresetDef {
+            name: "bad".into(),
+            overrides,
+            ..Default::default()
+        });
+
+        let err = validate_model(&model).unwrap_err();
+        assert!(
+            err.to_string().contains("not defined"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // 17. profile_undefined_preset_fails
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn profile_undefined_preset_fails() {
+        let mut model = minimal_model();
+        model.profiles.get_mut("default").unwrap().preset = Some("nonexistent".into());
+
+        let err = validate_model(&model).unwrap_err();
+        assert!(
+            err.to_string().contains("not defined"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // 18. valid_model_with_presets
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn valid_model_with_presets() {
+        let mut model = minimal_model();
+        model.config_options.insert("serial_log".into(), bool_opt("serial_log", true));
+        model.config_options.insert("lock_debug".into(), bool_opt("lock_debug", false));
+
+        let mut base_overrides = BTreeMap::new();
+        base_overrides.insert("serial_log".into(), ConfigValue::Bool(true));
+        model.presets.insert("base".into(), PresetDef {
+            name: "base".into(),
+            overrides: base_overrides,
+            ..Default::default()
+        });
+
+        let mut child_overrides = BTreeMap::new();
+        child_overrides.insert("lock_debug".into(), ConfigValue::Bool(true));
+        model.presets.insert("debug".into(), PresetDef {
+            name: "debug".into(),
+            inherits: Some("base".into()),
+            overrides: child_overrides,
+            ..Default::default()
+        });
+
+        model.profiles.get_mut("default").unwrap().preset = Some("debug".into());
+
+        validate_model(&model).expect("model with valid presets should pass");
     }
 }

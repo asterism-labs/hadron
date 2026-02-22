@@ -31,6 +31,7 @@ profile("default")
     .target("x86_64-unknown-hadron")
     .opt_level(0)
     .debug_info(true)
+    .preset("debug")
     .qemu_cores(4)
     .boot_binary("hadron-boot-limine");
 
@@ -38,24 +39,22 @@ profile("release")
     .target("x86_64-unknown-hadron")
     .opt_level(2)
     .lto("thin")
+    .preset("release")
     .boot_binary("hadron-boot-limine");
 
 profile("stress")
     .inherits("default")
-    .config(#{ smp: true, MAX_CPUS: 4 })
+    .preset("sched_stress")
     .qemu_memory(1024)
     .qemu_cores(4)
     .test_timeout(120);
 
 profile("lock-stress")
-    .inherits("stress")
-    .config(#{
-        lock_stress: true,
-        LOCK_STRESS_MAX_US: 10,
-        lockdep: true,
-        lock_debug: true,
-        lock_stat: true,
-    });
+    .inherits("default")
+    .preset("lock_stress")
+    .qemu_memory(1024)
+    .qemu_cores(4)
+    .test_timeout(120);
 
 profile("debug-gdb")
     .inherits("default")
@@ -65,22 +64,11 @@ profile("debug-gdb")
 
 profile("debug-sanitizers")
     .inherits("default")
-    .config(#{
-        debug_heap_poison: true,
-        debug_pmm_poison: true,
-        debug_alloc_track: true,
-        trace_mm: true,
-    });
+    .preset("sanitizers");
 
 profile("profile")
     .inherits("default")
-    .config(#{
-        profile_sample: true,
-        PROFILE_SAMPLE_RATE: 100,
-        PROFILE_SAMPLE_DEPTH: 16,
-        PROFILE_SAMPLE_BUFFER: 1024,
-        PROFILE_DURATION_SECS: 10,
-    });
+    .preset("perf");
 
 // ===========================================================================
 // Sysroot crates (built first, for kernel target)

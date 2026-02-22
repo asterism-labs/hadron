@@ -216,3 +216,57 @@ config PROFILE_DURATION_SECS
 endmenu
 
 endmenu
+
+# ===========================================================================
+# Presets
+# ===========================================================================
+
+preset debug
+    help "Development defaults with full debug aids"
+    set serial_log y
+    set LOG_LEVEL "debug"
+    set lock_debug y
+    set lockdep y
+    set lockdep_warn y
+
+preset release
+    help "Production settings, minimal debug overhead"
+    set serial_log y
+    set LOG_LEVEL "warn"
+    set lock_debug n
+    set lockdep n
+
+preset perf
+    inherits debug
+    help "Performance testing and profiling"
+    set profile_sample y
+    set PROFILE_SAMPLE_RATE 100
+    set PROFILE_SAMPLE_DEPTH 16
+    set PROFILE_SAMPLE_BUFFER 1024
+    set PROFILE_DURATION_SECS 10
+
+preset sched_stress
+    inherits debug
+    help "Scheduler stress testing with SMP"
+    set smp y
+    set MAX_CPUS 4
+    set trace_sched y
+
+preset lock_stress
+    inherits debug
+    help "Lock contention stress testing"
+    set smp y
+    set MAX_CPUS 4
+    set lock_stress y
+    set LOCK_STRESS_MAX_US 10
+    set lockdep y
+    set lock_debug y
+    set lock_stat y
+
+preset sanitizers
+    inherits debug
+    help "Memory sanitizer debugging"
+    set debug_heap_poison y
+    set debug_pmm_poison y
+    set debug_alloc_track y
+    set trace_mm y

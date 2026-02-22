@@ -20,6 +20,8 @@ pub enum KconfigItem {
     Menu(MenuBlock),
     /// `source "path"` directive.
     Source(String),
+    /// `preset NAME` block with overrides.
+    Preset(PresetBlock),
 }
 
 /// A `config NAME` block.
@@ -101,6 +103,22 @@ impl DependsExpr {
             DependsExpr::Not(inner) => inner.collect_symbols(out),
         }
     }
+}
+
+/// A `preset NAME` block.
+#[derive(Debug)]
+pub struct PresetBlock {
+    pub name: String,
+    pub inherits: Option<String>,
+    pub help: Option<String>,
+    pub overrides: Vec<PresetOverride>,
+}
+
+/// A single `set OPTION VALUE` within a preset.
+#[derive(Debug)]
+pub struct PresetOverride {
+    pub name: String,
+    pub value: DefaultValue,
 }
 
 /// A `menu "title"` ... `endmenu` block.
