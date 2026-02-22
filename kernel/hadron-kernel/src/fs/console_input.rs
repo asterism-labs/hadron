@@ -293,12 +293,10 @@ fn process_scancode(state: &mut ConsoleInputState, scancode: u8) -> Option<EchoA
         return None;
     }
 
-    // Detect Ctrl+C: send SIGINT to the foreground process.
+    // Detect Ctrl+C: send SIGINT to all processes in the foreground group.
     if state.ctrl_held && key == KeyCode::C {
-        if let Some(fg_pid) = crate::proc::foreground_pid() {
-            if let Some(proc) = crate::proc::lookup_process(fg_pid) {
-                proc.signals.post(crate::syscall::SIGINT);
-            }
+        if let Some(fg_pgid) = crate::proc::foreground_pgid() {
+            crate::proc::signal_process_group(fg_pgid, crate::syscall::SIGINT);
         }
         // Discard the current line buffer and echo ^C via deferred action.
         state.line_len = 0;

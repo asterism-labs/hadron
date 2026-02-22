@@ -52,6 +52,14 @@ impl SyscallHandler for HadronDispatch {
         process::sys_task_sigreturn()
     }
 
+    fn sys_task_setpgid(&self, pid: usize, pgid: usize) -> isize {
+        process::sys_task_setpgid(pid, pgid)
+    }
+
+    fn sys_task_getpgid(&self, pid: usize) -> isize {
+        process::sys_task_getpgid(pid)
+    }
+
     fn sys_handle_close(&self, handle: usize) -> isize {
         vfs::sys_handle_close(handle)
     }

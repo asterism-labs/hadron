@@ -5,11 +5,11 @@ use hadron_syscall::{
     CLOCK_MONOTONIC, KernelVersionInfo, MAP_ANONYMOUS, MemoryInfo, PROT_READ, PROT_WRITE,
     QUERY_KERNEL_VERSION, QUERY_MEMORY, QUERY_UPTIME, SYS_CLOCK_GETTIME, SYS_HANDLE_DUP,
     SYS_HANDLE_PIPE, SYS_MEM_MAP, SYS_MEM_UNMAP, SYS_QUERY, SYS_TASK_EXIT, SYS_TASK_INFO,
-    SYS_TASK_KILL, SYS_TASK_SIGACTION, SYS_TASK_SPAWN, SYS_TASK_WAIT, SpawnArg, Timespec,
-    UptimeInfo,
+    SYS_TASK_GETPGID, SYS_TASK_KILL, SYS_TASK_SETPGID, SYS_TASK_SIGACTION, SYS_TASK_SPAWN,
+    SYS_TASK_WAIT, SpawnArg, Timespec, UptimeInfo,
 };
 
-pub use hadron_syscall::{SIG_DFL, SIG_IGN};
+pub use hadron_syscall::{SIGINT, SIGQUIT, SIGTERM, SIG_DFL, SIG_IGN};
 
 // ── Functions ─────────────────────────────────────────────────────────
 
@@ -133,6 +133,22 @@ pub fn signal(signum: usize, handler: usize) -> isize {
     } else {
         old_handler as isize
     }
+}
+
+/// Set process group ID.
+///
+/// If `pid` is 0, uses the calling process. If `pgid` is 0, uses `pid` as the
+/// new PGID. Returns 0 on success, or a negative errno on failure.
+pub fn setpgid(pid: u32, pgid: u32) -> isize {
+    syscall2(SYS_TASK_SETPGID, pid as usize, pgid as usize)
+}
+
+/// Get process group ID.
+///
+/// If `pid` is 0, returns the calling process's PGID.
+/// Returns the PGID on success, or a negative errno on failure.
+pub fn getpgid(pid: u32) -> isize {
+    syscall1(SYS_TASK_GETPGID, pid as usize)
 }
 
 /// Duplicate a file descriptor (dup2 semantics).

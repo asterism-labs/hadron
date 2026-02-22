@@ -211,21 +211,35 @@ static IO_BUF_LEN: CpuLocal<AtomicU64> = CpuLocal::new([const { AtomicU64::new(0
 /// Per-CPU I/O direction for TRAP_IO: 0 = read, 1 = write.
 static IO_IS_WRITE: CpuLocal<AtomicU8> = CpuLocal::new([const { AtomicU8::new(0) }; MAX_CPUS]);
 
-/// PID of the current foreground process (the one that receives Ctrl+C).
+/// Process group ID of the current foreground group (receives Ctrl+C).
 ///
-/// Set to the child PID in TRAP_WAIT before await, reset to 0 after.
-/// Accessed from the keyboard input handler to deliver SIGINT.
-static FOREGROUND_PID: AtomicU32 = AtomicU32::new(0);
+/// Set to the child's PGID in TRAP_WAIT before await, reset to 0 after.
+/// Accessed from the keyboard input handler to deliver SIGINT to all
+/// processes in the foreground group.
+static FOREGROUND_PGID: AtomicU32 = AtomicU32::new(0);
 
-/// Sets the foreground process PID (called from `process_task` during TRAP_WAIT).
-pub fn set_foreground_pid(pid: Pid) {
-    FOREGROUND_PID.store(pid.as_u32(), Ordering::Release);
+/// Sets the foreground process group ID.
+pub fn set_foreground_pgid(pgid: u32) {
+    FOREGROUND_PGID.store(pgid, Ordering::Release);
 }
 
-/// Returns the current foreground process PID, or `None` if none.
-pub fn foreground_pid() -> Option<Pid> {
-    let raw = FOREGROUND_PID.load(Ordering::Acquire);
-    if raw == 0 { None } else { Some(Pid::new(raw)) }
+/// Returns the current foreground process group ID, or `None` if none.
+pub fn foreground_pgid() -> Option<u32> {
+    let raw = FOREGROUND_PGID.load(Ordering::Acquire);
+    if raw == 0 { None } else { Some(raw) }
+}
+
+/// Send a signal to all processes in a process group.
+///
+/// Iterates the global process table and posts the signal to every
+/// process whose `pgid` matches the given group ID.
+pub fn signal_process_group(pgid: u32, signum: usize) {
+    let table = PROCESS_TABLE.lock();
+    for proc in table.values() {
+        if proc.pgid.load(Ordering::Acquire) == pgid {
+            proc.signals.post(signum);
+        }
+    }
 }
 
 // ── Global process table ────────────────────────────────────────────
@@ -286,6 +300,10 @@ pub struct Process {
     pub pid: Pid,
     /// Parent process ID (`None` for init).
     pub parent_pid: Option<Pid>,
+    /// Process group ID. Initialized to own PID on spawn.
+    pub pgid: AtomicU32,
+    /// Session ID. Initialized to parent's session, or own PID for session leaders.
+    pub session_id: AtomicU32,
     /// Physical address of the user PML4 (cached for fast CR3 switch).
     pub user_cr3: PhysAddr,
     /// User address space (owns the PML4, freed on drop).
@@ -311,12 +329,25 @@ impl Process {
     }
 
     /// Creates a new process with the given address space and parent PID.
+    ///
+    /// The process group ID is initialized to the process's own PID.
+    /// The session ID is inherited from the parent, or set to own PID if init.
     pub fn new(address_space: AddressSpace<PageTableMapper>, parent_pid: Option<Pid>) -> Self {
         let user_cr3 = address_space.root_phys();
         let mmap_region = VirtRegion::new(VirtAddr::new(USER_MMAP_BASE), USER_MMAP_MAX_SIZE);
+        let pid = Pid::new(NEXT_PID.fetch_add(1, Ordering::Relaxed));
+
+        // Inherit session ID from parent, or use own PID for session leaders.
+        let session = parent_pid
+            .and_then(|ppid| lookup_process(ppid))
+            .map(|p| p.session_id.load(Ordering::Acquire))
+            .unwrap_or(pid.as_u32());
+
         Self {
-            pid: Pid::new(NEXT_PID.fetch_add(1, Ordering::Relaxed)),
+            pid,
             parent_pid,
+            pgid: AtomicU32::new(pid.as_u32()),
+            session_id: AtomicU32::new(session),
             user_cr3,
             address_space,
             fd_table: SpinLock::leveled("fd_table", 4, FileDescriptorTable::new()),
@@ -871,15 +902,17 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                     )
                 };
 
-                // Set foreground PID so Ctrl+C delivers SIGINT to the child.
+                // Set foreground PGID so Ctrl+C delivers SIGINT to the child's group.
                 if target.as_u32() != 0 {
-                    set_foreground_pid(target);
+                    if let Some(child_proc) = lookup_process(target) {
+                        set_foreground_pgid(child_proc.pgid.load(Ordering::Acquire));
+                    }
                 }
 
                 let (result, exit_code) = handle_wait(pid, target).await;
 
-                // Clear foreground PID.
-                set_foreground_pid(Pid::new(0));
+                // Clear foreground PGID.
+                set_foreground_pgid(0);
 
                 // Write exit status to user memory under user CR3.
                 if status_ptr != 0 && result >= 0 {

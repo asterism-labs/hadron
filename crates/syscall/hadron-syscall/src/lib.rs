@@ -232,6 +232,18 @@ hadron_syscall_macros::define_syscalls! {
         /// the `SignalFrame` saved on the user stack before re-entering
         /// userspace at the interrupted instruction.
         fn task_sigreturn() = 0x07;
+
+        /// Set process group ID.
+        ///
+        /// If `pid` is 0, uses the calling process. If `pgid` is 0, uses `pid`
+        /// as the new PGID (creating a new process group). The target must be
+        /// the caller or a child of the caller.
+        fn task_setpgid(pid: usize, pgid: usize) = 0x08;
+
+        /// Get process group ID.
+        ///
+        /// If `pid` is 0, returns the calling process's PGID.
+        fn task_getpgid(pid: usize) = 0x09;
     }
 
     /// Handle operations.

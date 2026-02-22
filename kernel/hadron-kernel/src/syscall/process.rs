@@ -268,6 +268,63 @@ pub(super) fn sys_task_kill(pid: usize, signum: usize) -> isize {
     }
 }
 
+/// `sys_task_setpgid` — set process group ID.
+///
+/// If `pid` is 0, uses the calling process. If `pgid` is 0, uses `pid` as
+/// the new PGID. The target must be the caller or a child of the caller.
+#[expect(clippy::cast_possible_truncation, reason = "PID/PGID fits in u32")]
+pub(super) fn sys_task_setpgid(pid: usize, pgid: usize) -> isize {
+    use core::sync::atomic::Ordering;
+
+    let current_pid = crate::proc::with_current_process(|p| p.pid);
+    let target_pid = if pid == 0 {
+        current_pid
+    } else {
+        crate::id::Pid::new(pid as u32)
+    };
+    let new_pgid = if pgid == 0 {
+        target_pid.as_u32()
+    } else {
+        pgid as u32
+    };
+
+    let target = match crate::proc::lookup_process(target_pid) {
+        Some(p) => p,
+        None => return -(crate::syscall::EINVAL),
+    };
+
+    // Must be self or a child of the caller.
+    if target.pid != current_pid && target.parent_pid != Some(current_pid) {
+        return -(crate::syscall::EACCES);
+    }
+
+    target.pgid.store(new_pgid, Ordering::Release);
+    0
+}
+
+/// `sys_task_getpgid` — get process group ID.
+///
+/// If `pid` is 0, returns the calling process's PGID.
+#[expect(
+    clippy::cast_possible_wrap,
+    reason = "PGID is small u32, wrapping impossible"
+)]
+#[expect(clippy::cast_possible_truncation, reason = "PID fits in u32")]
+pub(super) fn sys_task_getpgid(pid: usize) -> isize {
+    use core::sync::atomic::Ordering;
+
+    let target_pid = if pid == 0 {
+        crate::proc::with_current_process(|p| p.pid)
+    } else {
+        crate::id::Pid::new(pid as u32)
+    };
+
+    match crate::proc::lookup_process(target_pid) {
+        Some(p) => p.pgid.load(Ordering::Acquire) as isize,
+        None => -(crate::syscall::EINVAL),
+    }
+}
+
 /// `sys_task_sigaction` — register a signal handler.
 ///
 /// `signum` is the signal number (1-63). SIGKILL and SIGSTOP cannot be caught.
@@ -334,8 +391,8 @@ pub(super) fn sys_task_sigreturn() -> isize {
     // user RSP = &frame.signum (right after ret_addr was popped by `ret`).
     // We read from (user_rsp - 8) to get the full frame.
 
-    let frame: SignalFrame = crate::proc::with_current_process(|process| {
-        let user_rsp = unsafe { crate::percpu::current_cpu().user_rsp };
+    let frame: SignalFrame = crate::proc::with_current_process(|_process| {
+        let user_rsp = crate::percpu::current_cpu().user_rsp;
         let frame_addr = user_rsp - 8; // Back up past the popped ret_addr.
 
         // Read the frame from user memory.
