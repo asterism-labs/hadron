@@ -18,6 +18,9 @@ bitflags = { workspace = true }
 hadris-io = { workspace = true }
 hadron-acpi = { workspace = true, features = ["alloc"] }
 hadron-core = { workspace = true }
+hadron-fs = { workspace = true }
+hadron-mm = { workspace = true }
+hadron-sched = { workspace = true }
 hadron-elf = { workspace = true }
 hadron-linkset = { workspace = true }
 hadron-syscall = { workspace = true, features = [ "kernel" ] }

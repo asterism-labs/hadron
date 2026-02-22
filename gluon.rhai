@@ -170,6 +170,26 @@ kernel_libs.add("hadron-dwarf", "crates/parse/dwarf");
 kernel_libs.add("hadron-mmio", "crates/driver/hadron-mmio")
     .deps(#{ hadron_mmio_macros: #{ "crate": "hadron-mmio-macros", proc_macro: true } });
 
+kernel_libs.add("hadron-mm", "kernel/mm")
+    .deps(#{
+        bitflags: "bitflags",
+        hadron_core: "hadron-core",
+        planck_noalloc: "planck-noalloc"
+    });
+
+kernel_libs.add("hadron-fs", "kernel/fs")
+    .deps(#{
+        bitflags: "bitflags",
+        hadron_core: "hadron-core",
+        hadron_syscall: "hadron-syscall"
+    });
+
+kernel_libs.add("hadron-sched", "kernel/sched")
+    .deps(#{
+        hadron_core: "hadron-core",
+        planck_noalloc: "planck-noalloc"
+    });
+
 kernel_libs.add("hadron-acpi", "crates/parse/acpi")
     .features(["alloc"])
     .deps(#{ hadron_binparse: "hadron-binparse" });
@@ -240,7 +260,10 @@ kernel_main.add("hadron-kernel", "kernel/hadron-kernel")
         hadron_acpi: "hadron-acpi",
         hadron_core: "hadron-core",
         hadron_elf: "hadron-elf",
+        hadron_fs: "hadron-fs",
         hadron_linkset: "hadron-linkset",
+        hadron_mm: "hadron-mm",
+        hadron_sched: "hadron-sched",
         hadron_syscall: "hadron-syscall",
         planck_noalloc: "planck-noalloc"
     })
@@ -365,6 +388,9 @@ tests()
         "hadron-dwarf",
         "hadron-elf",
         "hadron-fdt",
+        "hadron-fs",
+        "hadron-mm",
+        "hadron-sched",
         "hadron-drivers",
         "hadron-kernel"
     ])

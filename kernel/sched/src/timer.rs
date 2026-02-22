@@ -10,7 +10,7 @@ use core::task::Waker;
 
 use planck_noalloc::vec::ArrayVec;
 
-use crate::sync::IrqSpinLock;
+use hadron_core::sync::IrqSpinLock;
 
 struct SleepEntry {
     deadline: u64,

@@ -4,10 +4,11 @@
 //! with the kernel upper half copied from the kernel root page table.
 //! User pages are mapped into the lower half (entries 0–255).
 
-use crate::addr::{PhysAddr, VirtAddr};
-use crate::mm::mapper::{MapFlags, MapFlush, PageMapper, PageTranslator, UnmapError};
-use crate::mm::{FrameAllocator, VmmError};
-use crate::paging::{Page, PhysFrame, Size4KiB};
+use hadron_core::addr::{PhysAddr, VirtAddr};
+use hadron_core::paging::{Page, PhysFrame, Size4KiB};
+
+use crate::mapper::{MapFlags, MapFlush, PageMapper, PageTranslator, UnmapError};
+use crate::{FrameAllocator, VmmError};
 
 /// Number of PML4 entries in the upper half (indices 256–511).
 const KERNEL_PML4_ENTRIES: usize = 256;

@@ -326,6 +326,10 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
     crate::mm::hhdm::init(boot_info.hhdm_offset());
     crate::kinfo!("HHDM initialized at offset {:#x}", boot_info.hhdm_offset());
 
+    // 2a. Register architecture-specific TLB flush for hadron-mm.
+    #[cfg(target_arch = "x86_64")]
+    crate::mm::mapper::register_tlb_flush(crate::arch::x86_64::instructions::tlb::flush);
+
     // 2b. Initialize backtrace support from embedded HKIF data.
     crate::backtrace::init_from_embedded(boot_info.kernel_address().virtual_base.as_u64());
 
@@ -517,7 +521,10 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
         }
 
         // Mount devfs at /dev (kernel-internal, not from driver registry).
-        let devfs = Arc::new(fs::devfs::DevFs::new());
+        let devfs = Arc::new(fs::devfs::DevFs::with_extra_devices([(
+            "console",
+            Arc::new(fs::devfs::DevConsole) as Arc<dyn fs::Inode>,
+        )]));
         let devfs_name = devfs.name();
         fs::vfs::with_vfs_mut(|vfs| vfs.mount("/dev", devfs));
         crate::kinfo!("VFS: Mounted {} at /dev", devfs_name);
@@ -573,7 +580,7 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
     crate::kinfo!("BSP interrupts enabled");
 
     // 12. Run the executor — drives ALL kernel tasks including the process task.
-    crate::sched::executor().run();
+    crate::sched::executor().run(&crate::sched::X86ArchHalt, crate::sched::smp::try_steal);
 }
 
 /// Try to mount a block device at the given mount point using registered FS drivers.

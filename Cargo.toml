@@ -2,6 +2,9 @@
 resolver = "2"
 members = [
     "crates/*/*",
+    "kernel/mm",
+    "kernel/fs",
+    "kernel/sched",
     "kernel/hadron-kernel",
     "kernel/hadron-drivers",
     "tools/gluon",
@@ -33,6 +36,9 @@ hadron-mmio = { path = "crates/driver/hadron-mmio" }
 hadron-mmio-macros = { path = "crates/driver/hadron-mmio-macros" }
 hadron-codegen = { path = "crates/tools/hadron-codegen" }
 hadron-drivers = { path = "kernel/hadron-drivers" }
+hadron-fs = { path = "kernel/fs" }
+hadron-mm = { path = "kernel/mm" }
+hadron-sched = { path = "kernel/sched" }
 hadron-dwarf = { path = "crates/parse/dwarf" }
 hadron-elf = { path = "crates/parse/elf" }
 hadron-kernel = { path = "kernel/hadron-kernel" }

@@ -7,9 +7,18 @@
 //! [`PageMapper<S>`] is parameterised by [`PageSize`]: an architecture
 //! implements the trait for each page size it supports. [`PageTranslator`]
 //! is separate because address translation is inherently page-size-agnostic.
+//!
+//! # TLB Flush Decoupling
+//!
+//! Architecture-specific TLB flush is registered at boot via
+//! [`register_tlb_flush`]. Before registration, flushes are no-ops (safe for
+//! early boot where no stale TLB entries exist). In host tests, the no-op
+//! default is used.
 
-use crate::addr::{PhysAddr, VirtAddr};
-use crate::paging::{Page, PageSize, PhysFrame, Size4KiB};
+use core::sync::atomic::{AtomicPtr, Ordering};
+
+use hadron_core::addr::{PhysAddr, VirtAddr};
+use hadron_core::paging::{Page, PageSize, PhysFrame, Size4KiB};
 
 bitflags::bitflags! {
     /// Architecture-independent page mapping flags.
@@ -40,6 +49,37 @@ pub enum UnmapError {
     SizeMismatch,
 }
 
+// ---------------------------------------------------------------------------
+// Registered TLB flush callback
+// ---------------------------------------------------------------------------
+
+/// Registered TLB flush function. Set to no-op by default.
+static TLB_FLUSH_FN: AtomicPtr<()> = AtomicPtr::new(nop_flush as fn(VirtAddr) as *mut ());
+
+fn nop_flush(_virt: VirtAddr) {}
+
+/// Registers the architecture-specific TLB flush function.
+///
+/// Must be called during early boot before any page table modifications that
+/// require TLB invalidation. On x86_64, this is typically set to `invlpg`.
+pub fn register_tlb_flush(f: fn(VirtAddr)) {
+    TLB_FLUSH_FN.store(f as *mut (), Ordering::Release);
+}
+
+/// Dispatches a single-page TLB flush through the registered callback.
+#[inline]
+fn arch_flush_page(virt: VirtAddr) {
+    let ptr = TLB_FLUSH_FN.load(Ordering::Acquire);
+    // SAFETY: The pointer was stored via `register_tlb_flush` which takes a
+    // valid `fn(VirtAddr)`, or it's the initial `nop_flush`.
+    let f: fn(VirtAddr) = unsafe { core::mem::transmute(ptr) };
+    f(virt);
+}
+
+// ---------------------------------------------------------------------------
+// MapFlush
+// ---------------------------------------------------------------------------
+
 /// A pending TLB flush for a single page.
 ///
 /// Created by page table modification operations. Flushes the TLB entry
@@ -53,7 +93,7 @@ pub struct MapFlush {
 
 impl MapFlush {
     /// Creates a new pending flush for the given virtual address.
-    pub(crate) fn new(virt: VirtAddr) -> Self {
+    pub fn new(virt: VirtAddr) -> Self {
         Self {
             virt,
             needs_flush: true,
@@ -81,60 +121,9 @@ impl Drop for MapFlush {
     }
 }
 
-/// Architecture-dispatched single-page TLB flush.
-#[inline]
-fn arch_flush_page(virt: VirtAddr) {
-    #[cfg(target_arch = "x86_64")]
-    crate::arch::x86_64::instructions::tlb::flush(virt);
-
-    #[cfg(target_arch = "aarch64")]
-    {
-        let _ = virt; // TODO: aarch64 TLB flush
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn mapflags_default_empty() {
-        let flags = MapFlags::empty();
-        assert!(flags.is_empty());
-        assert_eq!(flags.bits(), 0);
-    }
-
-    #[test]
-    fn mapflags_combination() {
-        let flags = MapFlags::WRITABLE | MapFlags::USER;
-        assert!(flags.contains(MapFlags::WRITABLE));
-        assert!(flags.contains(MapFlags::USER));
-        assert!(!flags.contains(MapFlags::EXECUTABLE));
-    }
-
-    #[test]
-    fn mapflags_all_bits_distinct() {
-        let all = [
-            MapFlags::WRITABLE,
-            MapFlags::EXECUTABLE,
-            MapFlags::USER,
-            MapFlags::GLOBAL,
-            MapFlags::CACHE_DISABLE,
-        ];
-        for (i, a) in all.iter().enumerate() {
-            for (j, b) in all.iter().enumerate() {
-                if i != j {
-                    assert!((*a & *b).is_empty(), "{a:?} and {b:?} share bits");
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn unmap_error_variants() {
-        assert_ne!(UnmapError::NotMapped, UnmapError::SizeMismatch);
-    }
-}
+// ---------------------------------------------------------------------------
+// PageMapper and PageTranslator traits
+// ---------------------------------------------------------------------------
 
 /// Architecture-independent page table mapping interface, generic over page size.
 ///
@@ -220,4 +209,47 @@ pub unsafe trait PageTranslator {
     ///
     /// `root` must point to a valid root page table.
     unsafe fn translate_addr(&self, root: PhysAddr, virt: VirtAddr) -> Option<PhysAddr>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mapflags_default_empty() {
+        let flags = MapFlags::empty();
+        assert!(flags.is_empty());
+        assert_eq!(flags.bits(), 0);
+    }
+
+    #[test]
+    fn mapflags_combination() {
+        let flags = MapFlags::WRITABLE | MapFlags::USER;
+        assert!(flags.contains(MapFlags::WRITABLE));
+        assert!(flags.contains(MapFlags::USER));
+        assert!(!flags.contains(MapFlags::EXECUTABLE));
+    }
+
+    #[test]
+    fn mapflags_all_bits_distinct() {
+        let all = [
+            MapFlags::WRITABLE,
+            MapFlags::EXECUTABLE,
+            MapFlags::USER,
+            MapFlags::GLOBAL,
+            MapFlags::CACHE_DISABLE,
+        ];
+        for (i, a) in all.iter().enumerate() {
+            for (j, b) in all.iter().enumerate() {
+                if i != j {
+                    assert!((*a & *b).is_empty(), "{a:?} and {b:?} share bits");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unmap_error_variants() {
+        assert_ne!(UnmapError::NotMapped, UnmapError::SizeMismatch);
+    }
 }

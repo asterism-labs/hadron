@@ -294,7 +294,7 @@ fn ap_entry(_mp_info: u64, percpu_addr: u64) -> ! {
 
     // Run this AP's per-CPU executor. Initially empty — tasks arrive via
     // cross-CPU wakeup (Step 12.5) or work stealing (Step 12.6).
-    crate::sched::executor().run();
+    crate::sched::executor().run(&crate::sched::X86ArchHalt, crate::sched::smp::try_steal);
 }
 
 /// Initializes the Local APIC on an AP and starts the periodic timer.

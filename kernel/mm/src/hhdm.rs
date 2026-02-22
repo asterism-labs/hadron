@@ -7,7 +7,7 @@
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use crate::addr::{PhysAddr, VirtAddr};
+use hadron_core::addr::{PhysAddr, VirtAddr};
 
 /// Sentinel value indicating the HHDM offset has not been initialized.
 const HHDM_UNINIT: u64 = u64::MAX;

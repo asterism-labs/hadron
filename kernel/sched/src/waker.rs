@@ -9,10 +9,12 @@
 //! - Bits 61-56: CPU ID (6 bits, supports up to 64 CPUs)
 //! - Bits 55-0:  TaskId (56 bits)
 
+use core::sync::atomic::{AtomicPtr, Ordering};
 use core::task::{RawWaker, RawWakerVTable, Waker};
 
-use crate::id::CpuId;
-use crate::task::{Priority, TaskId};
+use hadron_core::cpu_local::current_cpu_id;
+use hadron_core::id::CpuId;
+use hadron_core::task::{Priority, TaskId};
 
 /// Mask for the 56-bit task ID field (bits 55-0).
 const ID_MASK: u64 = 0x00FF_FFFF_FFFF_FFFF;
@@ -25,6 +27,26 @@ const CPU_MASK: u64 = 0x3F;
 
 static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop_waker);
 
+/// Registered callback for sending cross-CPU wake IPIs.
+///
+/// Set by the kernel glue layer during initialization via [`set_wake_ipi_fn`].
+/// When a waker fires for a task on a different CPU, this function is called
+/// with the target CPU ID to send an IPI wakeup.
+static WAKE_IPI_FN: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
+
+/// Registers the cross-CPU wake IPI function.
+///
+/// The provided function will be called with the target CPU ID whenever
+/// a task needs to be woken on a different CPU.
+///
+/// # Safety
+///
+/// Must be called before any cross-CPU wakeups occur (i.e., before APs
+/// enter their executor loops).
+pub fn set_wake_ipi_fn(f: fn(CpuId)) {
+    WAKE_IPI_FN.store(f as *mut (), Ordering::Release);
+}
+
 /// Creates a [`Waker`] that will re-queue the given task at the given
 /// priority on the current CPU's executor when woken.
 pub fn task_waker(id: TaskId, priority: Priority) -> Waker {
@@ -33,7 +55,7 @@ pub fn task_waker(id: TaskId, priority: Priority) -> Waker {
 }
 
 fn pack(id: TaskId, priority: Priority) -> *const () {
-    let cpu_id = crate::percpu::current_cpu().get_cpu_id().as_u32() as u64;
+    let cpu_id = current_cpu_id() as u64;
     let packed = ((priority as u64) << 62) | (cpu_id << CPU_SHIFT) | (id.0 & ID_MASK);
     packed as *const ()
 }
@@ -70,9 +92,14 @@ fn wake_by_ref(data: *const ()) {
 
     // If the target is a different CPU, send an IPI to wake it from HLT
     // so it processes the newly enqueued task promptly.
-    let current = crate::percpu::current_cpu().get_cpu_id();
-    if target_cpu != current {
-        super::smp::send_wake_ipi(target_cpu);
+    let current = current_cpu_id();
+    if target_cpu.as_u32() != current {
+        let ptr = WAKE_IPI_FN.load(Ordering::Acquire);
+        if !ptr.is_null() {
+            // SAFETY: The pointer was set by set_wake_ipi_fn with a valid fn pointer.
+            let f: fn(CpuId) = unsafe { core::mem::transmute(ptr) };
+            f(target_cpu);
+        }
     }
 }
 

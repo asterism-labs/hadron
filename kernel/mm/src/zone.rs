@@ -6,11 +6,11 @@
 
 use core::alloc::Layout;
 
-use crate::mm::hhdm;
-use crate::mm::pmm::BitmapFrameAllocRef;
-use crate::sync::SpinLock;
+use hadron_core::sync::SpinLock;
 
-use crate::mm::pmm::with_pmm;
+use crate::hhdm;
+use crate::pmm::{with_pmm, BitmapFrameAllocRef};
+use crate::FrameAllocator;
 
 const NUM_ZONES: usize = 8;
 const ZONE_SIZES: [usize; NUM_ZONES] = [32, 64, 128, 256, 512, 1024, 2048, 4096];
@@ -77,7 +77,6 @@ impl Zone {
     fn grow(&mut self) -> Result<(), ZoneAllocError> {
         with_pmm(|pmm| {
             let mut alloc = BitmapFrameAllocRef(pmm);
-            use crate::mm::FrameAllocator;
             let frame = alloc.allocate_frame().ok_or(ZoneAllocError::OutOfMemory)?;
 
             let virt = hhdm::phys_to_virt(frame.start_address());

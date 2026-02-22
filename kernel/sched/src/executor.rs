@@ -16,10 +16,10 @@ use core::pin::Pin;
 use core::sync::atomic::{AtomicU64, Ordering};
 use core::task::{Context, Poll};
 
-use crate::id::CpuId;
-use crate::percpu::{CpuLocal, MAX_CPUS};
-use crate::sync::{IrqSpinLock, LazyLock};
-use crate::task::{Priority, TaskId, TaskMeta};
+use hadron_core::cpu_local::{CpuLocal, MAX_CPUS};
+use hadron_core::id::CpuId;
+use hadron_core::sync::{IrqSpinLock, LazyLock};
+use hadron_core::task::{Priority, TaskId, TaskMeta};
 
 pub use hadron_core::sched::ReadyQueues;
 
@@ -36,17 +36,31 @@ pub fn global() -> &'static Executor {
 ///
 /// Used by the waker to push tasks back to their originating CPU's queue.
 pub fn for_cpu(cpu_id: CpuId) -> &'static Executor {
-    EXECUTORS.get_for(cpu_id)
+    EXECUTORS.get_for(cpu_id.as_u32())
 }
 
 /// A pinned, heap-allocated, dynamically dispatched future.
 type TaskFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 
 /// A stored task: its future plus metadata.
-pub(crate) struct TaskEntry {
+///
+/// Public so the kernel glue layer can pass `TaskEntry` values through
+/// work-stealing function pointers.
+pub struct TaskEntry {
     future: TaskFuture,
     #[allow(dead_code, reason = "reserved for Phase 7+ task debugging")]
     meta: TaskMeta,
+}
+
+/// Architecture-specific idle wait (enable interrupts + halt).
+///
+/// Implementations must:
+/// 1. Enable interrupts and halt (`sti; hlt` on x86_64, `wfi` on AArch64)
+/// 2. Disable interrupts after returning from halt
+pub trait ArchHalt {
+    /// Enable interrupts and halt until the next interrupt fires,
+    /// then disable interrupts.
+    fn enable_interrupts_and_halt(&self);
 }
 
 /// The kernel's async task executor.
@@ -86,7 +100,8 @@ impl Executor {
     /// - The ready queues or task map can't be locked (contention)
     /// - No stealable tasks exist (Critical tasks are never stolen)
     /// - The task is currently being polled (entry not in task map)
-    pub(crate) fn steal_task(&self) -> Option<(TaskId, Priority, TaskEntry)> {
+    /// Public so the kernel glue layer can call this for work stealing.
+    pub fn steal_task(&self) -> Option<(TaskId, Priority, TaskEntry)> {
         let mut rq = self.ready_queues.try_lock()?;
         let (priority, id) = rq.steal_one()?;
         // Hold ready_queues lock while checking tasks to prevent the
@@ -130,12 +145,19 @@ impl Executor {
             },
         );
         self.ready_queues.lock().push(priority, id);
-        crate::ktrace_subsys!(sched, "spawned task id={} priority={:?}", id.0, priority);
         id
     }
 
     /// Main executor loop. Called once per CPU, never returns.
-    pub fn run(&self) -> ! {
+    ///
+    /// The `halt` parameter provides architecture-specific idle wait
+    /// (enable interrupts + halt). The `steal_fn` attempts to steal a
+    /// task from another CPU's executor when this one is idle.
+    pub fn run(
+        &self,
+        halt: &dyn ArchHalt,
+        steal_fn: fn() -> Option<(TaskId, Priority, TaskEntry)>,
+    ) -> ! {
         loop {
             // Clear the stale preempt_pending flag left by the timer
             // interrupt that woke us from HLT.
@@ -153,7 +175,7 @@ impl Executor {
             }
 
             // No local work — try to steal from another CPU before halting.
-            if let Some((id, priority, entry)) = super::smp::try_steal() {
+            if let Some((id, priority, entry)) = steal_fn() {
                 // Insert the stolen task into our local task map and
                 // ready queue. When polled, the new waker will encode
                 // this CPU's ID, effectively migrating the task.
@@ -163,22 +185,7 @@ impl Executor {
             }
 
             // Nothing ready — halt until next interrupt wakes us.
-            #[cfg(target_arch = "x86_64")]
-            {
-                // SAFETY: IDT and LAPIC are fully configured before executor starts.
-                unsafe {
-                    crate::arch::x86_64::instructions::interrupts::enable_and_hlt();
-                }
-                // Interrupt fired — disable interrupts and check for ready tasks.
-                crate::arch::x86_64::instructions::interrupts::disable();
-            }
-            #[cfg(target_arch = "aarch64")]
-            {
-                // SAFETY: exception vectors are configured before executor starts.
-                unsafe {
-                    core::arch::asm!("wfi", options(nomem, nostack, preserves_flags));
-                }
-            }
+            halt.enable_interrupts_and_halt();
         }
     }
 
@@ -240,5 +247,11 @@ impl Executor {
                 break;
             }
         }
+    }
+}
+
+impl Default for Executor {
+    fn default() -> Self {
+        Self::new()
     }
 }

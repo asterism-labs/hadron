@@ -12,7 +12,7 @@ use alloc::sync::Arc;
 use bitflags::bitflags;
 
 use super::{FsError, Inode};
-use crate::id::Fd;
+use hadron_core::id::Fd;
 
 bitflags! {
     /// Flags for opening a file.

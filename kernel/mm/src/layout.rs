@@ -5,7 +5,7 @@
 //! KASLR-ready: all regions are defined as const offsets from a runtime
 //! `regions_base` that can be randomized.
 
-use crate::addr::VirtAddr;
+use hadron_core::addr::VirtAddr;
 
 /// Default base address for kernel regions (non-KASLR).
 pub const DEFAULT_REGIONS_BASE: u64 = 0xFFFF_C000_0000_0000;

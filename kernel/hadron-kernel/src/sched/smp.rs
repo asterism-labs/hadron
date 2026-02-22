@@ -16,7 +16,6 @@ use crate::id::CpuId;
 use crate::percpu::MAX_CPUS;
 use crate::task::Priority;
 
-use super::executor::TaskEntry;
 use crate::arch::x86_64::interrupts::dispatch::vectors;
 
 /// IPI vector used to wake a CPU from HLT.
@@ -43,12 +42,16 @@ pub fn register_cpu_apic_id(cpu_id: CpuId, apic_id: u8) {
     CPU_APIC_IDS[cpu_id.as_u32() as usize].store(apic_id, Ordering::Release);
 }
 
-/// Initializes the IPI wakeup vector handler.
+/// Initializes the IPI wakeup vector handler and registers the wake IPI callback.
 ///
 /// Must be called before APs enter their executor loops.
 pub fn init() {
     crate::arch::x86_64::interrupts::dispatch::register_handler(IPI_WAKE_VECTOR, ipi_wake_handler)
         .expect("Failed to register IPI wake vector");
+
+    // Register the wake IPI callback so hadron-sched's waker can send
+    // cross-CPU IPIs without depending on arch code directly.
+    hadron_sched::waker::set_wake_ipi_fn(send_wake_ipi);
 }
 
 /// IPI wakeup handler — intentionally empty.
@@ -73,6 +76,9 @@ pub fn send_wake_ipi(target_cpu: CpuId) {
     }
 }
 
+/// Type alias matching the signature expected by `Executor::run`.
+type StealResult = (crate::task::TaskId, Priority, hadron_sched::executor::TaskEntry);
+
 /// Attempts to steal one task from another CPU's executor.
 ///
 /// Iterates over other CPUs starting from a pseudo-random offset (to avoid
@@ -81,7 +87,7 @@ pub fn send_wake_ipi(target_cpu: CpuId) {
 ///
 /// The caller must insert the stolen entry into their local executor's task
 /// map and ready queue.
-pub(crate) fn try_steal() -> Option<(crate::task::TaskId, Priority, TaskEntry)> {
+pub(crate) fn try_steal() -> Option<StealResult> {
     #[cfg(hadron_no_work_steal)]
     return None;
 
@@ -102,7 +108,7 @@ pub(crate) fn try_steal() -> Option<(crate::task::TaskId, Priority, TaskEntry)> 
                 continue;
             }
 
-            if let Some(stolen) = super::executor::for_cpu(target).steal_task() {
+            if let Some(stolen) = hadron_sched::executor::for_cpu(target).steal_task() {
                 return Some(stolen);
             }
         }

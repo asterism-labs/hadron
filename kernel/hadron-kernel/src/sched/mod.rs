@@ -1,80 +1,50 @@
 //! Kernel task scheduler.
 //!
-//! Provides per-CPU async executors that run kernel tasks as cooperative
-//! futures. Tasks yield at `.await` points; a per-CPU budget-based
-//! preemption flag ensures fairness even if a task polls for a long time
-//! between awaits.
+//! Core scheduler logic (executor, timer, waker, primitives) lives in the
+//! `hadron-sched` crate for host testability. This module re-exports them
+//! and adds kernel-specific code (SMP/IPI, block_on, sleep primitives).
 
-pub mod block_on;
-pub mod executor;
-pub mod primitives;
-pub mod smp;
-pub mod timer;
-mod waker;
+// Re-export everything from hadron-sched root.
+pub use hadron_sched::{
+    Executor, Priority, TaskMeta,
+    clear_preempt_pending, preempt_pending, set_preempt_pending,
+    spawn, spawn_background, spawn_critical, spawn_with,
+};
 
-pub use crate::task::{Priority, TaskMeta};
-pub use executor::Executor;
-
-use core::sync::atomic::{AtomicBool, Ordering};
-
-use crate::percpu::{CpuLocal, MAX_CPUS};
-use crate::task::TaskId;
-
-/// Per-CPU preemption flag.
-static PREEMPT_PENDING: CpuLocal<AtomicBool> =
-    CpuLocal::new([const { AtomicBool::new(false) }; MAX_CPUS]);
+// Re-export submodules that don't need kernel extension.
+pub use hadron_sched::timer;
+pub use hadron_sched::waker;
 
 /// Returns a reference to the current CPU's executor.
+///
+/// Convenience wrapper for [`hadron_sched::executor::global`].
+#[inline]
 pub fn executor() -> &'static Executor {
-    executor::global()
+    hadron_sched::executor::global()
 }
 
-/// Spawns an async kernel task with default (Normal) priority.
-pub fn spawn(future: impl core::future::Future<Output = ()> + Send + 'static) -> TaskId {
-    executor().spawn(future)
-}
+// Kernel-extended modules.
+pub mod block_on;
+pub mod primitives;
+pub mod smp;
 
-/// Spawns an async kernel task with explicit metadata.
-pub fn spawn_with(
-    future: impl core::future::Future<Output = ()> + Send + 'static,
-    meta: TaskMeta,
-) -> TaskId {
-    executor().spawn_with_meta(future, meta)
-}
+// ── ArchHalt implementation ─────────────────────────────────────────
 
-/// Spawns a Critical-priority task (interrupt bottom-halves, hardware events).
-pub fn spawn_critical(
-    name: &'static str,
-    future: impl core::future::Future<Output = ()> + Send + 'static,
-) -> TaskId {
-    executor().spawn_with_meta(
-        future,
-        TaskMeta::new(name).with_priority(Priority::Critical),
-    )
-}
+/// x86_64 implementation of [`hadron_sched::executor::ArchHalt`].
+///
+/// Enables interrupts and halts (`sti; hlt`), then disables interrupts
+/// after waking from the halt.
+#[cfg(target_arch = "x86_64")]
+pub struct X86ArchHalt;
 
-/// Spawns a Background-priority task (housekeeping, statistics).
-pub fn spawn_background(
-    name: &'static str,
-    future: impl core::future::Future<Output = ()> + Send + 'static,
-) -> TaskId {
-    executor().spawn_with_meta(
-        future,
-        TaskMeta::new(name).with_priority(Priority::Background),
-    )
-}
-
-/// Sets the preemption-pending flag on the current CPU (called from timer interrupt).
-pub fn set_preempt_pending() {
-    PREEMPT_PENDING.get().store(true, Ordering::Release);
-}
-
-/// Returns `true` if preemption is pending on the current CPU.
-pub(crate) fn preempt_pending() -> bool {
-    PREEMPT_PENDING.get().load(Ordering::Acquire)
-}
-
-/// Clears the preemption-pending flag on the current CPU.
-pub(crate) fn clear_preempt_pending() {
-    PREEMPT_PENDING.get().store(false, Ordering::Release);
+#[cfg(target_arch = "x86_64")]
+impl hadron_sched::executor::ArchHalt for X86ArchHalt {
+    fn enable_interrupts_and_halt(&self) {
+        // SAFETY: IDT and LAPIC are fully configured before executor starts.
+        unsafe {
+            crate::arch::x86_64::instructions::interrupts::enable_and_hlt();
+        }
+        // Interrupt fired — disable interrupts and check for ready tasks.
+        crate::arch::x86_64::instructions::interrupts::disable();
+    }
 }
