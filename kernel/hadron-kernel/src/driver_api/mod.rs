@@ -27,6 +27,7 @@ pub mod framebuffer;
 pub mod hw;
 pub mod input;
 pub mod lifecycle;
+pub mod net;
 pub mod pci;
 pub mod probe_context;
 pub mod registration;
@@ -43,12 +44,13 @@ pub use capability::{
 pub use category::PlatformDriver;
 pub use device_path::DevicePath;
 pub use driver::{Driver, DriverInfo, DriverState, DriverType};
-pub use dyn_dispatch::{DynBlockDevice, DynBlockDeviceWrapper};
+pub use dyn_dispatch::{DynBlockDevice, DynBlockDeviceWrapper, DynNetDevice, DynNetDeviceWrapper};
 pub use error::DriverError;
 pub use framebuffer::{Framebuffer, FramebufferInfo, PixelFormat};
 pub use hw::{ClockSource, InterruptController, Timer};
 pub use input::{KeyCode, KeyEvent, KeyboardDevice, MouseDevice, MouseEvent};
 pub use lifecycle::ManagedDriver;
+pub use net::{MacAddress, NetError, NetworkDevice};
 pub use pci::{PciAddress, PciBar, PciDeviceId, PciDeviceInfo};
 pub use probe_context::{PciProbeContext, PlatformProbeContext};
 #[cfg(target_os = "none")]

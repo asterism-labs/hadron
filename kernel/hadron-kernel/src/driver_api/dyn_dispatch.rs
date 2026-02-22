@@ -12,6 +12,7 @@ use core::future::Future;
 use core::pin::Pin;
 
 use super::block::{BlockDevice, IoError};
+use super::net::{MacAddress, NetError, NetworkDevice};
 
 // ---------------------------------------------------------------------------
 // DynBlockDevice
@@ -100,5 +101,81 @@ impl BlockDevice for Box<dyn DynBlockDevice> {
 
     fn sector_count(&self) -> u64 {
         DynBlockDevice::sector_count(self.as_ref())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DynNetDevice
+// ---------------------------------------------------------------------------
+
+/// Dyn-compatible version of [`NetworkDevice`].
+///
+/// Wraps async trait methods in `Pin<Box<dyn Future>>` for dynamic dispatch.
+/// Use [`DynNetDeviceWrapper`] to convert any concrete [`NetworkDevice`] into
+/// a `Box<dyn DynNetDevice>`.
+pub trait DynNetDevice: Send + Sync {
+    /// Receives a single Ethernet frame into `buf` (dyn-dispatch version).
+    fn dyn_recv<'a>(
+        &'a self,
+        buf: &'a mut [u8],
+    ) -> Pin<Box<dyn Future<Output = Result<usize, NetError>> + 'a>>;
+
+    /// Sends a single Ethernet frame from `buf` (dyn-dispatch version).
+    fn dyn_send<'a>(
+        &'a self,
+        buf: &'a [u8],
+    ) -> Pin<Box<dyn Future<Output = Result<(), NetError>> + 'a>>;
+
+    /// Returns the device's MAC address.
+    fn mac_address(&self) -> MacAddress;
+
+    /// Returns the maximum transmission unit.
+    fn mtu(&self) -> usize;
+}
+
+/// Wrapper that adapts any [`NetworkDevice`] into a [`DynNetDevice`].
+pub struct DynNetDeviceWrapper<D>(pub D);
+
+impl<D: NetworkDevice> DynNetDevice for DynNetDeviceWrapper<D> {
+    fn dyn_recv<'a>(
+        &'a self,
+        buf: &'a mut [u8],
+    ) -> Pin<Box<dyn Future<Output = Result<usize, NetError>> + 'a>> {
+        Box::pin(self.0.recv(buf))
+    }
+
+    fn dyn_send<'a>(
+        &'a self,
+        buf: &'a [u8],
+    ) -> Pin<Box<dyn Future<Output = Result<(), NetError>> + 'a>> {
+        Box::pin(self.0.send(buf))
+    }
+
+    fn mac_address(&self) -> MacAddress {
+        self.0.mac_address()
+    }
+
+    fn mtu(&self) -> usize {
+        self.0.mtu()
+    }
+}
+
+/// Implements [`NetworkDevice`] for `Box<dyn DynNetDevice>`, closing the
+/// type-erasure round-trip.
+impl NetworkDevice for Box<dyn DynNetDevice> {
+    async fn recv(&self, buf: &mut [u8]) -> Result<usize, NetError> {
+        self.dyn_recv(buf).await
+    }
+
+    async fn send(&self, buf: &[u8]) -> Result<(), NetError> {
+        self.dyn_send(buf).await
+    }
+
+    fn mac_address(&self) -> MacAddress {
+        DynNetDevice::mac_address(self.as_ref())
+    }
+
+    fn mtu(&self) -> usize {
+        DynNetDevice::mtu(self.as_ref())
     }
 }

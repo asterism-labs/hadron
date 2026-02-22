@@ -8,6 +8,7 @@
 //! Device categories:
 //! - **Framebuffers**: `Arc<dyn Framebuffer>` — display output
 //! - **Block devices**: `Box<dyn DynBlockDevice>` — storage (take-once ownership)
+//! - **Network devices**: `Box<dyn DynNetDevice>` — network I/O (take-once ownership)
 //!
 //! The registry also tracks driver lifecycle state via [`DriverEntry`] records,
 //! enabling orderly shutdown and health inspection.
@@ -22,7 +23,7 @@ use alloc::vec::Vec;
 
 use crate::driver_api::device_path::DevicePath;
 use crate::driver_api::driver::DriverState;
-use crate::driver_api::dyn_dispatch::DynBlockDevice;
+use crate::driver_api::dyn_dispatch::{DynBlockDevice, DynNetDevice};
 use crate::driver_api::framebuffer::Framebuffer;
 use crate::driver_api::lifecycle::ManagedDriver;
 use crate::driver_api::registration::DeviceSet;
@@ -50,6 +51,8 @@ pub struct DeviceRegistry {
     framebuffers: BTreeMap<String, Arc<dyn Framebuffer>>,
     /// Named block devices (take-once: removed on retrieval).
     block_devices: BTreeMap<String, Box<dyn DynBlockDevice>>,
+    /// Named network devices (take-once: removed on retrieval).
+    net_devices: BTreeMap<String, Box<dyn DynNetDevice>>,
     /// Tracked driver instances.
     drivers: Vec<DriverEntry>,
 }
@@ -60,6 +63,7 @@ impl DeviceRegistry {
         Self {
             framebuffers: BTreeMap::new(),
             block_devices: BTreeMap::new(),
+            net_devices: BTreeMap::new(),
             drivers: Vec::new(),
         }
     }
@@ -86,6 +90,12 @@ impl DeviceRegistry {
             let leaf = path.leaf().to_string();
             device_paths.push(path);
             self.block_devices.insert(leaf, dev);
+        }
+
+        for (path, dev) in devices.net_devices {
+            let leaf = path.leaf().to_string();
+            device_paths.push(path);
+            self.net_devices.insert(leaf, dev);
         }
 
         self.drivers.push(DriverEntry {
@@ -133,11 +143,29 @@ impl DeviceRegistry {
         self.block_devices.keys().map(String::as_str)
     }
 
+    /// Takes ownership of a named network device, removing it from the registry.
+    ///
+    /// Returns `None` if the device was not registered or was already taken.
+    pub fn take_net_device(&mut self, name: &str) -> Option<Box<dyn DynNetDevice>> {
+        self.net_devices.remove(name)
+    }
+
+    /// Returns the number of registered network devices.
+    pub fn net_device_count(&self) -> usize {
+        self.net_devices.len()
+    }
+
+    /// Returns an iterator over registered network device names.
+    pub fn net_device_names(&self) -> impl Iterator<Item = &str> {
+        self.net_devices.keys().map(String::as_str)
+    }
+
     /// Removes a device by its leaf name from the registry.
     pub fn remove_device(&mut self, name: &str) -> bool {
         let fb = self.framebuffers.remove(name).is_some();
         let blk = self.block_devices.remove(name).is_some();
-        fb || blk
+        let net = self.net_devices.remove(name).is_some();
+        fb || blk || net
     }
 
     /// Performs orderly shutdown of all registered drivers.

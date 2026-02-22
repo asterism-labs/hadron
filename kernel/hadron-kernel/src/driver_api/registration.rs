@@ -15,11 +15,12 @@ use alloc::vec::Vec;
 
 use super::block::BlockDevice;
 use super::device_path::DevicePath;
-use super::dyn_dispatch::{DynBlockDevice, DynBlockDeviceWrapper};
+use super::dyn_dispatch::{DynBlockDevice, DynBlockDeviceWrapper, DynNetDevice, DynNetDeviceWrapper};
 use super::error::DriverError;
 use super::framebuffer::Framebuffer;
 use super::lifecycle::ManagedDriver;
 use super::pci::PciDeviceId;
+use super::net::NetworkDevice;
 use super::probe_context::{PciProbeContext, PlatformProbeContext};
 
 // ---------------------------------------------------------------------------
@@ -101,6 +102,8 @@ pub struct DeviceSet {
     pub(crate) framebuffers: Vec<(DevicePath, Arc<dyn Framebuffer>)>,
     /// Block devices (type-erased for dynamic dispatch).
     pub(crate) block_devices: Vec<(DevicePath, Box<dyn DynBlockDevice>)>,
+    /// Network devices (type-erased for dynamic dispatch).
+    pub(crate) net_devices: Vec<(DevicePath, Box<dyn DynNetDevice>)>,
 }
 
 impl DeviceSet {
@@ -110,6 +113,7 @@ impl DeviceSet {
         Self {
             framebuffers: Vec::new(),
             block_devices: Vec::new(),
+            net_devices: Vec::new(),
         }
     }
 
@@ -120,6 +124,15 @@ impl DeviceSet {
     pub fn add_block_device<D: BlockDevice + 'static>(&mut self, path: DevicePath, device: D) {
         self.block_devices
             .push((path, Box::new(DynBlockDeviceWrapper(device))));
+    }
+
+    /// Adds a network device to the set.
+    ///
+    /// The concrete `NetworkDevice` is automatically wrapped in a
+    /// [`DynNetDeviceWrapper`] for type-erased storage.
+    pub fn add_net_device<D: NetworkDevice + 'static>(&mut self, path: DevicePath, device: D) {
+        self.net_devices
+            .push((path, Box::new(DynNetDeviceWrapper(device))));
     }
 
     /// Adds a framebuffer device to the set.

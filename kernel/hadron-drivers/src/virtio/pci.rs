@@ -373,6 +373,30 @@ impl VirtioPciTransport {
 
     // -- Device config --------------------------------------------------------
 
+    /// Reads an 8-bit value from the device-specific config region.
+    ///
+    /// Returns `None` if the device has no device-specific config.
+    pub fn device_cfg_read_u8(&self, offset: u32) -> Option<u8> {
+        let (ref mmio, base_offset) = *self.device_cfg.as_ref()?;
+        let ptr = mmio
+            .ptr_at(u64::from(base_offset + offset))
+            .expect("device config offset out of bounds");
+        // SAFETY: ptr is within the mapped device config MMIO region.
+        Some(unsafe { core::ptr::read_volatile(ptr) })
+    }
+
+    /// Reads a 16-bit value from the device-specific config region.
+    ///
+    /// Returns `None` if the device has no device-specific config.
+    pub fn device_cfg_read_u16(&self, offset: u32) -> Option<u16> {
+        let (ref mmio, base_offset) = *self.device_cfg.as_ref()?;
+        let ptr = mmio
+            .ptr_at(u64::from(base_offset + offset))
+            .expect("device config offset out of bounds");
+        // SAFETY: ptr is within the mapped device config MMIO region.
+        Some(unsafe { core::ptr::read_volatile(ptr.cast::<u16>()) })
+    }
+
     /// Reads a 32-bit value from the device-specific config region.
     ///
     /// Returns `None` if the device has no device-specific config.

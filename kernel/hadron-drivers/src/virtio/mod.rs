@@ -6,6 +6,7 @@
 extern crate alloc;
 
 pub mod block;
+pub mod net;
 pub mod pci;
 pub mod queue;
 
