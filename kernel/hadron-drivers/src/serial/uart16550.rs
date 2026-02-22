@@ -447,7 +447,8 @@ impl Uart16550Driver {
 
         hadron_kernel::kinfo!(
             "uart16550: serial echo task spawned (I/O {:#x}, IRQ {})",
-            io_base, irq
+            io_base,
+            irq
         );
         Ok(PlatformDriverRegistration {
             devices: DeviceSet::new(),

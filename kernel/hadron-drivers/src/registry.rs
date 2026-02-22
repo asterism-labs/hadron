@@ -112,10 +112,7 @@ pub fn match_platform_drivers(devices: &[hadron_kernel::driver_api::acpi_device:
         for entry in entries {
             let matched = entry.id_table.iter().any(|id| {
                 id.matches_hid(&device.hid)
-                    || device
-                        .cid
-                        .as_ref()
-                        .is_some_and(|cid| id.matches_hid(cid))
+                    || device.cid.as_ref().is_some_and(|cid| id.matches_hid(cid))
             });
             if matched {
                 hadron_kernel::kprintln!(

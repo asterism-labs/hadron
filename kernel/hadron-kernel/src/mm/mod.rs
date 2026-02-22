@@ -6,7 +6,7 @@
 
 // Re-export root-level items from hadron-mm.
 pub use hadron_mm::{
-    FrameAllocator, FrameDeallocator, PhysMemoryRegion, PmmError, VmmError, PAGE_MASK, PAGE_SIZE,
+    FrameAllocator, FrameDeallocator, PAGE_MASK, PAGE_SIZE, PhysMemoryRegion, PmmError, VmmError,
     zero_frame,
 };
 

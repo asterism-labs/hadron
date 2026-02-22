@@ -6,8 +6,7 @@
 
 // Re-export everything from hadron-sched root.
 pub use hadron_sched::{
-    Executor, Priority, TaskMeta,
-    clear_preempt_pending, preempt_pending, set_preempt_pending,
+    Executor, Priority, TaskMeta, clear_preempt_pending, preempt_pending, set_preempt_pending,
     spawn, spawn_background, spawn_critical, spawn_with,
 };
 

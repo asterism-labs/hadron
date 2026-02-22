@@ -8,8 +8,8 @@ use core::fmt;
 
 use planck_noalloc::vec::ArrayVec;
 
-use hadron_core::addr::VirtAddr;
 use crate::layout::VirtRegion;
+use hadron_core::addr::VirtAddr;
 
 /// Page-align `size` upward (round to next 4 KiB boundary).
 #[inline]

@@ -270,7 +270,10 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
                 *ECAM_INFO.lock() = Some(info);
                 crate::kinfo!(
                     "ACPI: ECAM at {:#x}, segment {}, buses {}-{}",
-                    info.phys_base, info.segment, info.start_bus, info.end_bus
+                    info.phys_base,
+                    info.segment,
+                    info.start_bus,
+                    info.end_bus
                 );
             }
         }
@@ -835,14 +838,24 @@ fn parse_aml_namespace(tables: &AcpiTables<HhdmAcpiHandler>) -> Option<Namespace
                 let decoded = id.decode();
                 let hid_str = core::str::from_utf8(&decoded).unwrap_or("?");
                 if resource_count > 0 {
-                    crate::kdebug!("ACPI: AML: {} _HID={} ({} resources)", dev.path, hid_str, resource_count);
+                    crate::kdebug!(
+                        "ACPI: AML: {} _HID={} ({} resources)",
+                        dev.path,
+                        hid_str,
+                        resource_count
+                    );
                 } else {
                     crate::kdebug!("ACPI: AML: {} _HID={}", dev.path, hid_str);
                 }
             }
             Some(AmlValue::String(s)) => {
                 if resource_count > 0 {
-                    crate::kdebug!("ACPI: AML: {} _HID=\"{}\" ({} resources)", dev.path, s.as_str(), resource_count);
+                    crate::kdebug!(
+                        "ACPI: AML: {} _HID=\"{}\" ({} resources)",
+                        dev.path,
+                        s.as_str(),
+                        resource_count
+                    );
                 } else {
                     crate::kdebug!("ACPI: AML: {} _HID=\"{}\"", dev.path, s.as_str());
                 }

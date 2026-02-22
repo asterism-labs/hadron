@@ -653,11 +653,8 @@ mod tests {
 
         let completed = Arc::new(AtomicU64::new(0));
         let done = Arc::new(AtomicBool::new(false));
-        let per_cpu_polls: Arc<Vec<AtomicU64>> = Arc::new(
-            (0..NUM_CPUS)
-                .map(|_| AtomicU64::new(0))
-                .collect(),
-        );
+        let per_cpu_polls: Arc<Vec<AtomicU64>> =
+            Arc::new((0..NUM_CPUS).map(|_| AtomicU64::new(0)).collect());
 
         // All tasks start on CPU 0.
         {

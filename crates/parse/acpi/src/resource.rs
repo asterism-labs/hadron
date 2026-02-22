@@ -433,8 +433,8 @@ pub fn looks_like_resource_template(data: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     extern crate std;
-    use std::vec::Vec;
     use super::*;
+    use std::vec::Vec;
 
     #[test]
     fn parse_io_descriptor() {

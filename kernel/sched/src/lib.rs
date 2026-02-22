@@ -20,8 +20,8 @@ pub mod primitives;
 pub mod timer;
 pub mod waker;
 
-pub use hadron_core::task::{Priority, TaskMeta};
 pub use executor::Executor;
+pub use hadron_core::task::{Priority, TaskMeta};
 
 use core::sync::atomic::{AtomicBool, Ordering};
 

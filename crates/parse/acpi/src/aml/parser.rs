@@ -187,7 +187,10 @@ fn parse_def_name(
         }
     }
 
-    let ResolvedData { value, resource_template } = resolve_data_object(reader);
+    let ResolvedData {
+        value,
+        resource_template,
+    } = resolve_data_object(reader);
     visitor.name_object(path, name, &value);
     if let Some(rt_data) = resource_template {
         visitor.resource_template(path, name, rt_data);
@@ -261,13 +264,34 @@ fn parse_prt_package(
 fn read_prt_integer(reader: &mut BinaryReader<'_>) -> Option<u64> {
     let remaining = reader.remaining();
     match remaining.first()? {
-        0x00 => { reader.skip(1); Some(0) }
-        0x01 => { reader.skip(1); Some(1) }
-        0xFF => { reader.skip(1); Some(u64::MAX) }
-        0x0A => { reader.skip(1); reader.read::<u8>().map(u64::from) }
-        0x0B => { reader.skip(1); reader.read::<u16>().map(u64::from) }
-        0x0C => { reader.skip(1); reader.read::<u32>().map(u64::from) }
-        0x0E => { reader.skip(1); reader.read::<u64>() }
+        0x00 => {
+            reader.skip(1);
+            Some(0)
+        }
+        0x01 => {
+            reader.skip(1);
+            Some(1)
+        }
+        0xFF => {
+            reader.skip(1);
+            Some(u64::MAX)
+        }
+        0x0A => {
+            reader.skip(1);
+            reader.read::<u8>().map(u64::from)
+        }
+        0x0B => {
+            reader.skip(1);
+            reader.read::<u16>().map(u64::from)
+        }
+        0x0C => {
+            reader.skip(1);
+            reader.read::<u32>().map(u64::from)
+        }
+        0x0E => {
+            reader.skip(1);
+            reader.read::<u64>()
+        }
         _ => None,
     }
 }
@@ -627,7 +651,10 @@ fn decode_pkg_length(reader: &mut BinaryReader<'_>) -> Result<(usize, usize), Am
 fn resolve_data_object<'a>(reader: &mut BinaryReader<'a>) -> ResolvedData<'a> {
     let remaining = reader.remaining();
     if remaining.is_empty() {
-        return ResolvedData { value: AmlValue::Unresolved, resource_template: None };
+        return ResolvedData {
+            value: AmlValue::Unresolved,
+            resource_template: None,
+        };
     }
 
     let value = match remaining[0] {
@@ -708,7 +735,10 @@ fn resolve_data_object<'a>(reader: &mut BinaryReader<'a>) -> ResolvedData<'a> {
         }
         _ => AmlValue::Unresolved,
     };
-    ResolvedData { value, resource_template: None }
+    ResolvedData {
+        value,
+        resource_template: None,
+    }
 }
 
 /// Try to resolve a Buffer data object as either an EISAID or resource template.
@@ -721,7 +751,10 @@ fn try_resolve_buffer<'a>(reader: &mut BinaryReader<'a>) -> ResolvedData<'a> {
 
     let pkg_result = decode_pkg_length(reader);
     let Ok((pkg_remaining, _)) = pkg_result else {
-        return ResolvedData { value: AmlValue::Unresolved, resource_template: None };
+        return ResolvedData {
+            value: AmlValue::Unresolved,
+            resource_template: None,
+        };
     };
 
     let body_end = reader.position() + pkg_remaining;
@@ -730,7 +763,10 @@ fn try_resolve_buffer<'a>(reader: &mut BinaryReader<'a>) -> ResolvedData<'a> {
     let remaining = reader.remaining();
     if remaining.is_empty() {
         skip_to(reader, body_end);
-        return ResolvedData { value: AmlValue::Unresolved, resource_template: None };
+        return ResolvedData {
+            value: AmlValue::Unresolved,
+            resource_template: None,
+        };
     }
 
     let buf_size = match remaining[0] {
@@ -784,7 +820,10 @@ fn try_resolve_buffer<'a>(reader: &mut BinaryReader<'a>) -> ResolvedData<'a> {
     };
 
     skip_to(reader, body_end);
-    ResolvedData { value: AmlValue::Unresolved, resource_template: rt_data }
+    ResolvedData {
+        value: AmlValue::Unresolved,
+        resource_template: rt_data,
+    }
 }
 
 /// Skip a data object (used when we need to skip TermArgs like in Return).

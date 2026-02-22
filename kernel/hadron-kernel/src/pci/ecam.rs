@@ -47,8 +47,7 @@ fn ecam_address(bus: u8, device: u8, function: u8, offset: u8) -> Option<VirtAdd
         if bus < info.start_bus || bus > info.end_bus {
             return None;
         }
-        let phys = info.phys_base
-            + ((bus as u64) << 20)
+        let phys = info.phys_base + ((bus as u64) << 20)
             | ((device as u64) << 15)
             | ((function as u64) << 12)
             | ((offset as u64) & 0xFFC); // mask to 4-byte alignment for safety

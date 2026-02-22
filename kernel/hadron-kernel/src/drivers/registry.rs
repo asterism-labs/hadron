@@ -86,10 +86,7 @@ pub fn match_platform_drivers(devices: &[crate::driver_api::acpi_device::AcpiDev
         for entry in entries {
             let matched = entry.id_table.iter().any(|id| {
                 id.matches_hid(&device.hid)
-                    || device
-                        .cid
-                        .as_ref()
-                        .is_some_and(|cid| id.matches_hid(cid))
+                    || device.cid.as_ref().is_some_and(|cid| id.matches_hid(cid))
             });
             if matched {
                 crate::kprintln!(
@@ -110,11 +107,7 @@ pub fn match_platform_drivers(devices: &[crate::driver_api::acpi_device::AcpiDev
                         });
                     }
                     Err(e) => {
-                        crate::kprintln!(
-                            "Platform: driver '{}' probe failed: {}",
-                            device.path,
-                            e,
-                        );
+                        crate::kprintln!("Platform: driver '{}' probe failed: {}", device.path, e,);
                     }
                 }
                 break;

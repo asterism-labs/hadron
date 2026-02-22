@@ -46,9 +46,9 @@ pub use hpet::HpetTable;
 pub use ivrs::{Ivrs, IvrsEntry, IvrsEntryIter};
 pub use madt::{Madt, MadtEntry, MadtEntryIter};
 pub use mcfg::{Mcfg, McfgEntry};
+pub use resource::{AcpiResource, ResourceIter};
 pub use rsdt::MatchingTableIter;
 pub use sdt::{SdtHeader, ValidatedTable};
-pub use resource::{AcpiResource, ResourceIter};
 pub use slit::Slit;
 pub use srat::{Srat, SratEntry, SratEntryIter};
 

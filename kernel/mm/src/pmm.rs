@@ -433,9 +433,8 @@ static PMM: SpinLock<Option<BitmapAllocator>> = SpinLock::leveled("PMM", 3, None
 /// The caller is responsible for converting bootloader-specific memory maps
 /// into [`PhysMemoryRegion`] descriptors before calling this function.
 pub fn init(regions: &[PhysMemoryRegion], hhdm_offset: u64) {
-    let allocator = unsafe {
-        BitmapAllocator::new(regions, hhdm_offset).expect("failed to initialize PMM")
-    };
+    let allocator =
+        unsafe { BitmapAllocator::new(regions, hhdm_offset).expect("failed to initialize PMM") };
 
     let mut pmm = PMM.lock();
     assert!(pmm.is_none(), "PMM already initialized");

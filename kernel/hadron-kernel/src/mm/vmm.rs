@@ -143,6 +143,5 @@ fn default_mmio_cleanup(virt_base: VirtAddr, size: u64) {
 /// fault handlers) or if the VMM has not been initialized yet.
 pub fn try_with_vmm<R>(f: impl FnOnce(&mut KernelVmm) -> R) -> Option<R> {
     let mut vmm = VMM.try_lock()?;
-    Some(f(vmm.as_mut()?)
-    )
+    Some(f(vmm.as_mut()?))
 }

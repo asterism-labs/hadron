@@ -26,8 +26,8 @@ pub fn cpu_init() {
 pub fn platform_init(boot_info: &impl crate::boot::BootInfo) {
     #[cfg(target_arch = "x86_64")]
     {
-        use hadron_acpi::aml::value::AmlValue;
         use crate::driver_api::acpi_device::AcpiDeviceInfo;
+        use hadron_acpi::aml::value::AmlValue;
 
         // 1. Initialize ACPI, interrupt controllers, and timers.
         x86_64::acpi::init(boot_info.rsdp_address());
@@ -38,24 +38,23 @@ pub fn platform_init(boot_info: &impl crate::boot::BootInfo) {
         crate::pci::enumerate::apply_prt_routing(&mut pci_devices);
 
         // 3. Build ACPI platform device list from namespace.
-        let acpi_devices: alloc::vec::Vec<AcpiDeviceInfo> =
-            x86_64::acpi::with_namespace(|ns| {
-                ns.devices()
-                    .filter(|d| d.hid.is_some())
-                    .filter(|d| !matches!(&d.hid, Some(AmlValue::Unresolved)))
-                    .map(|d| AcpiDeviceInfo {
-                        path: d.path,
-                        hid: d.hid.unwrap(),
-                        cid: d.cid,
-                        uid: match d.uid {
-                            Some(AmlValue::Integer(v)) => Some(v),
-                            _ => None,
-                        },
-                        resources: d.resources.clone(),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let acpi_devices: alloc::vec::Vec<AcpiDeviceInfo> = x86_64::acpi::with_namespace(|ns| {
+            ns.devices()
+                .filter(|d| d.hid.is_some())
+                .filter(|d| !matches!(&d.hid, Some(AmlValue::Unresolved)))
+                .map(|d| AcpiDeviceInfo {
+                    path: d.path,
+                    hid: d.hid.unwrap(),
+                    cid: d.cid,
+                    uid: match d.uid {
+                        Some(AmlValue::Integer(v)) => Some(v),
+                        _ => None,
+                    },
+                    resources: d.resources.clone(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
         crate::kinfo!("Platform: {} ACPI devices with _HID", acpi_devices.len());
 
         // 4. Build and print device tree.

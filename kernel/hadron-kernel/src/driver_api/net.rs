@@ -12,7 +12,11 @@ pub struct MacAddress(pub [u8; 6]);
 impl fmt::Display for MacAddress {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let [a, b, c, d, e, g] = self.0;
-        write!(f, "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", a, b, c, d, e, g)
+        write!(
+            f,
+            "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+            a, b, c, d, e, g
+        )
     }
 }
 

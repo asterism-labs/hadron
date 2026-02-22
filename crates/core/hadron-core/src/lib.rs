@@ -20,7 +20,7 @@ pub mod cpu_local;
 pub mod id;
 pub mod paging;
 pub mod safety;
-pub mod static_assert;
 pub mod sched;
+pub mod static_assert;
 pub mod sync;
 pub mod task;

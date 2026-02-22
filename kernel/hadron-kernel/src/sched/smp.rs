@@ -77,7 +77,11 @@ pub fn send_wake_ipi(target_cpu: CpuId) {
 }
 
 /// Type alias matching the signature expected by `Executor::run`.
-type StealResult = (crate::task::TaskId, Priority, hadron_sched::executor::TaskEntry);
+type StealResult = (
+    crate::task::TaskId,
+    Priority,
+    hadron_sched::executor::TaskEntry,
+);
 
 /// Attempts to steal one task from another CPU's executor.
 ///

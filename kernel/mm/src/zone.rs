@@ -8,9 +8,9 @@ use core::alloc::Layout;
 
 use hadron_core::sync::SpinLock;
 
-use crate::hhdm;
-use crate::pmm::{with_pmm, BitmapFrameAllocRef};
 use crate::FrameAllocator;
+use crate::hhdm;
+use crate::pmm::{BitmapFrameAllocRef, with_pmm};
 
 const NUM_ZONES: usize = 8;
 const ZONE_SIZES: [usize; NUM_ZONES] = [32, 64, 128, 256, 512, 1024, 2048, 4096];
