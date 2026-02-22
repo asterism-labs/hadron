@@ -11,7 +11,6 @@
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
-use alloc::collections::VecDeque;
 use core::future::Future;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -21,6 +20,8 @@ use crate::id::CpuId;
 use crate::percpu::{CpuLocal, MAX_CPUS};
 use crate::sync::{IrqSpinLock, LazyLock};
 use crate::task::{Priority, TaskId, TaskMeta};
+
+pub use hadron_core::sched::ReadyQueues;
 
 /// Per-CPU executor instances, initialized on first access.
 static EXECUTORS: CpuLocal<LazyLock<Executor>> =
@@ -46,92 +47,6 @@ pub(crate) struct TaskEntry {
     future: TaskFuture,
     #[allow(dead_code, reason = "reserved for Phase 7+ task debugging")]
     meta: TaskMeta,
-}
-
-/// Priority-aware ready queues.
-///
-/// Maintains one FIFO queue per priority tier. Pops from the highest
-/// priority (lowest ordinal) non-empty queue first.
-pub(crate) struct ReadyQueues {
-    queues: [VecDeque<TaskId>; Priority::COUNT],
-    /// Counter for background starvation prevention.
-    /// Incremented each time a Normal task is popped while Background tasks wait.
-    normal_streak: u64,
-}
-
-/// How many consecutive Normal polls before forcing one Background poll.
-const BACKGROUND_STARVATION_LIMIT: u64 = 100;
-
-impl ReadyQueues {
-    fn new() -> Self {
-        Self {
-            queues: [VecDeque::new(), VecDeque::new(), VecDeque::new()],
-            normal_streak: 0,
-        }
-    }
-
-    /// Pushes a task into the queue for the given priority.
-    pub(crate) fn push(&mut self, priority: Priority, id: TaskId) {
-        self.queues[priority as usize].push_back(id);
-    }
-
-    /// Pops the highest-priority ready task.
-    ///
-    /// Always drains Critical first. Between Normal and Background,
-    /// applies starvation prevention: if Normal has run for
-    /// `BACKGROUND_STARVATION_LIMIT` consecutive pops and Background
-    /// has tasks, pop one Background task instead.
-    fn pop(&mut self) -> Option<(Priority, TaskId)> {
-        // Critical always first.
-        if let Some(id) = self.queues[Priority::Critical as usize].pop_front() {
-            self.normal_streak = 0;
-            return Some((Priority::Critical, id));
-        }
-
-        // Starvation prevention: if Normal has been running too long
-        // and Background has work, give Background a turn.
-        let has_background = !self.queues[Priority::Background as usize].is_empty();
-        let has_normal = !self.queues[Priority::Normal as usize].is_empty();
-
-        if has_normal && has_background && self.normal_streak >= BACKGROUND_STARVATION_LIMIT {
-            self.normal_streak = 0;
-            if let Some(id) = self.queues[Priority::Background as usize].pop_front() {
-                return Some((Priority::Background, id));
-            }
-        }
-
-        // Normal next.
-        if let Some(id) = self.queues[Priority::Normal as usize].pop_front() {
-            if has_background {
-                self.normal_streak += 1;
-            } else {
-                self.normal_streak = 0;
-            }
-            return Some((Priority::Normal, id));
-        }
-
-        // Background last.
-        self.normal_streak = 0;
-        self.queues[Priority::Background as usize]
-            .pop_front()
-            .map(|id| (Priority::Background, id))
-    }
-
-    /// Steals one task from the back of the queue for work stealing.
-    ///
-    /// Returns a Normal or Background task (never Critical). Steals from
-    /// the back to preserve locality — the victim keeps its hot (front)
-    /// tasks while the thief gets the coldest (most recently enqueued) one.
-    pub(crate) fn steal_one(&mut self) -> Option<(Priority, TaskId)> {
-        // Prefer stealing Normal over Background.
-        if let Some(id) = self.queues[Priority::Normal as usize].pop_back() {
-            return Some((Priority::Normal, id));
-        }
-        if let Some(id) = self.queues[Priority::Background as usize].pop_back() {
-            return Some((Priority::Background, id));
-        }
-        None
-    }
 }
 
 /// The kernel's async task executor.
@@ -222,16 +137,22 @@ impl Executor {
     /// Main executor loop. Called once per CPU, never returns.
     pub fn run(&self) -> ! {
         loop {
-            // Clear preempt_pending before polling. The timer interrupt that
-            // woke us from HLT calls set_preempt_pending(), but since we run
-            // poll_ready_tasks() with IF=0, that stale flag would cause the
-            // batch to break after just one task — stranding newly-queued
-            // tasks (e.g. shell woken by exit_notify) until the next timer.
+            // Clear the stale preempt_pending flag left by the timer
+            // interrupt that woke us from HLT.
             super::clear_preempt_pending();
 
             self.poll_ready_tasks();
 
-            // Try to steal work from another CPU before halting.
+            // Re-poll if preempt_pending broke poll_ready_tasks early and
+            // tasks remain. Checking BEFORE try_steal prevents the bouncing
+            // livelock: without this, try_steal scans all CPUs (expensive,
+            // opens a window for others to steal our stranded tasks), causing
+            // tasks to bounce between CPUs without real forward progress.
+            if self.ready_queues.lock().has_ready() {
+                continue;
+            }
+
+            // No local work — try to steal from another CPU before halting.
             if let Some((id, priority, entry)) = super::smp::try_steal() {
                 // Insert the stolen task into our local task map and
                 // ready queue. When polled, the new waker will encode
@@ -261,15 +182,17 @@ impl Executor {
         }
     }
 
-    /// Polls all tasks currently in the ready queues, highest priority first.
+    /// Polls ready tasks until the queue is empty or a ring-3 timer
+    /// preemption sets `preempt_pending`.
     ///
     /// The task is removed from `self.tasks` before polling so the lock is
-    /// dropped during `future.poll()`. Note: interrupts remain disabled
-    /// (IF=0) throughout the batch because `IrqSpinLock` save/restore
-    /// preserves the IF state from the caller (`run()` disables interrupts
-    /// after HLT). The `preempt_pending` budget check is only effective
-    /// when a ring-3 timer trap fires during a `process_task` poll (which
-    /// re-enters the executor via longjmp with `preempt_pending` set).
+    /// dropped during `future.poll()`. Interrupts remain disabled (IF=0)
+    /// throughout because `IrqSpinLock` save/restore preserves the IF
+    /// state from the caller (`run()` disables after HLT).
+    ///
+    /// The `preempt_pending` yield point returns control to `run()` after
+    /// a ring-3 timer trap fires inside a `process_task` poll. The caller
+    /// re-polls if tasks remain (see the `has_ready` guard in `run()`).
     ///
     /// If a waker fires while the task is out for polling, the task ID is
     /// pushed into the ready queue again. The next iteration will call
@@ -293,9 +216,9 @@ impl Executor {
             };
             // Lock dropped here (IF stays 0 — IrqSpinLock restores saved flags).
 
-            // Poll the future. Interrupts are disabled (IF=0) so no timer
-            // can fire here. However, a ring-3 timer trap inside
-            // process_task will longjmp back with preempt_pending set.
+            // Poll the future. Ring-0 interrupts are disabled (IF=0). A
+            // ring-3 timer trap inside process_task will longjmp back,
+            // causing the future to yield and re-queue itself at the back.
             if let Some(mut entry) = entry {
                 match entry.future.as_mut().poll(&mut cx) {
                     Poll::Ready(()) => {
@@ -308,8 +231,10 @@ impl Executor {
                 }
             }
 
-            // Budget check: if a ring-3 timer preemption set the flag during
-            // this batch, yield to the main loop so we re-check for steals/HLT.
+            // Yield point: if a ring-3 timer preemption set the flag during
+            // this batch, return to the main loop. The caller re-polls if
+            // there are remaining tasks (preventing the livelock where
+            // stranded tasks get stolen endlessly without being polled).
             if super::preempt_pending() {
                 super::clear_preempt_pending();
                 break;
