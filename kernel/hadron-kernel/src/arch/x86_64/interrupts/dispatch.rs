@@ -1,13 +1,16 @@
 //! Hardware interrupt dispatch subsystem.
 //!
 //! Provides a static handler table for vectors 32-255 and macro-generated
-//! `extern "x86-interrupt"` stub functions that call a common dispatcher.
+//! naked stub functions that call a common dispatcher. Each stub checks the
+//! interrupted privilege level (RPL in the saved CS) and conditionally
+//! performs `swapgs` so that per-CPU state is accessible regardless of
+//! whether the interrupt fired from ring 0 or ring 3.
+//!
 //! The dispatcher invokes the registered handler (if any) and then sends
 //! LAPIC EOI.
 
 use core::sync::atomic::{AtomicPtr, Ordering};
 
-use crate::arch::x86_64::structures::idt::InterruptStackFrame;
 use crate::id::IrqVector;
 
 /// Number of hardware interrupt vectors (32-255).
@@ -94,7 +97,21 @@ pub fn unregister_handler(vector: IrqVector) {
 ///
 /// Looks up the handler in the dispatch table, calls it if present,
 /// then sends LAPIC EOI.
-fn dispatch_interrupt(vector: u8) {
+///
+/// # ABI
+///
+/// Uses the C calling convention so naked stubs can call it directly
+/// via `call` with the vector number in `edi`.
+extern "C" fn dispatch_interrupt(vector: u8) {
+    // Debug: verify GS_BASE points to valid per-CPU data. If an interrupt
+    // stub failed to swapgs, GS_BASE is the user value (typically 0) and
+    // this read will fault or return a non-kernel pointer.
+    debug_assert!(
+        hadron_core::cpu_local::cpu_is_initialized(),
+        "dispatch_interrupt: GS_BASE does not point to valid per-CPU data \
+         (vector {vector}). Likely a missing swapgs in the interrupt stub."
+    );
+
     let idx = (vector - 32) as usize;
     if idx < NUM_VECTORS {
         let handler = HANDLERS[idx].load(Ordering::Acquire);
@@ -114,15 +131,77 @@ fn dispatch_interrupt(vector: u8) {
 }
 
 // We generate stubs with a function array indexed by vector offset (0-223 → vectors 32-255).
+// Each stub is a naked function that:
+//   1. Checks the RPL bits in the interrupted CS to determine ring 0 vs ring 3
+//   2. Conditionally swapgs on entry (ring 3 → kernel GS)
+//   3. Saves/restores scratch registers around the call to dispatch_interrupt
+//   4. Conditionally swapgs on exit (ring 3 → user GS)
+//   5. Returns via iretq
 
-/// Stub handler type matching the IDT entry signature.
-type StubFn = extern "x86-interrupt" fn(InterruptStackFrame);
+/// Stub handler type: raw function address for IDT entries.
+pub type StubFn = unsafe extern "C" fn();
 
-/// Generate a stub for a specific vector offset (0-223, maps to vectors 32-255).
+/// Generate a naked interrupt stub for a specific vector offset (0-223, maps to vectors 32-255).
+///
+/// The stub checks the RPL in the interrupted CS and conditionally performs
+/// `swapgs` so that kernel GS_BASE is always active when `dispatch_interrupt`
+/// runs. This is critical for interrupts that fire from ring 3 (userspace).
 macro_rules! make_stub {
     ($offset:expr) => {{
-        extern "x86-interrupt" fn stub(_frame: InterruptStackFrame) {
-            dispatch_interrupt($offset + 32);
+        #[unsafe(naked)]
+        unsafe extern "C" fn stub() {
+            core::arch::naked_asm!(
+                // ── Check privilege level of interrupted code ──
+                // On x86_64, the CPU always pushes SS, RSP, RFLAGS, CS, RIP
+                // (5 qwords). CS is at [rsp + 8]; RPL bits [0:1] indicate ring.
+                "test qword ptr [rsp + 8], 3",
+                "jz 1f",
+                "swapgs",                       // Ring 3 → swap to kernel GS
+                "1:",
+
+                // ── Save scratch registers ──
+                // 9 pushes = 72 bytes. With the 40-byte interrupt frame, the
+                // total displacement from pre-interrupt RSP is 112 = 16*7,
+                // keeping RSP 16-byte aligned for the call.
+                "push rax",
+                "push rcx",
+                "push rdx",
+                "push rsi",
+                "push rdi",
+                "push r8",
+                "push r9",
+                "push r10",
+                "push r11",
+
+                // ── Dispatch ──
+                // Clear DF for the C ABI (the interrupted code may have set
+                // it via STD). The original RFLAGS — including DF — is
+                // restored by iretq, so the interrupted code is unaffected.
+                "cld",
+                "mov edi, {vector}",            // arg0: vector number
+                "call {dispatch}",
+
+                // ── Restore scratch registers ──
+                "pop r11",
+                "pop r10",
+                "pop r9",
+                "pop r8",
+                "pop rdi",
+                "pop rsi",
+                "pop rdx",
+                "pop rcx",
+                "pop rax",
+
+                // ── Check privilege level again before return ──
+                "test qword ptr [rsp + 8], 3",
+                "jz 2f",
+                "swapgs",                       // Returning to ring 3 → swap back
+                "2:",
+                "iretq",
+
+                vector   = const ($offset + 32u8),
+                dispatch = sym dispatch_interrupt,
+            );
         }
         stub as StubFn
     }};
@@ -132,10 +211,6 @@ macro_rules! make_stub {
 /// `STUBS[i]` handles vector `i + 32`.
 // Due to the lack of const generics over function addresses, we enumerate them
 // explicitly. Groups of 16 for readability.
-#[expect(
-    clippy::declare_interior_mutable_const,
-    reason = "array init pattern requires const repetition"
-)]
 pub static STUBS: [StubFn; NUM_VECTORS] = [
     // Vectors 32-47 (ISA IRQs)
     make_stub!(0),

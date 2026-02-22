@@ -55,9 +55,12 @@ static IDT: LazyLock<InterruptDescriptorTable> = LazyLock::new(|| {
         .set_handler_with_err_code(handlers::security_exception);
 
     // --- Hardware Interrupt Stubs (vectors 32-255) ---
+    //
+    // The stubs are naked functions (not `extern "x86-interrupt"`), so we
+    // must install them via raw addresses rather than typed handler pointers.
 
     for (i, stub) in dispatch::STUBS.iter().enumerate() {
-        idt.interrupts[i].set_handler(*stub);
+        idt.interrupts[i].set_raw_handler_addr(*stub as *const () as u64);
     }
 
     // Override vector 254 (LAPIC timer) with the custom preemption-aware
