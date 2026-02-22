@@ -6,7 +6,7 @@ publish = false
 
 [dependencies]
 anyhow = "1"
-hadron-elf = { path = "../elf" }
+hadron-elf = { path = "../../parse/elf" }
 inferno = { version = "0.12", default-features = false, features = ["nameattr"] }
 rustc-demangle = "0.1"
 serde = { version = "1", features = ["derive"] }

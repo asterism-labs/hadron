@@ -5,4 +5,4 @@ edition = "2024"
 publish = false
 
 [dependencies]
-hadron-syscall = { path = "../../crates/hadron-syscall", features = [ "userspace" ] }
+hadron-syscall = { path = "../../crates/syscall/hadron-syscall", features = [ "userspace" ] }

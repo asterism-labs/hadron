@@ -14,9 +14,9 @@ crc32fast = "1"
 crossterm = "0.28"
 flate2 = "1"
 hadris-cpio = { version = "1.0.1", default-features = false, features = ["std", "write"] }
-hadron-dwarf = { path = "../../crates/dwarf" }
-hadron-elf = { path = "../../crates/elf" }
-hadron-perf = { path = "../../crates/hadron-perf" }
+hadron-dwarf = { path = "../../crates/parse/dwarf" }
+hadron-elf = { path = "../../crates/parse/elf" }
+hadron-perf = { path = "../../crates/tools/hadron-perf" }
 ratatui = "0.29"
 rhai = { version = "1", features = ["sync"] }
 rustc-demangle = "0.1"

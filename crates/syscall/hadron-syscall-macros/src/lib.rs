@@ -17,7 +17,7 @@ use model::SyscallDefs;
 
 /// Define all syscalls, error codes, types, and constants from a single DSL.
 ///
-/// See `crates/hadron-syscall/src/lib.rs` for the full invocation.
+/// See `crates/syscall/hadron-syscall/src/lib.rs` for the full invocation.
 #[proc_macro]
 pub fn define_syscalls(input: TokenStream) -> TokenStream {
     let defs = parse_macro_input!(input as SyscallDefs);

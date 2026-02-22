@@ -133,22 +133,22 @@ dependency("hadris-iso").version("1.0.1")
 
 let host = group("host").target("host").edition("2021").project(false);
 
-host.add("hadron-syscall-macros", "crates/hadron-syscall-macros")
+host.add("hadron-syscall-macros", "crates/syscall/hadron-syscall-macros")
     .edition("2024")
     .crate_type(PROC_MACRO)
     .deps(#{ syn: "syn", quote: "quote", proc_macro2: "proc-macro2" });
 
-host.add("hadron-driver-macros", "crates/hadron-driver-macros")
+host.add("hadron-driver-macros", "crates/driver/hadron-driver-macros")
     .edition("2024")
     .crate_type(PROC_MACRO)
     .deps(#{ syn: "syn", quote: "quote", proc_macro2: "proc-macro2" });
 
-host.add("hadron-binparse-macros", "crates/hadron-binparse-macros")
+host.add("hadron-binparse-macros", "crates/parse/hadron-binparse-macros")
     .edition("2024")
     .crate_type(PROC_MACRO)
     .deps(#{ syn: "syn", quote: "quote", proc_macro2: "proc-macro2" });
 
-host.add("hadron-mmio-macros", "crates/hadron-mmio-macros")
+host.add("hadron-mmio-macros", "crates/driver/hadron-mmio-macros")
     .edition("2024")
     .crate_type(PROC_MACRO)
     .deps(#{ syn: "syn", quote: "quote", proc_macro2: "proc-macro2" });
@@ -159,27 +159,27 @@ host.add("hadron-mmio-macros", "crates/hadron-mmio-macros")
 
 let kernel_libs = group("kernel-libs").target("x86_64-unknown-hadron").edition("2024").config(true);
 
-kernel_libs.add("planck-noalloc", "crates/planck-noalloc");
-kernel_libs.add("hadron-core", "crates/hadron-core")
+kernel_libs.add("planck-noalloc", "crates/core/planck-noalloc");
+kernel_libs.add("hadron-core", "crates/core/hadron-core")
     .deps(#{ planck_noalloc: "planck-noalloc" });
-kernel_libs.add("hadron-linkset", "crates/linkset");
-kernel_libs.add("hadron-binparse", "crates/binparse")
+kernel_libs.add("hadron-linkset", "crates/core/linkset");
+kernel_libs.add("hadron-binparse", "crates/parse/binparse")
     .deps(#{ hadron_binparse_macros: #{ "crate": "hadron-binparse-macros", proc_macro: true } });
-kernel_libs.add("hadron-elf", "crates/elf");
-kernel_libs.add("hadron-dwarf", "crates/dwarf");
-kernel_libs.add("hadron-mmio", "crates/hadron-mmio")
+kernel_libs.add("hadron-elf", "crates/parse/elf");
+kernel_libs.add("hadron-dwarf", "crates/parse/dwarf");
+kernel_libs.add("hadron-mmio", "crates/driver/hadron-mmio")
     .deps(#{ hadron_mmio_macros: #{ "crate": "hadron-mmio-macros", proc_macro: true } });
 
-kernel_libs.add("hadron-acpi", "crates/acpi")
+kernel_libs.add("hadron-acpi", "crates/parse/acpi")
     .deps(#{ hadron_binparse: "hadron-binparse" });
 
-kernel_libs.add("limine", "crates/limine")
+kernel_libs.add("limine", "crates/boot/limine")
     .deps(#{ bitflags: "bitflags" });
 
-kernel_libs.add("uefi", "crates/uefi")
+kernel_libs.add("uefi", "crates/boot/uefi")
     .deps(#{ bitflags: "bitflags" });
 
-kernel_libs.add("hadron-syscall", "crates/hadron-syscall")
+kernel_libs.add("hadron-syscall", "crates/syscall/hadron-syscall")
     .features(["kernel"])
     .deps(#{ hadron_syscall_macros: #{ "crate": "hadron-syscall-macros", proc_macro: true } });
 
@@ -209,7 +209,7 @@ kernel_drivers.add("hadron-drivers", "kernel/hadron-drivers")
 
 let test_deps = group("test-deps").target("x86_64-unknown-hadron").edition("2024").project(false);
 
-test_deps.add("hadron-test", "crates/hadron-test")
+test_deps.add("hadron-test", "crates/test/hadron-test")
     .features(["limine"])
     .deps(#{ limine: "limine" });
 
@@ -219,7 +219,7 @@ test_deps.add("hadron-test", "crates/hadron-test")
 
 let bench_deps = group("bench-deps").target("x86_64-unknown-hadron").edition("2024").project(false);
 
-bench_deps.add("hadron-bench", "crates/hadron-bench")
+bench_deps.add("hadron-bench", "crates/test/hadron-bench")
     .features(["limine"])
     .deps(#{ limine: "limine" });
 
@@ -264,7 +264,7 @@ kernel_main.add("hadron-boot-limine", "kernel/boot/limine")
 
 let userspace = group("userspace").target("x86_64-unknown-hadron-user").edition("2024");
 
-userspace.add("hadron-syscall-user", "crates/hadron-syscall")
+userspace.add("hadron-syscall-user", "crates/syscall/hadron-syscall")
     .features(["userspace"])
     .deps(#{ hadron_syscall_macros: #{ "crate": "hadron-syscall-macros", proc_macro: true } });
 
