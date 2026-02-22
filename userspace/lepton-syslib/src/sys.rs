@@ -4,9 +4,10 @@ use hadron_syscall::raw::{syscall0, syscall1, syscall2, syscall3, syscall4};
 use hadron_syscall::{
     CLOCK_MONOTONIC, KernelVersionInfo, MAP_ANONYMOUS, MemoryInfo, PROT_READ, PROT_WRITE,
     QUERY_KERNEL_VERSION, QUERY_MEMORY, QUERY_UPTIME, SYS_CLOCK_GETTIME, SYS_HANDLE_DUP,
-    SYS_HANDLE_PIPE, SYS_MEM_MAP, SYS_MEM_UNMAP, SYS_QUERY, SYS_TASK_EXIT, SYS_TASK_INFO,
-    SYS_TASK_GETPGID, SYS_TASK_KILL, SYS_TASK_SETPGID, SYS_TASK_SIGACTION, SYS_TASK_SPAWN,
-    SYS_TASK_WAIT, SpawnArg, Timespec, UptimeInfo,
+    SYS_HANDLE_PIPE, SYS_HANDLE_TCGETPGRP, SYS_HANDLE_TCSETPGRP, SYS_MEM_MAP, SYS_MEM_UNMAP,
+    SYS_QUERY, SYS_TASK_EXIT, SYS_TASK_INFO, SYS_TASK_GETPGID, SYS_TASK_KILL,
+    SYS_TASK_SETPGID, SYS_TASK_SIGACTION, SYS_TASK_SPAWN, SYS_TASK_WAIT, SpawnArg, Timespec,
+    UptimeInfo,
 };
 
 pub use hadron_syscall::{SIGINT, SIGQUIT, SIGTERM, SIG_DFL, SIG_IGN};
@@ -149,6 +150,20 @@ pub fn setpgid(pid: u32, pgid: u32) -> isize {
 /// Returns the PGID on success, or a negative errno on failure.
 pub fn getpgid(pid: u32) -> isize {
     syscall1(SYS_TASK_GETPGID, pid as usize)
+}
+
+/// Set the foreground process group of the terminal associated with `fd`.
+///
+/// Returns 0 on success, or a negative errno on failure.
+pub fn tcsetpgrp(fd: usize, pgid: u32) -> isize {
+    syscall2(SYS_HANDLE_TCSETPGRP, fd, pgid as usize)
+}
+
+/// Get the foreground process group of the terminal associated with `fd`.
+///
+/// Returns the PGID on success, or a negative errno on failure.
+pub fn tcgetpgrp(fd: usize) -> isize {
+    syscall1(SYS_HANDLE_TCGETPGRP, fd)
 }
 
 /// Duplicate a file descriptor (dup2 semantics).

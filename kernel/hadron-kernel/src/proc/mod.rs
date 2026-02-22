@@ -211,11 +211,6 @@ static IO_BUF_LEN: CpuLocal<AtomicU64> = CpuLocal::new([const { AtomicU64::new(0
 /// Per-CPU I/O direction for TRAP_IO: 0 = read, 1 = write.
 static IO_IS_WRITE: CpuLocal<AtomicU8> = CpuLocal::new([const { AtomicU8::new(0) }; MAX_CPUS]);
 
-/// Sets the foreground process group ID on the active TTY.
-pub fn set_foreground_pgid(pgid: u32) {
-    crate::tty::active_tty().set_foreground_pgid(pgid);
-}
-
 /// Send a signal to all processes in a process group.
 ///
 /// Iterates the global process table and posts the signal to every
@@ -889,17 +884,7 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                     )
                 };
 
-                // Set foreground PGID so Ctrl+C delivers SIGINT to the child's group.
-                if target.as_u32() != 0 {
-                    if let Some(child_proc) = lookup_process(target) {
-                        set_foreground_pgid(child_proc.pgid.load(Ordering::Acquire));
-                    }
-                }
-
                 let (result, exit_code) = handle_wait(pid, target).await;
-
-                // Clear foreground PGID.
-                set_foreground_pgid(0);
 
                 // Write exit status to user memory under user CR3.
                 if status_ptr != 0 && result >= 0 {

@@ -260,6 +260,17 @@ hadron_syscall_macros::define_syscalls! {
 
         /// Create a pipe. Writes [read_fd, write_fd] to `fds_ptr`.
         fn handle_pipe(fds_ptr: usize) = 0x03;
+
+        /// Set the foreground process group of the terminal associated with `fd`.
+        ///
+        /// `pgid` is the process group ID to set. Returns 0 on success, or a
+        /// negated errno on failure.
+        fn handle_tcsetpgrp(fd: usize, pgid: usize) = 0x04;
+
+        /// Get the foreground process group of the terminal associated with `fd`.
+        ///
+        /// Returns the PGID on success, or a negated errno on failure.
+        fn handle_tcgetpgrp(fd: usize) = 0x05;
     }
 
     /// Channel IPC.
