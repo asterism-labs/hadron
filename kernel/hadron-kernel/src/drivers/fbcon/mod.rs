@@ -395,6 +395,10 @@ impl FbCon {
             return;
         }
 
+        // Flush any pending dirty cells to pixels BEFORE the hardware blit,
+        // so the blit operates on up-to-date pixel data.
+        self.flush_dirty(state);
+
         // Blit framebuffer: shift all pixel rows up by one glyph height.
         let pitch = self.fb_info.pitch as usize;
         let row_bytes = pitch * glyph_height as usize;

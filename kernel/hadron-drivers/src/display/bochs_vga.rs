@@ -57,8 +57,8 @@ const DISPI_NOCLEARMEM: u16 = 0x80;
 const BGA_VERSION_MIN: u16 = 0xB0C0;
 
 /// Default display mode.
-const DEFAULT_WIDTH: u16 = 1920;
-const DEFAULT_HEIGHT: u16 = 1080;
+const DEFAULT_WIDTH: u16 = 1280;
+const DEFAULT_HEIGHT: u16 = 720;
 const DEFAULT_BPP: u16 = 32;
 /// Bytes per pixel for 32bpp.
 const BYTES_PER_PIXEL: u32 = 4;
