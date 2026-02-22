@@ -579,9 +579,10 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
         }
     }
 
-    // [KTEST] Run before_executor stage and spawn async test runner.
+    // [KTEST] Initialize watchdog, run before_executor stage, and spawn async test runner.
     #[cfg(ktest)]
     {
+        crate::ktest::init_watchdog();
         crate::ktest::run_sync_stage(hadron_ktest::TestStage::BeforeExecutor);
         crate::sched::spawn_background("ktest", crate::ktest::run_async_stages());
     }

@@ -7,7 +7,7 @@ use hadron_ktest::kernel_test;
 
 // ── Early boot stage ────────────────────────────────────────────────────
 
-#[kernel_test(stage = "early_boot")]
+#[kernel_test(stage = "early_boot", timeout = 5)]
 fn test_heap_watermark_increases() {
     let wm_before = crate::mm::vmm::with_vmm(|vmm| vmm.heap_watermark());
 
@@ -23,7 +23,7 @@ fn test_heap_watermark_increases() {
     );
 }
 
-#[kernel_test(stage = "early_boot")]
+#[kernel_test(stage = "early_boot", timeout = 5)]
 fn test_pmm_free_count_consistency() {
     crate::mm::pmm::with_pmm(|pmm| {
         let before = pmm.free_frames();
@@ -40,7 +40,7 @@ fn test_pmm_free_count_consistency() {
     });
 }
 
-#[kernel_test(stage = "early_boot")]
+#[kernel_test(stage = "early_boot", timeout = 5)]
 fn test_hhdm_phys_to_virt_roundtrip() {
     use crate::addr::PhysAddr;
 
@@ -58,7 +58,7 @@ fn test_hhdm_phys_to_virt_roundtrip() {
 
 // ── Before executor stage ───────────────────────────────────────────────
 
-#[kernel_test(stage = "before_executor")]
+#[kernel_test(stage = "before_executor", timeout = 5)]
 fn test_mmio_map_unmap() {
     use crate::addr::PhysAddr;
 

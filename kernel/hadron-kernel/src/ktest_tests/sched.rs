@@ -8,19 +8,19 @@ use hadron_ktest::kernel_test;
 
 // ── Migrated from sample tests ──────────────────────────────────────────
 
-#[kernel_test(stage = "with_executor")]
+#[kernel_test(stage = "with_executor", timeout = 10)]
 async fn test_async_yield() {
     crate::sched::primitives::yield_now().await;
 }
 
-#[kernel_test(stage = "with_executor", instances = 0..=1)]
+#[kernel_test(stage = "with_executor", instances = 0..=1, timeout = 10)]
 async fn test_barrier_sync(ctx: &hadron_ktest::TestContext) {
     ctx.barrier().await;
 }
 
 // ── New: spawn and complete ─────────────────────────────────────────────
 
-#[kernel_test(stage = "with_executor")]
+#[kernel_test(stage = "with_executor", timeout = 10)]
 async fn test_spawn_and_complete() {
     static COMPLETED: AtomicBool = AtomicBool::new(false);
     COMPLETED.store(false, Ordering::Release);
@@ -42,7 +42,7 @@ async fn test_spawn_and_complete() {
     );
 }
 
-#[kernel_test(stage = "with_executor")]
+#[kernel_test(stage = "with_executor", timeout = 10)]
 async fn test_spawn_multiple_tasks() {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     COUNTER.store(0, Ordering::Release);
@@ -69,7 +69,7 @@ async fn test_spawn_multiple_tasks() {
 
 // ── Priority ordering ───────────────────────────────────────────────────
 
-#[kernel_test(stage = "with_executor")]
+#[kernel_test(stage = "with_executor", timeout = 10)]
 async fn test_priority_ordering() {
     use crate::sched::{Priority, TaskMeta};
 
@@ -114,7 +114,7 @@ async fn test_priority_ordering() {
 
 // ── Sleep ticks ─────────────────────────────────────────────────────────
 
-#[kernel_test(stage = "with_executor")]
+#[kernel_test(stage = "with_executor", timeout = 10)]
 async fn test_sleep_ticks() {
     let before = crate::time::timer_ticks();
     crate::sched::primitives::sleep_ticks(5).await;
@@ -130,14 +130,14 @@ async fn test_sleep_ticks() {
 
 // ── Instanced barrier (4 instances) ────────────────────────────────────
 
-#[kernel_test(stage = "with_executor", instances = 0..=3)]
+#[kernel_test(stage = "with_executor", instances = 0..=3, timeout = 10)]
 async fn test_concurrent_barrier_four(ctx: &hadron_ktest::TestContext) {
     ctx.barrier().await;
 }
 
 // ── Yield fairness ──────────────────────────────────────────────────────
 
-#[kernel_test(stage = "with_executor", instances = 0..=1)]
+#[kernel_test(stage = "with_executor", instances = 0..=1, timeout = 10)]
 async fn test_yield_fairness(ctx: &hadron_ktest::TestContext) {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     // Reset counter when instance 0 starts.
@@ -169,7 +169,7 @@ async fn test_yield_fairness(ctx: &hadron_ktest::TestContext) {
 
 // ── Work stealing tests ─────────────────────────────────────────────────
 
-#[kernel_test(stage = "with_executor")]
+#[kernel_test(stage = "with_executor", timeout = 10)]
 async fn test_steal_from_executor() {
     use crate::sched::{Executor, TaskMeta, Priority};
 
@@ -185,7 +185,7 @@ async fn test_steal_from_executor() {
     );
 }
 
-#[kernel_test(stage = "with_executor")]
+#[kernel_test(stage = "with_executor", timeout = 10)]
 async fn test_steal_respects_critical() {
     use crate::sched::{Executor, TaskMeta, Priority};
 
@@ -201,7 +201,7 @@ async fn test_steal_respects_critical() {
     );
 }
 
-#[kernel_test(stage = "with_executor")]
+#[kernel_test(stage = "with_executor", timeout = 10)]
 async fn test_steal_one_task_rule() {
     use crate::sched::{Executor, TaskMeta, Priority};
 
@@ -216,7 +216,7 @@ async fn test_steal_one_task_rule() {
     );
 }
 
-#[kernel_test(stage = "with_executor")]
+#[kernel_test(stage = "with_executor", timeout = 10)]
 async fn test_steal_allowed_with_two() {
     use crate::sched::{Executor, TaskMeta, Priority};
 

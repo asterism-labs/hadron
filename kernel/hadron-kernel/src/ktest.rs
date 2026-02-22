@@ -8,6 +8,7 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
+use alloc::sync::Arc;
 use core::future::Future;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
@@ -16,11 +17,46 @@ use hadron_ktest::{
     AsyncBarrier, KernelTestDescriptor, TestContext, TestKind, TestStage, kernel_test_entries,
 };
 
+use crate::driver_api::hw::Watchdog;
+use crate::sync::SpinLock;
+
 /// Tracks the currently-running test name for the panic handler.
 static CURRENT_TEST: AtomicPtr<u8> = AtomicPtr::new(core::ptr::null_mut());
 static CURRENT_TEST_LEN: AtomicU32 = AtomicU32::new(0);
 /// Total number of failures across all stages.
 static FAILURES: AtomicU32 = AtomicU32::new(0);
+
+/// Cached watchdog device for arming/disarming around tests.
+static WATCHDOG: SpinLock<Option<Arc<dyn Watchdog>>> = SpinLock::leveled("KTEST_WD", 4, None);
+
+/// Default per-test timeout in seconds (if not specified by the test).
+const DEFAULT_TIMEOUT_SECS: u32 = 10;
+
+/// Initializes the ktest watchdog by fetching the first registered watchdog
+/// from the device registry. No-op if no watchdog is available.
+pub fn init_watchdog() {
+    let wd = crate::drivers::device_registry::with_device_registry(|reg| reg.first_watchdog());
+    if let Some(wd) = wd {
+        *WATCHDOG.lock() = Some(wd);
+        hadron_ktest::serial_println!("ktest: watchdog armed for hang detection");
+    }
+}
+
+/// Arms the watchdog with the given timeout. No-op if no watchdog is available.
+fn arm_watchdog(timeout_secs: u32) {
+    let guard = WATCHDOG.lock();
+    if let Some(ref wd) = *guard {
+        wd.arm(timeout_secs);
+    }
+}
+
+/// Disarms the watchdog. No-op if no watchdog is available.
+fn disarm_watchdog() {
+    let guard = WATCHDOG.lock();
+    if let Some(ref wd) = *guard {
+        wd.disarm();
+    }
+}
 
 /// Sets the currently-running test name (for panic reporting).
 fn set_current_test(name: &'static str) {
@@ -89,10 +125,18 @@ fn run_sync_test(test: &KernelTestDescriptor) {
     hadron_ktest::serial_print!("test {}::{} ... ", test.module_path, test.name);
     set_current_test(test.name);
 
+    let timeout = if test.timeout_secs > 0 {
+        test.timeout_secs
+    } else {
+        DEFAULT_TIMEOUT_SECS
+    };
+    arm_watchdog(timeout);
+
     // SAFETY: The proc macro guarantees this is a `fn()` for Sync tests.
     let f: fn() = unsafe { core::mem::transmute(test.test_fn) };
     f();
 
+    disarm_watchdog();
     clear_current_test();
     hadron_ktest::serial_println!("ok");
 }
@@ -158,12 +202,20 @@ async fn run_single_async_test(test: &KernelTestDescriptor) {
     hadron_ktest::serial_print!("test {}::{} ... ", test.module_path, test.name);
     set_current_test(test.name);
 
+    let timeout = if test.timeout_secs > 0 {
+        test.timeout_secs
+    } else {
+        DEFAULT_TIMEOUT_SECS
+    };
+    arm_watchdog(timeout);
+
     // SAFETY: The proc macro guarantees this is a
     // `fn() -> Pin<Box<dyn Future<Output = ()> + Send>>` for Async tests.
     let f: fn() -> Pin<Box<dyn Future<Output = ()> + Send>> =
         unsafe { core::mem::transmute(test.test_fn) };
     f().await;
 
+    disarm_watchdog();
     clear_current_test();
     hadron_ktest::serial_println!("ok");
 }
@@ -179,6 +231,13 @@ async fn run_instanced_async_test(test: &KernelTestDescriptor) {
     );
     set_current_test(test.name);
 
+    let timeout = if test.timeout_secs > 0 {
+        test.timeout_secs
+    } else {
+        DEFAULT_TIMEOUT_SECS
+    };
+    arm_watchdog(timeout);
+
     let barrier = alloc::sync::Arc::new(AsyncBarrier::new(instance_count));
 
     // SAFETY: The proc macro guarantees this is a
@@ -191,7 +250,11 @@ async fn run_instanced_async_test(test: &KernelTestDescriptor) {
     for id in test.instance_start..=test.instance_end_inclusive {
         // Leak the context to get a 'static lifetime. Acceptable memory cost
         // for a test binary that exits after completion.
-        let ctx = Box::leak(Box::new(TestContext::new(id, instance_count, barrier.clone())));
+        let ctx = Box::leak(Box::new(TestContext::new(
+            id,
+            instance_count,
+            barrier.clone(),
+        )));
         let fut = f(ctx);
         task_ids.push(crate::sched::spawn(fut));
     }
@@ -209,6 +272,7 @@ async fn run_instanced_async_test(test: &KernelTestDescriptor) {
         // For now we just yield enough times for cooperative tasks to complete.
     }
 
+    disarm_watchdog();
     clear_current_test();
     hadron_ktest::serial_println!("ok");
 }

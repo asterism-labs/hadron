@@ -2,7 +2,7 @@
 
 use hadron_ktest::kernel_test;
 
-#[kernel_test(stage = "before_executor")]
+#[kernel_test(stage = "before_executor", timeout = 5)]
 fn test_syscall_task_info() {
     let result: isize;
     unsafe {
@@ -18,7 +18,7 @@ fn test_syscall_task_info() {
     assert!(result >= 0, "sys_task_info returned {}", result);
 }
 
-#[kernel_test(stage = "before_executor")]
+#[kernel_test(stage = "before_executor", timeout = 5)]
 fn test_syscall_unknown_returns_enosys() {
     let result: isize;
     unsafe {
@@ -38,7 +38,7 @@ fn test_syscall_unknown_returns_enosys() {
     );
 }
 
-#[kernel_test(stage = "before_executor")]
+#[kernel_test(stage = "before_executor", timeout = 5)]
 fn test_syscall_debug_log() {
     let msg = b"syscall debug_log test\n";
     let result: isize;
@@ -61,7 +61,7 @@ fn test_syscall_debug_log() {
     );
 }
 
-#[kernel_test(stage = "before_executor")]
+#[kernel_test(stage = "before_executor", timeout = 5)]
 fn test_syscall_clock_gettime() {
     // Use sentinel values to confirm the syscall overwrites the struct.
     let mut ts = crate::syscall::Timespec {
@@ -85,7 +85,7 @@ fn test_syscall_clock_gettime() {
     assert!(ts.tv_nsec < 1_000_000_000, "tv_nsec must be < 1 billion");
 }
 
-#[kernel_test(stage = "before_executor")]
+#[kernel_test(stage = "before_executor", timeout = 5)]
 fn test_syscall_clock_gettime_invalid_clock() {
     let mut ts = crate::syscall::Timespec {
         tv_sec: 0,

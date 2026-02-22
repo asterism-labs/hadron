@@ -6,7 +6,7 @@ use hadron_ktest::kernel_test;
 
 // ── Migrated from pmm_test.rs ───────────────────────────────────────────
 
-#[kernel_test(stage = "early_boot")]
+#[kernel_test(stage = "early_boot", timeout = 5)]
 fn test_allocate_single_frame() {
     crate::mm::pmm::with_pmm(|pmm| {
         let free_before = pmm.free_frames();
@@ -22,7 +22,7 @@ fn test_allocate_single_frame() {
     });
 }
 
-#[kernel_test(stage = "early_boot")]
+#[kernel_test(stage = "early_boot", timeout = 5)]
 fn test_allocate_and_deallocate() {
     crate::mm::pmm::with_pmm(|pmm| {
         let free_before = pmm.free_frames();
@@ -35,7 +35,7 @@ fn test_allocate_and_deallocate() {
     });
 }
 
-#[kernel_test(stage = "early_boot")]
+#[kernel_test(stage = "early_boot", timeout = 5)]
 fn test_allocate_contiguous() {
     crate::mm::pmm::with_pmm(|pmm| {
         let free_before = pmm.free_frames();
@@ -56,7 +56,7 @@ fn test_allocate_contiguous() {
 
 // ── Migrated from sanitizer_test.rs (PMM tests) ────────────────────────
 
-#[kernel_test(stage = "early_boot")]
+#[kernel_test(stage = "early_boot", timeout = 5)]
 fn test_pmm_alloc_dealloc_cycle() {
     // Allocate a frame, deallocate it (poisons), re-allocate (checks poison).
     crate::mm::pmm::with_pmm(|pmm| {
@@ -70,7 +70,7 @@ fn test_pmm_alloc_dealloc_cycle() {
     });
 }
 
-#[kernel_test(stage = "early_boot")]
+#[kernel_test(stage = "early_boot", timeout = 5)]
 fn test_pmm_multi_frame_cycle() {
     crate::mm::pmm::with_pmm(|pmm| {
         // Allocate 8 contiguous frames.

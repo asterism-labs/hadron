@@ -30,3 +30,13 @@ pub trait Timer: Send + Sync {
     /// Stops the timer.
     fn stop(&mut self);
 }
+
+/// A hardware watchdog timer that resets the system on expiry.
+pub trait Watchdog: Send + Sync {
+    /// Arms the watchdog with a timeout in seconds. Countdown begins immediately.
+    fn arm(&self, timeout_secs: u32);
+    /// Pets (reloads) the watchdog, resetting the countdown.
+    fn pet(&self);
+    /// Disarms the watchdog, stopping the countdown.
+    fn disarm(&self);
+}

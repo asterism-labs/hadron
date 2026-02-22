@@ -5,6 +5,6 @@ pub mod cam;
 #[cfg(target_arch = "x86_64")]
 pub mod caps;
 #[cfg(target_arch = "x86_64")]
-pub mod msix;
+pub mod ich9_tco;
 #[cfg(target_arch = "x86_64")]
-pub mod stub;
+pub mod msix;

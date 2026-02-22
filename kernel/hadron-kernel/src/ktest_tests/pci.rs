@@ -7,7 +7,7 @@ use crate::driver_api::pci::PciBar;
 
 // ── Before executor stage ───────────────────────────────────────────────
 
-#[kernel_test(stage = "before_executor")]
+#[kernel_test(stage = "before_executor", timeout = 5)]
 fn test_pci_enumerate_finds_devices() {
     let devices = crate::pci::enumerate::enumerate();
     assert!(
@@ -16,7 +16,7 @@ fn test_pci_enumerate_finds_devices() {
     );
 }
 
-#[kernel_test(stage = "before_executor")]
+#[kernel_test(stage = "before_executor", timeout = 5)]
 fn test_pci_host_bridge_present() {
     let devices = crate::pci::enumerate::enumerate();
     let has_host_bridge = devices
@@ -28,7 +28,7 @@ fn test_pci_host_bridge_present() {
     );
 }
 
-#[kernel_test(stage = "before_executor")]
+#[kernel_test(stage = "before_executor", timeout = 5)]
 fn test_pci_isa_bridge_present() {
     let devices = crate::pci::enumerate::enumerate();
     let has_isa_bridge = devices
@@ -40,7 +40,7 @@ fn test_pci_isa_bridge_present() {
     );
 }
 
-#[kernel_test(stage = "before_executor")]
+#[kernel_test(stage = "before_executor", timeout = 5)]
 fn test_pci_device_ids_valid() {
     let devices = crate::pci::enumerate::enumerate();
     for dev in &devices {
@@ -52,7 +52,7 @@ fn test_pci_device_ids_valid() {
     }
 }
 
-#[kernel_test(stage = "before_executor")]
+#[kernel_test(stage = "before_executor", timeout = 5)]
 fn test_pci_bar_alignment() {
     let devices = crate::pci::enumerate::enumerate();
     for dev in &devices {

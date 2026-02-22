@@ -57,6 +57,8 @@ pub fn generate(def: KernelTestDef, func: ItemFn) -> syn::Result<TokenStream> {
         None => (0, 0),
     };
 
+    let timeout_secs = def.timeout.unwrap_or(0);
+
     let static_name = gen_static_name(fn_name);
     let fn_name_str = fn_name.to_string();
 
@@ -108,6 +110,7 @@ pub fn generate(def: KernelTestDef, func: ItemFn) -> syn::Result<TokenStream> {
                     kind: #kind_tokens,
                     instance_start: #instance_start,
                     instance_end_inclusive: #instance_end,
+                    timeout_secs: #timeout_secs,
                     test_fn: #fn_ptr_expr,
                 }
         );

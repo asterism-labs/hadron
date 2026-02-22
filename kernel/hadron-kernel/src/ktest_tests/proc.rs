@@ -10,7 +10,7 @@ use crate::syscall::{SIGKILL, SIGTERM};
 
 // ── Before executor stage — signal tests ────────────────────────────────
 
-#[kernel_test(stage = "before_executor")]
+#[kernel_test(stage = "before_executor", timeout = 5)]
 fn test_signal_post_and_dequeue() {
     let state = SignalState::new();
     state.post(SIGTERM);
@@ -18,13 +18,13 @@ fn test_signal_post_and_dequeue() {
     assert_eq!(sig, Some(Signal(SIGTERM)), "should dequeue SIGTERM");
 }
 
-#[kernel_test(stage = "before_executor")]
+#[kernel_test(stage = "before_executor", timeout = 5)]
 fn test_signal_dequeue_empty() {
     let state = SignalState::new();
     assert_eq!(state.dequeue(), None, "fresh SignalState should dequeue None");
 }
 
-#[kernel_test(stage = "before_executor")]
+#[kernel_test(stage = "before_executor", timeout = 5)]
 fn test_signal_sigkill_priority() {
     let state = SignalState::new();
     state.post(SIGTERM);
@@ -39,7 +39,7 @@ fn test_signal_sigkill_priority() {
     assert_eq!(second, Some(Signal(SIGTERM)), "SIGTERM should follow SIGKILL");
 }
 
-#[kernel_test(stage = "before_executor")]
+#[kernel_test(stage = "before_executor", timeout = 5)]
 fn test_signal_has_pending() {
     let state = SignalState::new();
     assert!(!state.has_pending(), "fresh state should have no pending");
@@ -53,7 +53,7 @@ fn test_signal_has_pending() {
 
 // ── Before executor stage — PID allocation ──────────────────────────────
 
-#[kernel_test(stage = "before_executor")]
+#[kernel_test(stage = "before_executor", timeout = 5)]
 fn test_pid_allocation_sequential() {
     use crate::mm::address_space::AddressSpace;
 
@@ -101,7 +101,7 @@ fn test_pid_allocation_sequential() {
 
 // ── With executor stage — process table ─────────────────────────────────
 
-#[kernel_test(stage = "with_executor")]
+#[kernel_test(stage = "with_executor", timeout = 10)]
 async fn test_process_table_register_lookup() {
     use crate::mm::address_space::AddressSpace;
 
@@ -146,7 +146,7 @@ async fn test_process_table_register_lookup() {
 
 // ── With executor stage — FD table ──────────────────────────────────────
 
-#[kernel_test(stage = "with_executor")]
+#[kernel_test(stage = "with_executor", timeout = 10)]
 async fn test_fd_table_open_close() {
     use crate::fs::file::{FileDescriptorTable, OpenFlags};
 

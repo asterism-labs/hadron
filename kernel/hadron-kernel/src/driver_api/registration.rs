@@ -15,12 +15,15 @@ use alloc::vec::Vec;
 
 use super::block::BlockDevice;
 use super::device_path::DevicePath;
-use super::dyn_dispatch::{DynBlockDevice, DynBlockDeviceWrapper, DynNetDevice, DynNetDeviceWrapper};
+use super::dyn_dispatch::{
+    DynBlockDevice, DynBlockDeviceWrapper, DynNetDevice, DynNetDeviceWrapper,
+};
 use super::error::DriverError;
 use super::framebuffer::Framebuffer;
+use super::hw::Watchdog;
 use super::lifecycle::ManagedDriver;
-use super::pci::PciDeviceId;
 use super::net::NetworkDevice;
+use super::pci::PciDeviceId;
 use super::probe_context::{PciProbeContext, PlatformProbeContext};
 
 // ---------------------------------------------------------------------------
@@ -104,6 +107,8 @@ pub struct DeviceSet {
     pub(crate) block_devices: Vec<(DevicePath, Box<dyn DynBlockDevice>)>,
     /// Network devices (type-erased for dynamic dispatch).
     pub(crate) net_devices: Vec<(DevicePath, Box<dyn DynNetDevice>)>,
+    /// Watchdog devices.
+    pub(crate) watchdogs: Vec<(DevicePath, Arc<dyn Watchdog>)>,
 }
 
 impl DeviceSet {
@@ -114,6 +119,7 @@ impl DeviceSet {
             framebuffers: Vec::new(),
             block_devices: Vec::new(),
             net_devices: Vec::new(),
+            watchdogs: Vec::new(),
         }
     }
 
@@ -138,6 +144,11 @@ impl DeviceSet {
     /// Adds a framebuffer device to the set.
     pub fn add_framebuffer(&mut self, path: DevicePath, fb: Arc<dyn Framebuffer>) {
         self.framebuffers.push((path, fb));
+    }
+
+    /// Adds a watchdog device to the set.
+    pub fn add_watchdog(&mut self, path: DevicePath, wd: Arc<dyn Watchdog>) {
+        self.watchdogs.push((path, wd));
     }
 }
 

@@ -5,7 +5,7 @@ extern crate alloc;
 use alloc::string::String;
 use hadron_ktest::kernel_test;
 
-#[kernel_test(stage = "early_boot")]
+#[kernel_test(stage = "early_boot", timeout = 5)]
 fn test_backtrace_captures_frames() {
     let mut output = String::new();
     crate::backtrace::panic_backtrace(&mut output);
@@ -17,7 +17,7 @@ fn test_backtrace_captures_frames() {
     );
 }
 
-#[kernel_test(stage = "early_boot")]
+#[kernel_test(stage = "early_boot", timeout = 5)]
 fn test_backtrace_symbolicated() {
     let mut output = String::new();
     crate::backtrace::panic_backtrace(&mut output);
@@ -42,7 +42,7 @@ fn nested_c(output: &mut String) {
     crate::backtrace::panic_backtrace(output);
 }
 
-#[kernel_test(stage = "early_boot")]
+#[kernel_test(stage = "early_boot", timeout = 5)]
 fn test_backtrace_nested_calls() {
     // Call through 3 nested #[inline(never)] functions.
     // This produces at least 3 frames on the stack.

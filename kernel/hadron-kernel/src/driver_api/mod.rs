@@ -47,7 +47,7 @@ pub use driver::{Driver, DriverInfo, DriverState, DriverType};
 pub use dyn_dispatch::{DynBlockDevice, DynBlockDeviceWrapper, DynNetDevice, DynNetDeviceWrapper};
 pub use error::DriverError;
 pub use framebuffer::{Framebuffer, FramebufferInfo, PixelFormat};
-pub use hw::{ClockSource, InterruptController, Timer};
+pub use hw::{ClockSource, InterruptController, Timer, Watchdog};
 pub use input::{KeyCode, KeyEvent, KeyboardDevice, MouseDevice, MouseEvent};
 pub use lifecycle::ManagedDriver;
 pub use net::{MacAddress, NetError, NetworkDevice};

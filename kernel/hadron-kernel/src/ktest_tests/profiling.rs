@@ -93,7 +93,7 @@ fn emit_hprf_stream() {
 // Test
 // ---------------------------------------------------------------------------
 
-#[kernel_test(stage = "early_boot")]
+#[kernel_test(stage = "early_boot", timeout = 5)]
 fn test_emit_hprf_binary() {
     emit_hprf_stream();
 }

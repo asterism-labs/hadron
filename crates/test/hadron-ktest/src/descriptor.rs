@@ -57,6 +57,8 @@ pub struct KernelTestDescriptor {
     pub instance_start: u32,
     /// Last instance ID, inclusive (0 for non-instanced tests).
     pub instance_end_inclusive: u32,
+    /// Per-test watchdog timeout in seconds. 0 = use runner default.
+    pub timeout_secs: u32,
     /// Type-erased function pointer. Cast based on `kind`:
     /// - `Sync`: `fn()`
     /// - `Async`: `fn() -> Pin<Box<dyn Future<Output = ()>>>`

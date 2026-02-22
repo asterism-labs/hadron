@@ -25,6 +25,7 @@ use crate::driver_api::device_path::DevicePath;
 use crate::driver_api::driver::DriverState;
 use crate::driver_api::dyn_dispatch::{DynBlockDevice, DynNetDevice};
 use crate::driver_api::framebuffer::Framebuffer;
+use crate::driver_api::hw::Watchdog;
 use crate::driver_api::lifecycle::ManagedDriver;
 use crate::driver_api::registration::DeviceSet;
 
@@ -53,6 +54,8 @@ pub struct DeviceRegistry {
     block_devices: BTreeMap<String, Box<dyn DynBlockDevice>>,
     /// Named network devices (take-once: removed on retrieval).
     net_devices: BTreeMap<String, Box<dyn DynNetDevice>>,
+    /// Named watchdog devices.
+    watchdogs: BTreeMap<String, Arc<dyn Watchdog>>,
     /// Tracked driver instances.
     drivers: Vec<DriverEntry>,
 }
@@ -64,6 +67,7 @@ impl DeviceRegistry {
             framebuffers: BTreeMap::new(),
             block_devices: BTreeMap::new(),
             net_devices: BTreeMap::new(),
+            watchdogs: BTreeMap::new(),
             drivers: Vec::new(),
         }
     }
@@ -96,6 +100,12 @@ impl DeviceRegistry {
             let leaf = path.leaf().to_string();
             device_paths.push(path);
             self.net_devices.insert(leaf, dev);
+        }
+
+        for (path, wd) in devices.watchdogs {
+            let leaf = path.leaf().to_string();
+            device_paths.push(path);
+            self.watchdogs.insert(leaf, wd);
         }
 
         self.drivers.push(DriverEntry {
@@ -160,12 +170,18 @@ impl DeviceRegistry {
         self.net_devices.keys().map(String::as_str)
     }
 
+    /// Returns the first registered watchdog device, if any.
+    pub fn first_watchdog(&self) -> Option<Arc<dyn Watchdog>> {
+        self.watchdogs.values().next().cloned()
+    }
+
     /// Removes a device by its leaf name from the registry.
     pub fn remove_device(&mut self, name: &str) -> bool {
         let fb = self.framebuffers.remove(name).is_some();
         let blk = self.block_devices.remove(name).is_some();
         let net = self.net_devices.remove(name).is_some();
-        fb || blk || net
+        let wd = self.watchdogs.remove(name).is_some();
+        fb || blk || net || wd
     }
 
     /// Performs orderly shutdown of all registered drivers.

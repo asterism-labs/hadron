@@ -23,18 +23,21 @@ pub struct InstanceRange {
 pub struct KernelTestDef {
     pub stage: TestStage,
     pub instances: Option<InstanceRange>,
+    pub timeout: Option<u32>,
 }
 
 impl Parse for KernelTestDef {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let mut stage = None;
         let mut instances = None;
+        let mut timeout = None;
 
         // Empty attribute defaults to early_boot.
         if input.is_empty() {
             return Ok(Self {
                 stage: TestStage::EarlyBoot,
                 instances: None,
+                timeout: None,
             });
         }
 
@@ -76,11 +79,22 @@ impl Parse for KernelTestDef {
                         end_inclusive: end_val,
                     });
                 }
+                "timeout" => {
+                    let lit: LitInt = input.parse()?;
+                    let val: u32 = lit.base10_parse()?;
+                    if val == 0 {
+                        return Err(syn::Error::new(
+                            lit.span(),
+                            "timeout must be greater than 0",
+                        ));
+                    }
+                    timeout = Some(val);
+                }
                 _ => {
                     return Err(syn::Error::new(
                         key.span(),
                         format!(
-                            "unknown attribute `{key}`; expected one of: stage, instances"
+                            "unknown attribute `{key}`; expected one of: stage, instances, timeout"
                         ),
                     ));
                 }
@@ -95,6 +109,7 @@ impl Parse for KernelTestDef {
         Ok(Self {
             stage: stage.unwrap_or(TestStage::EarlyBoot),
             instances,
+            timeout,
         })
     }
 }
