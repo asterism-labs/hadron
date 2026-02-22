@@ -5,9 +5,9 @@ edition = "2024"
 publish = false
 
 [dependencies]
-anyhow = "1"
-hadron-elf = { path = "../../parse/elf" }
-inferno = { version = "0.12", default-features = false, features = ["nameattr"] }
-rustc-demangle = "0.1"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+anyhow = { workspace = true }
+hadron-elf = { workspace = true }
+inferno = { workspace = true }
+rustc-demangle = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

@@ -10,6 +10,6 @@ publish.workspace = true
 description = "Build-time code generator for Hadron kernel (font rasterization, etc.)"
 
 [dependencies]
-fontdue = "0.9"
-serde = { version = "1", features = [ "derive" ] }
-toml = "0.8"
+fontdue = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }

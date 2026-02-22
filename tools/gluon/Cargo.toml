@@ -5,23 +5,23 @@ edition = "2024"
 publish = false
 
 [dependencies]
-anyhow = "1"
-cargo-image-runner = { version = "0.5", default-features = false, features = ["bios", "limine", "iso", "qemu"] }
-clap = { version = "4", features = ["derive"] }
-crc32fast = "1"
-crossterm = "0.28"
-flate2 = "1"
-hadris-cpio = { version = "1.0.1", default-features = false, features = ["std", "write"] }
-hadron-dwarf = { path = "../../crates/parse/dwarf" }
-hadron-elf = { path = "../../crates/parse/elf" }
-hadron-perf = { path = "../../crates/tools/hadron-perf" }
-ratatui = "0.29"
-rhai = { version = "1", features = ["sync"] }
-rustc-demangle = "0.1"
-semver = "1"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-sha2 = "0.10"
-tar = "0.4"
-toml = "0.8"
-walkdir = "2"
+anyhow = { workspace = true }
+cargo-image-runner = { workspace = true }
+clap = { workspace = true }
+crc32fast = { workspace = true }
+crossterm = { workspace = true }
+flate2 = { workspace = true }
+hadris-cpio = { workspace = true, features = ["std", "write"] }
+hadron-dwarf = { workspace = true }
+hadron-elf = { workspace = true }
+hadron-perf = { workspace = true }
+ratatui = { workspace = true }
+rhai = { workspace = true }
+rustc-demangle = { workspace = true }
+semver = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tar = { workspace = true }
+toml = { workspace = true }
+walkdir = { workspace = true }

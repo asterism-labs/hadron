@@ -44,13 +44,41 @@ hadron-test = { path = "crates/test/hadron-test", default-features = false }
 limine = { path = "crates/boot/limine" }
 uefi = { path = "crates/boot/uefi" }
 
-# External dependencies
+# Internal tool crate
+hadron-perf = { path = "crates/tools/hadron-perf" }
+
+# External dependencies (no_std kernel)
 bitflags = "2"
 planck-noalloc = { version = "0.1.1", default-features = false }
 hadris-cpio = { version = "1.0.1", default-features = false }
 hadris-fat = { version = "1.0.1", default-features = false }
 hadris-io = { version = "1.0.1", default-features = false }
 hadris-iso = { version = "1.0.1", default-features = false }
+
+# External dependencies (proc-macro ecosystem)
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full", "extra-traits"] }
+
+# External dependencies (host tools)
+anyhow = "1"
+cargo-image-runner = { version = "0.5", default-features = false, features = ["bios", "limine", "iso", "qemu"] }
+clap = { version = "4", features = ["derive"] }
+crc32fast = "1"
+crossterm = "0.28"
+flate2 = "1"
+fontdue = "0.9"
+inferno = { version = "0.12", default-features = false, features = ["nameattr"] }
+ratatui = "0.29"
+rhai = { version = "1", features = ["sync"] }
+rustc-demangle = "0.1"
+semver = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tar = "0.4"
+toml = "0.8"
+walkdir = "2"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "warn"
