@@ -10,6 +10,7 @@ extern crate alloc;
 
 use alloc::boxed::Box;
 use alloc::sync::Arc;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::driver_api::framebuffer::{Framebuffer, FramebufferInfo};
 use crate::drivers::font_console::px16;
@@ -28,10 +29,16 @@ use cell::{AnsiColor, Cell, Color, DirtyBits};
 // ---------------------------------------------------------------------------
 
 /// Framebuffer console backed by a device-registry framebuffer.
+///
+/// Each virtual terminal owns an `FbCon` instance. Only the active VT's
+/// fbcon renders to the physical framebuffer; inactive VTs update their
+/// cell buffer silently (dirty bits are discarded).
 pub struct FbCon {
     fb: Arc<dyn Framebuffer>,
     fb_info: FramebufferInfo,
     state: SpinLock<FbConState>,
+    /// Whether this fbcon is currently rendering to the physical framebuffer.
+    active: AtomicBool,
 }
 
 struct FbConState {
@@ -67,8 +74,9 @@ impl FbCon {
     /// Creates a new framebuffer console.
     ///
     /// The console dimensions are computed from the framebuffer size and the
-    /// embedded font metrics.
-    pub fn new(fb: Arc<dyn Framebuffer>) -> Self {
+    /// embedded font metrics. If `active` is `true`, the console renders to
+    /// the physical framebuffer; otherwise it only updates the cell buffer.
+    pub fn new(fb: Arc<dyn Framebuffer>, active: bool) -> Self {
         let fb_info = fb.info();
         let glyph_width = px16::WIDTH;
         let glyph_height = px16::HEIGHT;
@@ -99,7 +107,33 @@ impl FbCon {
                     glyph_height,
                 },
             ),
+            active: AtomicBool::new(active),
         }
+    }
+
+    /// Whether this fbcon is currently rendering to the physical framebuffer.
+    pub fn is_active(&self) -> bool {
+        self.active.load(Ordering::Acquire)
+    }
+
+    /// Set whether this fbcon renders to the physical framebuffer.
+    ///
+    /// When deactivated, pending dirty bits are discarded on the next flush.
+    /// When activated, call [`redraw_all`](Self::redraw_all) to refresh the
+    /// display from the cell buffer.
+    pub fn set_active(&self, active: bool) {
+        self.active.store(active, Ordering::Release);
+    }
+
+    /// Redraws the entire cell grid to the framebuffer.
+    ///
+    /// Call this after activating a previously inactive fbcon to refresh
+    /// the physical display from the cell buffer.
+    pub fn redraw_all(&self) {
+        let mut state = self.state.lock();
+        let total = state.cols * state.rows;
+        state.dirty.set_all(total);
+        self.flush_dirty(&mut state);
     }
 
     /// Writes a string to the console, processing ANSI escapes.
@@ -384,8 +418,9 @@ impl FbCon {
 
     /// Scrolls the entire screen up by one row.
     ///
-    /// Uses `fb.copy_within()` for hardware-speed blit, then clears the
-    /// bottom row in the cell grid and marks it dirty.
+    /// When active, uses `fb.copy_within()` for hardware-speed blit and
+    /// clears the bottom row in the cell grid. When inactive, only the cell
+    /// grid is updated (no pixel rendering).
     fn scroll_up(&self, state: &mut FbConState) {
         let cols = state.cols;
         let rows = state.rows;
@@ -395,27 +430,31 @@ impl FbCon {
             return;
         }
 
-        // Flush any pending dirty cells to pixels BEFORE the hardware blit,
-        // so the blit operates on up-to-date pixel data.
-        self.flush_dirty(state);
+        let is_active = self.active.load(Ordering::Acquire);
 
-        // Blit framebuffer: shift all pixel rows up by one glyph height.
-        let pitch = self.fb_info.pitch as usize;
-        let row_bytes = pitch * glyph_height as usize;
-        let src_offset = row_bytes as u64;
-        let copy_count = row_bytes * (rows as usize - 1);
+        if is_active {
+            // Flush any pending dirty cells to pixels BEFORE the hardware blit,
+            // so the blit operates on up-to-date pixel data.
+            self.flush_dirty(state);
 
-        // SAFETY: Scroll copies within the valid framebuffer region. The
-        // source starts one glyph row in, destination is the top of the FB,
-        // and the total copied bytes equal (rows-1) * row_bytes which is
-        // within the FB mapping.
-        unsafe {
-            self.fb.copy_within(src_offset, 0, copy_count);
-            self.fb
-                .fill_zero((row_bytes * (rows as usize - 1)) as u64, row_bytes);
+            // Blit framebuffer: shift all pixel rows up by one glyph height.
+            let pitch = self.fb_info.pitch as usize;
+            let row_bytes = pitch * glyph_height as usize;
+            let src_offset = row_bytes as u64;
+            let copy_count = row_bytes * (rows as usize - 1);
+
+            // SAFETY: Scroll copies within the valid framebuffer region. The
+            // source starts one glyph row in, destination is the top of the FB,
+            // and the total copied bytes equal (rows-1) * row_bytes which is
+            // within the FB mapping.
+            unsafe {
+                self.fb.copy_within(src_offset, 0, copy_count);
+                self.fb
+                    .fill_zero((row_bytes * (rows as usize - 1)) as u64, row_bytes);
+            }
         }
 
-        // Shift cell grid up by one row (memmove the cell array).
+        // Always shift cell grid up by one row (memmove the cell array).
         let cell_row = cols as usize;
         state.cells.copy_within(cell_row.., 0);
         // Clear the last row.
@@ -430,7 +469,15 @@ impl FbCon {
     }
 
     /// Flushes dirty cells to the framebuffer.
+    ///
+    /// When the fbcon is inactive, dirty bits are cleared without rendering
+    /// to avoid writing to the physical framebuffer while another VT is active.
     fn flush_dirty(&self, state: &mut FbConState) {
+        if !self.active.load(Ordering::Acquire) {
+            state.dirty.clear_all();
+            return;
+        }
+
         let cols = state.cols;
         let glyph_width = state.glyph_width;
         let glyph_height = state.glyph_height;
@@ -465,11 +512,13 @@ unsafe impl Sync for FbCon {}
 // ---------------------------------------------------------------------------
 
 /// Wraps an [`FbCon`] to implement [`LogSink`].
+#[allow(dead_code)] // Available for single-VT or standalone use
 pub struct FbConSink {
     fbcon: Arc<FbCon>,
     max_level: LogLevel,
 }
 
+#[allow(dead_code)] // Available for single-VT or standalone use
 impl FbConSink {
     /// Creates a new log sink backed by the given fbcon instance.
     pub fn new(fbcon: Arc<FbCon>, max_level: LogLevel) -> Self {

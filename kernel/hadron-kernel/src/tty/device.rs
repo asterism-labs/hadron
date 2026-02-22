@@ -129,10 +129,11 @@ impl Inode for DevTty {
     ) -> Pin<Box<dyn Future<Output = Result<usize, FsError>> + Send + 'a>> {
         Box::pin(async move {
             if let Ok(s) = core::str::from_utf8(buf) {
-                crate::kprint!("{}", s);
+                self.tty.write_output(s);
             } else {
                 for &byte in buf {
-                    crate::kprint!("{}", byte as char);
+                    self.tty
+                        .write_output(core::str::from_utf8(&[byte]).unwrap_or("?"));
                 }
             }
             Ok(buf.len())

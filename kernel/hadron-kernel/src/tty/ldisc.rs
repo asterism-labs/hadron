@@ -30,6 +30,8 @@ pub enum LdiscAction {
     Eof,
     /// Ctrl+D on non-empty line: line flushed without trailing newline.
     FlushLine,
+    /// Alt+Fn: request VT switch to the given index (0-based).
+    SwitchVt(usize),
 }
 
 /// Cooked-mode line discipline state.
@@ -47,6 +49,8 @@ pub struct LineDiscipline {
     shift_held: bool,
     /// Whether a ctrl key is currently held.
     ctrl_held: bool,
+    /// Whether an alt key is currently held.
+    alt_held: bool,
     /// Whether caps lock is active (toggled).
     caps_lock: bool,
     /// Whether the previous scancode was the 0xE0 extended prefix.
@@ -64,6 +68,7 @@ impl LineDiscipline {
             line_len: 0,
             shift_held: false,
             ctrl_held: false,
+            alt_held: false,
             caps_lock: false,
             extended_prefix: false,
             eof_pending: false,
@@ -105,6 +110,10 @@ impl LineDiscipline {
                 self.ctrl_held = !is_release;
                 return None;
             }
+            KeyCode::LeftAlt | KeyCode::RightAlt => {
+                self.alt_held = !is_release;
+                return None;
+            }
             KeyCode::CapsLock => {
                 if !is_release {
                     self.caps_lock = !self.caps_lock;
@@ -117,6 +126,19 @@ impl LineDiscipline {
         // Only process key presses, not releases.
         if is_release {
             return None;
+        }
+
+        // Alt+F1..F6: VT switching.
+        if self.alt_held {
+            match key {
+                KeyCode::F1 => return Some(LdiscAction::SwitchVt(0)),
+                KeyCode::F2 => return Some(LdiscAction::SwitchVt(1)),
+                KeyCode::F3 => return Some(LdiscAction::SwitchVt(2)),
+                KeyCode::F4 => return Some(LdiscAction::SwitchVt(3)),
+                KeyCode::F5 => return Some(LdiscAction::SwitchVt(4)),
+                KeyCode::F6 => return Some(LdiscAction::SwitchVt(5)),
+                _ => {}
+            }
         }
 
         // Ctrl+C: interrupt.
