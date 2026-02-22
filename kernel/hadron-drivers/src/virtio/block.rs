@@ -7,17 +7,17 @@ extern crate alloc;
 
 use core::ptr;
 
-use hadron_kernel::sync::SpinLock;
 use hadron_kernel::driver_api::block::{BlockDevice, IoError};
 use hadron_kernel::driver_api::capability::DmaCapability;
 use hadron_kernel::driver_api::error::DriverError;
 use hadron_kernel::driver_api::pci::PciDeviceId;
+use hadron_kernel::sync::SpinLock;
 
 use super::pci::VirtioPciTransport;
-use super::queue::{Virtqueue, VIRTQ_DESC_F_WRITE};
-use super::{VirtioDevice, VIRTIO_MSI_NO_VECTOR};
-use hadron_kernel::drivers::irq::IrqLine;
+use super::queue::{VIRTQ_DESC_F_WRITE, Virtqueue};
+use super::{VIRTIO_MSI_NO_VECTOR, VirtioDevice};
 use crate::pci::msix::MsixTable;
+use hadron_kernel::drivers::irq::IrqLine;
 
 // ---------------------------------------------------------------------------
 // PCI IDs
@@ -95,10 +95,7 @@ impl BlockDevice for VirtioBlkDisk {
         }
 
         // Allocate DMA bounce buffer (1 page covers header + data + status).
-        let dma_phys = self
-            .dma
-            .alloc_frames(1)
-            .map_err(|_| IoError::DmaError)?;
+        let dma_phys = self.dma.alloc_frames(1).map_err(|_| IoError::DmaError)?;
         let dma_virt = self.dma.phys_to_virt(dma_phys);
 
         // Layout within the DMA page:
@@ -123,9 +120,9 @@ impl BlockDevice for VirtioBlkDisk {
 
         // Build the 3-descriptor chain.
         let chain: [(u64, u32, u16); REQ_CHAIN_LEN] = [
-            (header_phys, 16, 0),                         // header: device-readable
-            (data_phys, ss as u32, VIRTQ_DESC_F_WRITE),   // data: device-writable
-            (status_phys, 1, VIRTQ_DESC_F_WRITE),         // status: device-writable
+            (header_phys, 16, 0),                       // header: device-readable
+            (data_phys, ss as u32, VIRTQ_DESC_F_WRITE), // data: device-writable
+            (status_phys, 1, VIRTQ_DESC_F_WRITE),       // status: device-writable
         ];
 
         {
@@ -179,10 +176,7 @@ impl BlockDevice for VirtioBlkDisk {
         }
 
         // Allocate DMA bounce buffer.
-        let dma_phys = self
-            .dma
-            .alloc_frames(1)
-            .map_err(|_| IoError::DmaError)?;
+        let dma_phys = self.dma.alloc_frames(1).map_err(|_| IoError::DmaError)?;
         let dma_virt = self.dma.phys_to_virt(dma_phys);
 
         let header_phys = dma_phys;
@@ -206,9 +200,9 @@ impl BlockDevice for VirtioBlkDisk {
 
         // Build the 3-descriptor chain.
         let chain: [(u64, u32, u16); REQ_CHAIN_LEN] = [
-            (header_phys, 16, 0),                         // header: device-readable
-            (data_phys, ss as u32, 0),                     // data: device-readable
-            (status_phys, 1, VIRTQ_DESC_F_WRITE),         // status: device-writable
+            (header_phys, 16, 0),                 // header: device-readable
+            (data_phys, ss as u32, 0),            // data: device-readable
+            (status_phys, 1, VIRTQ_DESC_F_WRITE), // status: device-writable
         ];
 
         {
@@ -313,16 +307,10 @@ impl VirtioBlkDriver {
         let device = VirtioDevice::init(transport, 0)?;
 
         // Read device config.
-        let capacity = device
-            .transport()
-            .device_cfg_read_u64(0)
-            .unwrap_or(0);
+        let capacity = device.transport().device_cfg_read_u64(0).unwrap_or(0);
 
         // blk_size is at device config offset 20 (u32).
-        let blk_size = device
-            .transport()
-            .device_cfg_read_u32(20)
-            .unwrap_or(512);
+        let blk_size = device.transport().device_cfg_read_u32(20).unwrap_or(512);
 
         hadron_kernel::kinfo!(
             "virtio-blk: capacity={} sectors, sector_size={}",
@@ -398,21 +386,21 @@ fn setup_irq(
         // Try MSI-X.
         match try_setup_msix(info, msix_cap, irq_cap, mmio_cap) {
             Ok((irq, table)) => {
-                hadron_kernel::kinfo!(
-                    "virtio-blk: MSI-X enabled, vector {}",
-                    irq.vector()
-                );
+                hadron_kernel::kinfo!("virtio-blk: MSI-X enabled, vector {}", irq.vector());
                 return Ok((irq, Some(table)));
             }
             Err(e) => {
-                hadron_kernel::kwarn!("virtio-blk: MSI-X setup failed ({:?}), falling back to legacy", e);
+                hadron_kernel::kwarn!(
+                    "virtio-blk: MSI-X setup failed ({:?}), falling back to legacy",
+                    e
+                );
             }
         }
     }
 
     // Legacy INTx fallback.
-    let irq = IrqLine::bind_isa(info.interrupt_line, irq_cap)
-        .map_err(|_| DriverError::InitFailed)?;
+    let irq =
+        IrqLine::bind_isa(info.interrupt_line, irq_cap).map_err(|_| DriverError::InitFailed)?;
     irq_cap
         .unmask_irq(info.interrupt_line)
         .map_err(|_| DriverError::InitFailed)?;

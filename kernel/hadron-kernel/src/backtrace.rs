@@ -127,9 +127,7 @@ pub fn init_from_embedded(kernel_virt_base: u64) {
 /// Returns `true` if HKIF symbol data has been loaded and symbolication is
 /// available. Test binaries that skip the two-pass link will return `false`.
 pub fn is_available() -> bool {
-    HKIF_STATE
-        .try_lock()
-        .is_some_and(|guard| guard.is_some())
+    HKIF_STATE.try_lock().is_some_and(|guard| guard.is_some())
 }
 
 /// Print a backtrace to the given writer. Safe to call from panic context.

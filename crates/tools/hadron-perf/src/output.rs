@@ -14,12 +14,7 @@ pub fn print_bench_table(results: &HBenchResults) {
     }
 
     // Compute column widths.
-    let max_name = stats
-        .iter()
-        .map(|s| s.name.len())
-        .max()
-        .unwrap_or(4)
-        .max(4);
+    let max_name = stats.iter().map(|s| s.name.len()).max().unwrap_or(4).max(4);
 
     // Header.
     println!();
@@ -71,10 +66,7 @@ pub fn print_bench_table(results: &HBenchResults) {
 }
 
 /// Print a flat profiling report from sample data.
-pub fn print_flat_profile(
-    entries: &[(String, u64)],
-    total_samples: u64,
-) {
+pub fn print_flat_profile(entries: &[(String, u64)], total_samples: u64) {
     if entries.is_empty() {
         println!("  No profiling samples to display.");
         return;

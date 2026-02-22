@@ -29,12 +29,7 @@ const fn page_align_up(size: usize) -> usize {
     clippy::cast_possible_wrap,
     reason = "returning virtual address as isize; upper bit is never set for user addresses"
 )]
-pub(super) fn sys_mem_map(
-    _addr_hint: usize,
-    length: usize,
-    prot: usize,
-    flags: usize,
-) -> isize {
+pub(super) fn sys_mem_map(_addr_hint: usize, length: usize, prot: usize, flags: usize) -> isize {
     use hadron_syscall::{MAP_ANONYMOUS, PROT_EXEC, PROT_READ, PROT_WRITE};
 
     // Validate flags.
@@ -83,10 +78,9 @@ pub(super) fn sys_mem_map(
                 };
 
                 let page = Page::<Size4KiB>::containing_address(VirtAddr::new(page_vaddr));
-                if let Err(_e) =
-                    process
-                        .address_space()
-                        .map_user_page(page, frame, map_flags, &mut alloc)
+                if let Err(_e) = process
+                    .address_space()
+                    .map_user_page(page, frame, map_flags, &mut alloc)
                 {
                     return Err(i);
                 }
@@ -114,10 +108,7 @@ pub(super) fn sys_mem_map(
 ///
 /// `addr` must be the exact address returned by `mem_map`. `length` must match
 /// the original mapping size.
-#[expect(
-    clippy::cast_possible_wrap,
-    reason = "returning 0 on success as isize"
-)]
+#[expect(clippy::cast_possible_wrap, reason = "returning 0 on success as isize")]
 pub(super) fn sys_mem_unmap(addr: usize, length: usize) -> isize {
     if length == 0 || addr == 0 {
         return -EINVAL;

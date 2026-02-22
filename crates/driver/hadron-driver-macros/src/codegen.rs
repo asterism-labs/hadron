@@ -133,9 +133,12 @@ fn gen_rewritten_impl(impl_block: &ItemImpl, ctx_name: &Ident) -> syn::Result<To
     let tokens = quote!(#impl_block);
     let source = tokens.to_string();
     let replaced = source.replace("DriverContext", &ctx_name.to_string());
-    let replaced_tokens: TokenStream = replaced
-        .parse()
-        .map_err(|e| syn::Error::new(Span::call_site(), format!("failed to reparse impl block: {e}")))?;
+    let replaced_tokens: TokenStream = replaced.parse().map_err(|e| {
+        syn::Error::new(
+            Span::call_site(),
+            format!("failed to reparse impl block: {e}"),
+        )
+    })?;
     Ok(quote! {
         #[cfg(target_os = "none")]
         #replaced_tokens

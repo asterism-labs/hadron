@@ -4,7 +4,7 @@
 //! register (offset 0x34), parsing each capability header. Supports VirtIO PCI
 //! capabilities (cap ID 0x09) and MSI-X capabilities (cap ID 0x11).
 
-use super::cam::{regs, PciCam};
+use super::cam::{PciCam, regs};
 use crate::driver_api::pci::PciAddress;
 
 /// A raw PCI capability header: capability ID and its config-space offset.
@@ -36,10 +36,8 @@ impl Iterator for CapabilityIter {
 
             // SAFETY: We are reading PCI config space of a device that was
             // previously enumerated and confirmed to exist.
-            let cap_id =
-                unsafe { PciCam::read_u8(self.bus, self.device, self.function, offset) };
-            let next =
-                unsafe { PciCam::read_u8(self.bus, self.device, self.function, offset + 1) };
+            let cap_id = unsafe { PciCam::read_u8(self.bus, self.device, self.function, offset) };
+            let next = unsafe { PciCam::read_u8(self.bus, self.device, self.function, offset + 1) };
 
             self.next_offset = next;
 
@@ -62,9 +60,8 @@ pub fn walk_capabilities(addr: &PciAddress) -> Option<CapabilityIter> {
     }
 
     // SAFETY: Reading capabilities pointer of an enumerated PCI device.
-    let cap_ptr = unsafe {
-        PciCam::read_u8(addr.bus, addr.device, addr.function, regs::CAPABILITIES_PTR)
-    };
+    let cap_ptr =
+        unsafe { PciCam::read_u8(addr.bus, addr.device, addr.function, regs::CAPABILITIES_PTR) };
 
     Some(CapabilityIter {
         bus: addr.bus,
@@ -210,18 +207,12 @@ mod tests {
             VirtioPciCfgType::from_u8(2),
             Some(VirtioPciCfgType::NotifyCfg)
         );
-        assert_eq!(
-            VirtioPciCfgType::from_u8(3),
-            Some(VirtioPciCfgType::IsrCfg)
-        );
+        assert_eq!(VirtioPciCfgType::from_u8(3), Some(VirtioPciCfgType::IsrCfg));
         assert_eq!(
             VirtioPciCfgType::from_u8(4),
             Some(VirtioPciCfgType::DeviceCfg)
         );
-        assert_eq!(
-            VirtioPciCfgType::from_u8(5),
-            Some(VirtioPciCfgType::PciCfg)
-        );
+        assert_eq!(VirtioPciCfgType::from_u8(5), Some(VirtioPciCfgType::PciCfg));
         assert_eq!(VirtioPciCfgType::from_u8(0), None);
         assert_eq!(VirtioPciCfgType::from_u8(6), None);
     }

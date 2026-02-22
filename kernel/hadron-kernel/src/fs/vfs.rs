@@ -59,11 +59,7 @@ impl Vfs {
     }
 
     /// Internal resolve with symlink depth tracking.
-    fn resolve_with_depth(
-        &self,
-        abs_path: &str,
-        depth: usize,
-    ) -> Result<Arc<dyn Inode>, FsError> {
+    fn resolve_with_depth(&self, abs_path: &str, depth: usize) -> Result<Arc<dyn Inode>, FsError> {
         if depth > Self::MAX_SYMLINK_DEPTH {
             return Err(FsError::SymlinkLoop);
         }

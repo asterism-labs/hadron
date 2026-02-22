@@ -121,11 +121,7 @@ fn derive_impl(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
             .map(|f| {
                 let ty = &f.ty;
                 let field_name = f.ident.as_ref().unwrap();
-                let assert_name = quote::format_ident!(
-                    "_AssertFromBytes_{}_{}",
-                    name,
-                    field_name
-                );
+                let assert_name = quote::format_ident!("_AssertFromBytes_{}_{}", name, field_name);
                 quote! {
                     #[doc(hidden)]
                     #[allow(non_camel_case_types, dead_code)]

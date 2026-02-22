@@ -35,8 +35,7 @@ extern "C" fn _start_rust(argc: usize, envc: usize, data_base: *const [u8; 16]) 
     // The pointer is non-null and properly aligned (set up by the kernel on
     // a 16-byte aligned stack). The slices are valid for the lifetime of the
     // process.
-    let args: &[&str] =
-        unsafe { core::slice::from_raw_parts(data_base.cast::<&str>(), argc) };
+    let args: &[&str] = unsafe { core::slice::from_raw_parts(data_base.cast::<&str>(), argc) };
     let envp: &[&str] =
         unsafe { core::slice::from_raw_parts(data_base.cast::<&str>().add(argc), envc) };
 

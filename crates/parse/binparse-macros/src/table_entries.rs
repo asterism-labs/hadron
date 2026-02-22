@@ -221,12 +221,10 @@ fn parse_table_entries_attrs(input: &DeriveInput) -> syn::Result<TableEntriesAtt
     })?;
 
     Ok(TableEntriesAttrs {
-        type_field_ty: type_field_ty.ok_or_else(|| {
-            syn::Error::new_spanned(attr, "missing type_field")
-        })?,
-        length_field_ty: length_field_ty.ok_or_else(|| {
-            syn::Error::new_spanned(attr, "missing length_field")
-        })?,
+        type_field_ty: type_field_ty
+            .ok_or_else(|| syn::Error::new_spanned(attr, "missing type_field"))?,
+        length_field_ty: length_field_ty
+            .ok_or_else(|| syn::Error::new_spanned(attr, "missing length_field"))?,
     })
 }
 
@@ -264,8 +262,7 @@ fn parse_entry_attrs(variant: &Variant) -> syn::Result<EntryVariantAttrs> {
     })?;
 
     Ok(EntryVariantAttrs {
-        type_id: type_id
-            .ok_or_else(|| syn::Error::new_spanned(attr, "missing type_id"))?,
+        type_id: type_id.ok_or_else(|| syn::Error::new_spanned(attr, "missing type_id"))?,
         min_length: min_length
             .ok_or_else(|| syn::Error::new_spanned(attr, "missing min_length"))?,
     })
@@ -293,10 +290,7 @@ fn parse_variant_fields(variant: &Variant) -> syn::Result<Vec<ParsedField>> {
             .iter()
             .find(|a| a.path().is_ident("field"))
             .ok_or_else(|| {
-                syn::Error::new_spanned(
-                    &field_ident,
-                    "entry fields require #[field(offset = N)]",
-                )
+                syn::Error::new_spanned(&field_ident, "entry fields require #[field(offset = N)]")
             })?;
 
         let mut offset = None;

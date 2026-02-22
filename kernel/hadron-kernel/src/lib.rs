@@ -5,7 +5,10 @@
 #![cfg_attr(all(test, target_os = "none"), no_main)]
 #![cfg_attr(target_os = "none", feature(custom_test_frameworks))]
 #![cfg_attr(all(test, target_os = "none"), test_runner(hadron_test::test_runner))]
-#![cfg_attr(all(test, target_os = "none"), reexport_test_harness_main = "test_main")]
+#![cfg_attr(
+    all(test, target_os = "none"),
+    reexport_test_harness_main = "test_main"
+)]
 #![cfg_attr(target_arch = "x86_64", feature(abi_x86_interrupt))]
 #![feature(allocator_api, negative_impls, never_type)]
 #![warn(missing_docs)]
@@ -55,14 +58,14 @@ pub mod pci;
 pub mod percpu;
 #[cfg(target_os = "none")]
 pub mod proc;
+#[cfg(all(target_os = "none", any(hadron_profile_sample, hadron_profile_ftrace)))]
+pub mod profiling;
 #[cfg(target_os = "none")]
 pub mod sched;
 #[cfg(target_os = "none")]
 pub mod syscall;
 #[cfg(target_os = "none")]
 pub mod time;
-#[cfg(all(target_os = "none", any(hadron_profile_sample, hadron_profile_ftrace)))]
-pub mod profiling;
 
 #[cfg(target_os = "none")]
 pub use boot::kernel_init;

@@ -21,12 +21,20 @@ impl SymbolResolver {
     pub fn from_kernel_elf(kernel_elf: &Path, _kernel_vbase: u64) -> Self {
         let elf_data = match std::fs::read(kernel_elf) {
             Ok(d) => d,
-            Err(_) => return Self { symbols: Vec::new() },
+            Err(_) => {
+                return Self {
+                    symbols: Vec::new(),
+                };
+            }
         };
 
         let elf = match hadron_elf::ElfFile::parse(&elf_data) {
             Ok(e) => e,
-            Err(_) => return Self { symbols: Vec::new() },
+            Err(_) => {
+                return Self {
+                    symbols: Vec::new(),
+                };
+            }
         };
 
         let virt_base = elf
@@ -54,7 +62,9 @@ impl SymbolResolver {
     /// Create an empty resolver (no symbols available).
     #[allow(dead_code)] // useful for tests and when no kernel ELF is available
     pub fn empty() -> Self {
-        Self { symbols: Vec::new() }
+        Self {
+            symbols: Vec::new(),
+        }
     }
 
     /// Resolve an absolute virtual address to a function name.

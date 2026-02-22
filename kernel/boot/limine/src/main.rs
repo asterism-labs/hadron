@@ -13,14 +13,14 @@ mod requests;
 use requests::REQUESTS;
 
 use hadron_kernel::addr::{PhysAddr, VirtAddr};
-use hadron_kernel::arch::x86_64::structures::paging::{PageTable, PageTableEntry, PageTableFlags};
-use hadron_kernel::paging::{PhysFrame, Size4KiB};
 use hadron_kernel::arch::x86_64::paging::PageTableMapper;
+use hadron_kernel::arch::x86_64::structures::paging::{PageTable, PageTableEntry, PageTableFlags};
 use hadron_kernel::boot::{
     BootInfoData, FramebufferInfo, InitrdInfo, KernelAddressInfo, MAX_FRAMEBUFFERS,
     MAX_MEMORY_REGIONS, MAX_SMP_CPUS, MemoryRegion, MemoryRegionKind, PagingMode, PixelFormat,
     SmpCpuEntry,
 };
+use hadron_kernel::paging::{PhysFrame, Size4KiB};
 use planck_noalloc::vec::ArrayVec;
 
 unsafe extern "C" {

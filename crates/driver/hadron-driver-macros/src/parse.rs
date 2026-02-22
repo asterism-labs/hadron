@@ -105,7 +105,7 @@ impl Parse for DriverDef {
                             return Err(syn::Error::new(
                                 value.span(),
                                 "expected `pci` or `platform`",
-                            ))
+                            ));
                         }
                     });
                 }
@@ -127,7 +127,7 @@ impl Parse for DriverDef {
                                     cap.span(),
                                     "unknown capability; expected one of: \
                                      Irq, Mmio, Dma, PciConfig, Spawner, Timer",
-                                ))
+                                ));
                             }
                         });
                         if !content.is_empty() {
@@ -150,7 +150,7 @@ impl Parse for DriverDef {
                              name, kind, capabilities, pci_ids, compatible",
                             key
                         ),
-                    ))
+                    ));
                 }
             }
 
@@ -160,12 +160,17 @@ impl Parse for DriverDef {
             }
         }
 
-        let name = name
-            .ok_or_else(|| syn::Error::new(Span::call_site(), "missing required `name` attribute"))?;
-        let kind = kind
-            .ok_or_else(|| syn::Error::new(Span::call_site(), "missing required `kind` attribute"))?;
+        let name = name.ok_or_else(|| {
+            syn::Error::new(Span::call_site(), "missing required `name` attribute")
+        })?;
+        let kind = kind.ok_or_else(|| {
+            syn::Error::new(Span::call_site(), "missing required `kind` attribute")
+        })?;
         let capabilities = capabilities.ok_or_else(|| {
-            syn::Error::new(Span::call_site(), "missing required `capabilities` attribute")
+            syn::Error::new(
+                Span::call_site(),
+                "missing required `capabilities` attribute",
+            )
         })?;
 
         // Validate kind-specific required fields.

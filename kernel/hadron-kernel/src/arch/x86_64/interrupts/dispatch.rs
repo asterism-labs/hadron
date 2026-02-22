@@ -48,7 +48,10 @@ impl core::fmt::Display for InterruptError {
 /// Registers a handler for the given interrupt vector (32-255).
 ///
 /// Returns an error if the vector is out of range or already has a handler.
-pub fn register_handler(vector: IrqVector, handler: InterruptHandler) -> Result<(), InterruptError> {
+pub fn register_handler(
+    vector: IrqVector,
+    handler: InterruptHandler,
+) -> Result<(), InterruptError> {
     let raw = vector.as_u8();
     if raw < 32 {
         return Err(InterruptError::InvalidVector);

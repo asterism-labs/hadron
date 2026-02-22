@@ -8,8 +8,8 @@
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use crate::sync::SpinLock;
 use crate::arch::x86_64::hw::hpet::Hpet;
+use crate::sync::SpinLock;
 
 /// Global HPET driver instance, stored after ACPI init and timer calibration.
 /// Provides the [`crate::driver_api::ClockSource`] trait interface.

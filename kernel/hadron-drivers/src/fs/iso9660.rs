@@ -132,9 +132,7 @@ impl Inode for Iso9660DirInode {
         })
     }
 
-    fn readdir(
-        &self,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<DirEntry>, FsError>> + Send + '_>> {
+    fn readdir(&self) -> Pin<Box<dyn Future<Output = Result<Vec<DirEntry>, FsError>> + Send + '_>> {
         Box::pin(async move {
             let dir = self.image.open_dir(self.dir_ref);
             let mut entries = Vec::new();
@@ -233,9 +231,7 @@ impl Inode for Iso9660FileInode {
         Box::pin(async { Err(FsError::NotADirectory) })
     }
 
-    fn readdir(
-        &self,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<DirEntry>, FsError>> + Send + '_>> {
+    fn readdir(&self) -> Pin<Box<dyn Future<Output = Result<Vec<DirEntry>, FsError>> + Send + '_>> {
         Box::pin(async { Err(FsError::NotADirectory) })
     }
 

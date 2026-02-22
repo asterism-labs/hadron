@@ -412,9 +412,7 @@ impl Uart16550Driver {
     > {
         use alloc::boxed::Box;
         use core::pin::Pin;
-        use hadron_kernel::driver_api::capability::{
-            CapabilityAccess, IrqCapability, TaskSpawner,
-        };
+        use hadron_kernel::driver_api::capability::{CapabilityAccess, IrqCapability, TaskSpawner};
         use hadron_kernel::driver_api::registration::{DeviceSet, PlatformDriverRegistration};
 
         let irq_cap = ctx.capability::<IrqCapability>();
@@ -422,8 +420,7 @@ impl Uart16550Driver {
 
         // Create an async serial port wrapping COM1 with IRQ 4.
         let uart = Uart16550::new(COM1);
-        let async_serial =
-            crate::serial::serial_async::AsyncSerial::new(uart, 4, irq_cap)?;
+        let async_serial = crate::serial::serial_async::AsyncSerial::new(uart, 4, irq_cap)?;
 
         // Spawn the serial echo task — reads bytes from the serial port and
         // echoes them back. Useful for debugging via a serial terminal.

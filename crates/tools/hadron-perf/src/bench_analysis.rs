@@ -97,8 +97,7 @@ pub fn save_baseline(results: &HBenchResults, path: &str) -> Result<()> {
         benchmarks,
     };
 
-    let json =
-        serde_json::to_string_pretty(&baseline).context("serializing baseline to JSON")?;
+    let json = serde_json::to_string_pretty(&baseline).context("serializing baseline to JSON")?;
     std::fs::write(path, json).with_context(|| format!("writing baseline to {path}"))?;
 
     Ok(())
@@ -107,8 +106,7 @@ pub fn save_baseline(results: &HBenchResults, path: &str) -> Result<()> {
 /// Compare benchmark results against a baseline and flag regressions.
 pub fn compare_baseline(results: &HBenchResults, path: &str, threshold_pct: u32) -> Result<()> {
     let json = std::fs::read_to_string(path).with_context(|| format!("reading baseline {path}"))?;
-    let baseline: Baseline =
-        serde_json::from_str(&json).context("parsing baseline JSON")?;
+    let baseline: Baseline = serde_json::from_str(&json).context("parsing baseline JSON")?;
 
     let current_stats = compute_stats(results);
     let mut regressions = 0;

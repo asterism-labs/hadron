@@ -77,11 +77,7 @@ impl AhciPort {
     /// and FIS structures, runs IDENTIFY DEVICE.
     ///
     /// Returns `None` if the port has no device connected.
-    pub fn init(
-        hba: &AhciHba,
-        port_num: u8,
-        dma: &DmaCapability,
-    ) -> Option<Self> {
+    pub fn init(hba: &AhciHba, port_num: u8, dma: &DmaCapability) -> Option<Self> {
         let port_base = hba.port_base(port_num);
 
         // SAFETY: port_base is derived from the validated HBA base + port offset.
@@ -210,16 +206,11 @@ impl AhciPort {
     }
 
     /// Runs IDENTIFY DEVICE on this port (blocking poll).
-    fn identify_device(
-        &mut self,
-        dma: &DmaCapability,
-    ) -> Result<DeviceIdentity, IoError> {
+    fn identify_device(&mut self, dma: &DmaCapability) -> Result<DeviceIdentity, IoError> {
         let slot = self.alloc_slot()?;
 
         // Allocate a DMA buffer for the 512-byte IDENTIFY response.
-        let buf_phys = dma
-            .alloc_frames(1)
-            .map_err(|_| IoError::DmaError)?;
+        let buf_phys = dma.alloc_frames(1).map_err(|_| IoError::DmaError)?;
         let buf_virt = dma.phys_to_virt(buf_phys);
         // SAFETY: Freshly allocated page.
         unsafe { ptr::write_bytes(buf_virt as *mut u8, 0, PAGE_SIZE as usize) };

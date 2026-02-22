@@ -14,10 +14,10 @@
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+use super::format;
 use crate::arch::x86_64::hw::tsc;
 use crate::id::CpuId;
 use crate::percpu::{CpuLocal, cpu_count, current_cpu};
-use super::format;
 
 /// Whether function tracing is currently active.
 static FTRACE_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -33,8 +33,7 @@ struct FtraceEntry {
 /// Per-CPU ftrace buffer size in entries.
 ///
 /// Each entry is 16 bytes. Default 64 KB buffer = 4096 entries.
-const FTRACE_BUFFER_ENTRIES: usize =
-    (hadron_config::PROFILE_FTRACE_BUFFER_KB as usize * 1024) / 16;
+const FTRACE_BUFFER_ENTRIES: usize = (hadron_config::PROFILE_FTRACE_BUFFER_KB as usize * 1024) / 16;
 
 /// Per-CPU ftrace ring buffer.
 ///

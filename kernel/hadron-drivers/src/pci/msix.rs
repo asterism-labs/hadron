@@ -6,11 +6,11 @@
 
 use super::cam::PciCam;
 use super::caps::MsixCapability;
-use hadron_kernel::id::IrqVector;
 use hadron_kernel::driver_api::capability::MmioCapability;
 use hadron_kernel::driver_api::error::DriverError;
 use hadron_kernel::driver_api::pci::{PciBar, PciDeviceInfo};
 use hadron_kernel::driver_api::resource::MmioRegion;
+use hadron_kernel::id::IrqVector;
 
 /// MSI-X table entry size in bytes.
 const MSIX_ENTRY_SIZE: u32 = 16;
@@ -170,7 +170,13 @@ impl MsixTable {
             // Message Control is the upper 16 bits of the dword at cap_offset
             // (cap_offset is dword-aligned, message control at +2).
             let new_dword = (dword & 0x0000_FFFF) | (u32::from(value) << 16);
-            PciCam::write_u32(self.bus, self.device, self.function, dword_offset, new_dword);
+            PciCam::write_u32(
+                self.bus,
+                self.device,
+                self.function,
+                dword_offset,
+                new_dword,
+            );
         }
     }
 }

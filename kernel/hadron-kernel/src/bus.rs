@@ -3,9 +3,9 @@
 //! Organizes discovered PCI devices, known platform devices, and bus
 //! placeholders into a tree structure for logging and driver matching.
 
+use crate::driver_api::pci::PciDeviceInfo;
 use alloc::string::String;
 use alloc::vec::Vec;
-use crate::driver_api::pci::PciDeviceInfo;
 
 use crate::pci::enumerate::class_name;
 

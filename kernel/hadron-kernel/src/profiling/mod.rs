@@ -16,10 +16,10 @@
 pub mod buffer;
 #[cfg(any(hadron_profile_sample, hadron_profile_ftrace))]
 pub mod format;
-#[cfg(hadron_profile_sample)]
-pub mod sample;
 #[cfg(hadron_profile_ftrace)]
 pub mod ftrace;
+#[cfg(hadron_profile_sample)]
+pub mod sample;
 
 /// Initialize and auto-start configured profilers.
 ///

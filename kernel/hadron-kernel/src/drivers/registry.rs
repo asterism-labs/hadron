@@ -51,11 +51,7 @@ pub fn match_pci_drivers(devices: &[PciDeviceInfo]) {
         for device in devices {
             for id in entry.id_table {
                 if id.matches(device) {
-                    crate::kprintln!(
-                        "PCI: matched {} -> driver '{}'",
-                        device.address,
-                        entry.name,
-                    );
+                    crate::kprintln!("PCI: matched {} -> driver '{}'", device.address, entry.name,);
                     let ctx = probe_context::pci_probe_context(device);
                     match (entry.probe)(ctx) {
                         Ok(registration) => {
@@ -69,11 +65,7 @@ pub fn match_pci_drivers(devices: &[PciDeviceInfo]) {
                             });
                         }
                         Err(e) => {
-                            crate::kprintln!(
-                                "PCI: driver '{}' probe failed: {}",
-                                entry.name,
-                                e,
-                            );
+                            crate::kprintln!("PCI: driver '{}' probe failed: {}", entry.name, e,);
                         }
                     }
                     break;

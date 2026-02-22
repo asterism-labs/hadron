@@ -73,34 +73,34 @@ fn serial_write_u64(v: u64) {
 /// Emit a complete HPRF stream: header + 2 sample records + end marker.
 fn emit_hprf_stream() {
     // --- Header (32 bytes) ---
-    serial_write_bytes(b"HPRF");                   // magic (4B)
-    serial_write_u16(1);                            // version (2B)
-    serial_write_u16(1);                            // flags: FLAG_SAMPLES (2B)
-    serial_write_u64(1_000_000);                    // tsc_freq_hz (8B)
-    serial_write_u64(0xFFFF_8000_0000_0000);        // kernel_vbase (8B)
-    serial_write_u32(1);                            // cpu_count (4B)
-    serial_write_u32(0);                            // reserved (4B)
+    serial_write_bytes(b"HPRF"); // magic (4B)
+    serial_write_u16(1); // version (2B)
+    serial_write_u16(1); // flags: FLAG_SAMPLES (2B)
+    serial_write_u64(1_000_000); // tsc_freq_hz (8B)
+    serial_write_u64(0xFFFF_8000_0000_0000); // kernel_vbase (8B)
+    serial_write_u32(1); // cpu_count (4B)
+    serial_write_u32(0); // reserved (4B)
 
     // --- Sample record 1 (depth=2) ---
-    serial_write_byte(0x01);                        // record type (1B)
-    serial_write_byte(0);                           // cpu_id (1B)
-    serial_write_u16(2);                            // depth (2B)
-    serial_write_u32(0);                            // reserved+padding (4B)
-    serial_write_u64(42);                           // tsc (8B)
-    serial_write_u64(0xFFFF_8000_0010_0000);        // stack[0] (8B)
-    serial_write_u64(0xFFFF_8000_0020_0000);        // stack[1] (8B)
+    serial_write_byte(0x01); // record type (1B)
+    serial_write_byte(0); // cpu_id (1B)
+    serial_write_u16(2); // depth (2B)
+    serial_write_u32(0); // reserved+padding (4B)
+    serial_write_u64(42); // tsc (8B)
+    serial_write_u64(0xFFFF_8000_0010_0000); // stack[0] (8B)
+    serial_write_u64(0xFFFF_8000_0020_0000); // stack[1] (8B)
 
     // --- Sample record 2 (depth=1) ---
-    serial_write_byte(0x01);                        // record type (1B)
-    serial_write_byte(0);                           // cpu_id (1B)
-    serial_write_u16(1);                            // depth (2B)
-    serial_write_u32(0);                            // reserved+padding (4B)
-    serial_write_u64(100);                          // tsc (8B)
-    serial_write_u64(0xFFFF_8000_0030_0000);        // stack[0] (8B)
+    serial_write_byte(0x01); // record type (1B)
+    serial_write_byte(0); // cpu_id (1B)
+    serial_write_u16(1); // depth (2B)
+    serial_write_u32(0); // reserved+padding (4B)
+    serial_write_u64(100); // tsc (8B)
+    serial_write_u64(0xFFFF_8000_0030_0000); // stack[0] (8B)
 
     // --- End-of-stream marker (8 bytes) ---
-    serial_write_byte(0xFF);                        // record type (1B)
-    serial_write_bytes(&[0; 7]);                    // reserved (7B)
+    serial_write_byte(0xFF); // record type (1B)
+    serial_write_bytes(&[0; 7]); // reserved (7B)
 }
 
 // ---------------------------------------------------------------------------

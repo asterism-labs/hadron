@@ -119,9 +119,7 @@ pub fn create_process_from_binary(
     clippy::cast_possible_truncation,
     reason = "x86_64: u64 and usize are the same width"
 )]
-fn map_segment<
-    M: crate::mm::mapper::PageMapper<Size4KiB> + crate::mm::mapper::PageTranslator,
->(
+fn map_segment<M: crate::mm::mapper::PageMapper<Size4KiB> + crate::mm::mapper::PageTranslator>(
     address_space: &AddressSpace<M>,
     seg: &ExecSegment<'_>,
     hhdm_offset: u64,
@@ -309,9 +307,7 @@ fn write_startup_data<M: PageMapper<Size4KiB> + PageTranslator>(
     //    [RSP + 16 + argc * 16] = envp (ptr, len) pairs
     let pair_size = 2 * core::mem::size_of::<usize>() as u64; // 16 bytes on x86_64
     let header_size = 2 * core::mem::size_of::<usize>() as u64; // argc + envc
-    let total_below = header_size
-        + pair_size * args.len() as u64
-        + pair_size * envs.len() as u64;
+    let total_below = header_size + pair_size * args.len() as u64 + pair_size * envs.len() as u64;
     let rsp = (cursor - total_below) & !0xF; // 16-byte aligned
 
     // 4. Write argc and envc.
@@ -458,7 +454,11 @@ pub fn spawn_process(
         let parent = super::lookup_process(parent_pid).expect("spawn_process: parent not found");
         let parent_fds = parent.fd_table.lock();
         let mut fd_table = process.fd_table.lock();
-        for &fd in &[crate::id::Fd::STDIN, crate::id::Fd::STDOUT, crate::id::Fd::STDERR] {
+        for &fd in &[
+            crate::id::Fd::STDIN,
+            crate::id::Fd::STDOUT,
+            crate::id::Fd::STDERR,
+        ] {
             if let Some(parent_fd) = parent_fds.get(fd) {
                 fd_table.insert_at(fd, parent_fd.inode.clone(), parent_fd.flags);
             } else {

@@ -373,7 +373,10 @@ impl Inode for DevConsole {
         _offset: usize,
         buf: &'a mut [u8],
     ) -> Pin<Box<dyn Future<Output = Result<usize, FsError>> + Send + 'a>> {
-        Box::pin(ConsoleReadFuture { buf, subscribed: false })
+        Box::pin(ConsoleReadFuture {
+            buf,
+            subscribed: false,
+        })
     }
 
     fn write<'a>(

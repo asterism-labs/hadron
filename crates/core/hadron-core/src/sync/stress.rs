@@ -27,8 +27,7 @@ static MAX_US: AtomicU32 = AtomicU32::new(10);
 static NANOS_FN: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
 
 /// Per-CPU xorshift64 PRNG state.
-static PRNG_STATE: CpuLocal<AtomicU64> =
-    CpuLocal::new([const { AtomicU64::new(0) }; MAX_CPUS]);
+static PRNG_STATE: CpuLocal<AtomicU64> = CpuLocal::new([const { AtomicU64::new(0) }; MAX_CPUS]);
 
 // ---------------------------------------------------------------------------
 // Initialization
@@ -42,14 +41,26 @@ static PRNG_STATE: CpuLocal<AtomicU64> =
 pub fn init(max_us: u32, seed: u64) {
     MAX_US.store(max_us, Ordering::Relaxed);
 
-    let base = if seed == 0 { 0xDEAD_BEEF_CAFE_BABEu64 } else { seed };
+    let base = if seed == 0 {
+        0xDEAD_BEEF_CAFE_BABEu64
+    } else {
+        seed
+    };
 
     // Seed each CPU with a divergent value.
     for i in 0..MAX_CPUS {
-        let cpu_seed = base.wrapping_add(i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        let cpu_seed = base
+            .wrapping_add(i as u64)
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15);
         // Avoid zero (xorshift fixed point).
-        let cpu_seed = if cpu_seed == 0 { base ^ 0x1234_5678 } else { cpu_seed };
-        PRNG_STATE.get_for(i as u32).store(cpu_seed, Ordering::Relaxed);
+        let cpu_seed = if cpu_seed == 0 {
+            base ^ 0x1234_5678
+        } else {
+            cpu_seed
+        };
+        PRNG_STATE
+            .get_for(i as u32)
+            .store(cpu_seed, Ordering::Relaxed);
     }
 }
 

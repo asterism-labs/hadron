@@ -4,9 +4,7 @@
 //! MMIO-based access to common config, notify, ISR, and device-specific regions.
 
 use crate::pci::cam::regs;
-use crate::pci::caps::{
-    self, MsixCapability, RawCapability, VirtioPciCap, VirtioPciCfgType,
-};
+use crate::pci::caps::{self, MsixCapability, RawCapability, VirtioPciCap, VirtioPciCfgType};
 use hadron_kernel::driver_api::capability::MmioCapability;
 use hadron_kernel::driver_api::error::DriverError;
 use hadron_kernel::driver_api::pci::{PciBar, PciDeviceInfo};
@@ -39,12 +37,8 @@ pub struct VirtioPciTransport {
 
 impl VirtioPciTransport {
     /// Discovers VirtIO config structures via PCI capabilities and maps the BARs.
-    pub fn new(
-        info: &PciDeviceInfo,
-        mmio_cap: &MmioCapability,
-    ) -> Result<Self, DriverError> {
-        let cap_iter = caps::walk_capabilities(&info.address)
-            .ok_or(DriverError::InitFailed)?;
+    pub fn new(info: &PciDeviceInfo, mmio_cap: &MmioCapability) -> Result<Self, DriverError> {
+        let cap_iter = caps::walk_capabilities(&info.address).ok_or(DriverError::InitFailed)?;
 
         let mut common_cap: Option<VirtioPciCap> = None;
         let mut notify_cap: Option<VirtioPciCap> = None;
@@ -90,19 +84,20 @@ impl VirtioPciTransport {
         // Map BARs. We cache mapped BARs to avoid double-mapping.
         let mut bar_mmios: [Option<MmioRegion>; 6] = [None; 6];
 
-        let map_bar =
-            |bar_idx: u8, bar_mmios: &mut [Option<MmioRegion>; 6]| -> Result<MmioRegion, DriverError> {
-                if let Some(mmio) = bar_mmios[bar_idx as usize] {
-                    return Ok(mmio);
-                }
-                let (phys, size) = match info.bars[bar_idx as usize] {
-                    PciBar::Memory { base, size, .. } => (base, size),
-                    _ => return Err(DriverError::InitFailed),
-                };
-                let mmio = mmio_cap.map_mmio(phys, size)?;
-                bar_mmios[bar_idx as usize] = Some(mmio);
-                Ok(mmio)
+        let map_bar = |bar_idx: u8,
+                       bar_mmios: &mut [Option<MmioRegion>; 6]|
+         -> Result<MmioRegion, DriverError> {
+            if let Some(mmio) = bar_mmios[bar_idx as usize] {
+                return Ok(mmio);
+            }
+            let (phys, size) = match info.bars[bar_idx as usize] {
+                PciBar::Memory { base, size, .. } => (base, size),
+                _ => return Err(DriverError::InitFailed),
             };
+            let mmio = mmio_cap.map_mmio(phys, size)?;
+            bar_mmios[bar_idx as usize] = Some(mmio);
+            Ok(mmio)
+        };
 
         let common_mmio = map_bar(common_cap.bar, &mut bar_mmios)?;
         let notify_mmio = map_bar(notify_cap.bar, &mut bar_mmios)?;
@@ -354,8 +349,7 @@ impl VirtioPciTransport {
             self.queue_notify_off()
         };
 
-        let offset = self.notify_offset
-            + u32::from(notify_off) * self.notify_off_multiplier;
+        let offset = self.notify_offset + u32::from(notify_off) * self.notify_off_multiplier;
 
         let ptr = self
             .notify

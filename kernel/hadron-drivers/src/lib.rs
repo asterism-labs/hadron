@@ -15,9 +15,9 @@ pub mod display;
 pub mod fs;
 pub mod input;
 pub mod pci;
+pub mod serial;
 #[cfg(target_arch = "x86_64")]
 pub mod virtio;
-pub mod serial;
 
 // ── Re-exports for convenience ──────────────────────────────────────────
 

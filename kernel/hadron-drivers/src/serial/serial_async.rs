@@ -8,8 +8,8 @@ use hadron_kernel::driver_api::capability::IrqCapability;
 use hadron_kernel::driver_api::error::DriverError;
 use hadron_kernel::driver_api::serial::SerialPort;
 
-use hadron_kernel::drivers::irq::IrqLine;
 use crate::uart16550::Uart16550;
+use hadron_kernel::drivers::irq::IrqLine;
 
 /// Async serial port: composes a [`Uart16550`] with an [`IrqLine`] for
 /// interrupt-driven RX.
@@ -28,11 +28,7 @@ impl AsyncSerial {
     ///
     /// Returns a [`DriverError`] if the IRQ cannot be bound or the I/O APIC
     /// is not initialized.
-    pub fn new(
-        uart: Uart16550,
-        isa_irq: u8,
-        irq_cap: &IrqCapability,
-    ) -> Result<Self, DriverError> {
+    pub fn new(uart: Uart16550, isa_irq: u8, irq_cap: &IrqCapability) -> Result<Self, DriverError> {
         // 1. Bind IRQ handler to vector.
         let irq = IrqLine::bind_isa(isa_irq, irq_cap)?;
 

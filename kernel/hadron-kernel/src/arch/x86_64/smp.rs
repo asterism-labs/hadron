@@ -21,11 +21,11 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use alloc::boxed::Box;
 
+use crate::arch::x86_64::hw::local_apic::LocalApic;
 use crate::arch::x86_64::registers::model_specific::{IA32_GS_BASE, IA32_KERNEL_GS_BASE};
 use crate::id::CpuId;
 use crate::percpu::{MAX_CPUS, PerCpu};
 use crate::{kdebug, kinfo, kwarn};
-use crate::arch::x86_64::hw::local_apic::LocalApic;
 
 use crate::boot::{BootInfo, SmpCpuEntry};
 

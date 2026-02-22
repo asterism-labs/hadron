@@ -35,7 +35,11 @@ impl IrqCapability {
     }
 
     /// Registers an interrupt handler for the given vector.
-    pub fn register_handler(&self, vector: IrqVector, handler: fn(IrqVector)) -> Result<(), DriverError> {
+    pub fn register_handler(
+        &self,
+        vector: IrqVector,
+        handler: fn(IrqVector),
+    ) -> Result<(), DriverError> {
         #[cfg(target_os = "none")]
         {
             crate::arch::interrupts::register_handler(vector, handler)

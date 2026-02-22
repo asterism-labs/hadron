@@ -124,9 +124,11 @@ impl Inode for FatDirInode {
         Box::pin(async move {
             let dir = match &self.kind {
                 FatDirKind::Root => self.fs.0.root_dir(),
-                FatDirKind::Subdirectory(entry) => {
-                    self.fs.0.open_dir_entry(entry).map_err(|_| FsError::IoError)?
-                }
+                FatDirKind::Subdirectory(entry) => self
+                    .fs
+                    .0
+                    .open_dir_entry(entry)
+                    .map_err(|_| FsError::IoError)?,
             };
             let entry = dir
                 .find(name)
@@ -147,15 +149,15 @@ impl Inode for FatDirInode {
         })
     }
 
-    fn readdir(
-        &self,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<DirEntry>, FsError>> + Send + '_>> {
+    fn readdir(&self) -> Pin<Box<dyn Future<Output = Result<Vec<DirEntry>, FsError>> + Send + '_>> {
         Box::pin(async move {
             let dir = match &self.kind {
                 FatDirKind::Root => self.fs.0.root_dir(),
-                FatDirKind::Subdirectory(entry) => {
-                    self.fs.0.open_dir_entry(entry).map_err(|_| FsError::IoError)?
-                }
+                FatDirKind::Subdirectory(entry) => self
+                    .fs
+                    .0
+                    .open_dir_entry(entry)
+                    .map_err(|_| FsError::IoError)?,
             };
             let mut entries = Vec::new();
             for entry_result in dir.entries() {
@@ -287,9 +289,7 @@ impl Inode for FatFileInode {
         Box::pin(async { Err(FsError::NotADirectory) })
     }
 
-    fn readdir(
-        &self,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<DirEntry>, FsError>> + Send + '_>> {
+    fn readdir(&self) -> Pin<Box<dyn Future<Output = Result<Vec<DirEntry>, FsError>> + Send + '_>> {
         Box::pin(async { Err(FsError::NotADirectory) })
     }
 

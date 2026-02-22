@@ -10,8 +10,8 @@ extern crate alloc;
 
 use alloc::vec;
 
-use hadris_io::{Error, ErrorKind, Read, Result, Seek, SeekFrom, Write};
 use crate::driver_api::block::BlockDevice;
+use hadris_io::{Error, ErrorKind, Read, Result, Seek, SeekFrom, Write};
 
 use crate::sched::block_on::block_on;
 
@@ -73,7 +73,8 @@ impl<D: BlockDevice> Read for BlockDeviceAdapter<D> {
         let remaining_on_device = (self.total_size - self.position) as usize;
         let to_copy = buf.len().min(available_in_sector).min(remaining_on_device);
 
-        buf[..to_copy].copy_from_slice(&self.sector_buf[offset_in_sector..offset_in_sector + to_copy]);
+        buf[..to_copy]
+            .copy_from_slice(&self.sector_buf[offset_in_sector..offset_in_sector + to_copy]);
         self.position += to_copy as u64;
 
         Ok(to_copy)
@@ -89,7 +90,10 @@ impl<D: BlockDevice> Seek for BlockDeviceAdapter<D> {
         };
 
         if new_pos < 0 {
-            return Err(Error::new(ErrorKind::InvalidInput, "seek to negative position"));
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "seek to negative position",
+            ));
         }
 
         self.position = new_pos as u64;

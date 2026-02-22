@@ -11,10 +11,10 @@
 
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
+use crate::arch::x86_64::hw::local_apic::LocalApic;
 use crate::id::CpuId;
 use crate::percpu::MAX_CPUS;
 use crate::task::Priority;
-use crate::arch::x86_64::hw::local_apic::LocalApic;
 
 use super::executor::TaskEntry;
 use crate::arch::x86_64::interrupts::dispatch::vectors;
@@ -87,27 +87,27 @@ pub(crate) fn try_steal() -> Option<(crate::task::TaskId, Priority, TaskEntry)> 
 
     #[cfg(not(hadron_no_work_steal))]
     {
-    let local_cpu = crate::percpu::current_cpu().get_cpu_id();
-    let cpu_count = crate::percpu::cpu_count();
-    if cpu_count <= 1 {
-        return None;
-    }
-
-    // Pseudo-random start offset to distribute stealing pressure.
-    let start = (crate::arch::x86_64::acpi::timer_ticks() as u32) % cpu_count;
-
-    for i in 1..cpu_count {
-        let target = CpuId::new((start + i) % cpu_count);
-        if target == local_cpu {
-            continue;
+        let local_cpu = crate::percpu::current_cpu().get_cpu_id();
+        let cpu_count = crate::percpu::cpu_count();
+        if cpu_count <= 1 {
+            return None;
         }
 
-        if let Some(stolen) = super::executor::for_cpu(target).steal_task() {
-            return Some(stolen);
-        }
-    }
+        // Pseudo-random start offset to distribute stealing pressure.
+        let start = (crate::arch::x86_64::acpi::timer_ticks() as u32) % cpu_count;
 
-    None
+        for i in 1..cpu_count {
+            let target = CpuId::new((start + i) % cpu_count);
+            if target == local_cpu {
+                continue;
+            }
+
+            if let Some(stolen) = super::executor::for_cpu(target).steal_task() {
+                return Some(stolen);
+            }
+        }
+
+        None
     }
 }
 

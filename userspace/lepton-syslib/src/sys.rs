@@ -207,11 +207,7 @@ pub fn mem_map(length: usize) -> Option<*mut u8> {
         PROT_READ | PROT_WRITE,
         MAP_ANONYMOUS,
     );
-    if ret > 0 {
-        Some(ret as *mut u8)
-    } else {
-        None
-    }
+    if ret > 0 { Some(ret as *mut u8) } else { None }
 }
 
 /// Unmap a previously mapped memory region.

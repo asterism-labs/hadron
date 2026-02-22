@@ -78,23 +78,23 @@ fn emit_u64(v: u64) {
 ///
 /// `tsc_freq_hz` should be the calibrated TSC frequency. Pass 0 if unknown.
 pub fn emit_header(flags: u16, tsc_freq_hz: u64, kernel_vbase: u64, cpu_count: u32) {
-    emit_bytes(b"HPRF");       // magic (4B)
-    emit_u16(HPRF_VERSION);    // version (2B)
-    emit_u16(flags);           // flags (2B)
-    emit_u64(tsc_freq_hz);    // tsc_freq_hz (8B)
-    emit_u64(kernel_vbase);   // kernel_vbase (8B)
-    emit_u32(cpu_count);      // cpu_count (4B)
-    emit_u32(0);               // reserved (4B)
+    emit_bytes(b"HPRF"); // magic (4B)
+    emit_u16(HPRF_VERSION); // version (2B)
+    emit_u16(flags); // flags (2B)
+    emit_u64(tsc_freq_hz); // tsc_freq_hz (8B)
+    emit_u64(kernel_vbase); // kernel_vbase (8B)
+    emit_u32(cpu_count); // cpu_count (4B)
+    emit_u32(0); // reserved (4B)
     // Total: 32 bytes
 }
 
 /// Emit a sample record.
 pub fn emit_sample_record(cpu_id: u8, tsc_val: u64, stack: &[u64], depth: u16) {
-    emit_u8(RECORD_SAMPLE);   // record type (1B)
-    emit_u8(cpu_id);          // cpu_id (1B)
-    emit_u16(depth);          // depth (2B)
-    emit_u32(0);               // reserved+padding (4B)
-    emit_u64(tsc_val);        // tsc (8B)
+    emit_u8(RECORD_SAMPLE); // record type (1B)
+    emit_u8(cpu_id); // cpu_id (1B)
+    emit_u16(depth); // depth (2B)
+    emit_u32(0); // reserved+padding (4B)
+    emit_u64(tsc_val); // tsc (8B)
     for i in 0..depth as usize {
         if i < stack.len() {
             emit_u64(stack[i]);
@@ -107,16 +107,16 @@ pub fn emit_sample_record(cpu_id: u8, tsc_val: u64, stack: &[u64], depth: u16) {
 /// Emit a function trace entry record.
 #[allow(dead_code)] // used when ftrace is wired up
 pub fn emit_ftrace_record(cpu_id: u8, tsc_val: u64, func_addr: u64) {
-    emit_u8(RECORD_FTRACE);   // record type (1B)
-    emit_u8(cpu_id);          // cpu_id (1B)
-    emit_u16(0);               // reserved (2B)
-    emit_u32(0);               // padding (4B)
-    emit_u64(tsc_val);        // tsc (8B)
-    emit_u64(func_addr);      // func_addr (8B)
+    emit_u8(RECORD_FTRACE); // record type (1B)
+    emit_u8(cpu_id); // cpu_id (1B)
+    emit_u16(0); // reserved (2B)
+    emit_u32(0); // padding (4B)
+    emit_u64(tsc_val); // tsc (8B)
+    emit_u64(func_addr); // func_addr (8B)
 }
 
 /// Emit the end-of-stream marker.
 pub fn emit_end_of_stream() {
-    emit_u8(RECORD_END);      // record type (1B)
-    emit_bytes(&[0; 7]);      // reserved (7B)
+    emit_u8(RECORD_END); // record type (1B)
+    emit_bytes(&[0; 7]); // reserved (7B)
 }

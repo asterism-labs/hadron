@@ -72,12 +72,11 @@ pub fn unpack_cpio(initrd: &[u8], root: &Arc<dyn Inode>) -> usize {
                 };
 
                 // Create the file.
-                let file_inode = poll_immediate(
-                    parent.create(file_name, InodeType::File, Permissions::all()),
-                )
-                .unwrap_or_else(|e| {
-                    panic!("initramfs: failed to create file '{}': {:?}", name, e)
-                });
+                let file_inode =
+                    poll_immediate(parent.create(file_name, InodeType::File, Permissions::all()))
+                        .unwrap_or_else(|e| {
+                            panic!("initramfs: failed to create file '{}': {:?}", name, e)
+                        });
 
                 // Read data from CPIO and write to the inode.
                 if file_size > 0 {
@@ -149,15 +148,15 @@ fn ensure_directory(root: &Arc<dyn Inode>, path: &str) {
     for component in hadron_kernel::fs::path::components(path) {
         current = match poll_immediate(current.lookup(component)) {
             Ok(inode) => inode,
-            Err(FsError::NotFound) => poll_immediate(
-                current.create(component, InodeType::Directory, Permissions::all()),
-            )
-            .unwrap_or_else(|e| {
-                panic!(
-                    "initramfs: failed to create directory '{}': {:?}",
-                    component, e
-                )
-            }),
+            Err(FsError::NotFound) => {
+                poll_immediate(current.create(component, InodeType::Directory, Permissions::all()))
+                    .unwrap_or_else(|e| {
+                        panic!(
+                            "initramfs: failed to create directory '{}': {:?}",
+                            component, e
+                        )
+                    })
+            }
             Err(e) => panic!("initramfs: lookup failed for '{}': {:?}", component, e),
         };
     }

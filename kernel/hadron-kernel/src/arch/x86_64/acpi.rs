@@ -6,18 +6,18 @@
 
 use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 
-use hadron_acpi::{AcpiHandler, AcpiTables, SdtHeader, madt};
-use hadron_acpi::aml::{self, AmlValue, EisaId};
-use hadron_acpi::aml::namespace::NamespaceBuilder;
 use crate::addr::{PhysAddr, VirtAddr};
-use crate::id::IrqVector;
-use crate::mm::hhdm;
-use crate::sync::IrqSpinLock;
+use crate::arch::x86_64::hw::hpet::Hpet;
 use crate::arch::x86_64::hw::io_apic::{
     DeliveryMode, DestinationMode, IoApic, Polarity, RedirectionEntry, TriggerMode,
 };
 use crate::arch::x86_64::hw::local_apic::LocalApic;
-use crate::arch::x86_64::hw::hpet::Hpet;
+use crate::id::IrqVector;
+use crate::mm::hhdm;
+use crate::sync::IrqSpinLock;
+use hadron_acpi::aml::namespace::NamespaceBuilder;
+use hadron_acpi::aml::{self, AmlValue, EisaId};
+use hadron_acpi::{AcpiHandler, AcpiTables, SdtHeader, madt};
 
 use crate::arch::x86_64::interrupts::dispatch::vectors;
 
@@ -52,7 +52,8 @@ struct AcpiPlatformState {
 ///
 /// Now only used for I/O APIC operations (`with_io_apic`). The LAPIC base
 /// address is cached in `LAPIC_BASE` for lock-free access on hot paths.
-static PLATFORM: IrqSpinLock<Option<AcpiPlatformState>> = IrqSpinLock::leveled("PLATFORM", 11, None);
+static PLATFORM: IrqSpinLock<Option<AcpiPlatformState>> =
+    IrqSpinLock::leveled("PLATFORM", 11, None);
 
 /// Timer tick counter, incremented by the LAPIC timer handler.
 /// Kept separate from `PLATFORM` because it is on the hot path (every ISR).
@@ -246,8 +247,11 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
     // Parse FADT
     let fadt = match tables.fadt() {
         Ok(f) => {
-            crate::kinfo!("ACPI: FADT: PM timer port {:#x}, boot arch flags {:#x}",
-                f.pm_timer_block, f.boot_architecture_flags);
+            crate::kinfo!(
+                "ACPI: FADT: PM timer port {:#x}, boot arch flags {:#x}",
+                f.pm_timer_block,
+                f.boot_architecture_flags
+            );
             if let Some(dsdt) = f.dsdt_address() {
                 crate::kdebug!("ACPI: FADT: DSDT at {:#x}", dsdt);
             }
@@ -272,7 +276,12 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
 
             for entry in srat.entries() {
                 match entry {
-                    hadron_acpi::SratEntry::ProcessorLocalApicAffinity { flags, proximity_domain_lo, proximity_domain_hi, .. } => {
+                    hadron_acpi::SratEntry::ProcessorLocalApicAffinity {
+                        flags,
+                        proximity_domain_lo,
+                        proximity_domain_hi,
+                        ..
+                    } => {
                         if flags & 1 != 0 {
                             cpu_count += 1;
                             let domain = u32::from(proximity_domain_lo)
@@ -284,19 +293,30 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
                             }
                         }
                     }
-                    hadron_acpi::SratEntry::MemoryAffinity { proximity_domain, base_address, length, flags } => {
+                    hadron_acpi::SratEntry::MemoryAffinity {
+                        proximity_domain,
+                        base_address,
+                        length,
+                        flags,
+                    } => {
                         if flags & 1 != 0 {
                             mem_regions += 1;
                             crate::kdebug!(
                                 "ACPI: SRAT: memory domain {} base {:#x} length {:#x}",
-                                proximity_domain, base_address, length
+                                proximity_domain,
+                                base_address,
+                                length
                             );
                             if proximity_domain > max_domain {
                                 max_domain = proximity_domain;
                             }
                         }
                     }
-                    hadron_acpi::SratEntry::X2ApicAffinity { flags, proximity_domain, .. } => {
+                    hadron_acpi::SratEntry::X2ApicAffinity {
+                        flags,
+                        proximity_domain,
+                        ..
+                    } => {
                         if flags & 1 != 0 {
                             cpu_count += 1;
                             if proximity_domain > max_domain {
@@ -313,7 +333,9 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
             }
             crate::kinfo!(
                 "ACPI: SRAT: {} proximity domains, {} CPUs, {} memory regions",
-                domains, cpu_count, mem_regions
+                domains,
+                cpu_count,
+                mem_regions
             );
         }
         Err(_) => {
@@ -348,29 +370,41 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
             let mut rmrr_count = 0u32;
             crate::kdebug!(
                 "ACPI: DMAR: host address width {}, flags {:#x}",
-                dmar.host_address_width, dmar.flags
+                dmar.host_address_width,
+                dmar.flags
             );
             for entry in dmar.entries() {
                 match entry {
-                    hadron_acpi::DmarEntry::Drhd { flags, segment, register_base_address, .. } => {
+                    hadron_acpi::DmarEntry::Drhd {
+                        flags,
+                        segment,
+                        register_base_address,
+                        ..
+                    } => {
                         drhd_count += 1;
                         crate::kdebug!(
                             "ACPI: DMAR: DRHD segment {} base {:#x} flags {:#x}",
-                            segment, register_base_address, flags
+                            segment,
+                            register_base_address,
+                            flags
                         );
                     }
-                    hadron_acpi::DmarEntry::Rmrr { segment, base_address, limit_address, .. } => {
+                    hadron_acpi::DmarEntry::Rmrr {
+                        segment,
+                        base_address,
+                        limit_address,
+                        ..
+                    } => {
                         rmrr_count += 1;
                         crate::kdebug!(
                             "ACPI: DMAR: RMRR segment {} range {:#x}-{:#x}",
-                            segment, base_address, limit_address
+                            segment,
+                            base_address,
+                            limit_address
                         );
                     }
                     hadron_acpi::DmarEntry::Atsr { flags, segment, .. } => {
-                        crate::kdebug!(
-                            "ACPI: DMAR: ATSR segment {} flags {:#x}",
-                            segment, flags
-                        );
+                        crate::kdebug!("ACPI: DMAR: ATSR segment {} flags {:#x}", segment, flags);
                     }
                     hadron_acpi::DmarEntry::Unknown { .. } => {}
                 }
@@ -390,18 +424,34 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
             crate::kdebug!("ACPI: IVRS: iv_info {:#x}", ivrs.iv_info);
             for entry in ivrs.entries() {
                 match entry {
-                    hadron_acpi::IvrsEntry::Ivhd { ivhd_type, iommu_base_address, segment_group, device_id, .. } => {
+                    hadron_acpi::IvrsEntry::Ivhd {
+                        ivhd_type,
+                        iommu_base_address,
+                        segment_group,
+                        device_id,
+                        ..
+                    } => {
                         ivhd_count += 1;
                         crate::kdebug!(
                             "ACPI: IVRS: IVHD type {:#x} IOMMU base {:#x} segment {} device {:#x}",
-                            ivhd_type, iommu_base_address, segment_group, device_id
+                            ivhd_type,
+                            iommu_base_address,
+                            segment_group,
+                            device_id
                         );
                     }
-                    hadron_acpi::IvrsEntry::Ivmd { ivmd_type, start_address, memory_block_length, .. } => {
+                    hadron_acpi::IvrsEntry::Ivmd {
+                        ivmd_type,
+                        start_address,
+                        memory_block_length,
+                        ..
+                    } => {
                         ivmd_count += 1;
                         crate::kdebug!(
                             "ACPI: IVRS: IVMD type {:#x} start {:#x} length {:#x}",
-                            ivmd_type, start_address, memory_block_length
+                            ivmd_type,
+                            start_address,
+                            memory_block_length
                         );
                     }
                     hadron_acpi::IvrsEntry::Unknown { .. } => {}
@@ -419,7 +469,10 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
         Ok(bgrt) => {
             crate::kinfo!(
                 "ACPI: BGRT: image at {:#x} type {} offset ({}, {})",
-                bgrt.image_address, bgrt.image_type, bgrt.image_offset_x, bgrt.image_offset_y
+                bgrt.image_address,
+                bgrt.image_type,
+                bgrt.image_offset_x,
+                bgrt.image_offset_y
             );
         }
         Err(_) => {
@@ -483,8 +536,7 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
             let ioapic_phys = PhysAddr::new(u64::from(io_apic_address));
 
             // Map I/O APIC MMIO region (permanent hardware mapping).
-            let mapping =
-                crate::mm::vmm::map_mmio_region(ioapic_phys, crate::mm::PAGE_SIZE as u64);
+            let mapping = crate::mm::vmm::map_mmio_region(ioapic_phys, crate::mm::PAGE_SIZE as u64);
             let ioapic_virt = mapping.virt_base();
             core::mem::forget(mapping); // permanent hardware mapping
 
@@ -530,8 +582,7 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
     let hpet = hpet_info.and_then(|info| {
         let hpet_phys = PhysAddr::new(info.base_address.address);
         // Map HPET MMIO region (permanent hardware mapping).
-        let mapping =
-            crate::mm::vmm::map_mmio_region(hpet_phys, crate::mm::PAGE_SIZE as u64);
+        let mapping = crate::mm::vmm::map_mmio_region(hpet_phys, crate::mm::PAGE_SIZE as u64);
         let hpet_virt = mapping.virt_base();
         core::mem::forget(mapping); // permanent hardware mapping
 
@@ -729,7 +780,8 @@ fn parse_aml_namespace(tables: &AcpiTables<HhdmAcpiHandler>) {
     if ssdt_count > 0 {
         crate::kinfo!(
             "ACPI: AML namespace: {} devices (DSDT + {} SSDTs)",
-            device_count, ssdt_count
+            device_count,
+            ssdt_count
         );
     } else {
         crate::kinfo!("ACPI: AML namespace: {} devices (DSDT)", device_count);

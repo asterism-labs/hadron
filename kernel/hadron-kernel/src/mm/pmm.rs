@@ -197,9 +197,7 @@ impl BitmapAllocator {
             // Verify poison pattern is intact (detects use-after-free).
             // NOTE: No logging here — PMM lock is held and logging would
             // acquire LOGGER, creating a PMM → LOGGER lock ordering violation.
-            if cfg!(hadron_debug_pmm_poison)
-                && !check_page_poison(phys_addr, self.hhdm_offset)
-            {
+            if cfg!(hadron_debug_pmm_poison) && !check_page_poison(phys_addr, self.hhdm_offset) {
                 panic!(
                     "PMM: page at {:#x} modified after free (use-after-free)",
                     phys_addr

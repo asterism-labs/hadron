@@ -191,7 +191,8 @@ pub fn foreground_pid() -> Option<Pid> {
 /// Global process table mapping PID → `Arc<Process>`.
 ///
 /// Processes are inserted on spawn and removed after exit + reaping.
-static PROCESS_TABLE: SpinLock<BTreeMap<Pid, Arc<Process>>> = SpinLock::leveled("PROCESS_TABLE", 4, BTreeMap::new());
+static PROCESS_TABLE: SpinLock<BTreeMap<Pid, Arc<Process>>> =
+    SpinLock::leveled("PROCESS_TABLE", 4, BTreeMap::new());
 
 /// Registers a process in the global table.
 pub fn register_process(process: &Arc<Process>) {
@@ -270,8 +271,7 @@ impl Process {
     /// Creates a new process with the given address space and parent PID.
     pub fn new(address_space: AddressSpace<PageTableMapper>, parent_pid: Option<Pid>) -> Self {
         let user_cr3 = address_space.root_phys();
-        let mmap_region =
-            VirtRegion::new(VirtAddr::new(USER_MMAP_BASE), USER_MMAP_MAX_SIZE);
+        let mmap_region = VirtRegion::new(VirtAddr::new(USER_MMAP_BASE), USER_MMAP_MAX_SIZE);
         Self {
             pid: Pid::new(NEXT_PID.fetch_add(1, Ordering::Relaxed)),
             parent_pid,
@@ -390,7 +390,9 @@ pub unsafe fn terminate_current_process_from_fault() -> ! {
     PROCESS_EXIT_STATUS
         .get()
         .store(usize::MAX as u64, Ordering::Release);
-    TRAP_REASON.get().store(TrapReason::Fault as u8, Ordering::Release);
+    TRAP_REASON
+        .get()
+        .store(TrapReason::Fault as u8, Ordering::Release);
     // SAFETY: saved_kernel_rsp() returns the RSP saved by enter_userspace_save,
     // which is still valid on the executor stack.
     unsafe {
@@ -540,8 +542,10 @@ pub fn spawn_init() {
 fn read_init_from_vfs() -> &'static [u8] {
     use crate::fs::{poll_immediate, vfs};
 
-    let inode =
-        vfs::with_vfs(|vfs| vfs.resolve("/bin/init").expect("VFS does not contain /bin/init"));
+    let inode = vfs::with_vfs(|vfs| {
+        vfs.resolve("/bin/init")
+            .expect("VFS does not contain /bin/init")
+    });
 
     let file_size = inode.size();
     kinfo!("Found /bin/init in VFS: {} bytes", file_size);
@@ -558,7 +562,9 @@ fn read_init_from_vfs() -> &'static [u8] {
 
 /// Sets the target PID and status pointer for a `TRAP_WAIT` syscall.
 pub fn set_wait_params(target_pid: Pid, status_ptr: u64) {
-    WAIT_TARGET_PID.get().store(target_pid.as_u32(), Ordering::Release);
+    WAIT_TARGET_PID
+        .get()
+        .store(target_pid.as_u32(), Ordering::Release);
     WAIT_STATUS_PTR.get().store(status_ptr, Ordering::Release);
 }
 
@@ -695,9 +701,7 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                     saved_r15,
                     saved_user_rsp,
                 ) = unsafe {
-                    let saved = &*crate::arch::x86_64::syscall::SYSCALL_SAVED_REGS
-                        .get()
-                        .get();
+                    let saved = &*crate::arch::x86_64::syscall::SYSCALL_SAVED_REGS.get().get();
                     (
                         saved.user_rip,
                         saved.user_rflags,
@@ -802,9 +806,7 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                     saved_r15,
                     saved_user_rsp,
                 ) = unsafe {
-                    let saved = &*crate::arch::x86_64::syscall::SYSCALL_SAVED_REGS
-                        .get()
-                        .get();
+                    let saved = &*crate::arch::x86_64::syscall::SYSCALL_SAVED_REGS.get().get();
                     (
                         saved.user_rip,
                         saved.user_rflags,
@@ -837,9 +839,8 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                             unsafe {
                                 Cr3::write(process.user_cr3);
                             }
-                            let uslice = crate::syscall::userptr::UserSlice::new(
-                                io_buf_ptr, io_buf_len,
-                            );
+                            let uslice =
+                                crate::syscall::userptr::UserSlice::new(io_buf_ptr, io_buf_len);
                             if let Ok(slice) = uslice {
                                 // SAFETY: UserSlice validated pointer range under user CR3.
                                 let src = unsafe { slice.as_slice() };
@@ -879,9 +880,8 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                                     unsafe {
                                         Cr3::write(process.user_cr3);
                                     }
-                                    let uslice = crate::syscall::userptr::UserSlice::new(
-                                        io_buf_ptr, n,
-                                    );
+                                    let uslice =
+                                        crate::syscall::userptr::UserSlice::new(io_buf_ptr, n);
                                     if let Ok(slice) = uslice {
                                         // SAFETY: UserSlice validated pointer range under user CR3.
                                         let dst = unsafe { slice.as_mut_slice() };

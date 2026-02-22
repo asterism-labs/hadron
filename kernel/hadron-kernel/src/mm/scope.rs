@@ -79,7 +79,5 @@ pub fn with_vmm_scope<R>(f: impl FnOnce(VmmScope<'_>) -> R) -> R {
 
 /// Acquire both VMM and PMM in correct ascending level order (VMM=2 then PMM=3).
 pub fn with_vmm_and_pmm<R>(f: impl FnOnce(VmmScope<'_>, PmmScope<'_>) -> R) -> R {
-    super::vmm::with_vmm(|vmm| {
-        super::pmm::with_pmm(|pmm| f(VmmScope { vmm }, PmmScope { pmm }))
-    })
+    super::vmm::with_vmm(|vmm| super::pmm::with_pmm(|pmm| f(VmmScope { vmm }, PmmScope { pmm })))
 }

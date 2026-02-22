@@ -148,9 +148,8 @@ pub(super) fn sys_task_spawn(info_ptr: usize, info_len: usize) -> isize {
 
     // SAFETY: UserSlice validated the pointer; SpawnInfo is repr(C) with only
     // usize fields so any bit pattern is valid.
-    let info: hadron_syscall::SpawnInfo = unsafe {
-        core::ptr::read_unaligned(info_slice.addr() as *const hadron_syscall::SpawnInfo)
-    };
+    let info: hadron_syscall::SpawnInfo =
+        unsafe { core::ptr::read_unaligned(info_slice.addr() as *const hadron_syscall::SpawnInfo) };
 
     // Read path.
     let path_uslice = match UserSlice::new(info.path_ptr, info.path_len) {
@@ -250,10 +249,7 @@ pub(super) fn sys_task_wait(pid: usize, status_ptr: usize) -> isize {
 /// `sys_task_kill` — sends a signal to a process.
 ///
 /// Returns 0 on success, or a negated errno on failure.
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "PID fits in u32"
-)]
+#[expect(clippy::cast_possible_truncation, reason = "PID fits in u32")]
 pub(super) fn sys_task_kill(pid: usize, signum: usize) -> isize {
     use crate::proc::signal::Signal;
 

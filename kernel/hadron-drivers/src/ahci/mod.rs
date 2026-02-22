@@ -10,11 +10,11 @@ extern crate alloc;
 use alloc::vec::Vec;
 use core::ptr;
 
-use hadron_kernel::sync::SpinLock;
 use hadron_kernel::driver_api::block::{BlockDevice, IoError};
 use hadron_kernel::driver_api::capability::DmaCapability;
 use hadron_kernel::driver_api::error::DriverError;
 use hadron_kernel::driver_api::pci::{PciBar, PciDeviceId};
+use hadron_kernel::sync::SpinLock;
 
 pub mod command;
 pub mod hba;
@@ -78,10 +78,7 @@ impl BlockDevice for AhciDisk {
         }
 
         // Allocate a DMA bounce buffer.
-        let dma_phys = self
-            .dma
-            .alloc_frames(1)
-            .map_err(|_| IoError::DmaError)?;
+        let dma_phys = self.dma.alloc_frames(1).map_err(|_| IoError::DmaError)?;
         let dma_virt = self.dma.phys_to_virt(dma_phys);
 
         // Zero the DMA buffer.
@@ -219,15 +216,17 @@ impl AhciDriver {
 
                     // Clone the IRQ binding for each disk.
                     // All ports on the same HBA share the same IRQ.
-                    let disk_irq =
-                        hadron_kernel::drivers::irq::IrqLine::bind_isa(info.interrupt_line, irq_cap)
-                            .unwrap_or_else(|_| {
-                                // If we can't bind a second time (already registered), reuse
-                                // by creating a new IrqLine that references the same vector.
-                                hadron_kernel::drivers::irq::IrqLine::from_vector(
-                                    irq_cap.isa_irq_vector(info.interrupt_line),
-                                )
-                            });
+                    let disk_irq = hadron_kernel::drivers::irq::IrqLine::bind_isa(
+                        info.interrupt_line,
+                        irq_cap,
+                    )
+                    .unwrap_or_else(|_| {
+                        // If we can't bind a second time (already registered), reuse
+                        // by creating a new IrqLine that references the same vector.
+                        hadron_kernel::drivers::irq::IrqLine::from_vector(
+                            irq_cap.isa_irq_vector(info.interrupt_line),
+                        )
+                    });
 
                     disks.push(AhciDisk {
                         port,

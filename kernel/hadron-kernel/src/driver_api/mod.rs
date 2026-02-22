@@ -49,11 +49,11 @@ pub use input::{KeyCode, KeyEvent, KeyboardDevice, MouseDevice, MouseEvent};
 pub use lifecycle::ManagedDriver;
 pub use pci::{PciAddress, PciBar, PciDeviceId, PciDeviceInfo};
 pub use probe_context::{PciProbeContext, PlatformProbeContext};
+#[cfg(target_os = "none")]
+pub use registration::{BlockFsEntry, InitramFsEntry, VirtualFsEntry};
 pub use registration::{
     DeviceSet, PciDriverEntry, PciDriverRegistration, PlatformDriverEntry,
     PlatformDriverRegistration,
 };
-#[cfg(target_os = "none")]
-pub use registration::{BlockFsEntry, InitramFsEntry, VirtualFsEntry};
 pub use resource::{IoPortRange, IrqLine, MmioRegion};
 pub use serial::SerialPort;

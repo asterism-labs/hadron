@@ -9,10 +9,7 @@ use crate::wire::HPrfResults;
 ///
 /// Uses the top-of-stack address from each sample as the function attribution.
 /// Returns entries sorted by count (descending).
-pub fn flat_profile(
-    results: &HPrfResults,
-    resolver: &SymbolResolver,
-) -> (Vec<(String, u64)>, u64) {
+pub fn flat_profile(results: &HPrfResults, resolver: &SymbolResolver) -> (Vec<(String, u64)>, u64) {
     let mut counts: HashMap<String, u64> = HashMap::new();
     let mut total = 0u64;
 
@@ -36,10 +33,7 @@ pub fn flat_profile(
 ///
 /// Each line is: `func1;func2;func3 count\n`
 /// where func1 is the bottom of the stack and func3 is the top.
-pub fn folded_stacks(
-    results: &HPrfResults,
-    resolver: &SymbolResolver,
-) -> String {
+pub fn folded_stacks(results: &HPrfResults, resolver: &SymbolResolver) -> String {
     let mut stacks: HashMap<String, u64> = HashMap::new();
 
     for sample in &results.samples {

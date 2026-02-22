@@ -5,8 +5,7 @@
 //! driver's probe/init function.
 
 use super::capability::{
-    DmaCapability, IrqCapability, MmioCapability, PciConfigCapability, TaskSpawner,
-    TimerCapability,
+    DmaCapability, IrqCapability, MmioCapability, PciConfigCapability, TaskSpawner, TimerCapability,
 };
 use super::pci::PciDeviceInfo;
 

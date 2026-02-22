@@ -12,8 +12,8 @@
 
 use core::task::Waker;
 
-use crate::sync::IrqSpinLock;
 use crate::driver_api::input::KeyCode;
+use crate::sync::IrqSpinLock;
 use planck_noalloc::ringbuf::RingBuf;
 
 /// Diagnostic counters for debugging keyboard input pipeline issues.
@@ -74,7 +74,8 @@ static SCANCODE_BUF: IrqSpinLock<RingBuf<u8, SCANCODE_BUF_SIZE>> =
 ///
 /// Uses [`IrqSpinLock`] because [`poll_keyboard_hardware`] accesses this
 /// while the keyboard IRQ handler could fire on the same CPU.
-static STATE: IrqSpinLock<ConsoleInputState> = IrqSpinLock::leveled("STATE", 10, ConsoleInputState::new());
+static STATE: IrqSpinLock<ConsoleInputState> =
+    IrqSpinLock::leveled("STATE", 10, ConsoleInputState::new());
 
 /// Internal state for the console input subsystem.
 struct ConsoleInputState {
@@ -497,16 +498,18 @@ fn dump_irq1_state() {
     // Collect values inside the PLATFORM lock, log OUTSIDE to avoid holding
     // IrqSpinLock while acquiring the logger lock (ABBA deadlock with APs
     // that acquire PLATFORM via lapic_virt/send_wake_ipi).
-    let ioapic_info = crate::arch::x86_64::acpi::with_io_apic(|ioapic| {
-        ioapic.read_entry_raw(1)
-    });
+    let ioapic_info = crate::arch::x86_64::acpi::with_io_apic(|ioapic| ioapic.read_entry_raw(1));
     if let Some((low, high)) = ioapic_info {
         let entry_vector = low & 0xFF;
         let masked = (low >> 16) & 1;
         let dest = (high >> 24) & 0xFF;
         crate::kinfo!(
             "IOAPIC entry 1: vector={} masked={} dest={} raw_low={:#010x} raw_high={:#010x}",
-            entry_vector, masked, dest, low, high
+            entry_vector,
+            masked,
+            dest,
+            low,
+            high
         );
     }
 
@@ -532,7 +535,9 @@ fn dump_irq1_state() {
     let port1_clock_disabled = config & 0x10 != 0;
     crate::kinfo!(
         "i8042 config: {:#04x} irq1_enabled={} port1_clock_disabled={}",
-        config, irq1_enabled, port1_clock_disabled
+        config,
+        irq1_enabled,
+        port1_clock_disabled
     );
     if !irq1_enabled {
         crate::kwarn!("i8042 PORT1_IRQ is DISABLED - keyboard will not generate IRQ1!");
@@ -578,8 +583,16 @@ pub fn spawn_health_monitor() {
 
             crate::kinfo!(
                 "CONSOLE DIAG: irq={} fire={} miss={} sub={} poll_hw={} data={} | poll={} first={} subscribe={} ready={}",
-                irq, fire, miss, sub, poll_hw, data,
-                poll, first, subscribe, ready,
+                irq,
+                fire,
+                miss,
+                sub,
+                poll_hw,
+                data,
+                poll,
+                first,
+                subscribe,
+                ready,
             );
         }
     });

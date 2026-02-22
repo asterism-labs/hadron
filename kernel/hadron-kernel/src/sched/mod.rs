@@ -12,8 +12,8 @@ pub mod smp;
 pub mod timer;
 mod waker;
 
-pub use executor::Executor;
 pub use crate::task::{Priority, TaskMeta};
+pub use executor::Executor;
 
 use core::sync::atomic::{AtomicBool, Ordering};
 

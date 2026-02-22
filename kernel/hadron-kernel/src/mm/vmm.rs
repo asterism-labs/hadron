@@ -426,7 +426,12 @@ pub fn map_initial_heap() -> (usize, usize) {
         (base.as_u64() as usize, size as usize)
     });
     // Log after releasing PMM lock to avoid PMM → LOGGER ordering violation.
-    crate::ktrace_subsys!(mm, "VMM: mapped initial heap at {:#x}, size {:#x}", result.0, result.1);
+    crate::ktrace_subsys!(
+        mm,
+        "VMM: mapped initial heap at {:#x}, size {:#x}",
+        result.0,
+        result.1
+    );
     result
 }
 
@@ -469,7 +474,13 @@ pub fn map_mmio_region(phys: PhysAddr, size: u64) -> MmioMapping {
         })
     });
     // Log after releasing PMM + VMM locks to avoid ordering violations.
-    crate::ktrace_subsys!(mm, "VMM: mapped MMIO phys={:#x} size={:#x} -> virt={:#x}", phys.as_u64(), size, mapping.virt_base().as_u64());
+    crate::ktrace_subsys!(
+        mm,
+        "VMM: mapped MMIO phys={:#x} size={:#x} -> virt={:#x}",
+        phys.as_u64(),
+        size,
+        mapping.virt_base().as_u64()
+    );
     mapping
 }
 

@@ -115,7 +115,9 @@ fn parse_u32(s: &str, default: u32) -> u32 {
     let mut result: u32 = 0;
     for &b in s.as_bytes() {
         if b.is_ascii_digit() {
-            result = result.saturating_mul(10).saturating_add(u32::from(b - b'0'));
+            result = result
+                .saturating_mul(10)
+                .saturating_add(u32::from(b - b'0'));
         } else {
             return default;
         }

@@ -65,7 +65,8 @@ fn test_pmm_alloc_dealloc_cycle() {
     hadron_kernel::mm::pmm::with_pmm(|pmm| {
         let frame = pmm.allocate_frame().expect("failed to allocate frame");
         unsafe {
-            pmm.deallocate_frame(frame).expect("failed to deallocate frame");
+            pmm.deallocate_frame(frame)
+                .expect("failed to deallocate frame");
         }
         // Re-allocate — if poison is active, the check runs here.
         let _frame2 = pmm.allocate_frame().expect("failed to re-allocate frame");
@@ -79,10 +80,13 @@ fn test_pmm_multi_frame_cycle() {
         let base = pmm.allocate_frames(8).expect("failed to allocate 8 frames");
         // Deallocate all 8 (each gets poisoned).
         unsafe {
-            pmm.deallocate_frames(base, 8).expect("failed to deallocate 8 frames");
+            pmm.deallocate_frames(base, 8)
+                .expect("failed to deallocate 8 frames");
         }
         // Re-allocate 8 — poison check runs on each frame.
-        let _base2 = pmm.allocate_frames(8).expect("failed to re-allocate 8 frames");
+        let _base2 = pmm
+            .allocate_frames(8)
+            .expect("failed to re-allocate 8 frames");
     });
 }
 

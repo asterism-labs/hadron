@@ -348,7 +348,7 @@ mod tests {
 
         // Sample record 1 (depth=2).
         data.push(0x01); // type
-        data.push(0);    // cpu_id
+        data.push(0); // cpu_id
         data.extend_from_slice(&2u16.to_le_bytes()); // depth
         data.extend_from_slice(&0u32.to_le_bytes()); // reserved+padding
         data.extend_from_slice(&42u64.to_le_bytes()); // tsc
@@ -357,7 +357,7 @@ mod tests {
 
         // Sample record 2 (depth=1).
         data.push(0x01); // type
-        data.push(0);    // cpu_id
+        data.push(0); // cpu_id
         data.extend_from_slice(&1u16.to_le_bytes()); // depth
         data.extend_from_slice(&0u32.to_le_bytes()); // reserved+padding
         data.extend_from_slice(&100u64.to_le_bytes()); // tsc

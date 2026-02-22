@@ -62,7 +62,11 @@ mod poison {
             // SAFETY: Region [block_addr..block_addr+front_pad-REDZONE_SIZE] is within
             // the allocated block.
             unsafe {
-                core::ptr::write_bytes(block_addr as *mut u8, REDZONE_FILL, front_pad - REDZONE_SIZE);
+                core::ptr::write_bytes(
+                    block_addr as *mut u8,
+                    REDZONE_FILL,
+                    front_pad - REDZONE_SIZE,
+                );
             }
         }
 
@@ -85,7 +89,11 @@ mod poison {
         // Fill back red zone with REDZONE_FILL.
         // SAFETY: back red zone is within the allocated block.
         unsafe {
-            core::ptr::write_bytes((user_ptr + user_size) as *mut u8, REDZONE_FILL, REDZONE_SIZE);
+            core::ptr::write_bytes(
+                (user_ptr + user_size) as *mut u8,
+                REDZONE_FILL,
+                REDZONE_SIZE,
+            );
         }
 
         user_ptr as *mut u8
@@ -154,9 +162,8 @@ mod poison {
         // Check back red zone (16 bytes after user data).
         let back_start = user_addr + user_size;
         // SAFETY: back red zone was written by fill_alloc and is within the block.
-        let back_zone = unsafe {
-            core::slice::from_raw_parts(back_start as *const u8, REDZONE_SIZE)
-        };
+        let back_zone =
+            unsafe { core::slice::from_raw_parts(back_start as *const u8, REDZONE_SIZE) };
         for (i, &byte) in back_zone.iter().enumerate() {
             if byte != REDZONE_FILL {
                 panic!(
@@ -220,13 +227,17 @@ impl LinkedListAllocator {
     /// Creates a new, uninitialized allocator. Must call `init()` before use.
     pub const fn new() -> Self {
         Self {
-            inner: SpinLock::leveled("HEAP", 1, LinkedListAllocatorInner {
-                head: ptr::null_mut(),
-                heap_start: 0,
-                heap_end: 0,
-                allocated_bytes: 0,
-                grow_fn: None,
-            }),
+            inner: SpinLock::leveled(
+                "HEAP",
+                1,
+                LinkedListAllocatorInner {
+                    head: ptr::null_mut(),
+                    heap_start: 0,
+                    heap_end: 0,
+                    allocated_bytes: 0,
+                    grow_fn: None,
+                },
+            ),
         }
     }
 
@@ -905,7 +916,9 @@ mod tests {
         assert_eq!(user_ptr as usize, buf as usize + front_pad);
 
         // Check header at [buf..buf+16].
-        let header = unsafe { &*((user_ptr as usize - poison::REDZONE_SIZE) as *const poison::RedZoneHeader) };
+        let header = unsafe {
+            &*((user_ptr as usize - poison::REDZONE_SIZE) as *const poison::RedZoneHeader)
+        };
         assert_eq!(header.magic, poison::REDZONE_MAGIC);
         assert_eq!(header.alloc_size, user_size);
         assert_eq!(header._pad, [poison::REDZONE_FILL; 4]);
@@ -915,7 +928,8 @@ mod tests {
         assert!(user_slice.iter().all(|&b| b == poison::ALLOC_FILL));
 
         // Back redzone should be all REDZONE_FILL.
-        let back = unsafe { core::slice::from_raw_parts(user_ptr.add(user_size), poison::REDZONE_SIZE) };
+        let back =
+            unsafe { core::slice::from_raw_parts(user_ptr.add(user_size), poison::REDZONE_SIZE) };
         assert!(back.iter().all(|&b| b == poison::REDZONE_FILL));
 
         unsafe { free_poison_buf(buf, total, align) };
@@ -939,14 +953,17 @@ mod tests {
         assert!(front_fill.iter().all(|&b| b == poison::REDZONE_FILL));
 
         // Header at [240..256].
-        let header = unsafe { &*((user_ptr as usize - poison::REDZONE_SIZE) as *const poison::RedZoneHeader) };
+        let header = unsafe {
+            &*((user_ptr as usize - poison::REDZONE_SIZE) as *const poison::RedZoneHeader)
+        };
         assert_eq!(header.magic, poison::REDZONE_MAGIC);
         assert_eq!(header.alloc_size, user_size);
 
         // User and back zones.
         let user_slice = unsafe { core::slice::from_raw_parts(user_ptr, user_size) };
         assert!(user_slice.iter().all(|&b| b == poison::ALLOC_FILL));
-        let back = unsafe { core::slice::from_raw_parts(user_ptr.add(user_size), poison::REDZONE_SIZE) };
+        let back =
+            unsafe { core::slice::from_raw_parts(user_ptr.add(user_size), poison::REDZONE_SIZE) };
         assert!(back.iter().all(|&b| b == poison::REDZONE_FILL));
 
         unsafe { free_poison_buf(buf, total, align) };
@@ -1084,10 +1101,10 @@ mod tests {
     #[test]
     fn test_alloc_stats_peak_tracking() {
         let mut stats = AllocStats::new();
-        stats.record_alloc(64);   // live=1, bytes=64
-        stats.record_alloc(128);  // live=2, bytes=192
-        stats.record_free(64);    // live=1, bytes=128
-        stats.record_alloc(256);  // live=2, bytes=384
+        stats.record_alloc(64); // live=1, bytes=64
+        stats.record_alloc(128); // live=2, bytes=192
+        stats.record_free(64); // live=1, bytes=128
+        stats.record_alloc(256); // live=2, bytes=384
         assert_eq!(stats.peak_live, 2);
         assert_eq!(stats.peak_bytes, 384);
         assert_eq!(stats.current_live, 2);

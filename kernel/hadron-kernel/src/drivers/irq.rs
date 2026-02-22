@@ -5,10 +5,10 @@
 
 use core::future::Future;
 
-use crate::id::IrqVector;
-use crate::sync::WaitQueue;
 use crate::driver_api::capability::IrqCapability;
 use crate::driver_api::error::DriverError;
+use crate::id::IrqVector;
+use crate::sync::WaitQueue;
 
 /// Number of IRQ wait queues covering vectors 32-255 (ISA + MSI-X).
 const MAX_IRQ_LINES: usize = 224;

@@ -2,5 +2,5 @@
 
 mod mapper;
 
-pub use mapper::{PageTableMapper, TranslateResult, UnmapError};
 pub use super::structures::paging::{PageTable, PageTableEntry, PageTableFlags};
+pub use mapper::{PageTableMapper, TranslateResult, UnmapError};

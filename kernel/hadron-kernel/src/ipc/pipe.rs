@@ -151,9 +151,7 @@ impl Inode for PipeReader {
                 core::future::poll_fn(|cx| {
                     self.0.read_wq.register_waker(cx.waker());
                     let buffer = self.0.buffer.lock();
-                    if !buffer.is_empty()
-                        || self.0.writers.load(Ordering::Acquire) == 0
-                    {
+                    if !buffer.is_empty() || self.0.writers.load(Ordering::Acquire) == 0 {
                         core::task::Poll::Ready(())
                     } else {
                         core::task::Poll::Pending
@@ -252,9 +250,7 @@ impl Inode for PipeWriter {
                 core::future::poll_fn(|cx| {
                     self.0.write_wq.register_waker(cx.waker());
                     let buffer = self.0.buffer.lock();
-                    if self.0.readers.load(Ordering::Acquire) == 0
-                        || !buffer.is_full()
-                    {
+                    if self.0.readers.load(Ordering::Acquire) == 0 || !buffer.is_full() {
                         core::task::Poll::Ready(())
                     } else {
                         core::task::Poll::Pending

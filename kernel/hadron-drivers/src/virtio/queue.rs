@@ -118,10 +118,7 @@ impl Virtqueue {
     ///
     /// Allocates DMA memory for the descriptor table, available ring, and
     /// used ring. Initializes the free list through descriptor `next` fields.
-    pub fn new(
-        queue_size: u16,
-        dma: &DmaCapability,
-    ) -> Result<Self, DriverError> {
+    pub fn new(queue_size: u16, dma: &DmaCapability) -> Result<Self, DriverError> {
         let qs = queue_size as usize;
 
         // Compute sizes.

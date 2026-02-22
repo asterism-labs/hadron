@@ -14,11 +14,11 @@
 #[cfg(loom)]
 pub(crate) use loom::cell::UnsafeCell;
 #[cfg(loom)]
+pub(crate) use loom::sync::atomic::Ordering;
+#[cfg(loom)]
 pub(crate) use loom::sync::atomic::{
     AtomicBool, AtomicU8, AtomicU16, AtomicU32, AtomicU64, AtomicUsize,
 };
-#[cfg(loom)]
-pub(crate) use loom::sync::atomic::Ordering;
 
 // ---------------------------------------------------------------------------
 // Normal mode

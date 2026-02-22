@@ -22,9 +22,8 @@ use super::lockdep::LockClassId;
 /// `Mutex` to assert they are not acquired inside an `IrqSpinLock` critical
 /// section, which could cause deadlocks with interrupt handlers.
 #[cfg(all(hadron_lock_debug, target_os = "none"))]
-static IRQ_LOCK_DEPTH: crate::cpu_local::CpuLocal<AtomicU32> = crate::cpu_local::CpuLocal::new(
-    [const { AtomicU32::new(0) }; crate::cpu_local::MAX_CPUS],
-);
+static IRQ_LOCK_DEPTH: crate::cpu_local::CpuLocal<AtomicU32> =
+    crate::cpu_local::CpuLocal::new([const { AtomicU32::new(0) }; crate::cpu_local::MAX_CPUS]);
 
 /// Returns the number of `IrqSpinLock`s held by the current CPU.
 #[cfg(hadron_lock_debug)]

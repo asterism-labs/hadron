@@ -47,10 +47,7 @@ impl DevicePath {
     /// This is the backward-compatible device name (e.g., `"ahci-0"`).
     #[must_use]
     pub fn leaf(&self) -> &str {
-        self.segments
-            .last()
-            .map(String::as_str)
-            .unwrap_or("")
+        self.segments.last().map(String::as_str).unwrap_or("")
     }
 
     /// Returns the full path as a `/`-separated string.
