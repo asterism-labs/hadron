@@ -157,6 +157,8 @@ pub struct PerfArgs {
 pub enum PerfCommand {
     /// Analyze HPRF profiling data and generate reports.
     Report(PerfReportArgs),
+    /// Run kernel in QEMU with serial capture for profiling data collection.
+    Record(PerfRecordArgs),
 }
 
 /// Arguments for `perf report`.
@@ -177,4 +179,20 @@ pub struct PerfReportArgs {
     /// Output file path (required for flamegraph and folded modes).
     #[arg(short = 'o', long)]
     pub output: Option<String>,
+}
+
+/// Arguments for `perf record`.
+#[derive(Parser)]
+pub struct PerfRecordArgs {
+    /// Path to kernel binary to profile.
+    #[arg(long)]
+    pub kernel: String,
+
+    /// Output path for captured serial data (default: build/profile_serial.bin).
+    #[arg(short = 'o', long)]
+    pub output: Option<String>,
+
+    /// Extra arguments passed to QEMU after `--`.
+    #[arg(last = true)]
+    pub extra_args: Vec<String>,
 }

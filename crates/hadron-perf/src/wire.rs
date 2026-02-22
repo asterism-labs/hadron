@@ -185,15 +185,14 @@ pub fn parse_hprf(data: &[u8]) -> Result<HPrfResults> {
 
         match record_type {
             0x01 => {
-                // Sample record.
-                if pos + 4 > data.len() {
+                // Sample record: cpu_id(1) + depth(2) + reserved(4) + tsc(8).
+                if pos + 15 > data.len() {
                     break;
                 }
                 let cpu_id = data[pos];
                 pos += 1;
                 let depth = read_u16(data, &mut pos);
-                let _reserved = data[pos];
-                pos += 1;
+                let _reserved = read_u32(data, &mut pos);
                 let tsc = read_u64(data, &mut pos);
 
                 let mut stack = Vec::with_capacity(depth as usize);
@@ -212,13 +211,14 @@ pub fn parse_hprf(data: &[u8]) -> Result<HPrfResults> {
                 });
             }
             0x02 => {
-                // Ftrace entry.
-                if pos + 17 > data.len() {
+                // Ftrace entry: cpu_id(1) + reserved(2) + padding(4) + tsc(8) + func_addr(8).
+                if pos + 23 > data.len() {
                     break;
                 }
                 let cpu_id = data[pos];
                 pos += 1;
                 let _reserved = read_u16(data, &mut pos);
+                let _padding = read_u32(data, &mut pos);
                 let tsc = read_u64(data, &mut pos);
                 let func_addr = read_u64(data, &mut pos);
 
@@ -331,5 +331,91 @@ mod tests {
         assert_eq!(results.records.len(), 1);
         assert_eq!(results.records[0].name, "test_bench");
         assert_eq!(results.records[0].samples, vec![100, 200]);
+    }
+
+    #[test]
+    fn parse_hprf_roundtrip() {
+        let mut data = Vec::new();
+
+        // Header (32 bytes).
+        data.extend_from_slice(b"HPRF");
+        data.extend_from_slice(&1u16.to_le_bytes()); // version
+        data.extend_from_slice(&1u16.to_le_bytes()); // flags (samples)
+        data.extend_from_slice(&1_000_000u64.to_le_bytes()); // tsc_freq_hz
+        data.extend_from_slice(&0xFFFF_8000_0000_0000u64.to_le_bytes()); // kernel_vbase
+        data.extend_from_slice(&1u32.to_le_bytes()); // cpu_count
+        data.extend_from_slice(&0u32.to_le_bytes()); // reserved
+
+        // Sample record 1 (depth=2).
+        data.push(0x01); // type
+        data.push(0);    // cpu_id
+        data.extend_from_slice(&2u16.to_le_bytes()); // depth
+        data.extend_from_slice(&0u32.to_le_bytes()); // reserved+padding
+        data.extend_from_slice(&42u64.to_le_bytes()); // tsc
+        data.extend_from_slice(&0xFFFF_8000_0010_0000u64.to_le_bytes()); // stack[0]
+        data.extend_from_slice(&0xFFFF_8000_0020_0000u64.to_le_bytes()); // stack[1]
+
+        // Sample record 2 (depth=1).
+        data.push(0x01); // type
+        data.push(0);    // cpu_id
+        data.extend_from_slice(&1u16.to_le_bytes()); // depth
+        data.extend_from_slice(&0u32.to_le_bytes()); // reserved+padding
+        data.extend_from_slice(&100u64.to_le_bytes()); // tsc
+        data.extend_from_slice(&0xFFFF_8000_0030_0000u64.to_le_bytes()); // stack[0]
+
+        // End of stream.
+        data.push(0xFF);
+        data.extend_from_slice(&[0u8; 7]);
+
+        let results = parse_hprf(&data).unwrap();
+        assert_eq!(results.version, 1);
+        assert_eq!(results.flags, 1);
+        assert_eq!(results.tsc_freq_hz, 1_000_000);
+        assert_eq!(results.kernel_vbase, 0xFFFF_8000_0000_0000);
+        assert_eq!(results.cpu_count, 1);
+        assert_eq!(results.samples.len(), 2);
+
+        // Sample 1.
+        assert_eq!(results.samples[0].cpu_id, 0);
+        assert_eq!(results.samples[0].depth, 2);
+        assert_eq!(results.samples[0].tsc, 42);
+        assert_eq!(results.samples[0].stack.len(), 2);
+        assert_eq!(results.samples[0].stack[0], 0xFFFF_8000_0010_0000);
+        assert_eq!(results.samples[0].stack[1], 0xFFFF_8000_0020_0000);
+
+        // Sample 2.
+        assert_eq!(results.samples[1].cpu_id, 0);
+        assert_eq!(results.samples[1].depth, 1);
+        assert_eq!(results.samples[1].tsc, 100);
+        assert_eq!(results.samples[1].stack.len(), 1);
+        assert_eq!(results.samples[1].stack[0], 0xFFFF_8000_0030_0000);
+
+        assert_eq!(results.ftrace_entries.len(), 0);
+    }
+
+    #[test]
+    fn parse_hprf_with_text_prefix() {
+        // Simulate serial output with text before the HPRF binary data.
+        let mut data = Vec::new();
+        data.extend_from_slice(b"[kernel] booting...\r\n");
+        data.extend_from_slice(b"[kernel] profiling started\r\n");
+
+        // Header.
+        data.extend_from_slice(b"HPRF");
+        data.extend_from_slice(&1u16.to_le_bytes());
+        data.extend_from_slice(&0u16.to_le_bytes()); // no flags
+        data.extend_from_slice(&0u64.to_le_bytes()); // tsc_freq_hz
+        data.extend_from_slice(&0xFFFF_8000_0000_0000u64.to_le_bytes());
+        data.extend_from_slice(&2u32.to_le_bytes()); // cpu_count
+        data.extend_from_slice(&0u32.to_le_bytes());
+
+        // End of stream (no records).
+        data.push(0xFF);
+        data.extend_from_slice(&[0u8; 7]);
+
+        let results = parse_hprf(&data).unwrap();
+        assert_eq!(results.cpu_count, 2);
+        assert_eq!(results.samples.len(), 0);
+        assert_eq!(results.ftrace_entries.len(), 0);
     }
 }

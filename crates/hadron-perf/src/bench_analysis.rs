@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use super::wire::HBenchResults;
+use crate::wire::HBenchResults;
 
 /// Statistics for a single benchmark.
 #[derive(Debug, Clone, Serialize, Deserialize)]

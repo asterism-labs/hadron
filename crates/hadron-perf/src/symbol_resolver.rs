@@ -1,10 +1,9 @@
 //! Address-to-symbol resolution using kernel ELF symbol tables.
 //!
-//! Reuses the `extract_symbols` infrastructure from the HBTF module.
+//! Extracts function symbols directly from the ELF binary using `hadron-elf`,
+//! without depending on gluon's HBTF module.
 
 use std::path::Path;
-
-use crate::artifact::hbtf;
 
 /// Resolves virtual addresses to function names using kernel ELF symbols.
 pub struct SymbolResolver {
@@ -36,7 +35,7 @@ impl SymbolResolver {
             .min()
             .unwrap_or(elf.entry_point());
 
-        let mut func_symbols = hbtf::extract_symbols(&elf, virt_base);
+        let mut func_symbols = extract_symbols(&elf, virt_base);
         func_symbols.sort_by_key(|s| s.addr);
 
         let symbols = func_symbols
@@ -90,4 +89,69 @@ impl SymbolResolver {
 
         Some(sym.name.clone())
     }
+}
+
+// ---------------------------------------------------------------------------
+// Inline symbol extraction (from gluon's HBTF module)
+// ---------------------------------------------------------------------------
+
+struct FuncSymbol {
+    /// Offset from kernel virtual base.
+    addr: u64,
+    /// Symbol size in bytes.
+    size: u32,
+    /// Demangled function name.
+    name: String,
+}
+
+/// Extract function symbols from the ELF symbol table.
+fn extract_symbols(elf: &hadron_elf::ElfFile<'_>, kernel_virt_base: u64) -> Vec<FuncSymbol> {
+    let symtab = match elf.find_section_by_type(hadron_elf::SHT_SYMTAB) {
+        Some(s) => s,
+        None => return Vec::new(),
+    };
+
+    let strtab = match elf.linked_strtab(&symtab) {
+        Some(s) => s,
+        None => return Vec::new(),
+    };
+
+    let syms = match elf.symbols(&symtab) {
+        Some(s) => s,
+        None => return Vec::new(),
+    };
+
+    let mut result = Vec::new();
+
+    for sym in syms {
+        // Only include defined function symbols.
+        if sym.sym_type() != hadron_elf::STT_FUNC {
+            continue;
+        }
+        if sym.st_shndx == hadron_elf::SHN_UNDEF {
+            continue;
+        }
+        if sym.st_value == 0 {
+            continue;
+        }
+        // Skip symbols below the kernel virtual base.
+        if sym.st_value < kernel_virt_base {
+            continue;
+        }
+
+        let raw_name = match strtab.get(sym.st_name) {
+            Some(n) if !n.is_empty() => n,
+            _ => continue,
+        };
+
+        let demangled = format!("{:#}", rustc_demangle::demangle(raw_name));
+
+        result.push(FuncSymbol {
+            addr: sym.st_value.wrapping_sub(kernel_virt_base),
+            size: sym.st_size as u32,
+            name: demangled,
+        });
+    }
+
+    result
 }

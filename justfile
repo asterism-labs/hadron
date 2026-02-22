@@ -53,6 +53,10 @@ miri *args:
 loom *args:
     RUSTFLAGS="--cfg loom" cargo test -p hadron-core {{args}}
 
+# Analyze profiling data (perf report, perf record)
+perf *args: bootstrap
+    {{hb}} perf {{args}}
+
 # Remove build artifacts
 clean *args: bootstrap
     {{hb}} clean {{args}}

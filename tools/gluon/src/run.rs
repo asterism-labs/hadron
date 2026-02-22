@@ -5,11 +5,17 @@
 //! QEMU exits with code 33 (success via `isa-debug-exit`), but the CLI wrapper
 //! treats non-zero as failure. Using the library API gives direct access to the
 //! runner result.
+//!
+//! Also provides [`run_kernel_with_serial_capture`] for capturing serial output
+//! with optional HPRF end-of-stream auto-shutdown (used by `perf record`).
 
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 
-use cargo_image_runner::{BootType, BootloaderKind, ImageFormat};
+use cargo_image_runner::runner::io::{IoAction, IoHandler};
+use cargo_image_runner::runner::qemu::QemuRunner;
+use cargo_image_runner::runner::Runner;
+use cargo_image_runner::{BootType, BootloaderKind, ImageFormat, RunResult};
 
 use crate::config::ResolvedConfig;
 
@@ -180,4 +186,57 @@ pub fn run_kernel_tests(
         bail!("kernel test failed (exit code {})", result.exit_code);
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Serial capture via IoHandler
+// ---------------------------------------------------------------------------
+
+/// IO handler that accumulates raw serial bytes and tees output to stderr.
+///
+/// Preserves binary data (HPRF/HBENCH) while providing real-time visibility.
+struct StderrTeeHandler {
+    serial: Vec<u8>,
+}
+
+impl IoHandler for StderrTeeHandler {
+    fn on_output(&mut self, data: &[u8]) -> IoAction {
+        use std::io::Write;
+        self.serial.extend_from_slice(data);
+        let _ = std::io::stderr().write_all(data);
+        IoAction::Continue
+    }
+}
+
+/// Run a kernel binary in QEMU with serial output captured as raw bytes.
+///
+/// Builds a test ISO and runs QEMU using the `IoHandler` API from
+/// `cargo-image-runner` 0.5, which preserves binary serial data that
+/// `run_with_result()` would corrupt via `String::from_utf8_lossy`.
+///
+/// Returns `(RunResult, captured_serial_bytes)`.
+pub fn run_with_serial_capture(
+    config: &ResolvedConfig,
+    kernel_binary: &Path,
+    extra_args: &[String],
+) -> Result<(RunResult, Vec<u8>)> {
+    let (image_path, cfg) = build_test_iso(config, kernel_binary, extra_args)?;
+
+    let mut ctx = cargo_image_runner::core::Context::new(
+        cfg,
+        config.root.clone(),
+        kernel_binary.to_path_buf(),
+    )
+    .context("failed to create runner context")?;
+    ctx.is_test = true;
+
+    let mut handler = StderrTeeHandler {
+        serial: Vec::new(),
+    };
+
+    let result = QemuRunner::new()
+        .run_with_io(&ctx, &image_path, &mut handler)
+        .context("failed to run QEMU with IO capture")?;
+
+    Ok((result, handler.serial))
 }

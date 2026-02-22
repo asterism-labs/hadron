@@ -1,7 +1,7 @@
 //! Terminal output formatting for benchmark and profiling results.
 
-use super::bench_analysis;
-use super::wire::HBenchResults;
+use crate::bench_analysis;
+use crate::wire::HBenchResults;
 
 /// Print benchmark results as a formatted table.
 pub fn print_bench_table(results: &HBenchResults) {

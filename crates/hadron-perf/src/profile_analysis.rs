@@ -2,8 +2,8 @@
 
 use std::collections::HashMap;
 
-use super::symbol_resolver::SymbolResolver;
-use super::wire::HPrfResults;
+use crate::symbol_resolver::SymbolResolver;
+use crate::wire::HPrfResults;
 
 /// Aggregate samples into a flat profile (function -> count).
 ///

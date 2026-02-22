@@ -56,7 +56,17 @@ fn main() -> Result<()> {
         cli::Command::Fmt(ref args) => fmt::cmd_fmt(args),
         cli::Command::Menuconfig => cmd_menuconfig(&cli),
         cli::Command::Vendor(ref args) => cmd_vendor(&cli, args),
-        cli::Command::Perf(ref args) => perf_cmd::cmd_perf(args),
+        cli::Command::Perf(ref args) => {
+            // Only resolve config for subcommands that need it (record).
+            let config = match &args.command {
+                cli::PerfCommand::Record(_) => {
+                    let (resolved, _model) = resolve_config(&cli)?;
+                    Some(resolved)
+                }
+                _ => None,
+            };
+            perf_cmd::cmd_perf(args, config.as_ref())
+        }
     }
 }
 

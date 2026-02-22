@@ -8,7 +8,7 @@ publish = false
 
 [dependencies]
 anyhow = "1"
-cargo-image-runner = { version = "0.4", default-features = false, features = ["bios", "limine", "iso", "qemu"] }
+cargo-image-runner = { version = "0.5", default-features = false, features = ["bios", "limine", "iso", "qemu"] }
 clap = { version = "4", features = ["derive"] }
 crc32fast = "1"
 crossterm = "0.28"
@@ -16,7 +16,7 @@ flate2 = "1"
 hadris-cpio = { version = "1.0.1", default-features = false, features = ["std", "write"] }
 hadron-dwarf = { path = "../../crates/dwarf" }
 hadron-elf = { path = "../../crates/elf" }
-inferno = { version = "0.12", default-features = false, features = ["nameattr"] }
+hadron-perf = { path = "../../crates/hadron-perf" }
 ratatui = "0.29"
 rhai = { version = "1", features = ["sync"] }
 rustc-demangle = "0.1"

@@ -375,95 +375,28 @@ fn compile_bench_binary(
 
 /// Run a benchmark binary in QEMU, capturing serial output to a file.
 ///
-/// Builds the ISO via the shared `build_test_iso()`, then spawns QEMU
-/// manually with `Stdio::piped()` so we can capture all serial data
-/// (which includes the HBENCH binary format) while teeing to stderr
-/// for real-time visibility.
+/// Uses `run_with_serial_capture()` which delegates to `cargo-image-runner`'s
+/// `IoHandler` API for structured serial capture with real-time stderr tee.
 fn run_benchmark_binary(
     config: &crate::config::ResolvedConfig,
     kernel_binary: &Path,
     serial_output: &Path,
     extra_args: &[String],
 ) -> Result<()> {
-    use std::io::{Read as _, Write as _};
-    use std::process::Stdio;
+    let (result, serial_data) =
+        run::run_with_serial_capture(config, kernel_binary, extra_args)?;
 
-    let (iso_path, cfg) = run::build_test_iso(config, kernel_binary, extra_args)?;
-
-    // Build the QEMU command manually so we can pipe stdout.
-    let qemu_cfg = &cfg.runner.qemu;
-    let mut cmd = Command::new(&qemu_cfg.binary);
-
-    cmd.arg("-machine").arg(&qemu_cfg.machine);
-    cmd.arg("-m").arg(qemu_cfg.memory.to_string());
-    if qemu_cfg.cores > 1 {
-        cmd.arg("-smp").arg(qemu_cfg.cores.to_string());
-    }
-
-    // Serial to stdio so it comes through stdout.
-    cmd.arg("-serial").arg("mon:stdio");
-
-    // Attach the ISO.
-    cmd.arg("-cdrom").arg(&iso_path);
-
-    // Test-mode args (isa-debug-exit, display none, no-reboot, etc.)
-    for arg in &cfg.test.extra_args {
-        cmd.arg(arg);
-    }
-
-    // Extra QEMU args from config.
-    for arg in &qemu_cfg.extra_args {
-        cmd.arg(arg);
-    }
-
-    // Pipe stdout for capture; inherit stderr for QEMU diagnostics.
-    cmd.stdin(Stdio::null());
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::inherit());
-
-    let mut child = cmd.spawn().context("failed to spawn QEMU for benchmark")?;
-
-    // Read stdout in a background thread, teeing to stderr for real-time visibility.
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| anyhow::anyhow!("failed to capture QEMU stdout"))?;
-
-    let reader_handle = std::thread::spawn(move || -> Vec<u8> {
-        let mut buf = Vec::new();
-        let mut reader = std::io::BufReader::new(stdout);
-        let mut chunk = [0u8; 4096];
-        loop {
-            match reader.read(&mut chunk) {
-                Ok(0) => break,
-                Ok(n) => {
-                    buf.extend_from_slice(&chunk[..n]);
-                    // Tee to stderr so user sees output in real time.
-                    let _ = std::io::stderr().write_all(&chunk[..n]);
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(_) => break,
-            }
-        }
-        buf
-    });
-
-    let status = child.wait().context("failed to wait for QEMU")?;
-    let captured = reader_handle.join().expect("stdout reader thread panicked");
-
-    // Write captured serial data to file.
-    std::fs::write(serial_output, &captured)
+    std::fs::write(serial_output, &serial_data)
         .with_context(|| format!("writing serial output to {}", serial_output.display()))?;
 
-    // Check exit code. The success_exit_code in the runner config is already
-    // the QEMU exit code (e.g. 33 = (0x10 << 1) | 1 from isa-debug-exit).
-    let expected_exit = cfg.test.success_exit_code.unwrap_or(33);
-    let actual_exit = status.code().unwrap_or(-1);
-    if actual_exit != expected_exit {
+    if result.timed_out {
+        bail!("benchmark QEMU timed out");
+    }
+    if !result.success {
         bail!(
-            "benchmark QEMU exited with code {actual_exit} (expected {expected_exit})"
+            "benchmark QEMU exited with code {} (expected success)",
+            result.exit_code
         );
     }
-
     Ok(())
 }

@@ -7,13 +7,16 @@ use std::path::Path;
 
 use anyhow::{Result, bail};
 
-use crate::cli::{PerfArgs, PerfCommand, PerfReportArgs};
+use crate::cli::{PerfArgs, PerfCommand, PerfRecordArgs, PerfReportArgs};
+use crate::config::ResolvedConfig;
 use crate::perf;
+use crate::run;
 
 /// Dispatch `gluon perf <subcommand>`.
-pub fn cmd_perf(args: &PerfArgs) -> Result<()> {
+pub fn cmd_perf(args: &PerfArgs, config: Option<&ResolvedConfig>) -> Result<()> {
     match &args.command {
         PerfCommand::Report(report_args) => cmd_perf_report(report_args),
+        PerfCommand::Record(record_args) => cmd_perf_record(record_args, config),
     }
 }
 
@@ -72,6 +75,60 @@ fn cmd_perf_report(args: &PerfReportArgs) -> Result<()> {
         other => {
             bail!("unknown report mode '{other}' (expected: flat, flamegraph, folded)");
         }
+    }
+
+    Ok(())
+}
+
+/// `gluon perf record` — run kernel in QEMU and capture serial profiling data.
+fn cmd_perf_record(args: &PerfRecordArgs, config: Option<&ResolvedConfig>) -> Result<()> {
+    let config = config.ok_or_else(|| {
+        anyhow::anyhow!("perf record requires a resolved build configuration")
+    })?;
+
+    let kernel_path = Path::new(&args.kernel);
+    if !kernel_path.exists() {
+        bail!("kernel binary not found: {}", kernel_path.display());
+    }
+
+    let output_path = match &args.output {
+        Some(p) => std::path::PathBuf::from(p),
+        None => config.root.join("build/profile_serial.bin"),
+    };
+
+    println!(
+        "Recording profiling data from {}...",
+        kernel_path.display()
+    );
+
+    let (result, serial_data) =
+        run::run_with_serial_capture(config, kernel_path, &args.extra_args)?;
+
+    // Save raw serial bytes.
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&output_path, &serial_data)
+        .map_err(|e| anyhow::anyhow!("failed to write output '{}': {e}", output_path.display()))?;
+
+    // Summary.
+    println!("\n  Captured {} bytes to {}", serial_data.len(), output_path.display());
+
+    // Check for HPRF magic as a quick sanity check.
+    if serial_data.windows(4).any(|w| w == b"HPRF") {
+        println!("  HPRF data detected in capture.");
+    } else {
+        println!("  Note: no HPRF magic found (kernel may not have profiling enabled).");
+    }
+
+    if result.timed_out {
+        bail!("QEMU timed out during profiling capture");
+    }
+    if !result.success {
+        bail!(
+            "QEMU exited with code {} (expected success)",
+            result.exit_code
+        );
     }
 
     Ok(())

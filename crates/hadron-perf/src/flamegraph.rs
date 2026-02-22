@@ -7,9 +7,9 @@ use anyhow::{Context, Result};
 use std::io::BufRead;
 use std::path::Path;
 
-use super::profile_analysis;
-use super::symbol_resolver::SymbolResolver;
-use super::wire::HPrfResults;
+use crate::profile_analysis;
+use crate::symbol_resolver::SymbolResolver;
+use crate::wire::HPrfResults;
 
 /// Generate a folded stacks file from profiling results.
 pub fn write_folded_stacks(
