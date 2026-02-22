@@ -52,7 +52,7 @@ pub fn map_initial_heap() -> (usize, usize) {
     let mut vmm = VMM.lock();
     let vmm = vmm.as_mut().expect("VMM not initialized");
 
-    let result = super::pmm::with_pmm(|pmm| {
+    let result = super::pmm::with(|pmm| {
         let mut alloc = BitmapFrameAllocRef(pmm);
         let (base, size) = vmm
             .map_initial_heap(&mut alloc)
@@ -76,7 +76,7 @@ pub fn grow_heap(min_bytes: usize) -> Option<(*mut u8, usize)> {
     let mut vmm = VMM.lock();
     let vmm = vmm.as_mut()?;
 
-    let result = super::pmm::with_pmm(|pmm| {
+    let result = super::pmm::with(|pmm| {
         let mut alloc = BitmapFrameAllocRef(pmm);
         let (base, size) = vmm.grow_heap(min_bytes as u64, &mut alloc).ok()?;
         Some((base.as_mut_ptr::<u8>(), size as usize))
@@ -89,7 +89,7 @@ pub fn grow_heap(min_bytes: usize) -> Option<(*mut u8, usize)> {
 }
 
 /// Executes a closure with a mutable reference to the global VMM.
-pub fn with_vmm<R>(f: impl FnOnce(&mut KernelVmm) -> R) -> R {
+pub fn with<R>(f: impl FnOnce(&mut KernelVmm) -> R) -> R {
     let mut vmm = VMM.lock();
     f(vmm.as_mut().expect("VMM not initialized"))
 }
@@ -100,8 +100,8 @@ pub fn with_vmm<R>(f: impl FnOnce(&mut KernelVmm) -> R) -> R {
 /// Returns an [`MmioMapping`] RAII guard that unmaps the region on drop.
 /// For permanent hardware mappings, call [`core::mem::forget`] on the guard.
 pub fn map_mmio_region(phys: PhysAddr, size: u64) -> MmioMapping {
-    let mapping = with_vmm(|vmm| {
-        super::pmm::with_pmm(|pmm| {
+    let mapping = with(|vmm| {
+        super::pmm::with(|pmm| {
             let mut alloc = BitmapFrameAllocRef(pmm);
             vmm.map_mmio(phys, size, &mut alloc, Some(default_mmio_cleanup))
                 .expect("failed to map MMIO region")
@@ -124,7 +124,7 @@ pub fn map_mmio_region(phys: PhysAddr, size: u64) -> MmioMapping {
 /// the MMIO region allocator. Does NOT deallocate physical frames because
 /// MMIO frames are device memory, not RAM.
 fn default_mmio_cleanup(virt_base: VirtAddr, size: u64) {
-    with_vmm(|vmm| {
+    with(|vmm| {
         let page_size = super::PAGE_SIZE as u64;
         let page_count = size / page_size;
         for i in 0..page_count {
@@ -141,7 +141,7 @@ fn default_mmio_cleanup(virt_base: VirtAddr, size: u64) {
 ///
 /// Returns `None` if the VMM lock is already held (avoiding deadlock in
 /// fault handlers) or if the VMM has not been initialized yet.
-pub fn try_with_vmm<R>(f: impl FnOnce(&mut KernelVmm) -> R) -> Option<R> {
+pub fn try_with<R>(f: impl FnOnce(&mut KernelVmm) -> R) -> Option<R> {
     let mut vmm = VMM.try_lock()?;
     Some(f(vmm.as_mut()?))
 }

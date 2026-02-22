@@ -69,15 +69,15 @@ impl<'a> VmmScope<'a> {
 
 /// Acquire the PMM lock and pass a typed scope token.
 pub fn with_pmm_scope<R>(f: impl FnOnce(PmmScope<'_>) -> R) -> R {
-    super::pmm::with_pmm(|pmm| f(PmmScope { pmm }))
+    super::pmm::with(|pmm| f(PmmScope { pmm }))
 }
 
 /// Acquire the VMM lock and pass a typed scope token.
 pub fn with_vmm_scope<R>(f: impl FnOnce(VmmScope<'_>) -> R) -> R {
-    super::vmm::with_vmm(|vmm| f(VmmScope { vmm }))
+    super::vmm::with(|vmm| f(VmmScope { vmm }))
 }
 
 /// Acquire both VMM and PMM in correct ascending level order (VMM=2 then PMM=3).
 pub fn with_vmm_and_pmm<R>(f: impl FnOnce(VmmScope<'_>, PmmScope<'_>) -> R) -> R {
-    super::vmm::with_vmm(|vmm| super::pmm::with_pmm(|pmm| f(VmmScope { vmm }, PmmScope { pmm })))
+    super::vmm::with(|vmm| super::pmm::with(|pmm| f(VmmScope { vmm }, PmmScope { pmm })))
 }

@@ -70,7 +70,7 @@ pub fn match_pci_drivers(devices: &[PciDeviceInfo]) {
                                 entry.name,
                                 device.address
                             );
-                            hadron_kernel::drivers::device_registry::with_device_registry_mut(
+                            hadron_kernel::drivers::device_registry::DeviceRegistry::with_mut(
                                 |dr| {
                                     dr.register_driver(
                                         entry.name,
@@ -131,7 +131,7 @@ pub fn match_platform_drivers(devices: &[hadron_kernel::driver_api::acpi_device:
                             entry.name,
                             device.path
                         );
-                        hadron_kernel::drivers::device_registry::with_device_registry_mut(|dr| {
+                        hadron_kernel::drivers::device_registry::DeviceRegistry::with_mut(|dr| {
                             dr.register_driver(
                                 entry.name,
                                 registration.devices,

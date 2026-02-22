@@ -190,7 +190,7 @@ pub extern "x86-interrupt" fn page_fault(frame: InterruptStackFrame, error_code:
     // Kernel-mode fault: diagnose and panic.
     // Try to identify the faulting region (non-blocking to avoid deadlock
     // if we faulted inside the VMM itself).
-    let region_info = crate::mm::vmm::try_with_vmm(|vmm| {
+    let region_info = crate::mm::vmm::try_with(|vmm| {
         let addr = crate::addr::VirtAddr::new_truncate(cr2);
         let layout = vmm.layout();
         let region = layout.identify_region(addr);

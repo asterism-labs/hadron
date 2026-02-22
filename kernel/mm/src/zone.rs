@@ -10,7 +10,7 @@ use hadron_core::sync::SpinLock;
 
 use crate::FrameAllocator;
 use crate::hhdm;
-use crate::pmm::{BitmapFrameAllocRef, with_pmm};
+use crate::pmm::{BitmapFrameAllocRef, with};
 
 const NUM_ZONES: usize = 8;
 const ZONE_SIZES: [usize; NUM_ZONES] = [32, 64, 128, 256, 512, 1024, 2048, 4096];
@@ -75,7 +75,7 @@ impl Zone {
 
     /// Allocates a new page from the PMM and carves it into blocks.
     fn grow(&mut self) -> Result<(), ZoneAllocError> {
-        with_pmm(|pmm| {
+        with(|pmm| {
             let mut alloc = BitmapFrameAllocRef(pmm);
             let frame = alloc.allocate_frame().ok_or(ZoneAllocError::OutOfMemory)?;
 

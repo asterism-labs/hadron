@@ -56,7 +56,7 @@ pub fn match_pci_drivers(devices: &[PciDeviceInfo]) {
                     match (entry.probe)(ctx) {
                         Ok(registration) => {
                             crate::kprintln!("PCI: driver '{}' probe OK", entry.name);
-                            crate::drivers::device_registry::with_device_registry_mut(|dr| {
+                            crate::drivers::device_registry::DeviceRegistry::with_mut(|dr| {
                                 dr.register_driver(
                                     entry.name,
                                     registration.devices,
@@ -98,7 +98,7 @@ pub fn match_platform_drivers(devices: &[crate::driver_api::acpi_device::AcpiDev
                 match (entry.probe)(ctx) {
                     Ok(registration) => {
                         crate::kprintln!("Platform: driver '{}' probe OK", entry.name);
-                        crate::drivers::device_registry::with_device_registry_mut(|dr| {
+                        crate::drivers::device_registry::DeviceRegistry::with_mut(|dr| {
                             dr.register_driver(
                                 entry.name,
                                 registration.devices,

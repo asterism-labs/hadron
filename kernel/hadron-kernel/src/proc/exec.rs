@@ -37,7 +37,7 @@ const SYS_TASK_SIGRETURN_NR: u64 = {
 ///
 /// Called by `AddressSpace::Drop` to free the PML4 frame.
 fn dealloc_frame(frame: PhysFrame<Size4KiB>) {
-    crate::mm::pmm::with_pmm(|pmm| {
+    crate::mm::pmm::with(|pmm| {
         let mut dealloc = BitmapFrameAllocRef(pmm);
         // SAFETY: The frame was allocated by BitmapFrameAllocRef and is no
         // longer referenced by any page table (the address space is being dropped).
@@ -74,12 +74,12 @@ pub fn create_process_from_binary(
     // Use the saved kernel CR3 — not Cr3::read() — because this function may
     // be called from a syscall handler where CR3 is the calling process's
     // user page table, not the kernel's.
-    let kernel_cr3 = super::kernel_cr3();
+    let kernel_cr3 = super::TrapContext::kernel_cr3();
     let hhdm_offset = crate::mm::hhdm::offset();
     let mapper = KernelMapper::new(hhdm_offset);
 
     // Create address space and map segments + stack inside PMM lock scope.
-    let process = crate::mm::pmm::with_pmm(|pmm| -> Result<Process, BinaryError> {
+    let process = crate::mm::pmm::with(|pmm| -> Result<Process, BinaryError> {
         let mut alloc = BitmapFrameAllocRef(pmm);
 
         // Create a new user address space (copies kernel upper half).
@@ -516,7 +516,7 @@ pub fn spawn_process(
             vfs.resolve("/dev/console")
                 .expect("spawn_process: /dev/console not found")
         });
-        let parent = super::lookup_process(parent_pid).expect("spawn_process: parent not found");
+        let parent = super::ProcessTable::lookup(parent_pid).expect("spawn_process: parent not found");
         let parent_fds = parent.fd_table.lock();
         let mut fd_table = process.fd_table.lock();
         for &fd in &[
@@ -538,7 +538,7 @@ pub fn spawn_process(
     }
 
     let process = Arc::new(process);
-    super::register_process(&process);
+    super::ProcessTable::register(&process);
 
     kinfo!(
         "Process {}: spawning child of {} (entry={:#x}, stack={:#x})",

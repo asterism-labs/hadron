@@ -52,14 +52,15 @@ static mut SYSCALL_STACK: AlignedStack = AlignedStack([0; EARLY_SYSCALL_STACK_SI
 /// - offset 48: `trap_reason_ptr`
 /// - offset 56: `saved_regs_ptr`
 ///
-/// Each CPU's GS base points to its own `PerCpu` instance. `current_cpu()`
-/// reads `GS:[0]` to get the self-pointer, avoiding global statics.
+/// Each CPU's GS base points to its own `PerCpu` instance.
+/// `PerCpuState::current()` reads `GS:[0]` to get the self-pointer,
+/// avoiding global statics.
 #[repr(C)]
 pub struct PerCpu {
     /// Self-pointer for `GS:[0]` access pattern (offset 0).
     ///
     /// Set during init to point to this struct's own address.
-    /// Allows `current_cpu()` to read `GS:[0]` instead of using a global.
+    /// Allows `PerCpuState::current()` to read `GS:[0]` instead of using a global.
     pub self_ptr: u64,
     /// Saved kernel RSP for syscall stack switching (offset 8).
     pub kernel_rsp: u64,
@@ -139,35 +140,40 @@ static mut BSP_PERCPU: PerCpu = PerCpu::new();
 /// Number of online CPUs.
 static CPU_COUNT: AtomicU32 = AtomicU32::new(1);
 
-/// Returns the number of online CPUs.
-pub fn cpu_count() -> u32 {
-    CPU_COUNT.load(Ordering::Acquire)
-}
+/// Zero-sized facade for per-CPU state queries.
+pub struct PerCpuState;
 
-/// Sets the number of online CPUs.
-pub fn set_cpu_count(count: u32) {
-    CPU_COUNT.store(count, Ordering::Release);
-}
+impl PerCpuState {
+    /// Returns the number of online CPUs.
+    pub fn cpu_count() -> u32 {
+        CPU_COUNT.load(Ordering::Acquire)
+    }
 
-/// Returns a reference to the current CPU's per-CPU data.
-///
-/// Reads the self-pointer from `GS:[0]`, which was set during CPU init.
-#[cfg(target_arch = "x86_64")]
-pub fn current_cpu() -> &'static PerCpu {
-    unsafe {
-        let ptr: u64;
-        // SAFETY: GS:[0] contains the self_ptr field, which points to the
-        // PerCpu struct itself. This was set during init_gs_base (BSP) or
-        // AP bootstrap. The read is lock-free and always valid after init.
-        core::arch::asm!("mov {}, gs:[0]", out(reg) ptr, options(readonly, nostack));
-        &*(ptr as *const PerCpu)
+    /// Sets the number of online CPUs.
+    pub fn set_cpu_count(count: u32) {
+        CPU_COUNT.store(count, Ordering::Release);
+    }
+
+    /// Returns a reference to the current CPU's per-CPU data.
+    ///
+    /// Reads the self-pointer from `GS:[0]`, which was set during CPU init.
+    #[cfg(target_arch = "x86_64")]
+    pub fn current() -> &'static PerCpu {
+        unsafe {
+            let ptr: u64;
+            // SAFETY: GS:[0] contains the self_ptr field, which points to the
+            // PerCpu struct itself. This was set during init_gs_base (BSP) or
+            // AP bootstrap. The read is lock-free and always valid after init.
+            core::arch::asm!("mov {}, gs:[0]", out(reg) ptr, options(readonly, nostack));
+            &*(ptr as *const PerCpu)
+        }
     }
 }
 
 /// Initializes GS-base MSRs to point to the BSP per-CPU data.
 ///
 /// Sets both `IA32_GS_BASE` and `IA32_KERNEL_GS_BASE` to `&BSP_PERCPU`.
-/// Also sets the `self_ptr` field so `current_cpu()` works via `GS:[0]`.
+/// Also sets the `self_ptr` field so `PerCpuState::current()` works via `GS:[0]`.
 ///
 /// Also initializes `kernel_rsp` to the top of the dedicated syscall stack.
 ///
@@ -229,7 +235,7 @@ impl<T> CpuLocal<T> {
     /// Returns a reference to the current CPU's instance.
     #[cfg(target_arch = "x86_64")]
     pub fn get(&self) -> &T {
-        &self.data[current_cpu().get_cpu_id().as_u32() as usize]
+        &self.data[PerCpuState::current().get_cpu_id().as_u32() as usize]
     }
 
     /// Host-only fallback: always returns CPU 0's instance.

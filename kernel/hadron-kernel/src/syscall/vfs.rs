@@ -39,7 +39,7 @@ pub(super) fn sys_vnode_open(path_ptr: usize, path_len: usize, flags: usize) -> 
     };
 
     // Allocate fd in the current process's fd table.
-    let fd = crate::proc::with_current_process(|process| {
+    let fd = crate::proc::ProcessTable::with_current(|process| {
         let mut fd_table = process.fd_table.lock();
         fd_table.open(inode, open_flags)
     });
@@ -73,7 +73,7 @@ pub(super) fn sys_vnode_read(fd: usize, buf_ptr: usize, buf_len: usize) -> isize
     // Extract inode and offset from fd table, then release the process lock
     // before performing I/O. This is critical: trap_io() does a longjmp and
     // must never be called while holding the CURRENT_PROCESS spinlock.
-    let (inode, offset) = match crate::proc::with_current_process(|process| {
+    let (inode, offset) = match crate::proc::ProcessTable::with_current(|process| {
         let fd_table = process.fd_table.lock();
         let Some(file) = fd_table.get(fd) else {
             return Err(-crate::syscall::EBADF);
@@ -92,7 +92,7 @@ pub(super) fn sys_vnode_read(fd: usize, buf_ptr: usize, buf_len: usize) -> isize
     match try_poll_immediate(inode.read(offset, buf)) {
         Some(Ok(n)) => {
             // Re-acquire to update offset.
-            crate::proc::with_current_process(|process| {
+            crate::proc::ProcessTable::with_current(|process| {
                 let mut fd_table = process.fd_table.lock();
                 if let Some(f) = fd_table.get_mut(fd) {
                     f.offset += n;
@@ -135,7 +135,7 @@ pub(super) fn sys_vnode_write(fd: usize, buf_ptr: usize, buf_len: usize) -> isiz
     // Extract inode and offset from fd table, then release the process lock
     // before performing I/O. This is critical: trap_io() does a longjmp and
     // must never be called while holding the CURRENT_PROCESS spinlock.
-    let (inode, offset) = match crate::proc::with_current_process(|process| {
+    let (inode, offset) = match crate::proc::ProcessTable::with_current(|process| {
         let fd_table = process.fd_table.lock();
         let Some(file) = fd_table.get(fd) else {
             return Err(-crate::syscall::EBADF);
@@ -154,7 +154,7 @@ pub(super) fn sys_vnode_write(fd: usize, buf_ptr: usize, buf_len: usize) -> isiz
     match try_poll_immediate(inode.write(offset, buf)) {
         Some(Ok(n)) => {
             // Re-acquire to update offset.
-            crate::proc::with_current_process(|process| {
+            crate::proc::ProcessTable::with_current(|process| {
                 let mut fd_table = process.fd_table.lock();
                 if let Some(f) = fd_table.get_mut(fd) {
                     f.offset += n;
@@ -179,7 +179,7 @@ pub(super) fn sys_vnode_write(fd: usize, buf_ptr: usize, buf_len: usize) -> isiz
 /// Returns 0 on success, or a negative errno on failure.
 pub(super) fn sys_handle_close(fd: usize) -> isize {
     let fd = Fd::new(fd as u32);
-    crate::proc::with_current_process(|process| {
+    crate::proc::ProcessTable::with_current(|process| {
         let mut fd_table = process.fd_table.lock();
         match fd_table.close(fd) {
             Ok(()) => 0,
@@ -202,7 +202,7 @@ pub(super) fn sys_handle_close(fd: usize) -> isize {
 pub(super) fn sys_handle_dup(old_fd: usize, new_fd: usize) -> isize {
     let old_fd = Fd::new(old_fd as u32);
     let new_fd = Fd::new(new_fd as u32);
-    crate::proc::with_current_process(|process| {
+    crate::proc::ProcessTable::with_current(|process| {
         let mut fd_table = process.fd_table.lock();
         let Some(src) = fd_table.get(old_fd) else {
             return -crate::syscall::EBADF;
@@ -239,7 +239,7 @@ pub(super) fn sys_vnode_stat(fd: usize, buf_ptr: usize, buf_len: usize) -> isize
         return -EFAULT;
     };
 
-    crate::proc::with_current_process(|process| {
+    crate::proc::ProcessTable::with_current(|process| {
         let fd_table = process.fd_table.lock();
         let Some(file) = fd_table.get(fd) else {
             return -crate::syscall::EBADF;
@@ -295,7 +295,7 @@ pub(super) fn sys_handle_pipe(fds_ptr: usize) -> isize {
 
     let (reader, writer) = crate::ipc::pipe::pipe();
 
-    let (read_fd, write_fd) = crate::proc::with_current_process(|process| {
+    let (read_fd, write_fd) = crate::proc::ProcessTable::with_current(|process| {
         let mut fd_table = process.fd_table.lock();
         let rfd = fd_table.open(reader, OpenFlags::READ);
         let wfd = fd_table.open(writer, OpenFlags::WRITE);
@@ -340,7 +340,7 @@ pub(super) fn sys_vnode_readdir(fd: usize, buf_ptr: usize, buf_len: usize) -> is
         return -EFAULT;
     };
 
-    crate::proc::with_current_process(|process| {
+    crate::proc::ProcessTable::with_current(|process| {
         let fd_table = process.fd_table.lock();
         let Some(file) = fd_table.get(fd) else {
             return -crate::syscall::EBADF;
@@ -430,7 +430,7 @@ fn trap_io(fd: Fd, buf_ptr: usize, buf_len: usize, is_write: bool) -> ! {
     use crate::arch::x86_64::registers::model_specific::{IA32_GS_BASE, IA32_KERNEL_GS_BASE};
     use crate::arch::x86_64::userspace::restore_kernel_context;
 
-    let kernel_cr3 = crate::proc::kernel_cr3();
+    let kernel_cr3 = crate::proc::TrapContext::kernel_cr3();
 
     // SAFETY: Restoring kernel CR3 and GS bases is the standard pattern
     // for returning from userspace context to kernel context.
@@ -440,10 +440,10 @@ fn trap_io(fd: Fd, buf_ptr: usize, buf_len: usize, is_write: bool) -> ! {
         IA32_KERNEL_GS_BASE.write(percpu);
     }
 
-    crate::proc::set_io_params(fd, buf_ptr, buf_len, is_write);
-    crate::proc::set_trap_reason(crate::proc::TrapReason::Io);
+    crate::proc::IoState::set_params(fd, buf_ptr, buf_len, is_write);
+    crate::proc::TrapContext::set_trap_reason(crate::proc::TrapReason::Io);
 
-    let saved_rsp = crate::proc::saved_kernel_rsp();
+    let saved_rsp = crate::proc::TrapContext::saved_kernel_rsp();
     // SAFETY: saved_rsp is the kernel RSP saved by enter_userspace_save,
     // still valid on the executor stack.
     unsafe {

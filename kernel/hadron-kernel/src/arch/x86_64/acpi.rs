@@ -93,68 +93,76 @@ pub struct EcamInfo {
     pub end_bus: u8,
 }
 
-/// Runs a closure with access to the ACPI namespace, if available.
-pub fn with_namespace<R>(f: impl FnOnce(&Namespace) -> R) -> Option<R> {
-    let lock = ACPI_NAMESPACE.lock();
-    let ns = lock.as_ref()?;
-    Some(f(ns))
-}
-
-/// Runs a closure with access to the ECAM info, if available.
-pub fn with_ecam<R>(f: impl FnOnce(&EcamInfo) -> R) -> Option<R> {
-    let lock = ECAM_INFO.lock();
-    let info = lock.as_ref()?;
-    Some(f(info))
-}
-
-/// Sends LAPIC EOI if the LAPIC has been initialized.
+/// Zero-sized facade type for ACPI platform services.
 ///
-/// Called by the interrupt dispatch subsystem after every hardware interrupt.
-/// Reads the cached `LAPIC_BASE` atomic — no lock, EOI is never dropped.
-pub fn send_lapic_eoi() {
-    let base = LAPIC_BASE.load(Ordering::Acquire);
-    if base != 0 {
-        // SAFETY: The LAPIC was mapped during init and the mapping is permanent.
-        let lapic = unsafe { LocalApic::new(VirtAddr::new(base)) };
-        lapic.eoi();
+/// Groups the public query/accessor functions as associated functions on a
+/// single type, keeping the module namespace clean.
+pub struct Acpi;
+
+impl Acpi {
+    /// Runs a closure with access to the ACPI namespace, if available.
+    pub fn with_namespace<R>(f: impl FnOnce(&Namespace) -> R) -> Option<R> {
+        let lock = ACPI_NAMESPACE.lock();
+        let ns = lock.as_ref()?;
+        Some(f(ns))
     }
-}
 
-/// Returns the LAPIC timer configuration (initial_count, divide) from BSP calibration.
-///
-/// APs use this to start their periodic timers with the same interval.
-/// Returns `(0, 0)` if the timer has not been calibrated yet.
-pub fn lapic_timer_config() -> (u32, u8) {
-    (
-        LAPIC_TIMER_INITIAL_COUNT.load(Ordering::Acquire),
-        LAPIC_TIMER_DIVIDE.load(Ordering::Acquire),
-    )
-}
-
-/// Returns the LAPIC virtual base address, if initialized.
-///
-/// Reads the cached `LAPIC_BASE` atomic — no lock required.
-/// All CPUs share the same virtual address for LAPIC MMIO; the hardware
-/// routes each access to the requesting CPU's local APIC.
-pub fn lapic_virt() -> Option<VirtAddr> {
-    let base = LAPIC_BASE.load(Ordering::Acquire);
-    if base != 0 {
-        Some(VirtAddr::new(base))
-    } else {
-        None
+    /// Runs a closure with access to the ECAM info, if available.
+    pub fn with_ecam<R>(f: impl FnOnce(&EcamInfo) -> R) -> Option<R> {
+        let lock = ECAM_INFO.lock();
+        let info = lock.as_ref()?;
+        Some(f(info))
     }
-}
 
-/// Runs a closure with a reference to the I/O APIC, if initialized.
-///
-/// Reconstructs the `IoApic` from the stored virtual base address. Drivers use
-/// this to unmask their IRQ lines after binding a handler.
-pub fn with_io_apic<R>(f: impl FnOnce(&IoApic) -> R) -> Option<R> {
-    let lock = PLATFORM.lock();
-    let state = lock.as_ref()?;
-    // SAFETY: The I/O APIC was mapped during init and the mapping is permanent.
-    let ioapic = unsafe { IoApic::new(state.io_apic_base, state.gsi_base) };
-    Some(f(&ioapic))
+    /// Sends LAPIC EOI if the LAPIC has been initialized.
+    ///
+    /// Called by the interrupt dispatch subsystem after every hardware interrupt.
+    /// Reads the cached `LAPIC_BASE` atomic — no lock, EOI is never dropped.
+    pub fn send_lapic_eoi() {
+        let base = LAPIC_BASE.load(Ordering::Acquire);
+        if base != 0 {
+            // SAFETY: The LAPIC was mapped during init and the mapping is permanent.
+            let lapic = unsafe { LocalApic::new(VirtAddr::new(base)) };
+            lapic.eoi();
+        }
+    }
+
+    /// Returns the LAPIC timer configuration (initial_count, divide) from BSP calibration.
+    ///
+    /// APs use this to start their periodic timers with the same interval.
+    /// Returns `(0, 0)` if the timer has not been calibrated yet.
+    pub fn lapic_timer_config() -> (u32, u8) {
+        (
+            LAPIC_TIMER_INITIAL_COUNT.load(Ordering::Acquire),
+            LAPIC_TIMER_DIVIDE.load(Ordering::Acquire),
+        )
+    }
+
+    /// Returns the LAPIC virtual base address, if initialized.
+    ///
+    /// Reads the cached `LAPIC_BASE` atomic — no lock required.
+    /// All CPUs share the same virtual address for LAPIC MMIO; the hardware
+    /// routes each access to the requesting CPU's local APIC.
+    pub fn lapic_virt() -> Option<VirtAddr> {
+        let base = LAPIC_BASE.load(Ordering::Acquire);
+        if base != 0 {
+            Some(VirtAddr::new(base))
+        } else {
+            None
+        }
+    }
+
+    /// Runs a closure with a reference to the I/O APIC, if initialized.
+    ///
+    /// Reconstructs the `IoApic` from the stored virtual base address. Drivers use
+    /// this to unmask their IRQ lines after binding a handler.
+    pub fn with_io_apic<R>(f: impl FnOnce(&IoApic) -> R) -> Option<R> {
+        let lock = PLATFORM.lock();
+        let state = lock.as_ref()?;
+        // SAFETY: The I/O APIC was mapped during init and the mapping is permanent.
+        let ioapic = unsafe { IoApic::new(state.io_apic_base, state.gsi_base) };
+        Some(f(&ioapic))
+    }
 }
 
 /// Combined timer tick + LAPIC EOI for the custom timer preemption stub.
@@ -164,13 +172,13 @@ pub fn with_io_apic<R>(f: impl FnOnce(&IoApic) -> R) -> Option<R> {
 /// preempt flag) and sends LAPIC EOI.
 pub(crate) extern "C" fn timer_tick_and_eoi() {
     timer_handler(vectors::TIMER.as_irq_vector());
-    send_lapic_eoi();
+    Acpi::send_lapic_eoi();
 }
 
 /// LAPIC timer interrupt handler.
 fn timer_handler(_vector: IrqVector) {
     // Wake tasks whose sleep deadline has expired.
-    crate::sched::timer::wake_expired(crate::time::timer_ticks());
+    crate::sched::timer::wake_expired(crate::time::Time::timer_ticks());
 
     // Signal the executor to rotate to the next task.
     crate::sched::set_preempt_pending();
@@ -553,7 +561,7 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
 
     // Initialize per-CPU state
     let apic_id = lapic.id();
-    crate::percpu::current_cpu().init(crate::id::CpuId::new(0), apic_id);
+    crate::percpu::PerCpuState::current().init(crate::id::CpuId::new(0), apic_id);
     crate::sched::smp::register_cpu_apic_id(crate::id::CpuId::new(0), apic_id);
 
     crate::kinfo!(
@@ -630,7 +638,7 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
         hpet.enable();
 
         // Initialize global time source from HPET — timestamps become real after this.
-        crate::time::init_hpet(hpet_virt, hpet.period_fs());
+        crate::time::Time::init_hpet(hpet_virt, hpet.period_fs());
 
         crate::kinfo!(
             "HPET: Enabled, {} Hz, {} comparators",
@@ -645,7 +653,7 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
 
     // --- 6b. Register HPET as global ClockSource ---
     if let Some(hpet) = hpet {
-        crate::time::register_hpet(hpet);
+        crate::time::Time::register_hpet(hpet);
     }
 
     // Note: Interrupts are NOT enabled here. The caller (kernel_init) enables

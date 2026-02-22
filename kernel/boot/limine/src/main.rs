@@ -76,7 +76,7 @@ extern "C" fn _start() -> ! {
     let serial = hadron_drivers::uart16550::Uart16550::new(hadron_drivers::uart16550::COM1);
     unsafe { serial.init(hadron_drivers::uart16550::BaudRate::Baud115200) }
         .expect("COM1 init failed");
-    hadron_kernel::log::init_early_serial();
+    hadron_kernel::log::Log::init_early_serial();
 
     // 2. Assert base revision is supported.
     assert!(REQUESTS.base_revision.is_supported());

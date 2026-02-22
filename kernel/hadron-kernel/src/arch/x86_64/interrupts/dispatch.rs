@@ -158,7 +158,7 @@ extern "C" fn dispatch_interrupt(vector: u8) {
     // during boot. If the LAPIC hasn't been initialized yet, skip EOI
     // (shouldn't happen in practice since interrupts are only enabled
     // after LAPIC init).
-    crate::arch::x86_64::acpi::send_lapic_eoi();
+    crate::arch::x86_64::acpi::Acpi::send_lapic_eoi();
 }
 
 // We generate stubs with a function array indexed by vector offset (0-223 → vectors 32-255).

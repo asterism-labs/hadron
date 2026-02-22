@@ -67,7 +67,7 @@ fn ipi_wake_handler(_vector: crate::id::IrqVector) {}
 /// and poll any newly enqueued tasks.
 pub fn send_wake_ipi(target_cpu: CpuId) {
     let target_apic_id = CPU_APIC_IDS[target_cpu.as_u32() as usize].load(Ordering::Acquire);
-    if let Some(lapic_virt) = crate::arch::x86_64::acpi::lapic_virt() {
+    if let Some(lapic_virt) = crate::arch::x86_64::acpi::Acpi::lapic_virt() {
         // SAFETY: The LAPIC is mapped and permanent. The target APIC ID was
         // registered during bootstrap. IPI_WAKE_VECTOR has a registered
         // handler (no-op) so the interrupt will be handled normally.
@@ -97,14 +97,14 @@ pub(crate) fn try_steal() -> Option<StealResult> {
 
     #[cfg(not(hadron_no_work_steal))]
     {
-        let local_cpu = crate::percpu::current_cpu().get_cpu_id();
-        let cpu_count = crate::percpu::cpu_count();
+        let local_cpu = crate::percpu::PerCpuState::current().get_cpu_id();
+        let cpu_count = crate::percpu::PerCpuState::cpu_count();
         if cpu_count <= 1 {
             return None;
         }
 
         // Pseudo-random start offset to distribute stealing pressure.
-        let start = (crate::time::timer_ticks() as u32) % cpu_count;
+        let start = (crate::time::Time::timer_ticks() as u32) % cpu_count;
 
         for i in 1..cpu_count {
             let target = CpuId::new((start + i) % cpu_count);
@@ -140,7 +140,7 @@ pub fn panic_halt_other_cpus() {
         }
     }
 
-    if let Some(lapic_virt) = crate::arch::x86_64::acpi::lapic_virt() {
+    if let Some(lapic_virt) = crate::arch::x86_64::acpi::Acpi::lapic_virt() {
         // SAFETY: The LAPIC is mapped and permanent. NMI delivery is always
         // safe — it cannot be masked, so all CPUs will receive it.
         let lapic = unsafe { LocalApic::new(lapic_virt) };

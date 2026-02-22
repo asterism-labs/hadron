@@ -215,7 +215,7 @@ pub fn boot_aps(boot_info: &impl BootInfo) {
     }
 
     let ready = AP_READY_COUNT.load(Ordering::Acquire);
-    crate::percpu::set_cpu_count(1 + ready);
+    crate::percpu::PerCpuState::set_cpu_count(1 + ready);
     kinfo!("SMP: {} APs online ({} total CPUs)", ready, 1 + ready);
 }
 
@@ -301,7 +301,7 @@ fn ap_entry(_mp_info: u64, percpu_addr: u64) -> ! {
 fn init_ap_lapic(cpu_id: CpuId) {
     use crate::arch::x86_64::interrupts::dispatch::vectors;
 
-    let lapic_virt = super::acpi::lapic_virt().expect("AP bootstrap: LAPIC not initialized by BSP");
+    let lapic_virt = super::acpi::Acpi::lapic_virt().expect("AP bootstrap: LAPIC not initialized by BSP");
 
     // SAFETY: lapic_virt was mapped by BSP and is valid for this CPU's LAPIC.
     let lapic = unsafe { LocalApic::new(lapic_virt) };
@@ -309,7 +309,7 @@ fn init_ap_lapic(cpu_id: CpuId) {
     lapic.set_tpr(0);
 
     // Start periodic timer using BSP's calibrated values.
-    let (initial_count, divide) = super::acpi::lapic_timer_config();
+    let (initial_count, divide) = super::acpi::Acpi::lapic_timer_config();
     if initial_count > 0 {
         lapic.start_timer_periodic(vectors::TIMER.as_irq_vector(), initial_count, divide);
         kdebug!(

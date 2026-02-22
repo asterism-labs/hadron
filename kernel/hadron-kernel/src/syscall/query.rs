@@ -83,7 +83,7 @@ fn write_response<T>(out_buf: usize, out_len: usize, value: &T) -> isize {
 /// Handle `QUERY_MEMORY`: return physical memory statistics.
 fn query_memory(out_buf: usize, out_len: usize) -> isize {
     let (total_frames, free_frames) =
-        crate::mm::pmm::with_pmm(|pmm| (pmm.total_frames(), pmm.free_frames()));
+        crate::mm::pmm::with(|pmm| (pmm.total_frames(), pmm.free_frames()));
 
     let info = MemoryInfo {
         total_bytes: (total_frames * PAGE_SIZE) as u64,
@@ -97,7 +97,7 @@ fn query_memory(out_buf: usize, out_len: usize) -> isize {
 /// Handle `QUERY_UPTIME`: return nanoseconds since boot.
 fn query_uptime(out_buf: usize, out_len: usize) -> isize {
     let info = UptimeInfo {
-        uptime_ns: crate::time::boot_nanos(),
+        uptime_ns: crate::time::Time::boot_nanos(),
     };
 
     write_response(out_buf, out_len, &info)

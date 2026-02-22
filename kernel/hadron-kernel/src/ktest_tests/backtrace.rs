@@ -8,7 +8,7 @@ use hadron_ktest::kernel_test;
 #[kernel_test(stage = "early_boot", timeout = 5)]
 fn test_backtrace_captures_frames() {
     let mut output = String::new();
-    crate::backtrace::panic_backtrace(&mut output);
+    crate::backtrace::Backtrace::panic_backtrace(&mut output);
     // Frame walking should capture at least one frame (this test function
     // plus the test runner are on the call stack with frame pointers).
     assert!(
@@ -20,7 +20,7 @@ fn test_backtrace_captures_frames() {
 #[kernel_test(stage = "early_boot", timeout = 5)]
 fn test_backtrace_symbolicated() {
     let mut output = String::new();
-    crate::backtrace::panic_backtrace(&mut output);
+    crate::backtrace::Backtrace::panic_backtrace(&mut output);
     assert!(
         output.contains(" - "),
         "Expected symbolicated frames (containing ' - '), got: {output}"
@@ -39,7 +39,7 @@ fn nested_b(output: &mut String) {
 
 #[inline(never)]
 fn nested_c(output: &mut String) {
-    crate::backtrace::panic_backtrace(output);
+    crate::backtrace::Backtrace::panic_backtrace(output);
 }
 
 #[kernel_test(stage = "early_boot", timeout = 5)]

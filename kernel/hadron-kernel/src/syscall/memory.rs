@@ -8,9 +8,9 @@
 use crate::addr::VirtAddr;
 use crate::mm::PAGE_SIZE;
 use crate::mm::mapper::MapFlags;
-use crate::mm::pmm::{BitmapFrameAllocRef, with_pmm};
+use crate::mm::pmm::{self, BitmapFrameAllocRef};
 use crate::paging::{Page, Size4KiB};
-use crate::proc::with_current_process;
+use crate::proc::ProcessTable;
 use crate::syscall::{EINVAL, ENOSYS};
 
 /// Page-align `size` upward (round to next 4 KiB boundary).
@@ -55,7 +55,7 @@ pub(super) fn sys_mem_map(_addr_hint: usize, length: usize, prot: usize, flags: 
     let _ = prot & PROT_READ;
 
     // Allocate virtual region from the process's mmap allocator.
-    let vaddr = with_current_process(|process| {
+    let vaddr = ProcessTable::with_current(|process| {
         let mut mmap = process.mmap_alloc.lock();
         mmap.allocate(aligned_length as u64)
     });
@@ -67,8 +67,8 @@ pub(super) fn sys_mem_map(_addr_hint: usize, length: usize, prot: usize, flags: 
 
     // Allocate physical frames and map pages.
     let hhdm_offset = crate::mm::hhdm::offset();
-    let map_result = with_current_process(|process| {
-        with_pmm(|pmm| {
+    let map_result = ProcessTable::with_current(|process| {
+        pmm::with(|pmm| {
             let mut alloc = BitmapFrameAllocRef(pmm);
             for i in 0..page_count {
                 let page_vaddr = base_vaddr.as_u64() + (i as u64) * PAGE_SIZE as u64;
@@ -118,9 +118,9 @@ pub(super) fn sys_mem_unmap(addr: usize, length: usize) -> isize {
     let page_count = aligned_length / PAGE_SIZE;
     let base = VirtAddr::new(addr as u64);
 
-    with_current_process(|process| {
+    ProcessTable::with_current(|process| {
         // Unmap pages and free physical frames.
-        with_pmm(|pmm| {
+        pmm::with(|pmm| {
             for i in 0..page_count {
                 let page_vaddr = base.as_u64() + (i as u64) * PAGE_SIZE as u64;
                 let page = Page::<Size4KiB>::containing_address(VirtAddr::new(page_vaddr));

@@ -336,7 +336,7 @@ pub fn init() {
     dispatch::register_handler(vector, keyboard_irq_handler)
         .expect("tty: failed to register keyboard IRQ handler");
 
-    crate::arch::x86_64::acpi::with_io_apic(|ioapic| ioapic.unmask(1));
+    crate::arch::x86_64::acpi::Acpi::with_io_apic(|ioapic| ioapic.unmask(1));
 
     crate::kinfo!("TTY: keyboard IRQ1 enabled (vector {}), tty0 active", vector);
 }

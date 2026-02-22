@@ -116,9 +116,9 @@ async fn test_priority_ordering() {
 
 #[kernel_test(stage = "with_executor", timeout = 10)]
 async fn test_sleep_ticks() {
-    let before = crate::time::timer_ticks();
+    let before = crate::time::Time::timer_ticks();
     crate::sched::primitives::sleep_ticks(5).await;
-    let after = crate::time::timer_ticks();
+    let after = crate::time::Time::timer_ticks();
     assert!(
         after >= before + 5,
         "expected at least 5 ticks elapsed, got {} -> {} (delta {})",

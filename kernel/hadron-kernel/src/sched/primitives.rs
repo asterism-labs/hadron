@@ -11,7 +11,7 @@ use core::task::{Context, Poll};
 
 /// Sleeps for at least `ticks` timer ticks (1 tick = 1ms at 1kHz).
 pub async fn sleep_ticks(ticks: u64) {
-    let deadline = crate::time::timer_ticks() + ticks;
+    let deadline = crate::time::Time::timer_ticks() + ticks;
     SleepFuture { deadline }.await;
 }
 
@@ -28,7 +28,7 @@ impl Future for SleepFuture {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        if crate::time::timer_ticks() >= self.deadline {
+        if crate::time::Time::timer_ticks() >= self.deadline {
             Poll::Ready(())
         } else {
             crate::sched::timer::register_sleep_waker(self.deadline, cx.waker().clone());

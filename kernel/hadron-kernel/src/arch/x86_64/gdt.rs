@@ -173,8 +173,8 @@ pub unsafe fn init_ap(cpu_id: crate::id::CpuId) -> u64 {
     let mut tss = TaskStateSegment::new();
 
     // Allocate double-fault IST stack and kernel stack via VMM.
-    let (df_stack_top, kernel_stack_top) = crate::mm::vmm::with_vmm(|vmm| {
-        crate::mm::pmm::with_pmm(|pmm| {
+    let (df_stack_top, kernel_stack_top) = crate::mm::vmm::with(|vmm| {
+        crate::mm::pmm::with(|pmm| {
             let mut alloc = BitmapFrameAllocRef(pmm);
             let df_stack = vmm
                 .alloc_kernel_stack(&mut alloc, None)

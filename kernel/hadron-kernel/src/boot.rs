@@ -331,11 +331,11 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
     crate::mm::mapper::register_tlb_flush(crate::arch::x86_64::instructions::tlb::flush);
 
     // 2b. Initialize backtrace support from embedded HKIF data.
-    crate::backtrace::init_from_embedded(boot_info.kernel_address().virtual_base.as_u64());
+    crate::backtrace::Backtrace::init_from_embedded(boot_info.kernel_address().virtual_base.as_u64());
 
     // 3. Initialize PMM (bitmap from memory map).
     crate::mm::pmm::init(boot_info);
-    let (free, total) = crate::mm::pmm::with_pmm(|pmm| (pmm.free_frames(), pmm.total_frames()));
+    let (free, total) = crate::mm::pmm::with(|pmm| (pmm.free_frames(), pmm.total_frames()));
     crate::kinfo!(
         "PMM: {} MiB free / {} MiB total",
         free * 4 / 1024,
@@ -349,8 +349,8 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
     // 4b. Allocate a guarded kernel syscall stack (replaces the early BSS stack).
     {
         use crate::mm::pmm::BitmapFrameAllocRef;
-        let (bottom, top, guard) = crate::mm::vmm::with_vmm(|vmm| {
-            crate::mm::pmm::with_pmm(|pmm| {
+        let (bottom, top, guard) = crate::mm::vmm::with(|vmm| {
+            crate::mm::pmm::with(|pmm| {
                 let mut alloc = BitmapFrameAllocRef(pmm);
                 let stack = vmm
                     .alloc_kernel_stack(&mut alloc, None)
@@ -389,15 +389,15 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
     crate::ktest::run_sync_stage(hadron_ktest::TestStage::EarlyBoot);
 
     // 5b. Initialize device registry (before driver probing).
-    crate::drivers::device_registry::init();
+    crate::drivers::device_registry::DeviceRegistry::init();
 
     // 6. Initialize the full logger (replaces early serial functions).
-    crate::log::init_logger();
+    crate::log::Log::init_logger();
 
     // 7. Register framebuffer sink if available.
     if let Some(fb_info) = boot_info.framebuffers().first() {
         if let Some(early_fb) = crate::drivers::early_fb::EarlyFramebuffer::new(fb_info) {
-            crate::log::add_sink(Box::new(crate::log::FramebufferSink::new(
+            crate::log::Log::add_sink(Box::new(crate::log::FramebufferSink::new(
                 early_fb,
                 crate::log::LogLevel::Info,
             )));
@@ -412,10 +412,10 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
     {
         hadron_core::sync::stress::init(
             crate::config::LOCK_STRESS_MAX_US,
-            crate::time::boot_nanos(),
+            crate::time::Time::boot_nanos(),
         );
         // SAFETY: `boot_nanos` is a lock-free function reading HPET via MMIO.
-        unsafe { hadron_core::sync::stress::set_nanos_fn(crate::time::boot_nanos) };
+        unsafe { hadron_core::sync::stress::set_nanos_fn(crate::time::Time::boot_nanos) };
         crate::kinfo!(
             "Lock stress delays enabled (max {}µs)",
             crate::config::LOCK_STRESS_MAX_US
@@ -431,7 +431,7 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
     //    Each VT gets its own FbCon with an independent cell buffer; only the
     //    active VT (tty0) renders to the physical framebuffer.
     #[cfg(target_arch = "x86_64")]
-    if let Some(fb) = crate::drivers::device_registry::with_device_registry(|dr| {
+    if let Some(fb) = crate::drivers::device_registry::DeviceRegistry::with(|dr| {
         dr.take_framebuffer("bochs-vga-0")
     }) {
         let info = fb.info();
@@ -452,7 +452,7 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
         let vt_sink = Box::new(crate::tty::VtConsoleSink::new(
             crate::log::LogLevel::Info,
         ));
-        if crate::log::replace_sink_by_name("framebuffer", vt_sink) {
+        if crate::log::Log::replace_sink_by_name("framebuffer", vt_sink) {
             crate::kinfo!("Switched display to per-VT fbcon (6 virtual terminals)");
         }
     }
@@ -563,14 +563,14 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
         let block_fs_entries = crate::drivers::registry::block_fs_entries();
 
         // VirtIO block → try registered block FS drivers at /mnt.
-        if let Some(disk) = crate::drivers::device_registry::with_device_registry_mut(|dr| {
+        if let Some(disk) = crate::drivers::device_registry::DeviceRegistry::with_mut(|dr| {
             dr.take_block_device("virtio-blk-0")
         }) {
             mount_block_device(disk, "/mnt", block_fs_entries, "virtio-blk-0");
         }
 
         // AHCI block → try registered block FS drivers at /cdrom.
-        if let Some(disk) = crate::drivers::device_registry::with_device_registry_mut(|dr| {
+        if let Some(disk) = crate::drivers::device_registry::DeviceRegistry::with_mut(|dr| {
             dr.take_block_device("ahci-0")
         }) {
             mount_block_device(disk, "/cdrom", block_fs_entries, "ahci-0");
@@ -580,20 +580,20 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
     // Initialize TTY subsystem (keyboard IRQ, line discipline).
     crate::tty::init();
 
-    crate::proc::save_kernel_cr3();
+    crate::proc::TrapContext::save_kernel_cr3();
 
     // Populate BSP per-CPU pointers for assembly stubs (timer, syscall).
     // These pointers let the naked ASM access per-CPU CpuLocal elements
     // via GS:[offset] instead of RIP-relative addressing.
     {
-        let percpu = crate::percpu::current_cpu();
+        let percpu = crate::percpu::PerCpuState::current();
         // SAFETY: We have exclusive BSP access during init. The pointers
         // are to static CpuLocal elements that live forever.
         unsafe {
             let percpu_mut = percpu as *const crate::percpu::PerCpu as *mut crate::percpu::PerCpu;
-            (*percpu_mut).user_context_ptr = crate::proc::user_context_ptr() as u64;
-            (*percpu_mut).saved_kernel_rsp_ptr = crate::proc::saved_kernel_rsp_ptr() as u64;
-            (*percpu_mut).trap_reason_ptr = crate::proc::trap_reason_ptr() as u64;
+            (*percpu_mut).user_context_ptr = crate::proc::TrapContext::user_context_ptr() as u64;
+            (*percpu_mut).saved_kernel_rsp_ptr = crate::proc::TrapContext::saved_kernel_rsp_ptr() as u64;
+            (*percpu_mut).trap_reason_ptr = crate::proc::TrapContext::trap_reason_ptr() as u64;
             (*percpu_mut).saved_regs_ptr =
                 crate::arch::x86_64::syscall::SYSCALL_SAVED_REGS.get().get() as u64;
         }

@@ -12,7 +12,7 @@ use crate::syscall::userptr::UserSlice;
 /// then calls `restore_kernel_context` to "return" from `enter_userspace_save`
 /// back into the process task on the executor.
 pub(super) fn sys_task_exit(status: usize) -> isize {
-    let kernel_cr3 = crate::proc::kernel_cr3();
+    let kernel_cr3 = crate::proc::TrapContext::kernel_cr3();
 
     unsafe {
         // Restore kernel address space.
@@ -24,9 +24,9 @@ pub(super) fn sys_task_exit(status: usize) -> isize {
     }
 
     // Store exit status and trap reason, then jump back to the process task.
-    crate::proc::set_process_exit_status(status as u64);
-    crate::proc::set_trap_reason(crate::proc::TrapReason::Exit);
-    let saved_rsp = crate::proc::saved_kernel_rsp();
+    crate::proc::TrapContext::set_exit_status(status as u64);
+    crate::proc::TrapContext::set_trap_reason(crate::proc::TrapReason::Exit);
+    let saved_rsp = crate::proc::TrapContext::saved_kernel_rsp();
 
     unsafe {
         restore_kernel_context(saved_rsp);
@@ -41,7 +41,7 @@ pub(super) fn sys_task_exit(status: usize) -> isize {
     reason = "PIDs are small u32 values, wrap is impossible"
 )]
 pub(super) fn sys_task_info() -> isize {
-    crate::proc::try_current_process(|process| process.pid.as_u32() as isize).unwrap_or(0)
+    crate::proc::ProcessTable::try_current(|process| process.pid.as_u32() as isize).unwrap_or(0)
 }
 
 /// Maximum number of arguments that can be passed to a spawned process.
@@ -199,7 +199,7 @@ pub(super) fn sys_task_spawn(info_ptr: usize, info_len: usize) -> isize {
     build_str_slice(&env_storage, &env_offsets, env_count, &mut env_strs);
     let envs = &env_strs[..env_count];
 
-    let parent_pid = crate::proc::with_current_process(|p| p.pid);
+    let parent_pid = crate::proc::ProcessTable::with_current(|p| p.pid);
 
     match crate::proc::exec::spawn_process(path, parent_pid, args, envs) {
         Ok(child) => child.pid.as_u32() as isize,
@@ -223,7 +223,7 @@ pub(super) fn sys_task_wait(pid: usize, status_ptr: usize) -> isize {
         }
     }
 
-    let kernel_cr3 = crate::proc::kernel_cr3();
+    let kernel_cr3 = crate::proc::TrapContext::kernel_cr3();
 
     // SAFETY: Restoring kernel CR3 and GS bases is the standard pattern
     // for returning from userspace context to kernel context (same as
@@ -236,10 +236,10 @@ pub(super) fn sys_task_wait(pid: usize, status_ptr: usize) -> isize {
 
     // Set up wait parameters for process_task to read.
     #[expect(clippy::cast_possible_truncation, reason = "PID fits in u32")]
-    crate::proc::set_wait_params(crate::id::Pid::new(pid as u32), status_ptr as u64);
-    crate::proc::set_trap_reason(crate::proc::TrapReason::Wait);
+    crate::proc::WaitState::set_params(crate::id::Pid::new(pid as u32), status_ptr as u64);
+    crate::proc::TrapContext::set_trap_reason(crate::proc::TrapReason::Wait);
 
-    let saved_rsp = crate::proc::saved_kernel_rsp();
+    let saved_rsp = crate::proc::TrapContext::saved_kernel_rsp();
     // SAFETY: saved_rsp is the kernel RSP saved by enter_userspace_save,
     // still valid on the executor stack.
     unsafe {
@@ -258,7 +258,7 @@ pub(super) fn sys_task_kill(pid: usize, signum: usize) -> isize {
         return -(crate::syscall::EINVAL);
     }
 
-    let target = crate::proc::lookup_process(crate::id::Pid::new(pid as u32));
+    let target = crate::proc::ProcessTable::lookup(crate::id::Pid::new(pid as u32));
     match target {
         Some(proc) => {
             proc.signals.post(signum);
@@ -276,7 +276,7 @@ pub(super) fn sys_task_kill(pid: usize, signum: usize) -> isize {
 pub(super) fn sys_task_setpgid(pid: usize, pgid: usize) -> isize {
     use core::sync::atomic::Ordering;
 
-    let current_pid = crate::proc::with_current_process(|p| p.pid);
+    let current_pid = crate::proc::ProcessTable::with_current(|p| p.pid);
     let target_pid = if pid == 0 {
         current_pid
     } else {
@@ -288,7 +288,7 @@ pub(super) fn sys_task_setpgid(pid: usize, pgid: usize) -> isize {
         pgid as u32
     };
 
-    let target = match crate::proc::lookup_process(target_pid) {
+    let target = match crate::proc::ProcessTable::lookup(target_pid) {
         Some(p) => p,
         None => return -(crate::syscall::EINVAL),
     };
@@ -314,12 +314,12 @@ pub(super) fn sys_task_getpgid(pid: usize) -> isize {
     use core::sync::atomic::Ordering;
 
     let target_pid = if pid == 0 {
-        crate::proc::with_current_process(|p| p.pid)
+        crate::proc::ProcessTable::with_current(|p| p.pid)
     } else {
         crate::id::Pid::new(pid as u32)
     };
 
-    match crate::proc::lookup_process(target_pid) {
+    match crate::proc::ProcessTable::lookup(target_pid) {
         Some(p) => p.pgid.load(Ordering::Acquire) as isize,
         None => -(crate::syscall::EINVAL),
     }
@@ -337,7 +337,7 @@ pub(super) fn sys_task_sigaction(
     handler: usize,
     old_handler_out: usize,
 ) -> isize {
-    crate::proc::with_current_process(|process| {
+    crate::proc::ProcessTable::with_current(|process| {
         let old = match process.signals.set_handler(signum, handler as u64) {
             Some(old) => old,
             None => return -(crate::syscall::EINVAL),
@@ -391,8 +391,8 @@ pub(super) fn sys_task_sigreturn() -> isize {
     // user RSP = &frame.signum (right after ret_addr was popped by `ret`).
     // We read from (user_rsp - 8) to get the full frame.
 
-    let frame: SignalFrame = crate::proc::with_current_process(|_process| {
-        let user_rsp = crate::percpu::current_cpu().user_rsp;
+    let frame: SignalFrame = crate::proc::ProcessTable::with_current(|_process| {
+        let user_rsp = crate::percpu::PerCpuState::current().user_rsp;
         let frame_addr = user_rsp - 8; // Back up past the popped ret_addr.
 
         // Read the frame from user memory.
@@ -404,7 +404,7 @@ pub(super) fn sys_task_sigreturn() -> isize {
     // Now we need to restore the kernel context and set up for re-entry.
     // We use the same TRAP mechanism as sys_task_wait: longjmp back to
     // process_task, which will resume userspace with the restored context.
-    let kernel_cr3 = crate::proc::kernel_cr3();
+    let kernel_cr3 = crate::proc::TrapContext::kernel_cr3();
 
     // SAFETY: Standard kernel context restore pattern (same as sys_task_exit/sys_task_wait).
     unsafe {
@@ -439,9 +439,9 @@ pub(super) fn sys_task_sigreturn() -> isize {
 
     // Set trap reason to Preempted so process_task resumes via enter_userspace_resume_wrapper
     // with the restored USER_CONTEXT.
-    crate::proc::set_trap_reason(crate::proc::TrapReason::Preempted);
+    crate::proc::TrapContext::set_trap_reason(crate::proc::TrapReason::Preempted);
 
-    let saved_rsp = crate::proc::saved_kernel_rsp();
+    let saved_rsp = crate::proc::TrapContext::saved_kernel_rsp();
     // SAFETY: saved_rsp is the kernel RSP saved by enter_userspace_save.
     unsafe {
         restore_kernel_context(saved_rsp);

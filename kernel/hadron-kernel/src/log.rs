@@ -429,7 +429,7 @@ fn early_serial_log(level: LogLevel, args: fmt::Arguments<'_>) {
     if level > crate::config::MAX_LOG_LEVEL {
         return;
     }
-    let nanos = crate::time::boot_nanos();
+    let nanos = crate::time::Time::boot_nanos();
     let total_micros = nanos / 1_000;
     let secs = total_micros / 1_000_000;
     let micros = total_micros % 1_000_000;
@@ -444,7 +444,7 @@ fn early_serial_log(level: LogLevel, args: fmt::Arguments<'_>) {
 /// Always emits (bypasses `MAX_LOG_LEVEL`), since subsystem tracing is
 /// independently gated by compile-time `hadron_trace_<subsys>` cfg flags.
 fn early_serial_subsys_log(level: LogLevel, subsys: &str, args: fmt::Arguments<'_>) {
-    let nanos = crate::time::boot_nanos();
+    let nanos = crate::time::Time::boot_nanos();
     let total_micros = nanos / 1_000;
     let secs = total_micros / 1_000_000;
     let micros = total_micros % 1_000_000;
@@ -454,19 +454,7 @@ fn early_serial_subsys_log(level: LogLevel, subsys: &str, args: fmt::Arguments<'
     let _ = write!(w, "[{secs:>5}.{micros:06}] {level_str} [{subsys}] {args}\n");
 }
 
-/// Registers early serial print/log functions.
-///
-/// Call this after UART hardware init and before any `kprint!`/`klog!` use.
-/// No heap allocation required.
-pub fn init_early_serial() {
-    // SAFETY: All three functions are safe to call from any context — they
-    // construct a Uart16550 on the stack (just a u16) and write bytes.
-    unsafe {
-        set_print_fn(early_serial_print);
-        set_log_fn(early_serial_log);
-        set_subsys_log_fn(early_serial_subsys_log);
-    }
-}
+// `init_early_serial` is an associated function on `Log` (see below).
 
 // ---------------------------------------------------------------------------
 // Logger (Phase 2, post-heap)
@@ -558,7 +546,7 @@ impl Logger {
     /// Leveled write — formats a timestamped, level-tagged message and writes
     /// it only to sinks whose `max_level >= level`.
     fn log(&self, level: LogLevel, args: fmt::Arguments<'_>) {
-        let nanos = crate::time::boot_nanos();
+        let nanos = crate::time::Time::boot_nanos();
         let total_micros = nanos / 1_000;
         let secs = total_micros / 1_000_000;
         let micros = total_micros % 1_000_000;
@@ -579,7 +567,7 @@ impl Logger {
     /// `max_level` filtering, since subsystem traces are independently gated
     /// at compile time).
     fn log_subsys(&self, level: LogLevel, subsys: &str, args: fmt::Arguments<'_>) {
-        let nanos = crate::time::boot_nanos();
+        let nanos = crate::time::Time::boot_nanos();
         let total_micros = nanos / 1_000;
         let secs = total_micros / 1_000_000;
         let micros = total_micros % 1_000_000;
@@ -627,21 +615,40 @@ fn logger_subsys_log(level: LogLevel, subsys: &str, args: fmt::Arguments<'_>) {
     LOGGER.log_subsys(level, subsys, args);
 }
 
-/// Initializes the full logger (Phase 2), replacing early serial functions.
-///
-/// Call this after the heap allocator is available.
-pub fn init_logger() {
-    LOGGER.init_with_serial();
-}
+/// Zero-sized facade for the kernel logging public API.
+pub struct Log;
 
-/// Registers an additional output sink with the global logger.
-pub fn add_sink(sink: Box<dyn LogSink>) {
-    LOGGER.add_sink(sink);
-}
+impl Log {
+    /// Registers early serial print/log functions.
+    ///
+    /// Call this after UART hardware init and before any `kprint!`/`klog!` use.
+    /// No heap allocation required.
+    pub fn init_early_serial() {
+        // SAFETY: All three functions are safe to call from any context — they
+        // construct a Uart16550 on the stack (just a u16) and write bytes.
+        unsafe {
+            set_print_fn(early_serial_print);
+            set_log_fn(early_serial_log);
+            set_subsys_log_fn(early_serial_subsys_log);
+        }
+    }
 
-/// Replaces a named sink in the global logger. Returns `true` on success.
-pub fn replace_sink_by_name(name: &str, new_sink: Box<dyn LogSink>) -> bool {
-    LOGGER.replace_sink_by_name(name, new_sink)
+    /// Initializes the full logger (Phase 2), replacing early serial functions.
+    ///
+    /// Call this after the heap allocator is available.
+    pub fn init_logger() {
+        LOGGER.init_with_serial();
+    }
+
+    /// Registers an additional output sink with the global logger.
+    pub fn add_sink(sink: Box<dyn LogSink>) {
+        LOGGER.add_sink(sink);
+    }
+
+    /// Replaces a named sink in the global logger. Returns `true` on success.
+    pub fn replace_sink_by_name(name: &str, new_sink: Box<dyn LogSink>) -> bool {
+        LOGGER.replace_sink_by_name(name, new_sink)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -655,5 +662,5 @@ pub fn replace_sink_by_name(name: &str, new_sink: Box<dyn LogSink>) -> bool {
 pub fn panic_serial(info: &core::panic::PanicInfo) {
     let mut w = SerialWriter(EarlySerial::new(COM1));
     let _ = write!(w, "\n!!! KERNEL PANIC !!!\n{info}\n");
-    crate::backtrace::panic_backtrace(&mut w);
+    crate::backtrace::Backtrace::panic_backtrace(&mut w);
 }

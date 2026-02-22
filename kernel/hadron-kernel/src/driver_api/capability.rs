@@ -86,7 +86,7 @@ impl IrqCapability {
     pub fn unmask_irq(&self, isa_irq: u8) -> Result<(), DriverError> {
         #[cfg(all(target_os = "none", target_arch = "x86_64"))]
         {
-            crate::arch::x86_64::acpi::with_io_apic(|ioapic| ioapic.unmask(isa_irq))
+            crate::arch::x86_64::acpi::Acpi::with_io_apic(|ioapic| ioapic.unmask(isa_irq))
                 .ok_or(DriverError::InitFailed)
         }
         #[cfg(not(all(target_os = "none", target_arch = "x86_64")))]
@@ -100,7 +100,7 @@ impl IrqCapability {
     pub fn mask_irq(&self, isa_irq: u8) -> Result<(), DriverError> {
         #[cfg(all(target_os = "none", target_arch = "x86_64"))]
         {
-            crate::arch::x86_64::acpi::with_io_apic(|ioapic| ioapic.mask(isa_irq))
+            crate::arch::x86_64::acpi::Acpi::with_io_apic(|ioapic| ioapic.mask(isa_irq))
                 .ok_or(DriverError::InitFailed)
         }
         #[cfg(not(all(target_os = "none", target_arch = "x86_64")))]
@@ -113,7 +113,7 @@ impl IrqCapability {
     /// Sends an End-of-Interrupt signal.
     pub fn send_eoi(&self) {
         #[cfg(all(target_os = "none", target_arch = "x86_64"))]
-        crate::arch::x86_64::acpi::send_lapic_eoi();
+        crate::arch::x86_64::acpi::Acpi::send_lapic_eoi();
     }
 }
 
@@ -193,7 +193,7 @@ impl DmaCapability {
     pub fn alloc_frames(&self, count: usize) -> Result<u64, DriverError> {
         #[cfg(target_os = "none")]
         {
-            crate::mm::pmm::with_pmm(|pmm| {
+            crate::mm::pmm::with(|pmm| {
                 pmm.allocate_frames(count)
                     .map(|frame| frame.start_address().as_u64())
                     .ok_or(DriverError::IoError)
@@ -238,7 +238,7 @@ impl DmaCapability {
             use crate::paging::{PhysFrame, Size4KiB};
             let frame =
                 PhysFrame::<Size4KiB>::containing_address(crate::addr::PhysAddr::new(phys_base));
-            crate::mm::pmm::with_pmm(|pmm| {
+            crate::mm::pmm::with(|pmm| {
                 // SAFETY: Caller guarantees phys_base/count match a prior allocation
                 // and no DMA operations reference these frames.
                 let _ = unsafe { pmm.deallocate_frames(frame, count) };
@@ -384,7 +384,7 @@ impl TimerCapability {
     pub fn timer_ticks(&self) -> u64 {
         #[cfg(target_os = "none")]
         {
-            crate::time::timer_ticks()
+            crate::time::Time::timer_ticks()
         }
         #[cfg(not(target_os = "none"))]
         0
