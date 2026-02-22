@@ -1,12 +1,15 @@
 //! System calls: exit, getpid, spawn, waitpid, kill, pipe, query, clock.
 
-use hadron_syscall::raw::{syscall0, syscall1, syscall2, syscall4};
+use hadron_syscall::raw::{syscall0, syscall1, syscall2, syscall3, syscall4};
 use hadron_syscall::{
     CLOCK_MONOTONIC, KernelVersionInfo, MAP_ANONYMOUS, MemoryInfo, PROT_READ, PROT_WRITE,
     QUERY_KERNEL_VERSION, QUERY_MEMORY, QUERY_UPTIME, SYS_CLOCK_GETTIME, SYS_HANDLE_DUP,
     SYS_HANDLE_PIPE, SYS_MEM_MAP, SYS_MEM_UNMAP, SYS_QUERY, SYS_TASK_EXIT, SYS_TASK_INFO,
-    SYS_TASK_KILL, SYS_TASK_SPAWN, SYS_TASK_WAIT, SpawnArg, Timespec, UptimeInfo,
+    SYS_TASK_KILL, SYS_TASK_SIGACTION, SYS_TASK_SPAWN, SYS_TASK_WAIT, SpawnArg, Timespec,
+    UptimeInfo,
 };
+
+pub use hadron_syscall::{SIG_DFL, SIG_IGN};
 
 // ── Functions ─────────────────────────────────────────────────────────
 
@@ -108,6 +111,28 @@ pub fn waitpid(pid: u32, status_out: Option<&mut u64>) -> isize {
 /// Returns 0 on success, or a negative errno on failure.
 pub fn kill(pid: u32, signum: usize) -> isize {
     syscall2(SYS_TASK_KILL, pid as usize, signum)
+}
+
+/// Register a signal handler for the given signal number.
+///
+/// `handler` is `SIG_DFL` (0) for default, `SIG_IGN` (1) to ignore, or a
+/// function pointer `fn(usize)` cast to `usize`. SIGKILL and SIGSTOP cannot
+/// be caught or ignored.
+///
+/// Returns the previous handler on success, or a negative errno on failure.
+pub fn signal(signum: usize, handler: usize) -> isize {
+    let mut old_handler: u64 = 0;
+    let ret = syscall3(
+        SYS_TASK_SIGACTION,
+        signum,
+        handler,
+        &mut old_handler as *mut u64 as usize,
+    );
+    if ret < 0 {
+        ret
+    } else {
+        old_handler as isize
+    }
 }
 
 /// Duplicate a file descriptor (dup2 semantics).

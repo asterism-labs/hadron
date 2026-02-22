@@ -27,6 +27,12 @@ const USER_STACK_TOP: u64 = 0x7FFF_FFFF_F000;
 /// User stack size: 64 KiB (16 pages) for MVP.
 const USER_STACK_SIZE: u64 = 64 * 1024;
 
+/// Syscall number for `task_sigreturn`, used in the trampoline stub.
+const SYS_TASK_SIGRETURN_NR: u64 = {
+    // task group base 0x00 + offset 0x07
+    0x07
+};
+
 /// Frame deallocation callback for user address spaces.
 ///
 /// Called by `AddressSpace::Drop` to free the PML4 frame.
@@ -106,6 +112,9 @@ pub fn create_process_from_binary(
 
         // Map user stack.
         map_user_stack(&address_space, &mut alloc);
+
+        // Map signal return trampoline page.
+        map_sigreturn_trampoline(&address_space, hhdm_offset, &mut alloc);
 
         // Wrap in Process (takes ownership of address space).
         Ok(Process::new(address_space, parent_pid))
@@ -234,6 +243,62 @@ fn map_user_stack<
             core::ptr::write_bytes(frame_ptr, 0, PAGE_SIZE);
         }
     }
+}
+
+/// Maps a single read-only executable page at [`super::SIGRETURN_TRAMPOLINE_ADDR`]
+/// containing a tiny code stub that calls `task_sigreturn()`.
+///
+/// The stub is: `mov rax, SYS_TASK_SIGRETURN; syscall`
+/// (x86_64 machine code: `48 c7 c0 07 00 00 00 0f 05`).
+///
+/// Every user process gets this page so signal handlers can return
+/// through it without needing a per-binary trampoline symbol.
+fn map_sigreturn_trampoline<
+    M: crate::mm::mapper::PageMapper<Size4KiB> + crate::mm::mapper::PageTranslator,
+>(
+    address_space: &AddressSpace<M>,
+    hhdm_offset: u64,
+    alloc: &mut BitmapFrameAllocRef<'_>,
+) {
+    let trampoline_addr = super::SIGRETURN_TRAMPOLINE_ADDR;
+    let page = Page::containing_address(VirtAddr::new(trampoline_addr));
+    let frame = alloc
+        .0
+        .allocate_frame()
+        .expect("PMM: out of memory mapping sigreturn trampoline");
+
+    // Read + execute, no write — user can execute but not modify.
+    let flags = MapFlags::USER | MapFlags::EXECUTABLE;
+
+    address_space
+        .map_user_page(page, frame, flags, alloc)
+        .expect("failed to map sigreturn trampoline page")
+        .ignore();
+
+    // Write the trampoline stub into the frame via HHDM.
+    let frame_ptr = (hhdm_offset + frame.start_address().as_u64()) as *mut u8;
+    // SAFETY: The frame was just allocated and is not yet accessible from userspace
+    // (address space not in CR3). Writing via HHDM is safe.
+    unsafe {
+        // Zero the page first.
+        core::ptr::write_bytes(frame_ptr, 0, PAGE_SIZE);
+
+        // Write: mov rax, SYS_TASK_SIGRETURN (0x07)
+        //   48 c7 c0 07 00 00 00    mov rax, 0x7
+        // Write: syscall
+        //   0f 05                   syscall
+        let stub: [u8; 9] = [
+            0x48, 0xc7, 0xc0,
+            SYS_TASK_SIGRETURN_NR as u8, 0x00, 0x00, 0x00,
+            0x0f, 0x05,
+        ];
+        core::ptr::copy_nonoverlapping(stub.as_ptr(), frame_ptr, stub.len());
+    }
+
+    kdebug!(
+        "  Mapped sigreturn trampoline at {:#x}",
+        trampoline_addr
+    );
 }
 
 /// Writes argv and envp data onto the child's user stack via HHDM translation.

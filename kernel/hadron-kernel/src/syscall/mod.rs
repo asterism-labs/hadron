@@ -39,6 +39,19 @@ impl SyscallHandler for HadronDispatch {
         process::sys_task_info()
     }
 
+    fn sys_task_sigaction(
+        &self,
+        signum: usize,
+        handler: usize,
+        old_handler_out: usize,
+    ) -> isize {
+        process::sys_task_sigaction(signum, handler, old_handler_out)
+    }
+
+    fn sys_task_sigreturn(&self) -> isize {
+        process::sys_task_sigreturn()
+    }
+
     fn sys_handle_close(&self, handle: usize) -> isize {
         vfs::sys_handle_close(handle)
     }
