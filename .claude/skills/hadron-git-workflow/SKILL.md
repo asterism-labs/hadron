@@ -56,7 +56,7 @@ Scope is **required** on every commit. Use the most specific scope that covers t
 `gluon`, `gluon/vendor`, `gluon/config`
 
 ### Other
-`boot/limine`, `docs`, `ci`
+`workspace`, `boot/limine`, `docs`, `ci`
 
 ## Rules
 

@@ -63,6 +63,10 @@ Global flags: `--profile <name>` (`-P`), `--target <triple>`, `--verbose` (`-v`)
 
 Build configuration lives in `gluon.rhai` (Rhai scripting) — defines targets, config options, profiles, crate groups, and QEMU settings.
 
+## Commit Messages
+
+Never commit without using the `hadron-git-workflow` skill to understand guidelines. Only fast-forward merges are allowed.
+
 ## Development Phases
 
 Phases 0-7 are complete (boot, serial, CPU init, PMM, VMM, interrupts, async executor, syscalls). The 8 remaining phases are documented in `docs/src/phases/`. Phase 6 introduced an async cooperative executor, so all remaining phases are designed around the async model (async VFS, async block devices, per-CPU executors for SMP). See `docs/src/SUMMARY.md` for the full phase listing.
