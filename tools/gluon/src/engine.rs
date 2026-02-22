@@ -1407,6 +1407,7 @@ fn parse_dep_value(extern_name: &str, val: &Dynamic) -> DepDef {
             extern_name: extern_name.into(),
             crate_name,
             features: Vec::new(),
+            version: None,
         }
     } else if let Some(map) = val.read_lock::<Map>() {
         let crate_name = map
@@ -1426,12 +1427,14 @@ fn parse_dep_value(extern_name: &str, val: &Dynamic) -> DepDef {
             extern_name: extern_name.into(),
             crate_name,
             features,
+            version: None,
         }
     } else {
         DepDef {
             extern_name: extern_name.into(),
             crate_name: extern_name.into(),
             features: Vec::new(),
+            version: None,
         }
     }
 }

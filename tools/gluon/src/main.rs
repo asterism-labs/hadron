@@ -119,7 +119,8 @@ fn load_model_inner(root: &PathBuf, validate: bool, force: bool) -> Result<model
         let _t = verbose::Timer::start("vendor dependency resolution");
         let vendor_dir = root.join("vendor");
         let mut version_cache = vendor::VersionCache::new();
-        let resolved = vendor::resolve_transitive(&model.dependencies, &vendor_dir, &mut version_cache)?;
+        let locked_versions = vendor::load_locked_versions(&root.join("gluon.lock"));
+        let resolved = vendor::resolve_transitive(&model.dependencies, &vendor_dir, &mut version_cache, &locked_versions)?;
         vprintln!("  resolved {} transitive dependencies", resolved.len());
 
         // Determine the default target from the "default" profile.
@@ -290,6 +291,14 @@ fn cmd_vendor(cli: &cli::Cli, args: &cli::VendorArgs) -> Result<()> {
 
     println!("Resolving {} dependencies...", model.dependencies.len());
 
+    // Clean up corrupt vendor directories before doing anything.
+    if vendor_dir.exists() {
+        let cleaned = vendor::cleanup_corrupt_vendor_dirs(&vendor_dir)?;
+        if cleaned > 0 {
+            println!("  Cleaned up {cleaned} corrupt vendor director{}", if cleaned == 1 { "y" } else { "ies" });
+        }
+    }
+
     let build_dir = root.join("build");
 
     if args.check {
@@ -298,7 +307,8 @@ fn cmd_vendor(cli: &cli::Cli, args: &cli::VendorArgs) -> Result<()> {
             .ok_or_else(|| anyhow::anyhow!("gluon.lock not found — run `gluon vendor` first"))?;
 
         let mut version_cache = vendor::VersionCache::load(&build_dir);
-        let resolved = vendor::resolve_transitive(&model.dependencies, &vendor_dir, &mut version_cache)?;
+        let locked_versions = vendor::load_locked_versions(&lock_path);
+        let resolved = vendor::resolve_transitive(&model.dependencies, &vendor_dir, &mut version_cache, &locked_versions)?;
         let new_lock = vendor::build_lock_file(&resolved, &vendor_dir)?;
 
         let mut mismatches = 0;
@@ -377,7 +387,7 @@ fn cmd_vendor(cli: &cli::Cli, args: &cli::VendorArgs) -> Result<()> {
                     anyhow::bail!("dependency '{name}' has no version specified");
                 }
                 let resolved_version = vendor::resolve_version(name, version, &mut version_cache)?;
-                let dest = vendor::find_vendor_dir(name, &vendor_dir);
+                let dest = vendor::find_vendor_dir(name, Some(&resolved_version), &vendor_dir);
                 if !dest.join("Cargo.toml").exists() {
                     if dest.exists() { std::fs::remove_dir_all(&dest)?; }
                     vendor::fetch_crates_io(name, &resolved_version, &vendor_dir)?;
@@ -391,7 +401,7 @@ fn cmd_vendor(cli: &cli::Cli, args: &cli::VendorArgs) -> Result<()> {
                     model::GitRef::Branch(b) => b.clone(),
                     model::GitRef::Default => "HEAD".into(),
                 };
-                let dest = vendor::find_vendor_dir(name, &vendor_dir);
+                let dest = vendor::find_vendor_dir(name, None, &vendor_dir);
                 if !dest.join("Cargo.toml").exists() {
                     if dest.exists() { std::fs::remove_dir_all(&dest)?; }
                     vendor::fetch_git(name, url, &ref_str, &vendor_dir)?;
@@ -414,12 +424,13 @@ fn cmd_vendor(cli: &cli::Cli, args: &cli::VendorArgs) -> Result<()> {
             anyhow::bail!("transitive resolution did not converge after {max_iterations} iterations");
         }
 
-        let resolved = vendor::resolve_transitive(&model.dependencies, &vendor_dir, &mut version_cache)?;
+        let locked_versions = vendor::load_locked_versions(&lock_path);
+        let resolved = vendor::resolve_transitive(&model.dependencies, &vendor_dir, &mut version_cache, &locked_versions)?;
 
         // Collect deps that need fetching.
         let mut to_fetch: Vec<&vendor::ResolvedDep> = Vec::new();
         for dep in &resolved {
-            let vendor_path = vendor::find_vendor_dir(&dep.name, &vendor_dir);
+            let vendor_path = vendor::find_vendor_dir(&dep.name, Some(&dep.version), &vendor_dir);
             if !vendor_path.join("Cargo.toml").exists() {
                 match &dep.source {
                     vendor::ResolvedSource::CratesIo => {

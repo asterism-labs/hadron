@@ -194,6 +194,9 @@ pub struct DepDef {
     pub crate_name: String,
     #[allow(dead_code)] // Phase 9+: feature-gated compilation
     pub features: Vec<String>,
+    /// Resolved version of this dependency (from vendor resolution).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
 }
 
 /// Source location for an external dependency.

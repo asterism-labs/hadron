@@ -251,6 +251,22 @@ pub struct ResolvedDep {
     pub source: ResolvedSource,
     pub features: Vec<String>,
     pub is_proc_macro: bool,
+    /// Dependency edges: what this crate depends on.
+    pub deps: Vec<ResolvedDepEdge>,
+    /// Parent crate names that caused this dep to be included.
+    pub required_by: Vec<String>,
+}
+
+/// A resolved dependency edge from one crate to another.
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // Fields are part of the public dep-tree API for diagnostics and tooling.
+pub struct ResolvedDepEdge {
+    /// Dependency crate name.
+    pub name: String,
+    /// Version requirement from Cargo.toml (e.g. "1.0.0", "^0.4").
+    pub version_req: String,
+    /// Rust extern name (hyphens replaced with underscores).
+    pub extern_name: String,
 }
 
 /// The resolved source of a dependency.
@@ -264,11 +280,17 @@ pub enum ResolvedSource {
 /// Resolve all transitive dependencies starting from root declarations.
 ///
 /// Returns a topologically sorted list of all dependencies that need to be
-/// vendored, with unified features.
+/// vendored, with unified features. Performs version-aware deduplication and
+/// conflict detection.
+///
+/// `locked_versions` provides pinned versions from the lock file. When a
+/// non-exact version requirement is resolved, the lock file is consulted
+/// first before querying crates.io, ensuring deterministic builds.
 pub fn resolve_transitive(
     roots: &BTreeMap<String, crate::model::ExternalDepDef>,
     vendor_dir: &Path,
     version_cache: &mut VersionCache,
+    locked_versions: &HashMap<String, String>,
 ) -> Result<Vec<ResolvedDep>> {
     let mut resolved: BTreeMap<String, ResolvedDep> = BTreeMap::new();
     // Parallel HashSet per dep for O(1) feature containment checks.
@@ -306,13 +328,43 @@ pub fn resolve_transitive(
             version,
             source,
             requested_features: initial_features,
+            required_by: "(root)".to_string(),
         });
     }
 
     // BFS resolution.
     while let Some(entry) = queue.pop_front() {
         if let Some(existing) = resolved.get_mut(&entry.name) {
-            // Already resolved — unify features using HashSet for O(1) checks.
+            // Version-aware dedup: check for conflicts when versions differ.
+            if !existing.version.is_empty()
+                && !entry.version.is_empty()
+                && existing.version != entry.version
+            {
+                if !versions_compatible(&existing.version, &entry.version) {
+                    bail!(
+                        "version conflict for '{}': '{}' requires {}, but '{}' requires {}",
+                        entry.name,
+                        entry.required_by, entry.version,
+                        existing.required_by.join(", "), existing.version,
+                    );
+                }
+                // Keep the higher compatible version.
+                if let (Ok(new_ver), Ok(old_ver)) = (
+                    semver::Version::parse(&entry.version),
+                    semver::Version::parse(&existing.version),
+                ) {
+                    if new_ver > old_ver {
+                        existing.version = entry.version.clone();
+                    }
+                }
+            }
+
+            // Track additional required_by.
+            if !existing.required_by.contains(&entry.required_by) {
+                existing.required_by.push(entry.required_by.clone());
+            }
+
+            // Unify features using HashSet for O(1) checks.
             let feat_set = feature_sets.get_mut(&entry.name).unwrap();
             let mut changed = false;
             for feat in &entry.requested_features {
@@ -335,11 +387,13 @@ pub fn resolve_transitive(
                 source: entry.source.clone(),
                 features: entry.requested_features.clone(),
                 is_proc_macro: false,
+                deps: Vec::new(),
+                required_by: vec![entry.required_by.clone()],
             });
         }
 
         // Find the vendored Cargo.toml to discover transitive deps.
-        let vendor_path = find_vendor_dir(&entry.name, vendor_dir);
+        let vendor_path = find_vendor_dir(&entry.name, Some(&entry.version), vendor_dir);
         let cargo_toml_path = vendor_path.join("Cargo.toml");
         if !cargo_toml_path.exists() {
             // Not yet vendored — will be fetched later. Skip transitive resolution
@@ -365,6 +419,9 @@ pub fn resolve_transitive(
             &parsed.features,
             &parsed.default_features,
         );
+
+        // Collect dependency edges for this crate.
+        let mut dep_edges: Vec<ResolvedDepEdge> = Vec::new();
 
         // Enqueue transitive dependencies.
         for cargo_dep in &parsed.dependencies {
@@ -411,23 +468,41 @@ pub fn resolve_transitive(
             let resolved_version = if !raw_version.is_empty()
                 && matches!(source, ResolvedSource::CratesIo)
             {
-                resolve_version(&cargo_dep.name, &raw_version, version_cache)?
+                resolve_version_with_lock(
+                    &cargo_dep.name,
+                    &raw_version,
+                    version_cache,
+                    locked_versions,
+                )?
             } else {
-                raw_version
+                raw_version.clone()
             };
+
+            // Record the dependency edge.
+            dep_edges.push(ResolvedDepEdge {
+                name: cargo_dep.name.clone(),
+                version_req: raw_version,
+                extern_name: cargo_dep.key.replace('-', "_"),
+            });
 
             queue.push_back(QueueEntry {
                 name: cargo_dep.name.clone(),
                 version: resolved_version,
                 source,
                 requested_features: trans_features,
+                required_by: entry.name.clone(),
             });
+        }
+
+        // Store dependency edges on the resolved dep.
+        if let Some(dep) = resolved.get_mut(&entry.name) {
+            dep.deps = dep_edges;
         }
     }
 
     // Convert "__default__" markers into actual default features.
     for dep in resolved.values_mut() {
-        let vendor_path = find_vendor_dir(&dep.name, vendor_dir);
+        let vendor_path = find_vendor_dir(&dep.name, Some(&dep.version), vendor_dir);
         let cargo_toml_path = vendor_path.join("Cargo.toml");
         if cargo_toml_path.exists() {
             if let Ok(parsed) = parse_cargo_toml(&cargo_toml_path) {
@@ -458,6 +533,47 @@ struct QueueEntry {
     version: String,
     source: ResolvedSource,
     requested_features: Vec<String>,
+    /// Which crate caused this dep to be queued.
+    required_by: String,
+}
+
+/// Check if two semver versions are compatible (same major for >= 1.0, same
+/// major.minor for 0.x).
+fn versions_compatible(a: &str, b: &str) -> bool {
+    let Ok(va) = semver::Version::parse(a) else { return false };
+    let Ok(vb) = semver::Version::parse(b) else { return false };
+    if va.major == 0 && vb.major == 0 {
+        va.minor == vb.minor
+    } else {
+        va.major == vb.major
+    }
+}
+
+/// Resolve a version, checking the lock file first for determinism.
+fn resolve_version_with_lock(
+    name: &str,
+    version_str: &str,
+    cache: &mut VersionCache,
+    locked_versions: &HashMap<String, String>,
+) -> Result<String> {
+    // If already an exact version, return immediately.
+    if semver::Version::parse(version_str).is_ok() {
+        return Ok(version_str.to_string());
+    }
+
+    // Check the lock file first for determinism.
+    if let Some(locked_ver) = locked_versions.get(name) {
+        if let Ok(req) = version_str.parse::<semver::VersionReq>() {
+            if let Ok(ver) = semver::Version::parse(locked_ver) {
+                if req.matches(&ver) {
+                    return Ok(locked_ver.clone());
+                }
+            }
+        }
+    }
+
+    // Fall back to crates.io resolution.
+    resolve_version(name, version_str, cache)
 }
 
 /// Compute the set of activated feature specs given requested features
@@ -498,15 +614,28 @@ fn compute_activated_features(
 
 /// Find the vendor directory for a dependency.
 ///
-/// Checks for `vendor/{name}-{version}/` first, then `vendor/{name}/`.
-pub fn find_vendor_dir(name: &str, vendor_dir: &Path) -> std::path::PathBuf {
-    // Check versioned directory pattern first.
+/// When `version` is provided, checks for the exact `vendor/{name}-{version}/`
+/// directory first. Falls back to a prefix scan that skips directories without
+/// `Cargo.toml` (corrupt/incomplete). Final fallback: `vendor/{name}/`.
+pub fn find_vendor_dir(name: &str, version: Option<&str>, vendor_dir: &Path) -> std::path::PathBuf {
+    // Exact version match first.
+    if let Some(ver) = version {
+        let exact = vendor_dir.join(format!("{name}-{ver}"));
+        if exact.is_dir() && exact.join("Cargo.toml").exists() {
+            return exact;
+        }
+    }
+
+    // Fallback: prefix scan, but ONLY dirs with Cargo.toml.
     if let Ok(entries) = std::fs::read_dir(vendor_dir) {
         let prefix = format!("{name}-");
         for entry in entries.flatten() {
             let fname = entry.file_name();
             let fname_str = fname.to_string_lossy();
-            if fname_str.starts_with(&prefix) && entry.path().is_dir() {
+            if fname_str.starts_with(&prefix)
+                && entry.path().is_dir()
+                && entry.path().join("Cargo.toml").exists()
+            {
                 return entry.path();
             }
         }
@@ -1097,6 +1226,29 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
 // Auto-vendor check
 // ---------------------------------------------------------------------------
 
+/// Remove vendor directories that are corrupt (exist but have no Cargo.toml).
+///
+/// Returns the number of directories removed.
+pub fn cleanup_corrupt_vendor_dirs(vendor_dir: &Path) -> Result<usize> {
+    let mut removed = 0;
+    if let Ok(entries) = std::fs::read_dir(vendor_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir()
+                && !path.join("Cargo.toml").exists()
+                // Skip hidden dirs (e.g. .tmp-*)
+                && !entry.file_name().to_string_lossy().starts_with('.')
+            {
+                println!("  Removing corrupt vendor directory: {}", path.display());
+                std::fs::remove_dir_all(&path)
+                    .with_context(|| format!("removing corrupt vendor dir {}", path.display()))?;
+                removed += 1;
+            }
+        }
+    }
+    Ok(removed)
+}
+
 /// Check if vendoring is needed and perform it if so.
 ///
 /// Returns `Ok(true)` if vendoring was performed, `Ok(false)` if everything
@@ -1110,10 +1262,18 @@ pub fn ensure_vendored(
     let vendor_dir = root.join("vendor");
     let lock_path = root.join("gluon.lock");
 
+    // Clean up corrupt vendor dirs before checking.
+    if vendor_dir.exists() {
+        let cleaned = cleanup_corrupt_vendor_dirs(&vendor_dir)?;
+        if cleaned > 0 {
+            println!("  Cleaned up {cleaned} corrupt vendor director{}", if cleaned == 1 { "y" } else { "ies" });
+        }
+    }
+
     // Quick check: if lock file exists and all root deps have Cargo.toml, skip.
     if !force && lock_path.exists() {
         let all_present = dependencies.iter().all(|(name, _)| {
-            let dest = find_vendor_dir(name, &vendor_dir);
+            let dest = find_vendor_dir(name, None, &vendor_dir);
             dest.join("Cargo.toml").exists()
         });
         if all_present {
@@ -1156,7 +1316,7 @@ pub fn ensure_vendored(
                     anyhow::bail!("dependency '{name}' has no version specified");
                 }
                 let resolved_version = resolve_version(name, version, &mut version_cache)?;
-                let dest = find_vendor_dir(name, &vendor_dir);
+                let dest = find_vendor_dir(name, Some(&resolved_version), &vendor_dir);
                 if !dest.join("Cargo.toml").exists() {
                     if dest.exists() { std::fs::remove_dir_all(&dest)?; }
                     fetch_crates_io(name, &resolved_version, &vendor_dir)?;
@@ -1169,7 +1329,7 @@ pub fn ensure_vendored(
                     crate::model::GitRef::Branch(b) => b.clone(),
                     crate::model::GitRef::Default => "HEAD".into(),
                 };
-                let dest = find_vendor_dir(name, &vendor_dir);
+                let dest = find_vendor_dir(name, None, &vendor_dir);
                 if !dest.join("Cargo.toml").exists() {
                     if dest.exists() { std::fs::remove_dir_all(&dest)?; }
                     fetch_git(name, url, &ref_str, &vendor_dir)?;
@@ -1182,12 +1342,13 @@ pub fn ensure_vendored(
     // Resolve transitive dependencies iteratively.
     let max_iterations = 10;
     let fetch_batch = if jobs > 0 { jobs } else { 12 };
+    let locked_versions = load_locked_versions(&lock_path);
     for iteration in 1..=max_iterations {
-        let resolved = resolve_transitive(dependencies, &vendor_dir, &mut version_cache)?;
+        let resolved = resolve_transitive(dependencies, &vendor_dir, &mut version_cache, &locked_versions)?;
 
         let to_fetch: Vec<&ResolvedDep> = resolved.iter()
             .filter(|dep| {
-                let vendor_path = find_vendor_dir(&dep.name, &vendor_dir);
+                let vendor_path = find_vendor_dir(&dep.name, Some(&dep.version), &vendor_dir);
                 !vendor_path.join("Cargo.toml").exists()
                     && !matches!(dep.source, ResolvedSource::Path { .. })
             })
@@ -1276,6 +1437,18 @@ pub fn read_lock_file(path: &Path) -> Result<Option<LockFile>> {
     Ok(Some(lock))
 }
 
+/// Load locked versions from a lock file, returning a name → version map.
+///
+/// Returns an empty map if the lock file doesn't exist or can't be read.
+pub fn load_locked_versions(lock_path: &Path) -> HashMap<String, String> {
+    let Ok(Some(lock)) = read_lock_file(lock_path) else {
+        return HashMap::new();
+    };
+    lock.packages.into_iter()
+        .map(|pkg| (pkg.name, pkg.version))
+        .collect()
+}
+
 /// Write a lock file to disk.
 pub fn write_lock_file(path: &Path, lock: &LockFile) -> Result<()> {
     let header = "# This file is auto-generated by `gluon vendor`. Do not edit.\n\n";
@@ -1326,7 +1499,7 @@ pub fn build_lock_file(
             ResolvedSource::Path { path } => format!("path+{path}"),
         };
 
-        let vendor_path = find_vendor_dir(&dep.name, vendor_dir);
+        let vendor_path = find_vendor_dir(&dep.name, Some(&dep.version), vendor_dir);
         let checksum = if vendor_path.exists() {
             Some(dir_checksum(&vendor_path)?)
         } else {
@@ -1409,13 +1582,18 @@ pub fn auto_register_dependencies(
         });
     }
 
+    // Build a lookup map from resolved deps for O(1) version lookups.
+    let resolved_map: HashMap<&str, &ResolvedDep> = resolved.iter()
+        .map(|d| (d.name.as_str(), d))
+        .collect();
+
     for dep in resolved {
         // Skip if already registered (e.g. a project crate with the same name).
         if model.crates.contains_key(&dep.name) {
             continue;
         }
 
-        let vendor_path = find_vendor_dir(&dep.name, vendor_dir);
+        let vendor_path = find_vendor_dir(&dep.name, Some(&dep.version), vendor_dir);
         let cargo_toml_path = vendor_path.join("Cargo.toml");
         if !cargo_toml_path.exists() {
             // Not yet vendored — skip registration for now.
@@ -1458,12 +1636,18 @@ pub fn auto_register_dependencies(
             }
 
             let extern_name = cargo_dep.key.replace('-', "_");
+            // Look up the resolved version of this transitive dep.
+            let dep_version = resolved_map
+                .get(cargo_dep.name.as_str())
+                .map(|r| r.version.clone())
+                .filter(|v| !v.is_empty());
             deps.insert(
                 extern_name.clone(),
                 crate::model::DepDef {
                     extern_name,
                     crate_name: cargo_dep.name.clone(),
                     features: Vec::new(),
+                    version: dep_version,
                 },
             );
         }
@@ -1725,13 +1909,22 @@ my_foo = { package = "foo", version = "1.0" }
     // find_vendor_dir tests
     // -----------------------------------------------------------------------
 
+    /// Helper: create a fake Cargo.toml inside a directory.
+    fn touch_cargo_toml(dir: &std::path::Path) {
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"fake\"\nversion = \"0.0.0\"\n",
+        ).unwrap();
+    }
+
     #[test]
     fn find_versioned_vendor_dir() {
         let dir = make_test_dir("find_versioned");
         let versioned = dir.join("foo-1.0.0");
         std::fs::create_dir_all(&versioned).unwrap();
+        touch_cargo_toml(&versioned);
 
-        let result = find_vendor_dir("foo", &dir);
+        let result = find_vendor_dir("foo", None, &dir);
         assert_eq!(result, versioned);
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -1743,7 +1936,7 @@ my_foo = { package = "foo", version = "1.0" }
         let unversioned = dir.join("foo");
         std::fs::create_dir_all(&unversioned).unwrap();
 
-        let result = find_vendor_dir("foo", &dir);
+        let result = find_vendor_dir("foo", None, &dir);
         assert_eq!(result, unversioned);
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -1755,10 +1948,48 @@ my_foo = { package = "foo", version = "1.0" }
         let versioned = dir.join("foo-1.0.0");
         let unversioned = dir.join("foo");
         std::fs::create_dir_all(&versioned).unwrap();
+        touch_cargo_toml(&versioned);
         std::fs::create_dir_all(&unversioned).unwrap();
 
-        let result = find_vendor_dir("foo", &dir);
+        let result = find_vendor_dir("foo", None, &dir);
         assert_eq!(result, versioned);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn find_exact_version_match() {
+        let dir = make_test_dir("find_exact_version");
+        let v100 = dir.join("foo-1.0.0");
+        let v104 = dir.join("foo-1.0.4");
+        std::fs::create_dir_all(&v100).unwrap();
+        std::fs::create_dir_all(&v104).unwrap();
+        touch_cargo_toml(&v100);
+        touch_cargo_toml(&v104);
+
+        // With exact version, should get the exact match.
+        let result = find_vendor_dir("foo", Some("1.0.0"), &dir);
+        assert_eq!(result, v100);
+
+        let result = find_vendor_dir("foo", Some("1.0.4"), &dir);
+        assert_eq!(result, v104);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn find_skips_corrupt_vendor_dir() {
+        let dir = make_test_dir("find_skips_corrupt");
+        let corrupt = dir.join("foo-1.0.4");
+        let valid = dir.join("foo-1.0.0");
+        // Create corrupt dir (no Cargo.toml) and valid dir.
+        std::fs::create_dir_all(&corrupt).unwrap();
+        std::fs::create_dir_all(&valid).unwrap();
+        touch_cargo_toml(&valid);
+
+        // Without version hint, should skip corrupt and find valid.
+        let result = find_vendor_dir("foo", None, &dir);
+        assert_eq!(result, valid);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

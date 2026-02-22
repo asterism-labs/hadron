@@ -41,7 +41,7 @@ fn resolve_path(raw: &str, root: &Path, sysroot_src: &Path) -> PathBuf {
     if let Some(rest) = raw.strip_prefix("{sysroot}/") {
         sysroot_src.join(rest)
     } else if let Some(name) = raw.strip_prefix("vendor/") {
-        crate::vendor::find_vendor_dir(name, &root.join("vendor"))
+        crate::vendor::find_vendor_dir(name, None, &root.join("vendor"))
     } else {
         root.join(raw)
     }
@@ -242,6 +242,7 @@ mod tests {
                         extern_name: dep.to_string(),
                         crate_name: dep.to_string(),
                         features: vec![],
+                        version: None,
                     },
                 );
             }

@@ -511,6 +511,7 @@ mod tests {
             extern_name: crate_name.into(),
             crate_name: crate_name.into(),
             features: Vec::new(),
+            version: None,
         }
     }
 
