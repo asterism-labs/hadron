@@ -100,7 +100,7 @@ pub(crate) fn try_steal() -> Option<StealResult> {
         }
 
         // Pseudo-random start offset to distribute stealing pressure.
-        let start = (crate::arch::x86_64::acpi::timer_ticks() as u32) % cpu_count;
+        let start = (crate::time::timer_ticks() as u32) % cpu_count;
 
         for i in 1..cpu_count {
             let target = CpuId::new((start + i) % cpu_count);

@@ -66,17 +66,10 @@ pub fn with_clock_source<R>(f: impl FnOnce(&dyn crate::driver_api::ClockSource) 
 
 /// Returns the current timer tick count (1 tick ≈ 1 ms).
 ///
-/// On x86_64, delegates to the ACPI/LAPIC timer tick counter.
-/// On other architectures, derives ticks from `boot_nanos()`.
+/// Derived from the HPET main counter via [`boot_nanos`], so the result is
+/// SMP-safe and consistent with log timestamps regardless of CPU count.
 pub fn timer_ticks() -> u64 {
-    #[cfg(target_arch = "x86_64")]
-    {
-        crate::arch::x86_64::acpi::timer_ticks()
-    }
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        boot_nanos() / 1_000_000
-    }
+    boot_nanos() / 1_000_000
 }
 
 /// Reads the HPET main counter register at offset 0xF0.

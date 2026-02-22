@@ -377,11 +377,11 @@ impl TimerCapability {
 
     /// Returns the current timer tick count.
     pub fn timer_ticks(&self) -> u64 {
-        #[cfg(all(target_os = "none", target_arch = "x86_64"))]
+        #[cfg(target_os = "none")]
         {
-            crate::arch::x86_64::acpi::timer_ticks()
+            crate::time::timer_ticks()
         }
-        #[cfg(not(all(target_os = "none", target_arch = "x86_64")))]
+        #[cfg(not(target_os = "none"))]
         0
     }
 }

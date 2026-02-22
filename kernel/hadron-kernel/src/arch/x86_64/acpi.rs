@@ -56,10 +56,6 @@ struct AcpiPlatformState {
 static PLATFORM: IrqSpinLock<Option<AcpiPlatformState>> =
     IrqSpinLock::leveled("PLATFORM", 11, None);
 
-/// Timer tick counter, incremented by the LAPIC timer handler.
-/// Kept separate from `PLATFORM` because it is on the hot path (every ISR).
-static TIMER_TICKS: AtomicU64 = AtomicU64::new(0);
-
 /// LAPIC timer initial count (ticks per interval), stored after BSP calibration
 /// so APs can start their timers with the same configuration.
 static LAPIC_TIMER_INITIAL_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -117,20 +113,11 @@ pub fn with_ecam<R>(f: impl FnOnce(&EcamInfo) -> R) -> Option<R> {
 /// Reads the cached `LAPIC_BASE` atomic — no lock, EOI is never dropped.
 pub fn send_lapic_eoi() {
     let base = LAPIC_BASE.load(Ordering::Acquire);
-    debug_assert!(
-        base != 0 || TIMER_TICKS.load(Ordering::Relaxed) == 0,
-        "send_lapic_eoi: LAPIC_BASE not set but timer ticks > 0 (boot ordering bug)"
-    );
     if base != 0 {
         // SAFETY: The LAPIC was mapped during init and the mapping is permanent.
         let lapic = unsafe { LocalApic::new(VirtAddr::new(base)) };
         lapic.eoi();
     }
-}
-
-/// Returns the current timer tick count.
-pub fn timer_ticks() -> u64 {
-    TIMER_TICKS.load(Ordering::Relaxed)
 }
 
 /// Returns the LAPIC timer configuration (initial_count, divide) from BSP calibration.
@@ -182,10 +169,8 @@ pub(crate) extern "C" fn timer_tick_and_eoi() {
 
 /// LAPIC timer interrupt handler.
 fn timer_handler(_vector: IrqVector) {
-    let tick = TIMER_TICKS.fetch_add(1, Ordering::Relaxed) + 1;
-
     // Wake tasks whose sleep deadline has expired.
-    crate::sched::timer::wake_expired(tick);
+    crate::sched::timer::wake_expired(crate::time::timer_ticks());
 
     // Signal the executor to rotate to the next task.
     crate::sched::set_preempt_pending();
