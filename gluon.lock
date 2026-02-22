@@ -11,16 +11,16 @@ dependencies = ["bytemuck"]
 
 [[package]]
 name = "bytemuck"
-version = "1.25.0"
+version = "1.22.0"
 source = "crates-io"
-checksum = "13c036beb44d169c761b08e1174a6311e36ae79aea5af1c73b2c1f55c5213ab7"
+checksum = "5274180f99af4671cceb96c772e0b8cccc07169204cd4181727c8c56cd8ea285"
 dependencies = ["bytemuck_derive"]
 
 [[package]]
 name = "bytemuck_derive"
-version = "1.10.2"
+version = "1.4.1"
 source = "crates-io"
-checksum = "8d9bd70ecc2b3b10360689dd2952d6787fe41afe03c0e041f2c5c618ca70d166"
+checksum = "e98369abdd3b7464b84ea1082413b958638c992273deb88cd0a303d0bdde4f95"
 dependencies = [
     "proc-macro2",
     "quote",
@@ -29,9 +29,9 @@ dependencies = [
 
 [[package]]
 name = "cfg-if"
-version = "1.0.4"
+version = "1.0.0"
 source = "crates-io"
-checksum = "72a483a6390b4d4cc710d4b9a1d8832259be70b68c94b98d9376a364c1858474"
+checksum = "4454d6b92e5bb2fe4413a8fc1283c19112368069d3c145c958385d9ac037214f"
 
 [[package]]
 name = "hadris-common"

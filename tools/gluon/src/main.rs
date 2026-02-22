@@ -98,6 +98,14 @@ fn load_model_inner(root: &PathBuf, validate: bool, force: bool) -> Result<model
 
     // Auto-register vendored dependencies if any dependency() declarations exist.
     if !model.dependencies.is_empty() {
+        // Auto-vendor missing deps when called from build/check/etc (validate=true).
+        // cmd_vendor passes validate=false to avoid recursion.
+        if validate {
+            if vendor::ensure_vendored(root, &model.dependencies, force, 0)? {
+                println!("Auto-vendored missing dependencies.");
+            }
+        }
+
         let _t = verbose::Timer::start("vendor dependency resolution");
         let vendor_dir = root.join("vendor");
         let mut version_cache = vendor::VersionCache::new();
@@ -360,7 +368,8 @@ fn cmd_vendor(cli: &cli::Cli, args: &cli::VendorArgs) -> Result<()> {
                 }
                 let resolved_version = vendor::resolve_version(name, version, &mut version_cache)?;
                 let dest = vendor::find_vendor_dir(name, &vendor_dir);
-                if !dest.exists() {
+                if !dest.join("Cargo.toml").exists() {
+                    if dest.exists() { std::fs::remove_dir_all(&dest)?; }
                     vendor::fetch_crates_io(name, &resolved_version, &vendor_dir)?;
                     fetched += 1;
                 }
@@ -373,7 +382,8 @@ fn cmd_vendor(cli: &cli::Cli, args: &cli::VendorArgs) -> Result<()> {
                     model::GitRef::Default => "HEAD".into(),
                 };
                 let dest = vendor::find_vendor_dir(name, &vendor_dir);
-                if !dest.exists() {
+                if !dest.join("Cargo.toml").exists() {
+                    if dest.exists() { std::fs::remove_dir_all(&dest)?; }
                     vendor::fetch_git(name, url, &ref_str, &vendor_dir)?;
                     fetched += 1;
                 }
@@ -596,6 +606,13 @@ fn prepare_pipeline_state(
 /// build model, so callers like `cmd_test` can compile test binaries.
 fn do_build(cli: &cli::Cli) -> Result<(scheduler::PipelineState, model::BuildModel)> {
     let (resolved, model) = resolve_config(cli)?;
+
+    // Auto-generate rust-project.json if missing.
+    let rp_path = resolved.root.join("rust-project.json");
+    if !rp_path.exists() {
+        println!("Generating rust-project.json...");
+        analyzer::generate_rust_project(&resolved, &model)?;
+    }
 
     let mut state = prepare_pipeline_state(resolved, cli.force, cli.jobs.unwrap_or(0))?;
 

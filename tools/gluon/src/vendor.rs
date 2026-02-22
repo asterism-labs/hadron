@@ -908,7 +908,12 @@ pub fn resolve_version(
 pub fn fetch_crates_io(name: &str, version: &str, vendor_dir: &Path) -> Result<std::path::PathBuf> {
     let dest = vendor_dir.join(format!("{name}-{version}"));
     if dest.exists() {
-        return Ok(dest);
+        if dest.join("Cargo.toml").exists() {
+            return Ok(dest);
+        }
+        println!("  Removing corrupt vendor directory: {}", dest.display());
+        std::fs::remove_dir_all(&dest)
+            .with_context(|| format!("removing corrupt vendor dir {}", dest.display()))?;
     }
 
     let url = format!(
@@ -956,7 +961,12 @@ pub fn fetch_git(
     let short_ref = if reference.len() > 8 { &reference[..8] } else { reference };
     let dest = vendor_dir.join(format!("{name}-{short_ref}"));
     if dest.exists() {
-        return Ok(dest);
+        if dest.join("Cargo.toml").exists() {
+            return Ok(dest);
+        }
+        println!("  Removing corrupt vendor directory: {}", dest.display());
+        std::fs::remove_dir_all(&dest)
+            .with_context(|| format!("removing corrupt vendor dir {}", dest.display()))?;
     }
 
     println!("  Cloning {name} from {url} (ref: {reference})...");
@@ -1081,6 +1091,153 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Auto-vendor check
+// ---------------------------------------------------------------------------
+
+/// Check if vendoring is needed and perform it if so.
+///
+/// Returns `Ok(true)` if vendoring was performed, `Ok(false)` if everything
+/// was already up to date.
+pub fn ensure_vendored(
+    root: &Path,
+    dependencies: &std::collections::BTreeMap<String, crate::model::ExternalDepDef>,
+    force: bool,
+    jobs: usize,
+) -> Result<bool> {
+    let vendor_dir = root.join("vendor");
+    let lock_path = root.join("gluon.lock");
+
+    // Quick check: if lock file exists and all root deps have Cargo.toml, skip.
+    if !force && lock_path.exists() {
+        let all_present = dependencies.iter().all(|(name, _)| {
+            let dest = find_vendor_dir(name, &vendor_dir);
+            dest.join("Cargo.toml").exists()
+        });
+        if all_present {
+            return Ok(false);
+        }
+    }
+
+    println!("Auto-vendoring missing dependencies...");
+
+    let build_dir = root.join("build");
+    let mut version_cache = if force {
+        VersionCache::new()
+    } else {
+        VersionCache::load(&build_dir)
+    };
+
+    // Prefetch version listings for crates.io deps.
+    let prefetch_batch = if jobs > 0 { jobs } else { 8 };
+    let crates_io_names: Vec<String> = dependencies.iter()
+        .filter_map(|(name, dep)| match &dep.source {
+            crate::model::DepSource::CratesIo { version } if !version.is_empty() => {
+                if semver::Version::parse(version).is_err() {
+                    Some(name.clone())
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        })
+        .collect();
+    if !crates_io_names.is_empty() {
+        prefetch_versions(&crates_io_names, &mut version_cache, prefetch_batch)?;
+    }
+
+    // Fetch missing root deps.
+    for (name, dep) in dependencies {
+        match &dep.source {
+            crate::model::DepSource::CratesIo { version } => {
+                if version.is_empty() {
+                    anyhow::bail!("dependency '{name}' has no version specified");
+                }
+                let resolved_version = resolve_version(name, version, &mut version_cache)?;
+                let dest = find_vendor_dir(name, &vendor_dir);
+                if !dest.join("Cargo.toml").exists() {
+                    if dest.exists() { std::fs::remove_dir_all(&dest)?; }
+                    fetch_crates_io(name, &resolved_version, &vendor_dir)?;
+                }
+            }
+            crate::model::DepSource::Git { url, reference } => {
+                let ref_str = match reference {
+                    crate::model::GitRef::Rev(r) => r.clone(),
+                    crate::model::GitRef::Tag(t) => t.clone(),
+                    crate::model::GitRef::Branch(b) => b.clone(),
+                    crate::model::GitRef::Default => "HEAD".into(),
+                };
+                let dest = find_vendor_dir(name, &vendor_dir);
+                if !dest.join("Cargo.toml").exists() {
+                    if dest.exists() { std::fs::remove_dir_all(&dest)?; }
+                    fetch_git(name, url, &ref_str, &vendor_dir)?;
+                }
+            }
+            crate::model::DepSource::Path { .. } => {}
+        }
+    }
+
+    // Resolve transitive dependencies iteratively.
+    let max_iterations = 10;
+    let fetch_batch = if jobs > 0 { jobs } else { 12 };
+    for iteration in 1..=max_iterations {
+        let resolved = resolve_transitive(dependencies, &vendor_dir, &mut version_cache)?;
+
+        let to_fetch: Vec<&ResolvedDep> = resolved.iter()
+            .filter(|dep| {
+                let vendor_path = find_vendor_dir(&dep.name, &vendor_dir);
+                !vendor_path.join("Cargo.toml").exists()
+                    && !matches!(dep.source, ResolvedSource::Path { .. })
+            })
+            .collect();
+
+        if to_fetch.is_empty() {
+            // All deps present — write lock file.
+            let lock = build_lock_file(&resolved, &vendor_dir)?;
+            write_lock_file(&lock_path, &lock)?;
+
+            if let Err(e) = version_cache.save(&build_dir) {
+                crate::verbose::vprintln!("  warning: failed to save version cache: {e}");
+            }
+
+            return Ok(true);
+        }
+
+        if iteration == max_iterations {
+            anyhow::bail!("transitive resolution did not converge after {max_iterations} iterations");
+        }
+
+        // Fetch missing transitive deps.
+        for chunk in to_fetch.chunks(fetch_batch) {
+            let results: Vec<Result<std::path::PathBuf>> = std::thread::scope(|s| {
+                let handles: Vec<_> = chunk.iter().map(|dep| {
+                    let vdir = &vendor_dir;
+                    s.spawn(move || -> Result<std::path::PathBuf> {
+                        match &dep.source {
+                            ResolvedSource::CratesIo => {
+                                fetch_crates_io(&dep.name, &dep.version, vdir)
+                            }
+                            ResolvedSource::Git { url, reference } => {
+                                fetch_git(&dep.name, url, reference, vdir)
+                            }
+                            ResolvedSource::Path { .. } => {
+                                Ok(vdir.join(&dep.name))
+                            }
+                        }
+                    })
+                }).collect();
+                handles.into_iter().map(|h| h.join().unwrap()).collect()
+            });
+
+            for result in results {
+                result?;
+            }
+        }
+    }
+
+    Ok(true)
 }
 
 // ---------------------------------------------------------------------------

@@ -104,32 +104,28 @@ sysroot.add("alloc", "{sysroot}/alloc")
 // External dependencies (resolved + vendored by `gluon vendor`)
 // ===========================================================================
 
-// Host proc-macro ecosystem (syn pulls in proc-macro2, quote, unicode-ident).
+// Host proc-macro ecosystem — syn/quote/proc-macro2 are direct deps of project
+// proc-macros. Transitive deps (unicode-ident) are auto-resolved.
 dependency("syn").version("2.0.116")
     .features(["full", "extra-traits", "parsing", "printing", "clone-impls", "proc-macro", "derive"]);
 dependency("proc-macro2").version("1.0.106")
     .cfg_flags(["wrap_proc_macro"]);
 dependency("quote").version("1.0.35");
-dependency("unicode-ident").version("1.0.24");
 
-// Kernel no_std dependencies.
+// Kernel no_std dependencies — bitflags is a direct dep of project crates.
+// Transitive deps (cfg-if, bytemuck, bytemuck_derive) are auto-resolved.
 dependency("bitflags").version("2.11.0");
-dependency("cfg-if").version("1.0.4");
-dependency("bytemuck").version("1.25.0").no_default_features();
 
-// Hadris ecosystem crates (from crates.io).
+// Hadris ecosystem — direct deps of hadron-drivers. Transitive deps
+// (hadris-common, hadris-part) are auto-resolved from their Cargo.toml.
 dependency("hadris-cpio").version("1.0.1")
     .features(["sync", "read", "alloc"]).no_default_features();
 dependency("hadris-io").version("1.0.1")
     .features(["sync"]).no_default_features();
-dependency("hadris-common").version("1.0.1")
-    .no_default_features();
 dependency("hadris-fat").version("1.0.1")
     .features(["sync", "read", "write", "alloc", "lfn"]).no_default_features();
 dependency("hadris-iso").version("1.0.1")
     .features(["sync", "read", "alloc"]).no_default_features();
-dependency("hadris-part").version("1.0.1")
-    .no_default_features();
 
 // ===========================================================================
 // Host crates (project proc-macros, built for host triple)
@@ -144,11 +140,6 @@ host.add("hadron-syscall-macros", "crates/hadron-syscall-macros")
 
 host.add("hadron-driver-macros", "crates/hadron-driver-macros")
     .edition("2024")
-    .crate_type(PROC_MACRO)
-    .deps(#{ syn: "syn", quote: "quote", proc_macro2: "proc-macro2" });
-
-host.add("bytemuck_derive", "vendor/bytemuck_derive")
-    .edition("2018")
     .crate_type(PROC_MACRO)
     .deps(#{ syn: "syn", quote: "quote", proc_macro2: "proc-macro2" });
 
