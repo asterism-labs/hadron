@@ -93,6 +93,8 @@ struct ConsoleInputState {
     caps_lock: bool,
     /// Whether the previous scancode was the 0xE0 extended prefix.
     extended_prefix: bool,
+    /// Whether an EOF condition (Ctrl+D on empty line) is pending.
+    eof_pending: bool,
 }
 
 impl ConsoleInputState {
@@ -105,6 +107,7 @@ impl ConsoleInputState {
             ctrl_held: false,
             caps_lock: false,
             extended_prefix: false,
+            eof_pending: false,
         }
     }
 }
@@ -242,6 +245,10 @@ enum EchoAction {
     Char(u8),
     /// Print `^C` followed by a newline (Ctrl+C interrupt).
     Interrupt,
+    /// Ctrl+D on empty line: EOF marker set, no echo.
+    Eof,
+    /// Ctrl+D on non-empty line: flush current line without newline.
+    FlushLine,
 }
 
 /// Process a single raw scancode: decode, update modifier state, and buffer
@@ -301,6 +308,23 @@ fn process_scancode(state: &mut ConsoleInputState, scancode: u8) -> Option<EchoA
         // Discard the current line buffer and echo ^C via deferred action.
         state.line_len = 0;
         return Some(EchoAction::Interrupt);
+    }
+
+    // Detect Ctrl+D: EOF on empty line, flush on non-empty line.
+    if state.ctrl_held && key == KeyCode::D {
+        if state.line_len == 0 {
+            // Empty line: signal EOF to the reader.
+            state.eof_pending = true;
+            return Some(EchoAction::Eof);
+        }
+        // Non-empty line: flush the current line buffer without a trailing newline.
+        let len = state.line_len;
+        for i in 0..len {
+            let byte = state.line_buf[i];
+            let _ = state.ready_buf.try_push(byte);
+        }
+        state.line_len = 0;
+        return Some(EchoAction::FlushLine);
     }
 
     let shifted = state.shift_held;
@@ -405,6 +429,8 @@ pub fn poll_keyboard_hardware() {
             Some(EchoAction::Newline) => crate::kprint!("\n"),
             Some(EchoAction::Char(ch)) => crate::kprint!("{}", *ch as char),
             Some(EchoAction::Interrupt) => crate::kprint!("^C\n"),
+            Some(EchoAction::Eof) => {}      // No echo for EOF
+            Some(EchoAction::FlushLine) => {} // No echo for flush
             None => {}
         }
     }
@@ -412,10 +438,18 @@ pub fn poll_keyboard_hardware() {
 
 /// Non-blocking read from the completed-line buffer.
 ///
-/// Copies up to `buf.len()` bytes from the ready buffer into `buf`.
-/// Returns the number of bytes actually copied.
-pub fn try_read(buf: &mut [u8]) -> usize {
+/// Returns `Some(n)` with the number of bytes copied into `buf`, `Some(0)` if
+/// EOF was signaled (Ctrl+D on an empty line), or `None` if no data is
+/// available yet.
+pub fn try_read(buf: &mut [u8]) -> Option<usize> {
     let mut state = STATE.lock();
+
+    // Check for pending EOF (Ctrl+D on empty line).
+    if state.eof_pending {
+        state.eof_pending = false;
+        return Some(0);
+    }
+
     let mut n = 0;
     for slot in buf.iter_mut() {
         match state.ready_buf.pop() {
@@ -426,11 +460,14 @@ pub fn try_read(buf: &mut [u8]) -> usize {
             None => break,
         }
     }
-    #[cfg(hadron_lock_debug)]
+
     if n > 0 {
+        #[cfg(hadron_lock_debug)]
         diag::inc(&diag::DATA_READY_COUNT);
+        Some(n)
+    } else {
+        None
     }
-    n
 }
 
 /// Keyboard IRQ handler — drains the PS/2 FIFO and wakes the waiting reader.
