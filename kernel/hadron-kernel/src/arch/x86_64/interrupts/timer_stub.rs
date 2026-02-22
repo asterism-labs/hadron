@@ -14,7 +14,7 @@
 //! [`USER_CONTEXT`]: crate::proc::USER_CONTEXT
 
 use crate::arch::x86_64::acpi::timer_tick_and_eoi;
-use crate::proc::{KERNEL_CR3, TRAP_PREEMPTED};
+use crate::proc::{KERNEL_CR3, TrapReason};
 
 /// MSR address for `IA32_GS_BASE`.
 const IA32_GS_BASE_MSR: u32 = 0xC000_0101;
@@ -117,7 +117,7 @@ pub(crate) unsafe extern "C" fn timer_preempt_stub() {
         kernel_cr3    = sym KERNEL_CR3,
         gs_base_msr   = const IA32_GS_BASE_MSR,
         kgs_base_msr  = const IA32_KERNEL_GS_BASE_MSR,
-        preempted     = const TRAP_PREEMPTED,
+        preempted     = const TrapReason::Preempted as u8,
     );
 }
 
@@ -233,6 +233,6 @@ pub(crate) unsafe extern "C" fn timer_preempt_stub() {
         kernel_cr3     = sym KERNEL_CR3,
         gs_base_msr    = const IA32_GS_BASE_MSR,
         kgs_base_msr   = const IA32_KERNEL_GS_BASE_MSR,
-        preempted      = const TRAP_PREEMPTED,
+        preempted      = const TrapReason::Preempted as u8,
     );
 }

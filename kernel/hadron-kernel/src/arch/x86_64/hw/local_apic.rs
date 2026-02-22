@@ -4,6 +4,7 @@
 //! timer configuration, and inter-processor interrupts.
 
 use crate::addr::VirtAddr;
+use crate::id::IrqVector;
 
 // Register offsets from LAPIC base.
 const REG_ID: u32 = 0x020;
@@ -54,8 +55,8 @@ impl LocalApic {
     }
 
     /// Enables the Local APIC with the given spurious interrupt vector.
-    pub fn enable(&self, spurious_vector: u8) {
-        let svr = SVR_ENABLE | u32::from(spurious_vector);
+    pub fn enable(&self, spurious_vector: IrqVector) {
+        let svr = SVR_ENABLE | u32::from(spurious_vector.as_u8());
         self.write_reg(REG_SVR, svr);
     }
 
@@ -70,16 +71,16 @@ impl LocalApic {
     }
 
     /// Starts the LAPIC timer in periodic mode.
-    pub fn start_timer_periodic(&self, vector: u8, initial_count: u32, divide: u8) {
+    pub fn start_timer_periodic(&self, vector: IrqVector, initial_count: u32, divide: u8) {
         self.write_reg(REG_TIMER_DIVIDE, divide_config(divide));
-        self.write_reg(REG_LVT_TIMER, TIMER_PERIODIC | u32::from(vector));
+        self.write_reg(REG_LVT_TIMER, TIMER_PERIODIC | u32::from(vector.as_u8()));
         self.write_reg(REG_TIMER_INITIAL, initial_count);
     }
 
     /// Starts the LAPIC timer in one-shot mode.
-    pub fn start_timer_oneshot(&self, vector: u8, initial_count: u32, divide: u8) {
+    pub fn start_timer_oneshot(&self, vector: IrqVector, initial_count: u32, divide: u8) {
         self.write_reg(REG_TIMER_DIVIDE, divide_config(divide));
-        self.write_reg(REG_LVT_TIMER, u32::from(vector));
+        self.write_reg(REG_LVT_TIMER, u32::from(vector.as_u8()));
         self.write_reg(REG_TIMER_INITIAL, initial_count);
     }
 
@@ -99,11 +100,11 @@ impl LocalApic {
     ///
     /// The caller must ensure the target APIC ID is valid and the vector
     /// is appropriately configured.
-    pub unsafe fn send_ipi(&self, target_apic_id: u8, vector: u8) {
+    pub unsafe fn send_ipi(&self, target_apic_id: u8, vector: IrqVector) {
         // Write destination APIC ID to high dword.
         self.write_reg(REG_ICR_HIGH, u32::from(target_apic_id) << 24);
         // Write vector to low dword (fixed delivery, physical destination).
-        self.write_reg(REG_ICR_LOW, u32::from(vector));
+        self.write_reg(REG_ICR_LOW, u32::from(vector.as_u8()));
         // Wait for delivery.
         while self.read_reg(REG_ICR_LOW) & (1 << 12) != 0 {
             core::hint::spin_loop();

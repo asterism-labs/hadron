@@ -62,7 +62,7 @@ static IDT: LazyLock<InterruptDescriptorTable> = LazyLock::new(|| {
 
     // Override vector 254 (LAPIC timer) with the custom preemption-aware
     // stub that saves user register state on ring-3 interrupts.
-    idt.interrupts[(dispatch::vectors::TIMER - 32) as usize]
+    idt.interrupts[(dispatch::vectors::TIMER.as_u8() - 32) as usize]
         .set_raw_handler_addr(timer_stub::timer_preempt_stub as *const () as u64);
 
     idt

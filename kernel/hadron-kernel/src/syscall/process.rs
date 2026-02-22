@@ -24,7 +24,7 @@ pub(super) fn sys_task_exit(status: usize) -> isize {
 
     // Store exit status and trap reason, then jump back to the process task.
     crate::proc::set_process_exit_status(status as u64);
-    crate::proc::set_trap_reason(crate::proc::TRAP_EXIT);
+    crate::proc::set_trap_reason(crate::proc::TrapReason::Exit);
     let saved_rsp = crate::proc::saved_kernel_rsp();
 
     unsafe {
@@ -40,7 +40,7 @@ pub(super) fn sys_task_exit(status: usize) -> isize {
     reason = "PIDs are small u32 values, wrap is impossible"
 )]
 pub(super) fn sys_task_info() -> isize {
-    crate::proc::try_current_process(|process| process.pid as isize).unwrap_or(0)
+    crate::proc::try_current_process(|process| process.pid.as_u32() as isize).unwrap_or(0)
 }
 
 /// Maximum number of arguments that can be passed to a spawned process.
@@ -202,7 +202,7 @@ pub(super) fn sys_task_spawn(info_ptr: usize, info_len: usize) -> isize {
     let parent_pid = crate::proc::with_current_process(|p| p.pid);
 
     match crate::proc::exec::spawn_process(path, parent_pid, args, envs) {
-        Ok(child) => child.pid as isize,
+        Ok(child) => child.pid.as_u32() as isize,
         Err(_) => -(crate::syscall::ENOENT),
     }
 }
@@ -236,8 +236,8 @@ pub(super) fn sys_task_wait(pid: usize, status_ptr: usize) -> isize {
 
     // Set up wait parameters for process_task to read.
     #[expect(clippy::cast_possible_truncation, reason = "PID fits in u32")]
-    crate::proc::set_wait_params(pid as u32, status_ptr as u64);
-    crate::proc::set_trap_reason(crate::proc::TRAP_WAIT);
+    crate::proc::set_wait_params(crate::id::Pid::new(pid as u32), status_ptr as u64);
+    crate::proc::set_trap_reason(crate::proc::TrapReason::Wait);
 
     let saved_rsp = crate::proc::saved_kernel_rsp();
     // SAFETY: saved_rsp is the kernel RSP saved by enter_userspace_save,
@@ -261,7 +261,7 @@ pub(super) fn sys_task_kill(pid: usize, signum: usize) -> isize {
         return -(crate::syscall::EINVAL);
     }
 
-    let target = crate::proc::lookup_process(pid as u32);
+    let target = crate::proc::lookup_process(crate::id::Pid::new(pid as u32));
     match target {
         Some(proc) => {
             proc.signals.post(signum);

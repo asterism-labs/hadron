@@ -160,7 +160,7 @@ pub fn selectors() -> &'static Selectors {
 /// Must be called exactly once per AP, after the heap is available and
 /// VMM is initialized. The caller must ensure no interrupts are processed
 /// before the GDT and TSS are fully loaded.
-pub unsafe fn init_ap(cpu_id: u32) -> u64 {
+pub unsafe fn init_ap(cpu_id: crate::id::CpuId) -> u64 {
     extern crate alloc;
     use alloc::boxed::Box;
 

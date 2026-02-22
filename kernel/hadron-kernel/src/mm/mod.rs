@@ -7,6 +7,7 @@ pub mod layout;
 pub mod mapper;
 pub mod pmm;
 pub mod region;
+pub mod scope;
 pub mod vmm;
 pub mod zone;
 

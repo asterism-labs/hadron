@@ -17,6 +17,7 @@ extern crate alloc;
 pub mod addr;
 pub mod cell;
 pub mod cpu_local;
+pub mod id;
 pub mod paging;
 pub mod static_assert;
 pub mod sync;

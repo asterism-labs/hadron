@@ -11,6 +11,7 @@
 
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
+use crate::id::CpuId;
 use crate::percpu::MAX_CPUS;
 use crate::task::Priority;
 use crate::arch::x86_64::hw::local_apic::LocalApic;
@@ -19,7 +20,7 @@ use super::executor::TaskEntry;
 use crate::arch::x86_64::interrupts::dispatch::vectors;
 
 /// IPI vector used to wake a CPU from HLT.
-const IPI_WAKE_VECTOR: u8 = vectors::IPI_START; // 240
+const IPI_WAKE_VECTOR: crate::id::IrqVector = vectors::IPI_START; // 240
 
 /// Global flag set by the panic handler to signal all CPUs to halt.
 ///
@@ -38,8 +39,8 @@ static CPU_APIC_IDS: [AtomicU8; MAX_CPUS] = {
 /// Registers a CPU's APIC ID for IPI routing.
 ///
 /// Called during BSP ACPI init (cpu_id=0) and AP bootstrap (cpu_id=1+).
-pub fn register_cpu_apic_id(cpu_id: u32, apic_id: u8) {
-    CPU_APIC_IDS[cpu_id as usize].store(apic_id, Ordering::Release);
+pub fn register_cpu_apic_id(cpu_id: CpuId, apic_id: u8) {
+    CPU_APIC_IDS[cpu_id.as_u32() as usize].store(apic_id, Ordering::Release);
 }
 
 /// Initializes the IPI wakeup vector handler.
@@ -55,14 +56,14 @@ pub fn init() {
 /// The interrupt itself breaks the target CPU out of `enable_and_hlt()`.
 /// No additional work is needed here because the task was already pushed
 /// into the target executor's ready queue before the IPI was sent.
-fn ipi_wake_handler(_vector: u8) {}
+fn ipi_wake_handler(_vector: crate::id::IrqVector) {}
 
 /// Sends a wakeup IPI to the specified CPU.
 ///
 /// The target CPU will exit `enable_and_hlt()`, re-enter the executor loop,
 /// and poll any newly enqueued tasks.
-pub fn send_wake_ipi(target_cpu: u32) {
-    let target_apic_id = CPU_APIC_IDS[target_cpu as usize].load(Ordering::Acquire);
+pub fn send_wake_ipi(target_cpu: CpuId) {
+    let target_apic_id = CPU_APIC_IDS[target_cpu.as_u32() as usize].load(Ordering::Acquire);
     if let Some(lapic_virt) = crate::arch::x86_64::acpi::lapic_virt() {
         // SAFETY: The LAPIC is mapped and permanent. The target APIC ID was
         // registered during bootstrap. IPI_WAKE_VECTOR has a registered
@@ -96,7 +97,7 @@ pub(crate) fn try_steal() -> Option<(crate::task::TaskId, Priority, TaskEntry)> 
     let start = (crate::arch::x86_64::acpi::timer_ticks() as u32) % cpu_count;
 
     for i in 1..cpu_count {
-        let target = (start + i) % cpu_count;
+        let target = CpuId::new((start + i) % cpu_count);
         if target == local_cpu {
             continue;
         }

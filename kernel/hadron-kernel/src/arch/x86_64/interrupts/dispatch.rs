@@ -8,12 +8,13 @@
 use core::sync::atomic::{AtomicPtr, Ordering};
 
 use crate::arch::x86_64::structures::idt::InterruptStackFrame;
+use crate::id::IrqVector;
 
 /// Number of hardware interrupt vectors (32-255).
 const NUM_VECTORS: usize = 224;
 
 /// Handler function signature: receives the vector number.
-pub type InterruptHandler = fn(u8);
+pub type InterruptHandler = fn(IrqVector);
 
 /// Static dispatch table: one atomic function pointer per vector (32-255).
 /// Null means no handler registered.
@@ -47,11 +48,12 @@ impl core::fmt::Display for InterruptError {
 /// Registers a handler for the given interrupt vector (32-255).
 ///
 /// Returns an error if the vector is out of range or already has a handler.
-pub fn register_handler(vector: u8, handler: InterruptHandler) -> Result<(), InterruptError> {
-    if vector < 32 {
+pub fn register_handler(vector: IrqVector, handler: InterruptHandler) -> Result<(), InterruptError> {
+    let raw = vector.as_u8();
+    if raw < 32 {
         return Err(InterruptError::InvalidVector);
     }
-    let idx = (vector - 32) as usize;
+    let idx = (raw - 32) as usize;
     if idx >= NUM_VECTORS {
         return Err(InterruptError::InvalidVector);
     }
@@ -74,9 +76,10 @@ pub fn register_handler(vector: u8, handler: InterruptHandler) -> Result<(), Int
 }
 
 /// Unregisters the handler for the given interrupt vector.
-pub fn unregister_handler(vector: u8) {
-    if vector >= 32 {
-        let idx = (vector - 32) as usize;
+pub fn unregister_handler(vector: IrqVector) {
+    let raw = vector.as_u8();
+    if raw >= 32 {
+        let idx = (raw - 32) as usize;
         if idx < NUM_VECTORS {
             HANDLERS[idx].store(core::ptr::null_mut(), Ordering::Release);
             crate::ktrace_subsys!(irq, "unregistered handler for vector {}", vector);
@@ -96,7 +99,7 @@ fn dispatch_interrupt(vector: u8) {
             // SAFETY: The handler was registered via `register_handler` which
             // takes a valid `fn(u8)` pointer.
             let f: InterruptHandler = unsafe { core::mem::transmute(handler) };
-            f(vector);
+            f(IrqVector::new(vector));
         }
     }
 
@@ -373,34 +376,36 @@ pub static STUBS: [StubFn; NUM_VECTORS] = [
 
 /// Well-known vector assignments.
 pub mod vectors {
+    use crate::id::IrqVector;
+
     /// LAPIC timer vector.
-    pub const TIMER: u8 = 254;
+    pub const TIMER: IrqVector = IrqVector::new(254);
     /// Spurious interrupt vector.
-    pub const SPURIOUS: u8 = 255;
+    pub const SPURIOUS: IrqVector = IrqVector::new(255);
     /// First vector available for dynamic allocation.
     pub const DYNAMIC_START: u8 = 48;
     /// Last vector available for dynamic allocation.
     pub const DYNAMIC_END: u8 = 239;
     /// First IPI vector.
-    pub const IPI_START: u8 = 240;
+    pub const IPI_START: IrqVector = IrqVector::new(240);
     /// Last IPI vector.
-    pub const IPI_END: u8 = 253;
+    pub const IPI_END: IrqVector = IrqVector::new(253);
 
     /// Returns the interrupt vector for an ISA IRQ (0-15).
     #[must_use]
-    pub const fn isa_irq_vector(irq: u8) -> u8 {
-        32 + irq
+    pub const fn isa_irq_vector(irq: u8) -> IrqVector {
+        IrqVector::new(32 + irq)
     }
 }
 
 /// Allocates a free vector in the dynamic range (48-239).
 ///
 /// Performs a linear scan of the handler table for the first unregistered slot.
-pub fn alloc_vector() -> Result<u8, InterruptError> {
-    for vector in vectors::DYNAMIC_START..=vectors::DYNAMIC_END {
-        let idx = (vector - 32) as usize;
+pub fn alloc_vector() -> Result<IrqVector, InterruptError> {
+    for raw in vectors::DYNAMIC_START..=vectors::DYNAMIC_END {
+        let idx = (raw - 32) as usize;
         if HANDLERS[idx].load(Ordering::Acquire).is_null() {
-            return Ok(vector);
+            return Ok(IrqVector::new(raw));
         }
     }
     Err(InterruptError::VectorExhausted)

@@ -1,5 +1,6 @@
 //! VFS syscall handlers: open, read, write, close, stat, readdir, dup.
 
+use crate::id::Fd;
 use crate::syscall::EFAULT;
 use crate::syscall::userptr::UserSlice;
 
@@ -43,7 +44,7 @@ pub(super) fn sys_vnode_open(path_ptr: usize, path_len: usize, flags: usize) -> 
         fd_table.open(inode, open_flags)
     });
 
-    fd as isize
+    fd.as_u32() as isize
 }
 
 /// `sys_vnode_read` — read from an open file descriptor.
@@ -61,6 +62,7 @@ pub(super) fn sys_vnode_open(path_ptr: usize, path_len: usize, flags: usize) -> 
     reason = "byte counts are small, wrap is impossible"
 )]
 pub(super) fn sys_vnode_read(fd: usize, buf_ptr: usize, buf_len: usize) -> isize {
+    let fd = Fd::new(fd as u32);
     let Ok(user_slice) = UserSlice::new(buf_ptr, buf_len) else {
         return -EFAULT;
     };
@@ -122,6 +124,7 @@ pub(super) fn sys_vnode_read(fd: usize, buf_ptr: usize, buf_len: usize) -> isize
     reason = "byte counts are small, wrap is impossible"
 )]
 pub(super) fn sys_vnode_write(fd: usize, buf_ptr: usize, buf_len: usize) -> isize {
+    let fd = Fd::new(fd as u32);
     let Ok(user_slice) = UserSlice::new(buf_ptr, buf_len) else {
         return -EFAULT;
     };
@@ -175,6 +178,7 @@ pub(super) fn sys_vnode_write(fd: usize, buf_ptr: usize, buf_len: usize) -> isiz
 ///
 /// Returns 0 on success, or a negative errno on failure.
 pub(super) fn sys_handle_close(fd: usize) -> isize {
+    let fd = Fd::new(fd as u32);
     crate::proc::with_current_process(|process| {
         let mut fd_table = process.fd_table.lock();
         match fd_table.close(fd) {
@@ -196,6 +200,8 @@ pub(super) fn sys_handle_close(fd: usize) -> isize {
     reason = "fd numbers are small, wrap is impossible"
 )]
 pub(super) fn sys_handle_dup(old_fd: usize, new_fd: usize) -> isize {
+    let old_fd = Fd::new(old_fd as u32);
+    let new_fd = Fd::new(new_fd as u32);
     crate::proc::with_current_process(|process| {
         let mut fd_table = process.fd_table.lock();
         let Some(src) = fd_table.get(old_fd) else {
@@ -208,7 +214,7 @@ pub(super) fn sys_handle_dup(old_fd: usize, new_fd: usize) -> isize {
         let _ = fd_table.close(new_fd);
 
         fd_table.insert_at(new_fd, inode, flags);
-        new_fd as isize
+        new_fd.as_u32() as isize
     })
 }
 
@@ -221,6 +227,7 @@ pub(super) fn sys_handle_dup(old_fd: usize, new_fd: usize) -> isize {
 ///
 /// Returns 0 on success, or a negative errno on failure.
 pub(super) fn sys_vnode_stat(fd: usize, buf_ptr: usize, buf_len: usize) -> isize {
+    let fd = Fd::new(fd as u32);
     use crate::syscall::{EINVAL, StatInfo};
 
     let stat_size = core::mem::size_of::<StatInfo>();
@@ -296,10 +303,11 @@ pub(super) fn sys_handle_pipe(fds_ptr: usize) -> isize {
     });
 
     // SAFETY: UserSlice validated the pointer range is in user space.
+    // The ABI returns fd numbers as usize values to userspace.
     unsafe {
         let dst = user_slice.addr() as *mut usize;
-        core::ptr::write(dst, read_fd);
-        core::ptr::write(dst.add(1), write_fd);
+        core::ptr::write(dst, read_fd.as_usize());
+        core::ptr::write(dst.add(1), write_fd.as_usize());
     }
 
     0
@@ -318,6 +326,7 @@ pub(super) fn sys_handle_pipe(fds_ptr: usize) -> isize {
     reason = "entry counts are small, wrap is impossible"
 )]
 pub(super) fn sys_vnode_readdir(fd: usize, buf_ptr: usize, buf_len: usize) -> isize {
+    let fd = Fd::new(fd as u32);
     use crate::syscall::DirEntryInfo;
 
     let entry_size = core::mem::size_of::<DirEntryInfo>();
@@ -389,7 +398,7 @@ pub(super) fn sys_vnode_readdir(fd: usize, buf_ptr: usize, buf_len: usize) -> is
 ///
 /// Sets the I/O parameters, restores kernel CR3 and GS bases, then
 /// calls `restore_kernel_context` — never returns.
-fn trap_io(fd: usize, buf_ptr: usize, buf_len: usize, is_write: bool) -> ! {
+fn trap_io(fd: Fd, buf_ptr: usize, buf_len: usize, is_write: bool) -> ! {
     use crate::arch::x86_64::registers::control::Cr3;
     use crate::arch::x86_64::registers::model_specific::{IA32_GS_BASE, IA32_KERNEL_GS_BASE};
     use crate::arch::x86_64::userspace::restore_kernel_context;
@@ -405,7 +414,7 @@ fn trap_io(fd: usize, buf_ptr: usize, buf_len: usize, is_write: bool) -> ! {
     }
 
     crate::proc::set_io_params(fd, buf_ptr, buf_len, is_write);
-    crate::proc::set_trap_reason(crate::proc::TRAP_IO);
+    crate::proc::set_trap_reason(crate::proc::TrapReason::Io);
 
     let saved_rsp = crate::proc::saved_kernel_rsp();
     // SAFETY: saved_rsp is the kernel RSP saved by enter_userspace_save,

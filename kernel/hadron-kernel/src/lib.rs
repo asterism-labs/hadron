@@ -19,6 +19,7 @@ extern crate alloc;
 pub use hadron_core::addr;
 pub use hadron_core::cell;
 pub use hadron_core::cpu_local;
+pub use hadron_core::id;
 pub use hadron_core::paging;
 pub use hadron_core::static_assert;
 pub use hadron_core::sync;

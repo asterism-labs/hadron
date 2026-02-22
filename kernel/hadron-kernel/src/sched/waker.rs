@@ -11,6 +11,7 @@
 
 use core::task::{RawWaker, RawWakerVTable, Waker};
 
+use crate::id::CpuId;
 use crate::task::{Priority, TaskId};
 
 /// Mask for the 56-bit task ID field (bits 55-0).
@@ -32,15 +33,15 @@ pub fn task_waker(id: TaskId, priority: Priority) -> Waker {
 }
 
 fn pack(id: TaskId, priority: Priority) -> *const () {
-    let cpu_id = crate::percpu::current_cpu().get_cpu_id() as u64;
+    let cpu_id = crate::percpu::current_cpu().get_cpu_id().as_u32() as u64;
     let packed = ((priority as u64) << 62) | (cpu_id << CPU_SHIFT) | (id.0 & ID_MASK);
     packed as *const ()
 }
 
-fn unpack(data: *const ()) -> (TaskId, Priority, u32) {
+fn unpack(data: *const ()) -> (TaskId, Priority, CpuId) {
     let raw = data as u64;
     let priority = Priority::from_u8((raw >> 62) as u8);
-    let cpu_id = ((raw >> CPU_SHIFT) & CPU_MASK) as u32;
+    let cpu_id = CpuId::new(((raw >> CPU_SHIFT) & CPU_MASK) as u32);
     let id = TaskId(raw & ID_MASK);
     (id, priority, cpu_id)
 }

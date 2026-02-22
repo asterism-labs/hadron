@@ -429,7 +429,7 @@ unsafe impl FrameDeallocator<Size4KiB> for BitmapFrameAllocRef<'_> {
 use crate::boot::{BootInfo, MemoryRegionKind};
 
 /// Global physical memory manager.
-static PMM: SpinLock<Option<BitmapAllocator>> = SpinLock::leveled("PMM", 2, None);
+static PMM: SpinLock<Option<BitmapAllocator>> = SpinLock::leveled("PMM", 3, None);
 
 /// Initializes the PMM from boot info.
 ///

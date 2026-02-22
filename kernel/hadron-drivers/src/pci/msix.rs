@@ -6,6 +6,7 @@
 
 use super::cam::PciCam;
 use super::caps::MsixCapability;
+use hadron_kernel::id::IrqVector;
 use hadron_kernel::driver_api::capability::MmioCapability;
 use hadron_kernel::driver_api::error::DriverError;
 use hadron_kernel::driver_api::pci::{PciBar, PciDeviceInfo};
@@ -90,7 +91,7 @@ impl MsixTable {
     /// Configures an MSI-X table entry to target the given CPU and vector.
     ///
     /// The entry is left masked; call [`unmask`](Self::unmask) after setup.
-    pub fn set_entry(&self, index: u16, vector: u8, cpu: u8) {
+    pub fn set_entry(&self, index: u16, vector: IrqVector, cpu: u8) {
         let base = self.entry_offset(index);
 
         let addr_lo = MSIX_MSG_ADDR_BASE | (u32::from(cpu) << 12);
@@ -100,7 +101,7 @@ impl MsixTable {
         unsafe {
             self.write_entry_u32(base + ENTRY_MSG_ADDR_LO, addr_lo);
             self.write_entry_u32(base + ENTRY_MSG_ADDR_HI, 0);
-            self.write_entry_u32(base + ENTRY_MSG_DATA, u32::from(vector));
+            self.write_entry_u32(base + ENTRY_MSG_DATA, u32::from(vector.as_u8()));
             // Mask the entry (bit 0 = 1).
             self.write_entry_u32(base + ENTRY_VECTOR_CTRL, 1);
         }

@@ -5,6 +5,7 @@
 //! returns a [`Process`] ready to run.
 
 use crate::addr::VirtAddr;
+use crate::id::Pid;
 use crate::mm::PAGE_SIZE;
 use crate::mm::address_space::AddressSpace;
 use crate::mm::mapper::{MapFlags, PageMapper, PageTranslator};
@@ -55,7 +56,7 @@ fn dealloc_frame(frame: PhysFrame<Size4KiB>) {
 /// is exhausted while mapping segments or stack.
 pub fn create_process_from_binary(
     data: &[u8],
-    parent_pid: Option<u32>,
+    parent_pid: Option<Pid>,
 ) -> Result<(Process, u64, u64), BinaryError> {
     #[cfg(target_arch = "x86_64")]
     type KernelMapper = crate::arch::x86_64::paging::PageTableMapper;
@@ -424,7 +425,7 @@ pub fn write_argv_to_init_stack<M: PageMapper<Size4KiB> + PageTranslator>(
 /// be read, or the binary cannot be loaded.
 pub fn spawn_process(
     path: &str,
-    parent_pid: u32,
+    parent_pid: Pid,
     args: &[&str],
     envs: &[&str],
 ) -> Result<Arc<Process>, BinaryError> {
@@ -457,16 +458,16 @@ pub fn spawn_process(
         let parent = super::lookup_process(parent_pid).expect("spawn_process: parent not found");
         let parent_fds = parent.fd_table.lock();
         let mut fd_table = process.fd_table.lock();
-        for fd_num in 0..=2usize {
-            if let Some(parent_fd) = parent_fds.get(fd_num) {
-                fd_table.insert_at(fd_num, parent_fd.inode.clone(), parent_fd.flags);
+        for &fd in &[crate::id::Fd::STDIN, crate::id::Fd::STDOUT, crate::id::Fd::STDERR] {
+            if let Some(parent_fd) = parent_fds.get(fd) {
+                fd_table.insert_at(fd, parent_fd.inode.clone(), parent_fd.flags);
             } else {
-                let flags = if fd_num == 0 {
+                let flags = if fd == crate::id::Fd::STDIN {
                     OpenFlags::READ
                 } else {
                     OpenFlags::WRITE
                 };
-                fd_table.insert_at(fd_num, console.clone(), flags);
+                fd_table.insert_at(fd, console.clone(), flags);
             }
         }
     }

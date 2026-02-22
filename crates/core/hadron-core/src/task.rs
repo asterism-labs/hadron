@@ -1,5 +1,7 @@
 //! Kernel task types.
 
+use crate::id::CpuId;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -42,10 +44,10 @@ mod tests {
     fn task_meta_builder() {
         let meta = TaskMeta::new("test-task")
             .with_priority(Priority::Critical)
-            .with_affinity(2);
+            .with_affinity(CpuId::new(2));
         assert_eq!(meta.name, "test-task");
         assert_eq!(meta.priority, Priority::Critical);
-        assert_eq!(meta.affinity, Some(2));
+        assert_eq!(meta.affinity, Some(CpuId::new(2)));
     }
 
     #[test]
@@ -99,7 +101,7 @@ pub struct TaskMeta {
     /// Priority tier.
     pub priority: Priority,
     /// CPU affinity: `None` = any CPU, `Some(id)` = pinned.
-    pub affinity: Option<u32>,
+    pub affinity: Option<CpuId>,
 }
 
 impl Default for TaskMeta {
@@ -129,7 +131,7 @@ impl TaskMeta {
     }
 
     /// Sets CPU affinity.
-    pub const fn with_affinity(mut self, cpu: u32) -> Self {
+    pub const fn with_affinity(mut self, cpu: CpuId) -> Self {
         self.affinity = Some(cpu);
         self
     }

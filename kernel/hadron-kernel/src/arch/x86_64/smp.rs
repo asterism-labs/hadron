@@ -22,6 +22,7 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use alloc::boxed::Box;
 
 use crate::arch::x86_64::registers::model_specific::{IA32_GS_BASE, IA32_KERNEL_GS_BASE};
+use crate::id::CpuId;
 use crate::percpu::{MAX_CPUS, PerCpu};
 use crate::{kdebug, kinfo, kwarn};
 use crate::arch::x86_64::hw::local_apic::LocalApic;
@@ -170,7 +171,7 @@ pub fn boot_aps(boot_info: &impl BootInfo) {
 
     // Allocate per-CPU state for each AP and store in the shared table.
     for (i, cpu_entry) in smp_cpus.iter().enumerate() {
-        let cpu_id = (i + 1) as u32; // BSP is CPU 0
+        let cpu_id = CpuId::new((i + 1) as u32); // BSP is CPU 0
 
         // Heap-allocate a PerCpu for this AP. Leaked because it must live forever.
         let percpu = Box::leak(Box::new(PerCpu::new()));
@@ -297,7 +298,7 @@ fn ap_entry(_mp_info: u64, percpu_addr: u64) -> ! {
 }
 
 /// Initializes the Local APIC on an AP and starts the periodic timer.
-fn init_ap_lapic(cpu_id: u32) {
+fn init_ap_lapic(cpu_id: CpuId) {
     use crate::arch::x86_64::interrupts::dispatch::vectors;
 
     let lapic_virt = super::acpi::lapic_virt().expect("AP bootstrap: LAPIC not initialized by BSP");

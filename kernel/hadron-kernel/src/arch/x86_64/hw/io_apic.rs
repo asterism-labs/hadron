@@ -3,6 +3,7 @@
 //! Controls external interrupt routing from hardware devices to Local APICs.
 
 use crate::addr::VirtAddr;
+use crate::id::IrqVector;
 
 const IOREGSEL: u32 = 0x00;
 const IOWIN: u32 = 0x10;
@@ -59,7 +60,7 @@ pub enum TriggerMode {
 #[derive(Debug, Clone, Copy)]
 pub struct RedirectionEntry {
     /// Interrupt vector (32-255).
-    pub vector: u8,
+    pub vector: IrqVector,
     /// Delivery mode.
     pub delivery_mode: DeliveryMode,
     /// Destination mode.
@@ -77,7 +78,7 @@ pub struct RedirectionEntry {
 impl RedirectionEntry {
     /// Encodes this entry as a 64-bit register value.
     fn encode(&self) -> u64 {
-        let mut val: u64 = u64::from(self.vector);
+        let mut val: u64 = u64::from(self.vector.as_u8());
         val |= u64::from(self.delivery_mode as u8) << 8;
         if self.destination_mode == DestinationMode::Logical {
             val |= 1 << 11;

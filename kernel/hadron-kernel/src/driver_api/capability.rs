@@ -12,6 +12,7 @@ use core::pin::Pin;
 
 use super::error::DriverError;
 use super::resource::MmioRegion;
+use crate::id::IrqVector;
 
 // ---------------------------------------------------------------------------
 // IrqCapability
@@ -34,7 +35,7 @@ impl IrqCapability {
     }
 
     /// Registers an interrupt handler for the given vector.
-    pub fn register_handler(&self, vector: u8, handler: fn(u8)) -> Result<(), DriverError> {
+    pub fn register_handler(&self, vector: IrqVector, handler: fn(IrqVector)) -> Result<(), DriverError> {
         #[cfg(target_os = "none")]
         {
             crate::arch::interrupts::register_handler(vector, handler)
@@ -48,7 +49,7 @@ impl IrqCapability {
     }
 
     /// Unregisters a previously registered interrupt handler.
-    pub fn unregister_handler(&self, vector: u8) {
+    pub fn unregister_handler(&self, vector: IrqVector) {
         #[cfg(target_os = "none")]
         crate::arch::interrupts::unregister_handler(vector);
         #[cfg(not(target_os = "none"))]
@@ -56,19 +57,19 @@ impl IrqCapability {
     }
 
     /// Returns the interrupt vector for a given ISA IRQ number.
-    pub fn isa_irq_vector(&self, irq: u8) -> u8 {
+    pub fn isa_irq_vector(&self, irq: u8) -> IrqVector {
         #[cfg(target_os = "none")]
         {
             crate::arch::interrupts::vectors::isa_irq_vector(irq)
         }
         #[cfg(not(target_os = "none"))]
         {
-            irq + 32
+            IrqVector::new(irq + 32)
         }
     }
 
     /// Allocates a free interrupt vector.
-    pub fn alloc_vector(&self) -> Result<u8, DriverError> {
+    pub fn alloc_vector(&self) -> Result<IrqVector, DriverError> {
         #[cfg(target_os = "none")]
         {
             crate::arch::interrupts::alloc_vector().map_err(interrupt_error_to_driver_error)
@@ -136,7 +137,9 @@ impl MmioCapability {
         #[cfg(target_os = "none")]
         {
             let phys = crate::addr::PhysAddr::new(phys_base);
-            let virt = crate::mm::vmm::map_mmio_region(phys, size);
+            let mapping = crate::mm::vmm::map_mmio_region(phys, size);
+            let virt = mapping.virt_base();
+            core::mem::forget(mapping); // driver mappings are permanent
             // SAFETY: The VMM just mapped this region; phys and virt refer to the
             // same physical memory and the mapping is valid for the kernel's lifetime.
             Ok(unsafe { MmioRegion::new(phys, virt, size) })

@@ -7,6 +7,8 @@
 
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 
+use crate::id::CpuId;
+
 /// Syscall stack size for early boot (16 KiB).
 ///
 /// This static BSS stack is used during early boot before the VMM is
@@ -109,15 +111,15 @@ impl PerCpu {
     }
 
     /// Initializes this per-CPU instance.
-    pub fn init(&self, cpu_id: u32, apic_id: u8) {
-        self.cpu_id.store(cpu_id, Ordering::Relaxed);
+    pub fn init(&self, cpu_id: CpuId, apic_id: u8) {
+        self.cpu_id.store(cpu_id.as_u32(), Ordering::Relaxed);
         self.apic_id.store(apic_id, Ordering::Relaxed);
         self.initialized.store(true, Ordering::Release);
     }
 
     /// Returns the CPU ID.
-    pub fn get_cpu_id(&self) -> u32 {
-        self.cpu_id.load(Ordering::Relaxed)
+    pub fn get_cpu_id(&self) -> CpuId {
+        CpuId::new(self.cpu_id.load(Ordering::Relaxed))
     }
 
     /// Returns the APIC ID.
@@ -194,7 +196,7 @@ pub unsafe fn init_gs_base() {
         // pointer. This is needed both in the full kernel boot path and
         // in the test harness (which calls cpu_init but not kernel_init).
         (*percpu_ptr).saved_regs_ptr = crate::arch::x86_64::syscall::SYSCALL_SAVED_REGS
-            .get_for(0)
+            .get_for(CpuId::new(0))
             .get() as u64;
 
         IA32_GS_BASE.write(percpu_addr);
@@ -227,7 +229,7 @@ impl<T> CpuLocal<T> {
     /// Returns a reference to the current CPU's instance.
     #[cfg(target_arch = "x86_64")]
     pub fn get(&self) -> &T {
-        &self.data[current_cpu().get_cpu_id() as usize]
+        &self.data[current_cpu().get_cpu_id().as_u32() as usize]
     }
 
     /// Host-only fallback: always returns CPU 0's instance.
@@ -237,8 +239,8 @@ impl<T> CpuLocal<T> {
     }
 
     /// Returns a reference to a specific CPU's instance.
-    pub fn get_for(&self, cpu_id: u32) -> &T {
-        &self.data[cpu_id as usize]
+    pub fn get_for(&self, cpu_id: CpuId) -> &T {
+        &self.data[cpu_id.as_u32() as usize]
     }
 }
 

@@ -5,6 +5,7 @@
 
 use core::future::Future;
 
+use crate::id::IrqVector;
 use crate::sync::WaitQueue;
 use crate::driver_api::capability::IrqCapability;
 use crate::driver_api::error::DriverError;
@@ -19,8 +20,8 @@ static IRQ_WAITQUEUES: [WaitQueue; MAX_IRQ_LINES] = {
 };
 
 /// Generic IRQ handler that wakes all tasks waiting on the corresponding vector.
-fn irq_wakeup_handler(vector: u8) {
-    let idx = (vector - 32) as usize;
+fn irq_wakeup_handler(vector: IrqVector) {
+    let idx = (vector.as_u8() - 32) as usize;
     if idx < MAX_IRQ_LINES {
         IRQ_WAITQUEUES[idx].wake_all();
     }
@@ -32,7 +33,7 @@ fn irq_wakeup_handler(vector: u8) {
 /// given vector. Async tasks call [`wait`](IrqLine::wait) to sleep until the
 /// next interrupt on this line.
 pub struct IrqLine {
-    vector: u8,
+    vector: IrqVector,
 }
 
 impl IrqLine {
@@ -40,7 +41,7 @@ impl IrqLine {
     ///
     /// The vector should be an ISA IRQ vector (32-47) or a dynamically
     /// allocated vector. Returns an error if the vector is already in use.
-    pub fn bind(vector: u8, irq_cap: &IrqCapability) -> Result<Self, DriverError> {
+    pub fn bind(vector: IrqVector, irq_cap: &IrqCapability) -> Result<Self, DriverError> {
         irq_cap.register_handler(vector, irq_wakeup_handler)?;
         Ok(Self { vector })
     }
@@ -57,19 +58,19 @@ impl IrqLine {
     /// Use this when multiple consumers share the same IRQ vector (e.g.,
     /// multiple AHCI ports on the same HBA).
     #[must_use]
-    pub const fn from_vector(vector: u8) -> Self {
+    pub const fn from_vector(vector: IrqVector) -> Self {
         Self { vector }
     }
 
     /// Returns the bound interrupt vector.
     #[must_use]
-    pub const fn vector(&self) -> u8 {
+    pub const fn vector(&self) -> IrqVector {
         self.vector
     }
 
     /// Returns a future that completes when the next interrupt fires on this line.
     pub fn wait(&self) -> impl Future<Output = ()> + '_ {
-        let idx = (self.vector - 32) as usize;
+        let idx = (self.vector.as_u8() - 32) as usize;
         IRQ_WAITQUEUES[idx].wait()
     }
 }

@@ -17,6 +17,7 @@ use core::pin::Pin;
 use core::sync::atomic::{AtomicU64, Ordering};
 use core::task::{Context, Poll};
 
+use crate::id::CpuId;
 use crate::percpu::{CpuLocal, MAX_CPUS};
 use crate::sync::{IrqSpinLock, LazyLock};
 use crate::task::{Priority, TaskId, TaskMeta};
@@ -33,7 +34,7 @@ pub fn global() -> &'static Executor {
 /// Returns a reference to a specific CPU's executor.
 ///
 /// Used by the waker to push tasks back to their originating CPU's queue.
-pub fn for_cpu(cpu_id: u32) -> &'static Executor {
+pub fn for_cpu(cpu_id: CpuId) -> &'static Executor {
     EXECUTORS.get_for(cpu_id)
 }
 
@@ -154,7 +155,7 @@ impl Executor {
     /// Creates a new executor with no tasks.
     pub fn new() -> Self {
         Self {
-            tasks: IrqSpinLock::leveled("Executor.tasks", 13, BTreeMap::new()),
+            tasks: IrqSpinLock::leveled("Executor.tasks", 14, BTreeMap::new()),
             ready_queues: IrqSpinLock::leveled("Executor.ready_queues", 13, ReadyQueues::new()),
             next_id: AtomicU64::new(0),
         }

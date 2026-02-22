@@ -47,13 +47,17 @@ impl WaitQueue {
     ///
     /// Used by [`Mutex`](crate::sync::Mutex) to register interest before
     /// retrying acquisition. Returns `true` if the waker was registered,
-    /// `false` if the queue is full.
+    /// `false` if the queue is full (caller should fall back to spin-poll).
     pub fn register_waker(&self, waker: &Waker) -> bool {
         let mut waiters = self.waiters.lock();
         if waiters.len() < MAX_WAITERS {
             waiters.push(waker.clone());
             true
         } else {
+            // Queue is full — the caller will degrade to spin-polling.
+            // With hadron_lock_debug, this condition can be traced via the
+            // returned false. Increasing MAX_WAITERS or switching to
+            // HeapWaitQueue may be warranted if this triggers often.
             false
         }
     }

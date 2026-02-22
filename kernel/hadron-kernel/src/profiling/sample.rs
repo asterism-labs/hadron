@@ -12,6 +12,7 @@ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use super::buffer::{MAX_SAMPLE_DEPTH, Sample, SampleBufCell, SampleRingBuf};
 use super::format;
 use crate::arch::x86_64::hw::tsc;
+use crate::id::CpuId;
 use crate::percpu::{CpuLocal, cpu_count, current_cpu};
 
 /// Whether sampling is currently active.
@@ -69,7 +70,8 @@ pub fn stop() {
     format::emit_header(format::FLAG_SAMPLES, 0, 0, cpus);
 
     // Drain each CPU's buffer.
-    for cpu_id in 0..cpus {
+    for cpu in 0..cpus {
+        let cpu_id = CpuId::new(cpu);
         let buf_cell = SAMPLE_BUFFERS.get_for(cpu_id);
         // SAFETY: Sampling is stopped, no ISR is writing. We're the only reader.
         let buf: &mut SampleRingBuf = unsafe { &mut *buf_cell.0.get() };
@@ -128,12 +130,12 @@ pub unsafe fn sample_capture(interrupted_rip: u64, _interrupted_rsp: u64, interr
 
     // Capture the sample.
     let tsc_val = tsc::read_tsc();
-    let cpu = current_cpu();
-    let cpu_id = cpu.get_cpu_id();
+    let percpu = current_cpu();
+    let cpu_id = percpu.get_cpu_id();
 
     let mut sample = Sample {
         tsc: tsc_val,
-        cpu_id,
+        cpu_id: cpu_id.as_u32(),
         depth: 0,
         stack: [0; MAX_SAMPLE_DEPTH],
     };

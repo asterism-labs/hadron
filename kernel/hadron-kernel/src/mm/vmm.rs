@@ -386,7 +386,7 @@ type KernelMapper = crate::arch::aarch64::paging::AArch64PageMapper;
 pub type KernelVmm = Vmm<KernelMapper>;
 
 /// Global virtual memory manager.
-static VMM: SpinLock<Option<KernelVmm>> = SpinLock::leveled("VMM", 3, None);
+static VMM: SpinLock<Option<KernelVmm>> = SpinLock::leveled("VMM", 2, None);
 
 /// Initializes the VMM from boot info and the PMM.
 ///
@@ -458,20 +458,38 @@ pub fn with_vmm<R>(f: impl FnOnce(&mut KernelVmm) -> R) -> R {
 /// Maps an MMIO physical region into kernel virtual space.
 ///
 /// Convenience wrapper that acquires both VMM and PMM locks internally.
-/// Returns the virtual base address of the mapping.
-pub fn map_mmio_region(phys: PhysAddr, size: u64) -> VirtAddr {
-    let virt = with_vmm(|vmm| {
+/// Returns an [`MmioMapping`] RAII guard that unmaps the region on drop.
+/// For permanent hardware mappings, call [`core::mem::forget`] on the guard.
+pub fn map_mmio_region(phys: PhysAddr, size: u64) -> MmioMapping {
+    let mapping = with_vmm(|vmm| {
         super::pmm::with_pmm(|pmm| {
             let mut alloc = BitmapFrameAllocRef(pmm);
-            let mapping = vmm
-                .map_mmio(phys, size, &mut alloc, None)
-                .expect("failed to map MMIO region");
-            mapping.virt_base()
+            vmm.map_mmio(phys, size, &mut alloc, Some(default_mmio_cleanup))
+                .expect("failed to map MMIO region")
         })
     });
     // Log after releasing PMM + VMM locks to avoid ordering violations.
-    crate::ktrace_subsys!(mm, "VMM: mapped MMIO phys={:#x} size={:#x} -> virt={:#x}", phys.as_u64(), size, virt.as_u64());
-    virt
+    crate::ktrace_subsys!(mm, "VMM: mapped MMIO phys={:#x} size={:#x} -> virt={:#x}", phys.as_u64(), size, mapping.virt_base().as_u64());
+    mapping
+}
+
+/// Default cleanup callback for MMIO mappings.
+///
+/// Unmaps all pages in the region and returns the virtual address range to
+/// the MMIO region allocator. Does NOT deallocate physical frames because
+/// MMIO frames are device memory, not RAM.
+fn default_mmio_cleanup(virt_base: VirtAddr, size: u64) {
+    with_vmm(|vmm| {
+        let page_size = super::PAGE_SIZE as u64;
+        let page_count = size / page_size;
+        for i in 0..page_count {
+            let virt = virt_base + i * page_size;
+            let page = crate::paging::Page::containing_address(virt);
+            // Ignore errors — the page may already be unmapped.
+            let _ = vmm.unmap_page(page);
+        }
+        let _ = vmm.dealloc_mmio_region(virt_base, size);
+    });
 }
 
 /// Attempts to execute a closure with a mutable reference to the global VMM.

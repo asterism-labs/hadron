@@ -26,6 +26,7 @@ use crate::arch::x86_64::registers::model_specific::{IA32_GS_BASE, IA32_KERNEL_G
 use crate::arch::x86_64::userspace::{
     UserRegisters, enter_userspace_resume, enter_userspace_save, restore_kernel_context,
 };
+use crate::id::Pid;
 use crate::mm::address_space::AddressSpace;
 use crate::mm::layout::VirtRegion;
 use crate::mm::region::FreeRegionAllocator;
@@ -34,20 +35,42 @@ use crate::sync::SpinLock;
 use crate::{kdebug, kinfo};
 
 use crate::fs::file::{FileDescriptorTable, OpenFlags};
+use crate::id::Fd;
 use crate::sync::HeapWaitQueue;
 
-// ── Trap reason constants ────────────────────────────────────────────
+// ── Trap reason ─────────────────────────────────────────────────────
 
-/// Userspace returned via `sys_task_exit`.
-pub const TRAP_EXIT: u8 = 0;
-/// Userspace was preempted by the timer interrupt.
-pub const TRAP_PREEMPTED: u8 = 1;
-/// Userspace was killed by a fault.
-pub const TRAP_FAULT: u8 = 2;
-/// Syscall requested blocking wait (sys_task_wait).
-pub const TRAP_WAIT: u8 = 3;
-/// Syscall requested blocking I/O (pipe read/write).
-pub const TRAP_IO: u8 = 4;
+/// Why userspace returned to the kernel.
+///
+/// Assembly stubs write the raw `u8` discriminant; Rust code reads it
+/// through [`TrapReason::from_u8`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum TrapReason {
+    /// Userspace returned via `sys_task_exit`.
+    Exit = 0,
+    /// Userspace was preempted by the timer interrupt.
+    Preempted = 1,
+    /// Userspace was killed by a fault.
+    Fault = 2,
+    /// Syscall requested blocking wait (sys_task_wait).
+    Wait = 3,
+    /// Syscall requested blocking I/O (pipe read/write).
+    Io = 4,
+}
+
+impl TrapReason {
+    /// Converts a raw `u8` (written by assembly stubs) to a `TrapReason`.
+    pub const fn from_u8(val: u8) -> Self {
+        match val {
+            1 => Self::Preempted,
+            2 => Self::Fault,
+            3 => Self::Wait,
+            4 => Self::Io,
+            _ => Self::Exit,
+        }
+    }
+}
 
 // ── Global statics ──────────────────────────────────────────────────
 
@@ -124,7 +147,7 @@ pub(crate) static USER_CONTEXT: CpuLocal<SyncUserContext> =
 /// Per-CPU trap reason. Set before `restore_kernel_context`.
 /// `pub(crate)` for access from the timer preemption stub.
 pub(crate) static TRAP_REASON: CpuLocal<AtomicU8> =
-    CpuLocal::new([const { AtomicU8::new(TRAP_EXIT) }; MAX_CPUS]);
+    CpuLocal::new([const { AtomicU8::new(TrapReason::Exit as u8) }; MAX_CPUS]);
 
 /// Per-CPU target PID for `sys_task_wait`. Set by syscall handler, read by `process_task`.
 static WAIT_TARGET_PID: CpuLocal<AtomicU32> =
@@ -153,13 +176,14 @@ static IO_IS_WRITE: CpuLocal<AtomicU8> = CpuLocal::new([const { AtomicU8::new(0)
 static FOREGROUND_PID: AtomicU32 = AtomicU32::new(0);
 
 /// Sets the foreground process PID (called from `process_task` during TRAP_WAIT).
-pub fn set_foreground_pid(pid: u32) {
-    FOREGROUND_PID.store(pid, Ordering::Release);
+pub fn set_foreground_pid(pid: Pid) {
+    FOREGROUND_PID.store(pid.as_u32(), Ordering::Release);
 }
 
-/// Returns the current foreground process PID, or 0 if none.
-pub fn foreground_pid() -> u32 {
-    FOREGROUND_PID.load(Ordering::Acquire)
+/// Returns the current foreground process PID, or `None` if none.
+pub fn foreground_pid() -> Option<Pid> {
+    let raw = FOREGROUND_PID.load(Ordering::Acquire);
+    if raw == 0 { None } else { Some(Pid::new(raw)) }
 }
 
 // ── Global process table ────────────────────────────────────────────
@@ -167,7 +191,7 @@ pub fn foreground_pid() -> u32 {
 /// Global process table mapping PID → `Arc<Process>`.
 ///
 /// Processes are inserted on spawn and removed after exit + reaping.
-static PROCESS_TABLE: SpinLock<BTreeMap<u32, Arc<Process>>> = SpinLock::leveled("PROCESS_TABLE", 4, BTreeMap::new());
+static PROCESS_TABLE: SpinLock<BTreeMap<Pid, Arc<Process>>> = SpinLock::leveled("PROCESS_TABLE", 4, BTreeMap::new());
 
 /// Registers a process in the global table.
 pub fn register_process(process: &Arc<Process>) {
@@ -176,19 +200,19 @@ pub fn register_process(process: &Arc<Process>) {
 }
 
 /// Looks up a process by PID.
-pub fn lookup_process(pid: u32) -> Option<Arc<Process>> {
+pub fn lookup_process(pid: Pid) -> Option<Arc<Process>> {
     let table = PROCESS_TABLE.lock();
     table.get(&pid).cloned()
 }
 
 /// Removes a process from the global table.
-pub fn unregister_process(pid: u32) {
+pub fn unregister_process(pid: Pid) {
     let mut table = PROCESS_TABLE.lock();
     table.remove(&pid);
 }
 
 /// Returns the PIDs of all children of the given parent.
-pub fn children_of(parent_pid: u32) -> Vec<u32> {
+pub fn children_of(parent_pid: Pid) -> Vec<Pid> {
     let table = PROCESS_TABLE.lock();
     table
         .values()
@@ -216,9 +240,9 @@ const MMAP_FREE_LIST_CAPACITY: usize = 64;
 /// the stored deallocation callback.
 pub struct Process {
     /// Process ID.
-    pub pid: u32,
+    pub pid: Pid,
     /// Parent process ID (`None` for init).
-    pub parent_pid: Option<u32>,
+    pub parent_pid: Option<Pid>,
     /// Physical address of the user PML4 (cached for fast CR3 switch).
     pub user_cr3: PhysAddr,
     /// User address space (owns the PML4, freed on drop).
@@ -244,19 +268,19 @@ impl Process {
     }
 
     /// Creates a new process with the given address space and parent PID.
-    pub fn new(address_space: AddressSpace<PageTableMapper>, parent_pid: Option<u32>) -> Self {
+    pub fn new(address_space: AddressSpace<PageTableMapper>, parent_pid: Option<Pid>) -> Self {
         let user_cr3 = address_space.root_phys();
         let mmap_region =
             VirtRegion::new(VirtAddr::new(USER_MMAP_BASE), USER_MMAP_MAX_SIZE);
         Self {
-            pid: NEXT_PID.fetch_add(1, Ordering::Relaxed),
+            pid: Pid::new(NEXT_PID.fetch_add(1, Ordering::Relaxed)),
             parent_pid,
             user_cr3,
             address_space,
-            fd_table: SpinLock::named("fd_table", FileDescriptorTable::new()),
-            mmap_alloc: SpinLock::named("mmap_alloc", FreeRegionAllocator::new(mmap_region)),
+            fd_table: SpinLock::leveled("fd_table", 4, FileDescriptorTable::new()),
+            mmap_alloc: SpinLock::leveled("mmap_alloc", 4, FreeRegionAllocator::new(mmap_region)),
             signals: signal::SignalState::new(),
-            exit_status: SpinLock::named("exit_status", None),
+            exit_status: SpinLock::leveled("exit_status", 4, None),
             exit_notify: HeapWaitQueue::new(),
         }
     }
@@ -296,8 +320,8 @@ pub fn save_kernel_cr3() {
 }
 
 /// Sets the trap reason before calling `restore_kernel_context` (current CPU).
-pub fn set_trap_reason(reason: u8) {
-    TRAP_REASON.get().store(reason, Ordering::Release);
+pub fn set_trap_reason(reason: TrapReason) {
+    TRAP_REASON.get().store(reason as u8, Ordering::Release);
 }
 
 /// Returns a raw pointer to the current CPU's `USER_CONTEXT`.
@@ -366,7 +390,7 @@ pub unsafe fn terminate_current_process_from_fault() -> ! {
     PROCESS_EXIT_STATUS
         .get()
         .store(usize::MAX as u64, Ordering::Release);
-    TRAP_REASON.get().store(TRAP_FAULT, Ordering::Release);
+    TRAP_REASON.get().store(TrapReason::Fault as u8, Ordering::Release);
     // SAFETY: saved_kernel_rsp() returns the RSP saved by enter_userspace_save,
     // which is still valid on the executor stack.
     unsafe {
@@ -492,9 +516,9 @@ pub fn spawn_init() {
                 .expect("spawn_init: /dev/console not found")
         });
         let mut fd_table = process.fd_table.lock();
-        fd_table.insert_at(0, console.clone(), OpenFlags::READ);
-        fd_table.insert_at(1, console.clone(), OpenFlags::WRITE);
-        fd_table.insert_at(2, console, OpenFlags::WRITE);
+        fd_table.insert_at(Fd::STDIN, console.clone(), OpenFlags::READ);
+        fd_table.insert_at(Fd::STDOUT, console.clone(), OpenFlags::WRITE);
+        fd_table.insert_at(Fd::STDERR, console, OpenFlags::WRITE);
     }
 
     let process = Arc::new(process);
@@ -533,14 +557,14 @@ fn read_init_from_vfs() -> &'static [u8] {
 }
 
 /// Sets the target PID and status pointer for a `TRAP_WAIT` syscall.
-pub fn set_wait_params(target_pid: u32, status_ptr: u64) {
-    WAIT_TARGET_PID.get().store(target_pid, Ordering::Release);
+pub fn set_wait_params(target_pid: Pid, status_ptr: u64) {
+    WAIT_TARGET_PID.get().store(target_pid.as_u32(), Ordering::Release);
     WAIT_STATUS_PTR.get().store(status_ptr, Ordering::Release);
 }
 
 /// Sets the I/O parameters for a `TRAP_IO` syscall.
-pub fn set_io_params(fd: usize, buf_ptr: usize, buf_len: usize, is_write: bool) {
-    IO_FD.get().store(fd as u64, Ordering::Release);
+pub fn set_io_params(fd: Fd, buf_ptr: usize, buf_len: usize, is_write: bool) {
+    IO_FD.get().store(fd.as_u32() as u64, Ordering::Release);
     IO_BUF_PTR.get().store(buf_ptr as u64, Ordering::Release);
     IO_BUF_LEN.get().store(buf_len as u64, Ordering::Release);
     IO_IS_WRITE
@@ -597,8 +621,8 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
             *current = None;
         }
 
-        match TRAP_REASON.get().load(Ordering::Acquire) {
-            TRAP_EXIT => {
+        match TrapReason::from_u8(TRAP_REASON.get().load(Ordering::Acquire)) {
+            TrapReason::Exit => {
                 let status = PROCESS_EXIT_STATUS.get().load(Ordering::Acquire);
                 if status == usize::MAX as u64 {
                     kinfo!("Process {} killed by fault", pid);
@@ -610,7 +634,7 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                 process.exit_notify.wake_all();
                 break;
             }
-            TRAP_PREEMPTED => {
+            TrapReason::Preempted => {
                 // User state was saved in USER_CONTEXT by the timer stub.
                 // Snapshot it before yielding — USER_CONTEXT is per-CPU but
                 // will be overwritten if another process is preempted on
@@ -641,17 +665,17 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                 }
                 continue;
             }
-            TRAP_FAULT => {
+            TrapReason::Fault => {
                 kinfo!("Process {} killed by fault", pid);
                 // Faults report as exit status usize::MAX.
                 *process.exit_status.lock() = Some(usize::MAX as u64);
                 process.exit_notify.wake_all();
                 break;
             }
-            TRAP_WAIT => {
+            TrapReason::Wait => {
                 // The syscall handler set WAIT_TARGET_PID and WAIT_STATUS_PTR.
                 // We await the child's exit here (async context).
-                let target = WAIT_TARGET_PID.get().load(Ordering::Acquire);
+                let target = Pid::new(WAIT_TARGET_PID.get().load(Ordering::Acquire));
                 let status_ptr = WAIT_STATUS_PTR.get().load(Ordering::Acquire);
 
                 // Snapshot the saved user registers and RSP BEFORE yielding.
@@ -688,15 +712,14 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                 };
 
                 // Set foreground PID so Ctrl+C delivers SIGINT to the child.
-                let child_pid_for_fg = if target != 0 { target } else { 0 };
-                if child_pid_for_fg != 0 {
-                    set_foreground_pid(child_pid_for_fg);
+                if target.as_u32() != 0 {
+                    set_foreground_pid(target);
                 }
 
                 let (result, exit_code) = handle_wait(pid, target).await;
 
                 // Clear foreground PID.
-                set_foreground_pid(0);
+                set_foreground_pid(Pid::new(0));
 
                 // Check for pending signals after wait completes.
                 if let Some(exit_code) = check_signals(&process) {
@@ -757,10 +780,10 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                 }
                 continue;
             }
-            TRAP_IO => {
+            TrapReason::Io => {
                 // The syscall handler set IO_FD, IO_BUF_PTR, IO_BUF_LEN, IO_IS_WRITE.
                 // Perform the async I/O here where we can .await.
-                let io_fd = IO_FD.get().load(Ordering::Acquire) as usize;
+                let io_fd = Fd::new(IO_FD.get().load(Ordering::Acquire) as u32);
                 let io_buf_ptr = IO_BUF_PTR.get().load(Ordering::Acquire) as usize;
                 let io_buf_len = IO_BUF_LEN.get().load(Ordering::Acquire) as usize;
                 let is_write = IO_IS_WRITE.get().load(Ordering::Acquire) != 0;
@@ -925,7 +948,6 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                 }
                 continue;
             }
-            _ => unreachable!("invalid trap reason"),
         }
     }
 
@@ -944,9 +966,9 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
     clippy::cast_possible_wrap,
     reason = "returning negated errno as isize"
 )]
-async fn handle_wait(parent_pid: u32, target_pid: u32) -> (isize, u64) {
+async fn handle_wait(parent_pid: Pid, target_pid: Pid) -> (isize, u64) {
     // Find the child process.
-    let child = if target_pid == 0 {
+    let child = if target_pid.as_u32() == 0 {
         // Wait for any child — pick the first one.
         let children = children_of(parent_pid);
         if children.is_empty() {
@@ -974,7 +996,7 @@ async fn handle_wait(parent_pid: u32, target_pid: u32) -> (isize, u64) {
         // Fast path: child already exited.
         let status = child.exit_status.lock();
         if let Some(exit_code) = *status {
-            return core::task::Poll::Ready((child.pid as isize, exit_code));
+            return core::task::Poll::Ready((child.pid.as_u32() as isize, exit_code));
         }
         drop(status);
 
@@ -984,7 +1006,7 @@ async fn handle_wait(parent_pid: u32, target_pid: u32) -> (isize, u64) {
         // Re-check: child may have exited between our check and registration.
         let status = child.exit_status.lock();
         if let Some(exit_code) = *status {
-            return core::task::Poll::Ready((child.pid as isize, exit_code));
+            return core::task::Poll::Ready((child.pid.as_u32() as isize, exit_code));
         }
         drop(status);
 

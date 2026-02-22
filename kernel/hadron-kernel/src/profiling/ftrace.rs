@@ -15,6 +15,7 @@ use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::arch::x86_64::hw::tsc;
+use crate::id::CpuId;
 use crate::percpu::{CpuLocal, cpu_count, current_cpu};
 use super::format;
 
@@ -134,12 +135,13 @@ pub fn stop() {
 
     format::emit_header(format::FLAG_FTRACE, 0, 0, cpus);
 
-    for cpu_id in 0..cpus {
+    for cpu in 0..cpus {
+        let cpu_id = CpuId::new(cpu);
         let buf_cell = FTRACE_BUFFERS.get_for(cpu_id);
         // SAFETY: Tracing is stopped, no concurrent writes.
         let buf: &FtraceBuffer = unsafe { &*buf_cell.0.get() };
         buf.drain(|tsc_val, func_addr| {
-            format::emit_ftrace_record(cpu_id as u8, tsc_val, func_addr);
+            format::emit_ftrace_record(cpu as u8, tsc_val, func_addr);
         });
     }
 
@@ -217,8 +219,8 @@ pub unsafe extern "C" fn mcount() {
 /// Called from the `mcount` naked function.
 #[inline(never)]
 fn record_ftrace_entry(tsc_val: u64, func_addr: u64) {
-    let cpu = current_cpu();
-    let cpu_id = cpu.get_cpu_id();
+    let percpu = current_cpu();
+    let cpu_id = percpu.get_cpu_id();
     let buf_cell = FTRACE_BUFFERS.get_for(cpu_id);
     // SAFETY: Only the owning CPU writes to this buffer.
     let buf: &FtraceBuffer = unsafe { &*buf_cell.0.get() };

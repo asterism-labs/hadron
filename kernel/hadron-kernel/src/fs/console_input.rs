@@ -294,8 +294,7 @@ fn process_scancode(state: &mut ConsoleInputState, scancode: u8) -> Option<EchoA
 
     // Detect Ctrl+C: send SIGINT to the foreground process.
     if state.ctrl_held && key == KeyCode::C {
-        let fg_pid = crate::proc::foreground_pid();
-        if fg_pid != 0 {
+        if let Some(fg_pid) = crate::proc::foreground_pid() {
             if let Some(proc) = crate::proc::lookup_process(fg_pid) {
                 proc.signals.post(crate::syscall::SIGINT);
             }
@@ -440,7 +439,7 @@ pub fn try_read(buf: &mut [u8]) -> usize {
 /// Scancodes are buffered in [`SCANCODE_BUF`] for deferred processing by
 /// [`poll_keyboard_hardware`]. Echo and line editing happen there (in thread
 /// context) to avoid taking the logger lock from interrupt context.
-fn keyboard_irq_handler(_vector: u8) {
+fn keyboard_irq_handler(_vector: crate::id::IrqVector) {
     {
         let mut buf = SCANCODE_BUF.lock();
         while let Some(scancode) = try_read_keyboard_scancode() {

@@ -8,6 +8,7 @@ use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 
 use hadron_acpi::{AcpiHandler, AcpiTables, madt};
 use crate::addr::{PhysAddr, VirtAddr};
+use crate::id::IrqVector;
 use crate::mm::hhdm;
 use crate::sync::IrqSpinLock;
 use crate::arch::x86_64::hw::io_apic::{
@@ -140,7 +141,7 @@ pub(crate) extern "C" fn timer_tick_and_eoi() {
 }
 
 /// LAPIC timer interrupt handler.
-fn timer_handler(_vector: u8) {
+fn timer_handler(_vector: IrqVector) {
     let tick = TIMER_TICKS.fetch_add(1, Ordering::Relaxed) + 1;
 
     // Wake tasks whose sleep deadline has expired.
@@ -256,8 +257,10 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
 
     let lapic_phys = PhysAddr::new(u64::from(madt.local_apic_address));
 
-    // Map LAPIC MMIO region
-    let lapic_virt = crate::mm::vmm::map_mmio_region(lapic_phys, crate::mm::PAGE_SIZE as u64);
+    // Map LAPIC MMIO region (permanent hardware mapping).
+    let mapping = crate::mm::vmm::map_mmio_region(lapic_phys, crate::mm::PAGE_SIZE as u64);
+    let lapic_virt = mapping.virt_base();
+    core::mem::forget(mapping); // permanent hardware mapping
 
     // SAFETY: lapic_virt was just mapped to the LAPIC MMIO region.
     let lapic = unsafe { LocalApic::new(lapic_virt) };
@@ -266,8 +269,8 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
 
     // Initialize per-CPU state
     let apic_id = lapic.id();
-    crate::percpu::current_cpu().init(0, apic_id);
-    crate::sched::smp::register_cpu_apic_id(0, apic_id);
+    crate::percpu::current_cpu().init(crate::id::CpuId::new(0), apic_id);
+    crate::sched::smp::register_cpu_apic_id(crate::id::CpuId::new(0), apic_id);
 
     crate::kinfo!(
         "LAPIC: Enabled, ID={}, spurious vector={}",
@@ -288,8 +291,11 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
         {
             let ioapic_phys = PhysAddr::new(u64::from(io_apic_address));
 
-            let ioapic_virt =
+            // Map I/O APIC MMIO region (permanent hardware mapping).
+            let mapping =
                 crate::mm::vmm::map_mmio_region(ioapic_phys, crate::mm::PAGE_SIZE as u64);
+            let ioapic_virt = mapping.virt_base();
+            core::mem::forget(mapping); // permanent hardware mapping
 
             // SAFETY: ioapic_virt was just mapped to the I/O APIC MMIO region.
             let ioapic = unsafe { IoApic::new(ioapic_virt, gsi_base) };
@@ -332,8 +338,11 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
     // --- 5. Initialize HPET ---
     let hpet = hpet_info.and_then(|info| {
         let hpet_phys = PhysAddr::new(info.base_address.address);
-        let hpet_virt =
+        // Map HPET MMIO region (permanent hardware mapping).
+        let mapping =
             crate::mm::vmm::map_mmio_region(hpet_phys, crate::mm::PAGE_SIZE as u64);
+        let hpet_virt = mapping.virt_base();
+        core::mem::forget(mapping); // permanent hardware mapping
 
         let hpet = unsafe { Hpet::new(hpet_virt) };
         hpet.enable();
@@ -408,7 +417,7 @@ fn setup_isa_irqs(ioapic: &IoApic, madt_data: &hadron_acpi::madt::Madt, bsp_apic
             }
         }
 
-        let vector = 32 + gsi as u8;
+        let vector = IrqVector::new(32 + gsi as u8);
         let entry = RedirectionEntry {
             vector,
             delivery_mode: DeliveryMode::Fixed,

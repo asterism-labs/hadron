@@ -1,6 +1,6 @@
 //! File descriptors and file descriptor tables.
 //!
-//! Each process has a [`FileDescriptorTable`] mapping integer fd numbers
+//! Each process has a [`FileDescriptorTable`] mapping [`Fd`] numbers
 //! to open [`FileDescriptor`]s. File descriptors hold a reference to an
 //! [`Inode`](super::Inode) plus an offset and flags.
 
@@ -11,6 +11,7 @@ use alloc::sync::Arc;
 
 use bitflags::bitflags;
 
+use crate::id::Fd;
 use super::{FsError, Inode};
 
 bitflags! {
@@ -41,9 +42,9 @@ pub struct FileDescriptor {
 /// Per-process file descriptor table.
 pub struct FileDescriptorTable {
     /// Open file descriptors.
-    fds: BTreeMap<usize, FileDescriptor>,
+    fds: BTreeMap<Fd, FileDescriptor>,
     /// Next fd number to allocate.
-    next_fd: usize,
+    next_fd: Fd,
 }
 
 impl Default for FileDescriptorTable {
@@ -58,14 +59,14 @@ impl FileDescriptorTable {
     pub fn new() -> Self {
         Self {
             fds: BTreeMap::new(),
-            next_fd: 0,
+            next_fd: Fd::new(0),
         }
     }
 
     /// Open a file, allocating the next available fd number.
     ///
     /// Returns the newly assigned fd number.
-    pub fn open(&mut self, inode: Arc<dyn Inode>, flags: OpenFlags) -> usize {
+    pub fn open(&mut self, inode: Arc<dyn Inode>, flags: OpenFlags) -> Fd {
         let fd = self.next_fd;
         self.fds.insert(
             fd,
@@ -75,14 +76,14 @@ impl FileDescriptorTable {
                 flags,
             },
         );
-        self.next_fd = fd + 1;
+        self.next_fd = Fd::new(fd.as_u32() + 1);
         fd
     }
 
     /// Insert a file descriptor at a specific fd number.
     ///
     /// Used for setting up stdin (0), stdout (1), stderr (2).
-    pub fn insert_at(&mut self, fd: usize, inode: Arc<dyn Inode>, flags: OpenFlags) {
+    pub fn insert_at(&mut self, fd: Fd, inode: Arc<dyn Inode>, flags: OpenFlags) {
         self.fds.insert(
             fd,
             FileDescriptor {
@@ -92,7 +93,7 @@ impl FileDescriptorTable {
             },
         );
         if fd >= self.next_fd {
-            self.next_fd = fd + 1;
+            self.next_fd = Fd::new(fd.as_u32() + 1);
         }
     }
 
@@ -101,19 +102,19 @@ impl FileDescriptorTable {
     /// # Errors
     ///
     /// Returns [`FsError::BadFd`] if `fd` is not open.
-    pub fn close(&mut self, fd: usize) -> Result<(), FsError> {
+    pub fn close(&mut self, fd: Fd) -> Result<(), FsError> {
         self.fds.remove(&fd).ok_or(FsError::BadFd)?;
         Ok(())
     }
 
     /// Get a shared reference to a file descriptor.
     #[must_use]
-    pub fn get(&self, fd: usize) -> Option<&FileDescriptor> {
+    pub fn get(&self, fd: Fd) -> Option<&FileDescriptor> {
         self.fds.get(&fd)
     }
 
     /// Get a mutable reference to a file descriptor.
-    pub fn get_mut(&mut self, fd: usize) -> Option<&mut FileDescriptor> {
+    pub fn get_mut(&mut self, fd: Fd) -> Option<&mut FileDescriptor> {
         self.fds.get_mut(&fd)
     }
 }
