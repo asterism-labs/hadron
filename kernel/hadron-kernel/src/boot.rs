@@ -536,17 +536,24 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
         }
 
         // Mount devfs at /dev (kernel-internal, not from driver registry).
-        let devfs = Arc::new(fs::devfs::DevFs::with_extra_devices([
-            (
-                "console",
-                Arc::new(fs::devfs::DevConsole) as Arc<dyn fs::Inode>,
-            ),
-            (
-                "tty0",
-                Arc::new(crate::tty::device::DevTty::new(crate::tty::active_tty()))
-                    as Arc<dyn fs::Inode>,
-            ),
-        ]));
+        // Register /dev/console (active-VT alias) and /dev/tty0..5 (per-VT).
+        let mut dev_devices: alloc::vec::Vec<(&str, Arc<dyn fs::Inode>)> =
+            alloc::vec::Vec::with_capacity(8);
+        dev_devices.push((
+            "console",
+            Arc::new(fs::devfs::DevConsole) as Arc<dyn fs::Inode>,
+        ));
+        const TTY_NAMES: [&str; crate::tty::MAX_TTYS] =
+            ["tty0", "tty1", "tty2", "tty3", "tty4", "tty5"];
+        for i in 0..crate::tty::MAX_TTYS {
+            if let Some(tty_ref) = crate::tty::tty(i) {
+                dev_devices.push((
+                    TTY_NAMES[i],
+                    Arc::new(crate::tty::device::DevTty::new(tty_ref)) as Arc<dyn fs::Inode>,
+                ));
+            }
+        }
+        let devfs = Arc::new(fs::devfs::DevFs::with_extra_devices(dev_devices));
         let devfs_name = devfs.name();
         fs::vfs::with_vfs_mut(|vfs| vfs.mount("/dev", devfs));
         crate::kinfo!("VFS: Mounted {} at /dev", devfs_name);
