@@ -394,6 +394,33 @@ pub(super) fn sys_vnode_readdir(fd: usize, buf_ptr: usize, buf_len: usize) -> is
     })
 }
 
+/// `sys_handle_tcsetpgrp` — set the foreground process group of a TTY.
+///
+/// Currently operates on the active TTY regardless of `fd`, since all
+/// terminal fds (/dev/console, /dev/tty0) point to the same TTY.
+///
+/// Returns 0 on success, or a negative errno on failure.
+pub(super) fn sys_handle_tcsetpgrp(_fd: usize, pgid: usize) -> isize {
+    let pgid = pgid as u32;
+    crate::tty::active_tty().set_foreground_pgid(pgid);
+    0
+}
+
+/// `sys_handle_tcgetpgrp` — get the foreground process group of a TTY.
+///
+/// Currently operates on the active TTY regardless of `fd`.
+///
+/// Returns the PGID on success (0 if none set), or a negative errno.
+#[expect(
+    clippy::cast_possible_wrap,
+    reason = "PGIDs are small positive integers, wrap is impossible"
+)]
+pub(super) fn sys_handle_tcgetpgrp(_fd: usize) -> isize {
+    crate::tty::active_tty()
+        .foreground_pgid()
+        .unwrap_or(0) as isize
+}
+
 /// Trigger a TRAP_IO longjmp back to `process_task` for async I/O.
 ///
 /// Sets the I/O parameters, restores kernel CR3 and GS bases, then

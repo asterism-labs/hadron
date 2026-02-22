@@ -22,7 +22,7 @@ hadron/
 │   │       ├── mm/             # PMM, VMM, heap, HHDM, address_space, region, zone
 │   │       ├── sync/           # SpinLock, IrqSpinLock, Mutex, RwLock, WaitQueue, Lazy
 │   │       ├── sched/          # Async executor, waker encoding, timer, SMP scheduling
-│   │       ├── fs/             # VFS, devfs, console_input, block_adapter, file, path
+│   │       ├── fs/             # VFS, devfs, block_adapter, file, path
 │   │       ├── proc/           # Process management, ELF loading (binfmt)
 │   │       ├── syscall/        # Syscall dispatch, io, memory, process, query, time, vfs
 │   │       ├── ipc/            # Pipes, IPC primitives

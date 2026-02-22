@@ -291,10 +291,12 @@ registration:
 Writes interpret the buffer as UTF-8 (with a byte-by-byte fallback) and send
 it to the kernel's `kprint!` macro.
 
-## Console input subsystem
+## TTY subsystem
 
-`fs/console_input.rs` provides cooked-mode line editing for `/dev/console`
-reads. It sits between the PS/2 keyboard hardware and the VFS inode layer.
+The `tty/` module provides virtual terminal abstractions. Each `Tty` owns a
+`LineDiscipline` for cooked-mode line editing, a per-VT foreground process
+group, and a waker slot for async reader notification. `/dev/console` delegates
+reads to the active TTY; `/dev/ttyN` nodes map directly to specific VTs.
 
 ### Data flow
 
@@ -303,15 +305,15 @@ PS/2 hardware (ports 0x60, 0x64)
         |
    IRQ1 handler  ->  SCANCODE_BUF (ring buffer, IrqSpinLock)
         |                  |
-   INPUT_READY.wake_all()  |
+   TTY_WAKER.wake()        |
                            v
-              poll_keyboard_hardware()
+            Tty::poll_hardware()
                    |
-            process_scancode()    (decode, echo, line editing)
+       LineDiscipline::process_scancode()   (decode, echo, line editing)
                    |
-              STATE.ready_buf     (completed lines)
+          LineDiscipline::ready_buf         (completed lines)
                    |
-               try_read(buf)      (non-blocking read for ConsoleReadFuture)
+           Tty::try_read(buf)               (non-blocking read for TtyReadFuture)
 ```
 
 ### Key components
@@ -321,26 +323,19 @@ PS/2 hardware (ports 0x60, 0x64)
   IRQ context to avoid taking the logger lock (needed for character echo)
   from interrupt context.
 
-- **`ConsoleInputState`**: Contains the `ready_buf` (completed lines available
-  for reading), a `line_buf` for the line currently being edited, modifier
-  state (`shift_held`, `caps_lock`), and the `extended_prefix` flag for
-  0xE0-prefixed scancodes.
+- **`LineDiscipline`** (`tty/ldisc.rs`): Contains the `ready_buf` (completed
+  lines available for reading), a `line_buf` for the line currently being
+  edited, modifier state, and the `extended_prefix` flag for 0xE0-prefixed
+  scancodes. Handles Ctrl+C (SIGINT), Ctrl+D (EOF), backspace, and Enter.
 
-- **`poll_keyboard_hardware()`**: Drains both the IRQ ring buffer and the PS/2
-  hardware FIFO directly (catching bytes from before IRQ setup), then
-  processes each scancode through `process_scancode()`.
+- **`Tty`** (`tty/mod.rs`): Wraps a `LineDiscipline` behind an `IrqSpinLock`,
+  manages the per-VT foreground PGID, and handles IRQ-to-waker routing.
 
-- **`process_scancode()`**: Translates Set 1 scancodes to `KeyCode` values,
-  tracks modifier state, converts to ASCII via `keycode_to_ascii()`, and
-  implements cooked-mode editing:
-  - Printable characters are appended to the line buffer and echoed.
-  - Backspace removes the last character and sends the erase sequence
-    `\x08 \x08`.
-  - Enter copies the completed line (plus `\n`) into `ready_buf` and clears
-    the line buffer.
+- **`DevTty`** (`tty/device.rs`): VFS `Inode` implementation for `/dev/ttyN`,
+  using `TtyReadFuture` with a two-phase waker strategy.
 
-- **`init()`**: Registers the IRQ1 handler via the interrupt dispatch table and
-  unmasks IRQ1 in the I/O APIC.
+- **`tty::init()`**: Registers the IRQ1 handler via the interrupt dispatch
+  table and unmasks IRQ1 in the I/O APIC.
 
 ## Block adapter
 

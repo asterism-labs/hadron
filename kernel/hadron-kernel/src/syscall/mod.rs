@@ -72,6 +72,14 @@ impl SyscallHandler for HadronDispatch {
         vfs::sys_handle_pipe(fds_ptr)
     }
 
+    fn sys_handle_tcsetpgrp(&self, fd: usize, pgid: usize) -> isize {
+        vfs::sys_handle_tcsetpgrp(fd, pgid)
+    }
+
+    fn sys_handle_tcgetpgrp(&self, fd: usize) -> isize {
+        vfs::sys_handle_tcgetpgrp(fd)
+    }
+
     fn sys_vnode_open(&self, path_ptr: usize, path_len: usize, flags: usize) -> isize {
         vfs::sys_vnode_open(path_ptr, path_len, flags)
     }

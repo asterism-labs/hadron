@@ -619,12 +619,18 @@ fn execute(pipeline: &Pipeline<'_>, jobs: &mut JobTable) {
                 println!("[{}] {}", job_num, pid);
             }
         }
-    } else {
+    } else if spawned > 0 {
+        // Set the pipeline's process group as the terminal foreground group.
+        sys::tcsetpgrp(STDIN, pipeline_pgid);
+
         // Wait for all children.
         for &pid in &child_pids[..spawned] {
             let mut status: u64 = 0;
             sys::waitpid(pid, Some(&mut status));
         }
+
+        // Restore the shell as the foreground group (pgid 0 = clear).
+        sys::tcsetpgrp(STDIN, 0);
     }
 }
 

@@ -211,24 +211,6 @@ static IO_BUF_LEN: CpuLocal<AtomicU64> = CpuLocal::new([const { AtomicU64::new(0
 /// Per-CPU I/O direction for TRAP_IO: 0 = read, 1 = write.
 static IO_IS_WRITE: CpuLocal<AtomicU8> = CpuLocal::new([const { AtomicU8::new(0) }; MAX_CPUS]);
 
-/// Process group ID of the current foreground group (receives Ctrl+C).
-///
-/// Set to the child's PGID in TRAP_WAIT before await, reset to 0 after.
-/// Accessed from the keyboard input handler to deliver SIGINT to all
-/// processes in the foreground group.
-static FOREGROUND_PGID: AtomicU32 = AtomicU32::new(0);
-
-/// Sets the foreground process group ID.
-pub fn set_foreground_pgid(pgid: u32) {
-    FOREGROUND_PGID.store(pgid, Ordering::Release);
-}
-
-/// Returns the current foreground process group ID, or `None` if none.
-pub fn foreground_pgid() -> Option<u32> {
-    let raw = FOREGROUND_PGID.load(Ordering::Acquire);
-    if raw == 0 { None } else { Some(raw) }
-}
-
 /// Send a signal to all processes in a process group.
 ///
 /// Iterates the global process table and posts the signal to every
@@ -902,17 +884,7 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                     )
                 };
 
-                // Set foreground PGID so Ctrl+C delivers SIGINT to the child's group.
-                if target.as_u32() != 0 {
-                    if let Some(child_proc) = lookup_process(target) {
-                        set_foreground_pgid(child_proc.pgid.load(Ordering::Acquire));
-                    }
-                }
-
                 let (result, exit_code) = handle_wait(pid, target).await;
-
-                // Clear foreground PGID.
-                set_foreground_pgid(0);
 
                 // Write exit status to user memory under user CR3.
                 if status_ptr != 0 && result >= 0 {

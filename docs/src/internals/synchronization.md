@@ -392,7 +392,7 @@ with cycle detection.
 | 3 | `HKIF_STATE`, `HPET_DRIVER`, `VFS`, `DEVICE_REGISTRY`, `PROCESS_TABLE`, `CURSOR` | SpinLock | various |
 | 4 | `LOGGER.inner` | SpinLock | `log.rs` |
 | 5 | `DISK_INDEX` (×2) | SpinLock | `hadron-drivers` |
-| IRQ-0 | `SCANCODE_BUF`, `STATE` | IrqSpinLock | `fs/console_input.rs` |
+| IRQ-0 | `TTY_SCANCODE`, `TTY_LDISC`, `TTY_WAKER` | IrqSpinLock | `tty/mod.rs` |
 | IRQ-1 | `PLATFORM` | IrqSpinLock | `arch/x86_64/acpi.rs` |
 | IRQ-2 | `SLEEP_QUEUE` | IrqSpinLock | `sched/timer.rs` |
 | IRQ-3 | `Executor.tasks`, `Executor.ready_queues` | IrqSpinLock | `sched/executor.rs` |

@@ -448,7 +448,7 @@ a diverging function (`-> !`) that performs initialization in a strict order:
 | 9b | Spawn platform tasks + heartbeat | `arch::spawn_platform_tasks()` |
 | 10 | Extract initrd via HHDM | CPIO archive from bootloader |
 | 10b | VFS init, mount ramfs + devfs + block devices | `fs::vfs::init()` |
-| 11 | Console input init, kernel CR3 save | `fs::console_input::init()` |
+| 11 | TTY subsystem init, kernel CR3 save | `tty::init()` |
 | 12 | Populate BSP per-CPU assembly pointers | `user_context_ptr`, etc. |
 | 13 | Spawn init process | `proc::spawn_init()` |
 | 14 | Enable BSP interrupts | `instructions::interrupts::enable()` |
