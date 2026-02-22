@@ -21,6 +21,14 @@ use hadron_core::id::CpuId;
 use hadron_core::sync::{IrqSpinLock, LazyLock};
 use hadron_core::task::{Priority, TaskId, TaskMeta};
 
+/// Global task ID counter shared by all executors.
+///
+/// Task IDs must be globally unique because work stealing moves tasks
+/// between per-CPU executors. A per-executor counter would allow the
+/// destination CPU to generate an ID that collides with a stolen task's
+/// original ID, silently corrupting the task map.
+static NEXT_TASK_ID: AtomicU64 = AtomicU64::new(0);
+
 pub use hadron_core::sched::ReadyQueues;
 
 /// Per-CPU executor instances, initialized on first access.
@@ -76,8 +84,6 @@ pub struct Executor {
     tasks: IrqSpinLock<BTreeMap<TaskId, TaskEntry>>,
     /// Priority-aware ready queues.
     pub(crate) ready_queues: IrqSpinLock<ReadyQueues>,
-    /// Next task ID counter.
-    next_id: AtomicU64,
 }
 
 impl Executor {
@@ -86,7 +92,6 @@ impl Executor {
         Self {
             tasks: IrqSpinLock::leveled("Executor.tasks", 14, BTreeMap::new()),
             ready_queues: IrqSpinLock::leveled("Executor.ready_queues", 13, ReadyQueues::new()),
-            next_id: AtomicU64::new(0),
         }
     }
 
@@ -132,7 +137,7 @@ impl Executor {
         future: impl Future<Output = ()> + Send + 'static,
         meta: TaskMeta,
     ) -> TaskId {
-        let id = TaskId(self.next_id.fetch_add(1, Ordering::Relaxed));
+        let id = TaskId(NEXT_TASK_ID.fetch_add(1, Ordering::Relaxed));
         let priority = meta.priority;
         // Allocate the boxed future BEFORE acquiring the tasks lock to avoid
         // a level ordering violation (tasks=14 → HEAP=1 is descending).
