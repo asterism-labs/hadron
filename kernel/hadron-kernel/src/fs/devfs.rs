@@ -72,11 +72,13 @@ impl Future for ConsoleReadFuture<'_> {
 
         // Always poll hardware and check for data first.
         super::console_input::poll_keyboard_hardware();
-        let n = super::console_input::try_read(this.buf);
-        if n > 0 {
-            #[cfg(hadron_lock_debug)]
-            console_read_diag::inc(&console_read_diag::POLL_DATA_READY);
-            return Poll::Ready(Ok(n));
+        match super::console_input::try_read(this.buf) {
+            Some(n) => {
+                #[cfg(hadron_lock_debug)]
+                console_read_diag::inc(&console_read_diag::POLL_DATA_READY);
+                return Poll::Ready(Ok(n));
+            }
+            None => {}
         }
 
         if !this.subscribed {
@@ -97,11 +99,13 @@ impl Future for ConsoleReadFuture<'_> {
 
         // Re-check after registration (catches IRQs between check and subscribe).
         super::console_input::poll_keyboard_hardware();
-        let n = super::console_input::try_read(this.buf);
-        if n > 0 {
-            #[cfg(hadron_lock_debug)]
-            console_read_diag::inc(&console_read_diag::POLL_DATA_READY);
-            return Poll::Ready(Ok(n));
+        match super::console_input::try_read(this.buf) {
+            Some(n) => {
+                #[cfg(hadron_lock_debug)]
+                console_read_diag::inc(&console_read_diag::POLL_DATA_READY);
+                return Poll::Ready(Ok(n));
+            }
+            None => {}
         }
 
         // Check for pending signals on the current (reading) process.

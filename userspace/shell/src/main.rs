@@ -883,22 +883,32 @@ fn parse_usize(s: &str) -> Option<usize> {
     Some(result)
 }
 
-/// Read a complete line from stdin into `buf`, returning the number of bytes
-/// (excluding the trailing newline).
-fn read_line(buf: &mut [u8]) -> usize {
+/// Read a complete line from stdin into `buf`.
+///
+/// Returns `Some(len)` with the number of bytes read (excluding trailing
+/// newline), or `None` if EOF was received (Ctrl+D on an empty line).
+fn read_line(buf: &mut [u8]) -> Option<usize> {
     let mut total = 0;
     let mut read_buf = [0u8; READ_BUF_SIZE];
 
     loop {
         let n = io::read(STDIN, &mut read_buf);
-        if n <= 0 {
+        if n < 0 {
             break;
+        }
+        if n == 0 {
+            // EOF: Ctrl+D on empty line.
+            if total == 0 {
+                return None;
+            }
+            // Had partial data before EOF — return what we have.
+            return Some(total);
         }
         let n = n as usize;
 
         for i in 0..n {
             if read_buf[i] == b'\n' {
-                return total;
+                return Some(total);
             }
             if total < buf.len() {
                 buf[total] = read_buf[i];
@@ -907,7 +917,7 @@ fn read_line(buf: &mut [u8]) -> usize {
         }
     }
 
-    total
+    Some(total)
 }
 
 // ── Main ────────────────────────────────────────────────────────────
@@ -928,7 +938,14 @@ pub extern "C" fn main(_args: &[&str]) -> i32 {
         let cwd = env::getenv("PWD").unwrap_or("/");
         print!("hsh:{}> ", cwd);
 
-        let len = read_line(&mut line_buf);
+        let len = match read_line(&mut line_buf) {
+            Some(len) => len,
+            None => {
+                // EOF (Ctrl+D on empty line) — exit the shell.
+                println!();
+                sys::exit(0);
+            }
+        };
         let line = match core::str::from_utf8(&line_buf[..len]) {
             Ok(s) => s.trim(),
             Err(_) => {
