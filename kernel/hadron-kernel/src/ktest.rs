@@ -35,7 +35,7 @@ const DEFAULT_TIMEOUT_SECS: u32 = 10;
 /// Initializes the ktest watchdog by fetching the first registered watchdog
 /// from the device registry. No-op if no watchdog is available.
 pub fn init_watchdog() {
-    let wd = crate::drivers::device_registry::with_device_registry(|reg| reg.first_watchdog());
+    let wd = crate::drivers::device_registry::DeviceRegistry::with(|reg| reg.first_watchdog());
     if let Some(wd) = wd {
         *WATCHDOG.lock() = Some(wd);
         hadron_ktest::serial_println!("ktest: watchdog armed for hang detection");

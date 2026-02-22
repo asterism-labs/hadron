@@ -38,7 +38,7 @@ pub fn platform_init(boot_info: &impl crate::boot::BootInfo) {
         crate::pci::enumerate::apply_prt_routing(&mut pci_devices);
 
         // 3. Build ACPI platform device list from namespace.
-        let acpi_devices: alloc::vec::Vec<AcpiDeviceInfo> = x86_64::acpi::with_namespace(|ns| {
+        let acpi_devices: alloc::vec::Vec<AcpiDeviceInfo> = x86_64::acpi::Acpi::with_namespace(|ns| {
             ns.devices()
                 .filter(|d| d.hid.is_some())
                 .filter(|d| !matches!(&d.hid, Some(AmlValue::Unresolved)))

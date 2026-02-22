@@ -43,7 +43,7 @@ pub fn ecam_write_u32(bus: u8, device: u8, function: u8, offset: u8, value: u32)
 ///
 /// ECAM address = base + (bus << 20) | (device << 15) | (function << 12) | offset
 fn ecam_address(bus: u8, device: u8, function: u8, offset: u8) -> Option<VirtAddr> {
-    crate::arch::x86_64::acpi::with_ecam(|info| {
+    crate::arch::x86_64::acpi::Acpi::with_ecam(|info| {
         if bus < info.start_bus || bus > info.end_bus {
             return None;
         }

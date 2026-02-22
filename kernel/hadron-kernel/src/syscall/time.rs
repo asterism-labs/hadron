@@ -12,7 +12,7 @@ pub(super) fn sys_clock_gettime(clock_id: usize, tp: usize) -> isize {
         return -EINVAL;
     }
 
-    let nanos = crate::time::boot_nanos();
+    let nanos = crate::time::Time::boot_nanos();
     let ts = Timespec {
         tv_sec: nanos / 1_000_000_000,
         tv_nsec: nanos % 1_000_000_000,

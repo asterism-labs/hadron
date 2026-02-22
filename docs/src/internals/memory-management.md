@@ -154,8 +154,8 @@ implements both traits, bridging the interior-mutability API with the
 The PMM is stored as a `SpinLock<Option<BitmapAllocator>>` static. Access is
 through:
 
-- `pmm::with_pmm(|pmm| ...)` -- panics if not initialized.
-- `pmm::try_with_pmm(|pmm| ...)` -- returns `None` if the lock is held or
+- `pmm::with(|pmm| ...)` -- panics if not initialized.
+- `pmm::try_with(|pmm| ...)` -- returns `None` if the lock is held or
   the PMM is uninitialized (safe for use in fault handlers).
 
 ## Higher Half Direct Map (HHDM)

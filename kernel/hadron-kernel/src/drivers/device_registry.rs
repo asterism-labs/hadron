@@ -72,6 +72,40 @@ impl DeviceRegistry {
         }
     }
 
+    /// Initializes the global device registry.
+    ///
+    /// Must be called before any driver probing begins.
+    pub fn init() {
+        let mut guard = DEVICE_REGISTRY.lock();
+        *guard = Some(DeviceRegistry::new());
+    }
+
+    /// Executes a closure with a shared reference to the device registry.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the device registry has not been initialized via [`init`].
+    pub fn with<R>(f: impl FnOnce(&DeviceRegistry) -> R) -> R {
+        let guard = DEVICE_REGISTRY.lock();
+        let registry = guard
+            .as_ref()
+            .expect("device registry not initialized — call device_registry::init() first");
+        f(registry)
+    }
+
+    /// Executes a closure with a mutable reference to the device registry.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the device registry has not been initialized via [`init`].
+    pub fn with_mut<R>(f: impl FnOnce(&mut DeviceRegistry) -> R) -> R {
+        let mut guard = DEVICE_REGISTRY.lock();
+        let registry = guard
+            .as_mut()
+            .expect("device registry not initialized — call device_registry::init() first");
+        f(registry)
+    }
+
     /// Registers a driver and its device set from a probe result.
     ///
     /// Processes the [`DeviceSet`] to add individual devices to the registry,
@@ -205,36 +239,3 @@ impl DeviceRegistry {
 static DEVICE_REGISTRY: SpinLock<Option<DeviceRegistry>> =
     SpinLock::leveled("DEVICE_REGISTRY", 4, None);
 
-/// Initializes the global device registry.
-///
-/// Must be called before any driver probing begins.
-pub fn init() {
-    let mut guard = DEVICE_REGISTRY.lock();
-    *guard = Some(DeviceRegistry::new());
-}
-
-/// Executes a closure with a shared reference to the device registry.
-///
-/// # Panics
-///
-/// Panics if the device registry has not been initialized via [`init`].
-pub fn with_device_registry<R>(f: impl FnOnce(&DeviceRegistry) -> R) -> R {
-    let guard = DEVICE_REGISTRY.lock();
-    let registry = guard
-        .as_ref()
-        .expect("device registry not initialized — call device_registry::init() first");
-    f(registry)
-}
-
-/// Executes a closure with a mutable reference to the device registry.
-///
-/// # Panics
-///
-/// Panics if the device registry has not been initialized via [`init`].
-pub fn with_device_registry_mut<R>(f: impl FnOnce(&mut DeviceRegistry) -> R) -> R {
-    let mut guard = DEVICE_REGISTRY.lock();
-    let registry = guard
-        .as_mut()
-        .expect("device registry not initialized — call device_registry::init() first");
-    f(registry)
-}

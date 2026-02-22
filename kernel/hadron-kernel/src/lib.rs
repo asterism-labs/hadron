@@ -90,7 +90,7 @@ pub fn test_init(boot_info: &impl boot::BootInfo) {
     crate::mm::hhdm::init(boot_info.hhdm_offset());
     #[cfg(target_arch = "x86_64")]
     crate::mm::mapper::register_tlb_flush(crate::arch::x86_64::instructions::tlb::flush);
-    crate::backtrace::init_from_embedded(boot_info.kernel_address().virtual_base.as_u64());
+    crate::backtrace::Backtrace::init_from_embedded(boot_info.kernel_address().virtual_base.as_u64());
     crate::mm::pmm::init(boot_info);
     crate::mm::vmm::init(boot_info);
     crate::mm::heap::init();

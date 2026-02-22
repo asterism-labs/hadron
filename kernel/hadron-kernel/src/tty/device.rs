@@ -88,7 +88,7 @@ impl Future for TtyReadFuture<'_> {
         }
 
         // Check for pending signals on the current (reading) process.
-        let has_signal = crate::proc::try_current_process(|proc| proc.signals.has_pending());
+        let has_signal = crate::proc::ProcessTable::try_current(|proc| proc.signals.has_pending());
         if has_signal == Some(true) {
             return Poll::Ready(Err(FsError::Interrupted));
         }

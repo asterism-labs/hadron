@@ -446,7 +446,7 @@ pub fn init(regions: &[PhysMemoryRegion], hhdm_offset: u64) {
 /// # Panics
 ///
 /// Panics if the PMM has not been initialized.
-pub fn with_pmm<R>(f: impl FnOnce(&mut BitmapAllocator) -> R) -> R {
+pub fn with<R>(f: impl FnOnce(&mut BitmapAllocator) -> R) -> R {
     let mut pmm = PMM.lock();
     f(pmm.as_mut().expect("PMM not initialized"))
 }
@@ -455,7 +455,7 @@ pub fn with_pmm<R>(f: impl FnOnce(&mut BitmapAllocator) -> R) -> R {
 ///
 /// Returns `None` if the PMM lock is already held (avoiding deadlock in
 /// fault handlers) or if the PMM has not been initialized yet.
-pub fn try_with_pmm<R>(f: impl FnOnce(&mut BitmapAllocator) -> R) -> Option<R> {
+pub fn try_with<R>(f: impl FnOnce(&mut BitmapAllocator) -> R) -> Option<R> {
     let mut pmm = PMM.try_lock()?;
     Some(f(pmm.as_mut()?))
 }

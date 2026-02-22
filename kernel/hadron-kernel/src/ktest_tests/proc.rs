@@ -57,21 +57,21 @@ fn test_signal_has_pending() {
 fn test_pid_allocation_sequential() {
     use crate::mm::address_space::AddressSpace;
 
-    let kernel_cr3 = crate::proc::kernel_cr3();
+    let kernel_cr3 = crate::proc::TrapContext::kernel_cr3();
     let hhdm = crate::mm::hhdm::offset();
 
     #[cfg(target_arch = "x86_64")]
     type KernelMapper = crate::arch::x86_64::paging::PageTableMapper;
 
     fn dealloc_frame(frame: crate::paging::PhysFrame<crate::paging::Size4KiB>) {
-        crate::mm::pmm::with_pmm(|pmm| unsafe {
+        crate::mm::pmm::with(|pmm| unsafe {
             let _ = pmm.deallocate_frame(frame);
         });
     }
 
     // Create two processes inside the PMM lock, but return them so they
-    // drop *outside* the lock (Drop -> dealloc_frame -> with_pmm).
-    let (p1, p2) = crate::mm::pmm::with_pmm(|pmm| {
+    // drop *outside* the lock (Drop -> dealloc_frame -> pmm::with).
+    let (p1, p2) = crate::mm::pmm::with(|pmm| {
         let mut alloc = crate::mm::pmm::BitmapFrameAllocRef(pmm);
 
         let as1 = unsafe {
@@ -105,20 +105,20 @@ fn test_pid_allocation_sequential() {
 async fn test_process_table_register_lookup() {
     use crate::mm::address_space::AddressSpace;
 
-    let kernel_cr3 = crate::proc::kernel_cr3();
+    let kernel_cr3 = crate::proc::TrapContext::kernel_cr3();
     let hhdm = crate::mm::hhdm::offset();
 
     #[cfg(target_arch = "x86_64")]
     type KernelMapper = crate::arch::x86_64::paging::PageTableMapper;
 
     fn dealloc_frame(frame: crate::paging::PhysFrame<crate::paging::Size4KiB>) {
-        crate::mm::pmm::with_pmm(|pmm| unsafe {
+        crate::mm::pmm::with(|pmm| unsafe {
             let _ = pmm.deallocate_frame(frame);
         });
     }
 
     // Create process inside PMM lock, return it so it drops outside.
-    let process = crate::mm::pmm::with_pmm(|pmm| {
+    let process = crate::mm::pmm::with(|pmm| {
         let mut alloc = crate::mm::pmm::BitmapFrameAllocRef(pmm);
         let addr_space = unsafe {
             AddressSpace::new_user(kernel_cr3, KernelMapper::new(hhdm), hhdm, &mut alloc, dealloc_frame)
@@ -128,17 +128,17 @@ async fn test_process_table_register_lookup() {
     });
 
     let pid = process.pid;
-    crate::proc::register_process(&process);
+    crate::proc::ProcessTable::register(&process);
 
-    let found = crate::proc::lookup_process(pid);
+    let found = crate::proc::ProcessTable::lookup(pid);
     assert!(found.is_some(), "registered process should be found by PID");
     assert_eq!(found.unwrap().pid, pid);
 
     // Clean up: unregister first, then drop the Arc (which may trigger
-    // Process::Drop -> dealloc_frame -> with_pmm).
-    crate::proc::unregister_process(pid);
+    // Process::Drop -> dealloc_frame -> pmm::with).
+    crate::proc::ProcessTable::unregister(pid);
     assert!(
-        crate::proc::lookup_process(pid).is_none(),
+        crate::proc::ProcessTable::lookup(pid).is_none(),
         "unregistered process should not be found"
     );
     drop(process);

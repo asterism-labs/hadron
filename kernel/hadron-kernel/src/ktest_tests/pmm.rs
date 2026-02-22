@@ -8,7 +8,7 @@ use hadron_ktest::kernel_test;
 
 #[kernel_test(stage = "early_boot", timeout = 5)]
 fn test_allocate_single_frame() {
-    crate::mm::pmm::with_pmm(|pmm| {
+    crate::mm::pmm::with(|pmm| {
         let free_before = pmm.free_frames();
         let frame = pmm.allocate_frame();
         assert!(frame.is_some(), "should allocate a frame");
@@ -24,7 +24,7 @@ fn test_allocate_single_frame() {
 
 #[kernel_test(stage = "early_boot", timeout = 5)]
 fn test_allocate_and_deallocate() {
-    crate::mm::pmm::with_pmm(|pmm| {
+    crate::mm::pmm::with(|pmm| {
         let free_before = pmm.free_frames();
         let frame = pmm.allocate_frame().expect("should allocate");
         assert_eq!(pmm.free_frames(), free_before - 1);
@@ -37,7 +37,7 @@ fn test_allocate_and_deallocate() {
 
 #[kernel_test(stage = "early_boot", timeout = 5)]
 fn test_allocate_contiguous() {
-    crate::mm::pmm::with_pmm(|pmm| {
+    crate::mm::pmm::with(|pmm| {
         let free_before = pmm.free_frames();
         let mut frames = alloc::vec::Vec::new();
         for _ in 0..4 {
@@ -59,7 +59,7 @@ fn test_allocate_contiguous() {
 #[kernel_test(stage = "early_boot", timeout = 5)]
 fn test_pmm_alloc_dealloc_cycle() {
     // Allocate a frame, deallocate it (poisons), re-allocate (checks poison).
-    crate::mm::pmm::with_pmm(|pmm| {
+    crate::mm::pmm::with(|pmm| {
         let frame = pmm.allocate_frame().expect("failed to allocate frame");
         unsafe {
             pmm.deallocate_frame(frame)
@@ -72,7 +72,7 @@ fn test_pmm_alloc_dealloc_cycle() {
 
 #[kernel_test(stage = "early_boot", timeout = 5)]
 fn test_pmm_multi_frame_cycle() {
-    crate::mm::pmm::with_pmm(|pmm| {
+    crate::mm::pmm::with(|pmm| {
         // Allocate 8 contiguous frames.
         let base = pmm.allocate_frames(8).expect("failed to allocate 8 frames");
         // Deallocate all 8 (each gets poisoned).

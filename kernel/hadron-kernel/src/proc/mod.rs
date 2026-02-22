@@ -224,6 +224,36 @@ pub fn signal_process_group(pgid: u32, signum: usize) {
     }
 }
 
+/// Set to the child PID in TRAP_WAIT before await, reset to 0 after.
+/// Accessed from the keyboard input handler to deliver SIGINT.
+static FOREGROUND_PID: AtomicU32 = AtomicU32::new(0);
+
+// ── WaitState facade ────────────────────────────────────────────────
+
+/// Zero-sized facade for wait syscall parameters.
+pub struct WaitState;
+
+impl WaitState {
+    /// Sets the foreground process PID (called from `process_task` during TRAP_WAIT).
+    pub fn set_foreground(pid: Pid) {
+        FOREGROUND_PID.store(pid.as_u32(), Ordering::Release);
+    }
+
+    /// Returns the current foreground process PID, or `None` if none.
+    pub fn foreground() -> Option<Pid> {
+        let raw = FOREGROUND_PID.load(Ordering::Acquire);
+        if raw == 0 { None } else { Some(Pid::new(raw)) }
+    }
+
+    /// Sets the target PID and status pointer for a `TRAP_WAIT` syscall.
+    pub fn set_params(target_pid: Pid, status_ptr: u64) {
+        WAIT_TARGET_PID
+            .get()
+            .store(target_pid.as_u32(), Ordering::Release);
+        WAIT_STATUS_PTR.get().store(status_ptr, Ordering::Release);
+    }
+}
+
 // ── Global process table ────────────────────────────────────────────
 
 /// Global process table mapping PID → `Arc<Process>`.
@@ -232,32 +262,62 @@ pub fn signal_process_group(pgid: u32, signum: usize) {
 static PROCESS_TABLE: SpinLock<BTreeMap<Pid, Arc<Process>>> =
     SpinLock::leveled("PROCESS_TABLE", 4, BTreeMap::new());
 
-/// Registers a process in the global table.
-pub fn register_process(process: &Arc<Process>) {
-    let mut table = PROCESS_TABLE.lock();
-    table.insert(process.pid, process.clone());
-}
+// ── ProcessTable facade ─────────────────────────────────────────────
 
-/// Looks up a process by PID.
-pub fn lookup_process(pid: Pid) -> Option<Arc<Process>> {
-    let table = PROCESS_TABLE.lock();
-    table.get(&pid).cloned()
-}
+/// Zero-sized facade for the process registry and current process access.
+pub struct ProcessTable;
 
-/// Removes a process from the global table.
-pub fn unregister_process(pid: Pid) {
-    let mut table = PROCESS_TABLE.lock();
-    table.remove(&pid);
-}
+impl ProcessTable {
+    /// Registers a process in the global table.
+    pub fn register(process: &Arc<Process>) {
+        let mut table = PROCESS_TABLE.lock();
+        table.insert(process.pid, process.clone());
+    }
 
-/// Returns the PIDs of all children of the given parent.
-pub fn children_of(parent_pid: Pid) -> Vec<Pid> {
-    let table = PROCESS_TABLE.lock();
-    table
-        .values()
-        .filter(|p| p.parent_pid == Some(parent_pid))
-        .map(|p| p.pid)
-        .collect()
+    /// Looks up a process by PID.
+    pub fn lookup(pid: Pid) -> Option<Arc<Process>> {
+        let table = PROCESS_TABLE.lock();
+        table.get(&pid).cloned()
+    }
+
+    /// Removes a process from the global table.
+    pub fn unregister(pid: Pid) {
+        let mut table = PROCESS_TABLE.lock();
+        table.remove(&pid);
+    }
+
+    /// Returns the PIDs of all children of the given parent.
+    pub fn children_of(parent_pid: Pid) -> Vec<Pid> {
+        let table = PROCESS_TABLE.lock();
+        table
+            .values()
+            .filter(|p| p.parent_pid == Some(parent_pid))
+            .map(|p| p.pid)
+            .collect()
+    }
+
+    /// Execute a closure with a reference to the current process.
+    ///
+    /// Called from syscall handlers to access the running process's state
+    /// (e.g. fd table).
+    ///
+    /// # Panics
+    ///
+    /// Panics if no process is currently running.
+    pub fn with_current<R>(f: impl FnOnce(&Arc<Process>) -> R) -> R {
+        let guard = CURRENT_PROCESS.get().lock();
+        let process = guard.as_ref().expect("no current process");
+        f(process)
+    }
+
+    /// Try to execute a closure with a reference to the current process.
+    ///
+    /// Returns `None` if no process is currently running (e.g. in the test
+    /// harness or during early boot).
+    pub fn try_current<R>(f: impl FnOnce(&Arc<Process>) -> R) -> Option<R> {
+        let guard = CURRENT_PROCESS.get().lock();
+        guard.as_ref().map(f)
+    }
 }
 
 // ── User mmap region ────────────────────────────────────────────────
@@ -321,7 +381,7 @@ impl Process {
 
         // Inherit session ID from parent, or use own PID for session leaders.
         let session = parent_pid
-            .and_then(|ppid| lookup_process(ppid))
+            .and_then(|ppid| ProcessTable::lookup(ppid))
             .map(|p| p.session_id.load(Ordering::Acquire))
             .unwrap_or(pid.as_u32());
 
@@ -352,70 +412,75 @@ impl Drop for Process {
     }
 }
 
-// ── Public accessors ────────────────────────────────────────────────
+// ── TrapContext facade ──────────────────────────────────────────────
 
-/// Returns the saved kernel CR3 physical address.
-pub fn kernel_cr3() -> PhysAddr {
-    PhysAddr::new(KERNEL_CR3.load(Ordering::Acquire))
-}
+/// Zero-sized facade for context switching and trap state.
+pub struct TrapContext;
 
-/// Returns the saved kernel RSP for `restore_kernel_context` (current CPU).
-pub fn saved_kernel_rsp() -> u64 {
-    SAVED_KERNEL_RSP.get().load(Ordering::Acquire)
-}
+impl TrapContext {
+    /// Returns the saved kernel CR3 physical address.
+    pub fn kernel_cr3() -> PhysAddr {
+        PhysAddr::new(KERNEL_CR3.load(Ordering::Acquire))
+    }
 
-/// Stores the exit status so `process_task` can read it after context restore (current CPU).
-pub fn set_process_exit_status(status: u64) {
-    PROCESS_EXIT_STATUS.get().store(status, Ordering::Release);
-}
+    /// Returns the saved kernel RSP for `restore_kernel_context` (current CPU).
+    pub fn saved_kernel_rsp() -> u64 {
+        SAVED_KERNEL_RSP.get().load(Ordering::Acquire)
+    }
 
-/// Saves the current CR3 as the kernel CR3.
-pub fn save_kernel_cr3() {
-    KERNEL_CR3.store(Cr3::read().as_u64(), Ordering::Release);
-}
+    /// Stores the exit status so `process_task` can read it after context restore (current CPU).
+    pub fn set_exit_status(status: u64) {
+        PROCESS_EXIT_STATUS.get().store(status, Ordering::Release);
+    }
 
-/// Sets the trap reason before calling `restore_kernel_context` (current CPU).
-pub fn set_trap_reason(reason: TrapReason) {
-    TRAP_REASON.get().store(reason as u8, Ordering::Release);
-}
+    /// Saves the current CR3 as the kernel CR3.
+    pub fn save_kernel_cr3() {
+        KERNEL_CR3.store(Cr3::read().as_u64(), Ordering::Release);
+    }
 
-/// Returns a raw pointer to the current CPU's `USER_CONTEXT`.
-///
-/// Used by the timer preemption stub to save user registers.
-///
-/// # Safety
-///
-/// The caller must ensure exclusive access (interrupts disabled or
-/// single-threaded context).
-pub fn user_context_ptr() -> *mut UserRegisters {
-    USER_CONTEXT.get().get()
-}
+    /// Sets the trap reason before calling `restore_kernel_context` (current CPU).
+    pub fn set_trap_reason(reason: TrapReason) {
+        TRAP_REASON.get().store(reason as u8, Ordering::Release);
+    }
 
-/// Returns a raw pointer to the current CPU's `SAVED_KERNEL_RSP`.
-///
-/// Used by assembly stubs to read the saved RSP value.
-///
-/// # Safety
-///
-/// The pointer must only be dereferenced in contexts where the value
-/// is valid (after `enter_userspace_save` has stored a value).
-pub fn saved_kernel_rsp_ptr() -> *const u64 {
-    // AtomicU64 has the same layout as u64.
-    SAVED_KERNEL_RSP.get() as *const AtomicU64 as *const u64
-}
+    /// Returns a raw pointer to the current CPU's `USER_CONTEXT`.
+    ///
+    /// Used by the timer preemption stub to save user registers.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure exclusive access (interrupts disabled or
+    /// single-threaded context).
+    pub fn user_context_ptr() -> *mut UserRegisters {
+        USER_CONTEXT.get().get()
+    }
 
-/// Returns a raw pointer to the current CPU's `TRAP_REASON`.
-///
-/// Used by the timer preemption stub to set the trap reason.
-pub fn trap_reason_ptr() -> *const u8 {
-    TRAP_REASON.get() as *const AtomicU8 as *const u8
-}
+    /// Returns a raw pointer to the current CPU's `SAVED_KERNEL_RSP`.
+    ///
+    /// Used by assembly stubs to read the saved RSP value.
+    ///
+    /// # Safety
+    ///
+    /// The pointer must only be dereferenced in contexts where the value
+    /// is valid (after `enter_userspace_save` has stored a value).
+    pub fn saved_kernel_rsp_ptr() -> *const u64 {
+        // AtomicU64 has the same layout as u64.
+        SAVED_KERNEL_RSP.get() as *const AtomicU64 as *const u64
+    }
 
-/// Returns a raw pointer to the `KERNEL_CR3` static (global, not per-CPU).
-///
-/// Used by the timer preemption stub to restore kernel CR3.
-pub fn kernel_cr3_ptr() -> *const u64 {
-    core::ptr::addr_of!(KERNEL_CR3) as *const u64
+    /// Returns a raw pointer to the current CPU's `TRAP_REASON`.
+    ///
+    /// Used by the timer preemption stub to set the trap reason.
+    pub fn trap_reason_ptr() -> *const u8 {
+        TRAP_REASON.get() as *const AtomicU8 as *const u8
+    }
+
+    /// Returns a raw pointer to the `KERNEL_CR3` static (global, not per-CPU).
+    ///
+    /// Used by the timer preemption stub to restore kernel CR3.
+    pub fn kernel_cr3_ptr() -> *const u64 {
+        core::ptr::addr_of!(KERNEL_CR3) as *const u64
+    }
 }
 
 /// Terminates the current user process due to a fault.
@@ -433,7 +498,7 @@ pub unsafe fn terminate_current_process_from_fault() -> ! {
     // SAFETY: Restoring kernel CR3 is safe because the kernel upper half
     // is identity-mapped in the user address space.
     unsafe {
-        Cr3::write(kernel_cr3());
+        Cr3::write(TrapContext::kernel_cr3());
     }
     // SAFETY: Reading KERNEL_GS_BASE gives us the percpu pointer that was
     // saved before entering userspace. Writing it to GS_BASE restores the
@@ -453,29 +518,6 @@ pub unsafe fn terminate_current_process_from_fault() -> ! {
     unsafe {
         restore_kernel_context(SAVED_KERNEL_RSP.get().load(Ordering::Acquire));
     }
-}
-
-/// Execute a closure with a reference to the current process.
-///
-/// Called from syscall handlers to access the running process's state
-/// (e.g. fd table).
-///
-/// # Panics
-///
-/// Panics if no process is currently running.
-pub fn with_current_process<R>(f: impl FnOnce(&Arc<Process>) -> R) -> R {
-    let guard = CURRENT_PROCESS.get().lock();
-    let process = guard.as_ref().expect("no current process");
-    f(process)
-}
-
-/// Try to execute a closure with a reference to the current process.
-///
-/// Returns `None` if no process is currently running (e.g. in the test
-/// harness or during early boot).
-pub fn try_current_process<R>(f: impl FnOnce(&Arc<Process>) -> R) -> Option<R> {
-    let guard = CURRENT_PROCESS.get().lock();
-    guard.as_ref().map(f)
 }
 
 // ── Userspace entry helpers ─────────────────────────────────────────
@@ -579,7 +621,7 @@ pub fn spawn_init() {
     }
 
     let process = Arc::new(process);
-    register_process(&process);
+    ProcessTable::register(&process);
 
     kinfo!(
         "Process {}: spawning init task (entry={:#x}, stack={:#x})",
@@ -615,22 +657,21 @@ fn read_init_from_vfs() -> &'static [u8] {
     buf.leak()
 }
 
-/// Sets the target PID and status pointer for a `TRAP_WAIT` syscall.
-pub fn set_wait_params(target_pid: Pid, status_ptr: u64) {
-    WAIT_TARGET_PID
-        .get()
-        .store(target_pid.as_u32(), Ordering::Release);
-    WAIT_STATUS_PTR.get().store(status_ptr, Ordering::Release);
-}
+// ── IoState facade ──────────────────────────────────────────────────
 
-/// Sets the I/O parameters for a `TRAP_IO` syscall.
-pub fn set_io_params(fd: Fd, buf_ptr: usize, buf_len: usize, is_write: bool) {
-    IO_FD.get().store(fd.as_u32() as u64, Ordering::Release);
-    IO_BUF_PTR.get().store(buf_ptr as u64, Ordering::Release);
-    IO_BUF_LEN.get().store(buf_len as u64, Ordering::Release);
-    IO_IS_WRITE
-        .get()
-        .store(u8::from(is_write), Ordering::Release);
+/// Zero-sized facade for I/O syscall parameters.
+pub struct IoState;
+
+impl IoState {
+    /// Sets the I/O parameters for a `TRAP_IO` syscall.
+    pub fn set_params(fd: Fd, buf_ptr: usize, buf_len: usize, is_write: bool) {
+        IO_FD.get().store(fd.as_u32() as u64, Ordering::Release);
+        IO_BUF_PTR.get().store(buf_ptr as u64, Ordering::Release);
+        IO_BUF_LEN.get().store(buf_len as u64, Ordering::Release);
+        IO_IS_WRITE
+            .get()
+            .store(u8::from(is_write), Ordering::Release);
+    }
 }
 
 /// Result of checking pending signals.
@@ -747,7 +788,7 @@ fn deliver_signal_to_handler(process: &Process, signum: usize, handler_addr: u64
     // Restore kernel CR3.
     unsafe {
         use crate::arch::x86_64::registers::control::Cr3;
-        Cr3::write(kernel_cr3());
+        Cr3::write(TrapContext::kernel_cr3());
     }
 
     // Redirect userspace execution to the signal handler.
@@ -880,11 +921,20 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                         saved.r13,
                         saved.r14,
                         saved.r15,
-                        crate::percpu::current_cpu().user_rsp,
+                        crate::percpu::PerCpuState::current().user_rsp,
                     )
                 };
 
+                // Set foreground PID so Ctrl+C delivers SIGINT to the child.
+                if target.as_u32() != 0 {
+                    WaitState::set_foreground(target);
+                }
+
                 let (result, exit_code) = handle_wait(pid, target).await;
+
+                // Clear foreground PID.
+                WaitState::set_foreground(Pid::new(0));
+
 
                 // Write exit status to user memory under user CR3.
                 if status_ptr != 0 && result >= 0 {
@@ -906,7 +956,7 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                     }
                     // SAFETY: Restore kernel CR3.
                     unsafe {
-                        Cr3::write(kernel_cr3());
+                        Cr3::write(TrapContext::kernel_cr3());
                     }
                 }
 
@@ -982,7 +1032,7 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                         saved.r13,
                         saved.r14,
                         saved.r15,
-                        crate::percpu::current_cpu().user_rsp,
+                        crate::percpu::PerCpuState::current().user_rsp,
                     )
                 };
 
@@ -1014,7 +1064,7 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                             }
                             // SAFETY: Restore kernel CR3.
                             unsafe {
-                                Cr3::write(kernel_cr3());
+                                Cr3::write(TrapContext::kernel_cr3());
                             }
 
                             match inode.write(offset, &kbuf).await {
@@ -1055,7 +1105,7 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                                     }
                                     // SAFETY: Restore kernel CR3.
                                     unsafe {
-                                        Cr3::write(kernel_cr3());
+                                        Cr3::write(TrapContext::kernel_cr3());
                                     }
                                     let mut fd_table = process.fd_table.lock();
                                     if let Some(f) = fd_table.get_mut(io_fd) {
@@ -1141,13 +1191,13 @@ async fn handle_wait(parent_pid: Pid, target_pid: Pid) -> (isize, u64) {
     // Find the child process.
     let child = if target_pid.as_u32() == 0 {
         // Wait for any child — pick the first one.
-        let children = children_of(parent_pid);
+        let children = ProcessTable::children_of(parent_pid);
         if children.is_empty() {
             return (-(crate::syscall::EINVAL), 0);
         }
-        lookup_process(children[0])
+        ProcessTable::lookup(children[0])
     } else {
-        lookup_process(target_pid)
+        ProcessTable::lookup(target_pid)
     };
 
     let child = match child {
@@ -1187,6 +1237,6 @@ async fn handle_wait(parent_pid: Pid, target_pid: Pid) -> (isize, u64) {
 
     // Reap: remove child from the process table now that the parent
     // has collected the exit status.
-    unregister_process(child.pid);
+    ProcessTable::unregister(child.pid);
     (pid, exit_code)
 }

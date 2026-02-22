@@ -9,12 +9,12 @@ use hadron_ktest::kernel_test;
 
 #[kernel_test(stage = "early_boot", timeout = 5)]
 fn test_heap_watermark_increases() {
-    let wm_before = crate::mm::vmm::with_vmm(|vmm| vmm.heap_watermark());
+    let wm_before = crate::mm::vmm::with(|vmm| vmm.heap_watermark());
 
     // Force a heap allocation to grow the watermark.
     let _b = Box::new([0u8; 4096]);
 
-    let wm_after = crate::mm::vmm::with_vmm(|vmm| vmm.heap_watermark());
+    let wm_after = crate::mm::vmm::with(|vmm| vmm.heap_watermark());
     assert!(
         wm_after >= wm_before,
         "heap watermark should not decrease after allocation: before={:#x}, after={:#x}",
@@ -25,7 +25,7 @@ fn test_heap_watermark_increases() {
 
 #[kernel_test(stage = "early_boot", timeout = 5)]
 fn test_pmm_free_count_consistency() {
-    crate::mm::pmm::with_pmm(|pmm| {
+    crate::mm::pmm::with(|pmm| {
         let before = pmm.free_frames();
         let frame = pmm.allocate_frame().expect("should allocate");
         assert_eq!(pmm.free_frames(), before - 1);

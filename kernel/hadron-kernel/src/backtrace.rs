@@ -91,69 +91,74 @@ hadron_linkset::declare_linkset_blob! {
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Initialize the backtrace system from the embedded HKIF section.
-///
-/// Reads the `.hadron_hkif` linker section, validates the HKIF header,
-/// and parses the section directory to locate symbol/line/string data.
-///
-/// Must be called once during boot. The `kernel_virt_base` is the lowest
-/// PT_LOAD virtual address of the kernel image.
-pub fn init_from_embedded(kernel_virt_base: u64) {
-    let data = hkif_data();
+/// Zero-sized facade for the backtrace subsystem.
+pub struct Backtrace;
 
-    if data.is_empty() {
-        crate::kwarn!("HKIF: empty .hadron_hkif section, backtraces disabled");
-        return;
+impl Backtrace {
+    /// Initialize the backtrace system from the embedded HKIF section.
+    ///
+    /// Reads the `.hadron_hkif` linker section, validates the HKIF header,
+    /// and parses the section directory to locate symbol/line/string data.
+    ///
+    /// Must be called once during boot. The `kernel_virt_base` is the lowest
+    /// PT_LOAD virtual address of the kernel image.
+    pub fn init_from_embedded(kernel_virt_base: u64) {
+        let data = hkif_data();
+
+        if data.is_empty() {
+            crate::kwarn!("HKIF: empty .hadron_hkif section, backtraces disabled");
+            return;
+        }
+
+        if let Some(state) = parse_hkif(data) {
+            let sym_count = state.sections.sym_count;
+            let line_count = state.sections.line_count;
+
+            KERNEL_VIRT_BASE.store(kernel_virt_base, Ordering::Relaxed);
+            // lock_unchecked: runs during single-threaded early boot (step 2b)
+            // before interrupts are enabled (step 11). No contention possible.
+            *HKIF_STATE.lock_unchecked() = Some(state);
+
+            crate::kinfo!(
+                "Backtrace: loaded HKIF ({} symbols, {} lines, {} bytes)",
+                sym_count,
+                line_count,
+                data.len(),
+            );
+        }
     }
 
-    if let Some(state) = parse_hkif(data) {
-        let sym_count = state.sections.sym_count;
-        let line_count = state.sections.line_count;
-
-        KERNEL_VIRT_BASE.store(kernel_virt_base, Ordering::Relaxed);
-        // lock_unchecked: runs during single-threaded early boot (step 2b)
-        // before interrupts are enabled (step 11). No contention possible.
-        *HKIF_STATE.lock_unchecked() = Some(state);
-
-        crate::kinfo!(
-            "Backtrace: loaded HKIF ({} symbols, {} lines, {} bytes)",
-            sym_count,
-            line_count,
-            data.len(),
-        );
-    }
-}
-
-/// Returns `true` if HKIF symbol data has been loaded and symbolication is
-/// available. Test binaries that skip the two-pass link will return `false`.
-pub fn is_available() -> bool {
-    HKIF_STATE.try_lock().is_some_and(|guard| guard.is_some())
-}
-
-/// Print a backtrace to the given writer. Safe to call from panic context.
-///
-/// If HKIF data is not available, prints raw hex addresses.
-pub fn panic_backtrace(writer: &mut impl Write) {
-    let frames = capture_backtrace();
-    let frame_count = frames.len();
-
-    if frame_count == 0 {
-        let _ = write!(writer, "Backtrace: no frames captured\n");
-        return;
+    /// Returns `true` if HKIF symbol data has been loaded and symbolication is
+    /// available. Test binaries that skip the two-pass link will return `false`.
+    pub fn is_available() -> bool {
+        HKIF_STATE.try_lock().is_some_and(|guard| guard.is_some())
     }
 
-    let _ = write!(writer, "Backtrace ({frame_count} frames):\n");
+    /// Print a backtrace to the given writer. Safe to call from panic context.
+    ///
+    /// If HKIF data is not available, prints raw hex addresses.
+    pub fn panic_backtrace(writer: &mut impl Write) {
+        let frames = capture_backtrace();
+        let frame_count = frames.len();
 
-    // Try to lock HKIF state — if we can't (e.g., panic while holding the lock),
-    // fall back to raw addresses.
-    let guard = HKIF_STATE.try_lock();
-    let kernel_base = KERNEL_VIRT_BASE.load(Ordering::Relaxed);
+        if frame_count == 0 {
+            let _ = write!(writer, "Backtrace: no frames captured\n");
+            return;
+        }
 
-    for (i, &addr) in frames.iter().enumerate() {
-        if let Some(Some(state)) = guard.as_deref() {
-            print_frame_symbolicated(writer, i, addr, state, kernel_base);
-        } else {
-            let _ = write!(writer, "  #{i}: {addr:#018x}\n");
+        let _ = write!(writer, "Backtrace ({frame_count} frames):\n");
+
+        // Try to lock HKIF state — if we can't (e.g., panic while holding the lock),
+        // fall back to raw addresses.
+        let guard = HKIF_STATE.try_lock();
+        let kernel_base = KERNEL_VIRT_BASE.load(Ordering::Relaxed);
+
+        for (i, &addr) in frames.iter().enumerate() {
+            if let Some(Some(state)) = guard.as_deref() {
+                print_frame_symbolicated(writer, i, addr, state, kernel_base);
+            } else {
+                let _ = write!(writer, "  #{i}: {addr:#018x}\n");
+            }
         }
     }
 }

@@ -153,7 +153,7 @@ fn read_device_info(bus: u8, dev: u8, func: u8) -> PciDeviceInfo {
 pub fn apply_prt_routing(devices: &mut [PciDeviceInfo]) {
     use hadron_acpi::aml::value::AmlValue;
 
-    let prt_entries = crate::arch::x86_64::acpi::with_namespace(|ns| {
+    let prt_entries = crate::arch::x86_64::acpi::Acpi::with_namespace(|ns| {
         // Find PCI host bridge (PNP0A03 = PCI bus, PNP0A08 = PCIe bus).
         // _HID can be either an EisaId (Buffer) or Integer.
         ns.devices()
