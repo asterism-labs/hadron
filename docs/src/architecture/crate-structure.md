@@ -74,7 +74,7 @@ hadron/
 ├── userspace/
 │   ├── init/               # Init process (lepton-init)
 │   ├── lepton-syslib/      # Userspace syscall library
-│   ├── shell/              # Interactive shell (lepton-shell)
+│   ├── shell/              # Interactive shell (lsh)
 │   └── coreutils/          # Core utilities (lepton-coreutils)
 │
 ├── tools/

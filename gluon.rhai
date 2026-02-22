@@ -303,7 +303,7 @@ userspace.add("lepton-init", "userspace/init")
     .root("src/main.rs")
     .deps(#{ lepton_syslib: "lepton-syslib" });
 
-userspace.add("lepton-shell", "userspace/shell")
+userspace.add("lsh", "userspace/shell")
     .crate_type(BIN).root("src/main.rs")
     .deps(#{ lepton_syslib: "lepton-syslib" });
 
@@ -321,7 +321,7 @@ rule("hkif")
     .handler("hkif");
 
 rule("initrd")
-    .inputs(["lepton-init", "lepton-shell", "lepton-coreutils"])
+    .inputs(["lepton-init", "lsh", "lepton-coreutils"])
     .output("build/initrd.cpio")
     .handler("initrd");
 

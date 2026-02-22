@@ -98,7 +98,7 @@ Hadron is an x86_64 kernel written in Rust. It uses an async-native, cooperative
 |---------|-------------|
 | lepton-syslib | Userspace syscall wrapper library |
 | lepton-init | Init process (PID 1) |
-| lepton-shell | Interactive shell with pipes, redirection, and job control |
+| lsh | Interactive shell with pipes, redirection, and job control |
 | lepton-coreutils | 11 core utilities (ls, cat, echo, mkdir, etc.) |
 
 ### Developer Tools & Testing

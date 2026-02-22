@@ -1,6 +1,6 @@
-# lepton-shell
+# lsh
 
-hsh (Hadron SHell) -- a minimal interactive shell for Hadron OS. lepton-shell is a `no_std` userspace binary that provides command-line interaction with pipeline execution, I/O redirection, background job control, environment variable expansion, and PATH-based command resolution. It serves as the primary user interface when running Hadron interactively.
+lsh (Lepton SHell) -- a minimal interactive shell for Hadron OS. lsh is a `no_std` userspace binary that provides command-line interaction with pipeline execution, I/O redirection, background job control, environment variable expansion, and PATH-based command resolution. It serves as the primary user interface when running Hadron interactively.
 
 ## Features
 

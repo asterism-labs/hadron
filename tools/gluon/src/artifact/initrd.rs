@@ -20,7 +20,7 @@ const COREUTILS_COMMANDS: &[&str] = &[
 fn binary_name(crate_name: &str) -> &str {
     match crate_name {
         "lepton-init" => "init",
-        "lepton-shell" => "sh",
+        "lsh" => "sh",
         "lepton-coreutils" => "coreutils",
         other => other.strip_prefix("lepton-").unwrap_or(other),
     }
@@ -31,7 +31,7 @@ fn binary_name(crate_name: &str) -> &str {
 /// Creates a Unix-like layout:
 /// ```text
 /// /bin/init          (lepton-init)
-/// /bin/sh            (lepton-shell)
+/// /bin/sh            (lsh)
 /// /bin/coreutils     (lepton-coreutils)
 /// /bin/echo          → /bin/coreutils (symlink)
 /// /bin/cat           → /bin/coreutils (symlink)

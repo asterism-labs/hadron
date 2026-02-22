@@ -50,7 +50,7 @@ Scope is **required** on every commit. Use the most specific scope that covers t
 `hadron-acpi`, `hadron-elf`, `hadron-dwarf`, `hadron-test`, `hadron-core`, `hadron-bench`, `hadron-codegen`, `hadron-binparse`, `hadron-mmio`, `hadron-syscall`, `hadron-driver-macros`, `planck-noalloc`, `linkset`, `limine`
 
 ### Userspace
-`lepton-init`, `lepton-shell`, `lepton-syslib`, `lepton-coreutils`
+`lepton-init`, `lsh`, `lepton-syslib`, `lepton-coreutils`
 
 ### Tools
 `gluon`, `gluon/vendor`, `gluon/config`
