@@ -7,7 +7,7 @@ authors.workspace = true
 repository.workspace = true
 license.workspace = true
 readme.workspace = true
-publish.workspace = true
+publish = true
 description = "Minimal DWARF .debug_line parser for Hadron OS"
 
 [dependencies]
