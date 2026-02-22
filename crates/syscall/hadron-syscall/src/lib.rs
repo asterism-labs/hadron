@@ -170,7 +170,9 @@ hadron_syscall_macros::define_syscalls! {
         MAP_ANONYMOUS: usize = 0x1;
         /// Signal: interrupt (Ctrl+C).
         SIGINT: usize = 2;
-        /// Signal: kill (cannot be caught).
+        /// Signal: quit (Ctrl+\).
+        SIGQUIT: usize = 3;
+        /// Signal: kill (cannot be caught or ignored).
         SIGKILL: usize = 9;
         /// Signal: segmentation fault.
         SIGSEGV: usize = 11;
@@ -180,6 +182,12 @@ hadron_syscall_macros::define_syscalls! {
         SIGTERM: usize = 15;
         /// Signal: child process exited.
         SIGCHLD: usize = 17;
+        /// Signal: stop (cannot be caught or ignored).
+        SIGSTOP: usize = 19;
+        /// Signal disposition: default action.
+        SIG_DFL: usize = 0;
+        /// Signal disposition: ignore the signal.
+        SIG_IGN: usize = 1;
     }
 
     /// Task management.
@@ -209,6 +217,33 @@ hadron_syscall_macros::define_syscalls! {
 
         /// Query task information (returns task ID for now).
         fn task_info() = 0x05;
+
+        /// Register a signal handler for a signal number.
+        ///
+        /// `signum` is the signal number (1-63, cannot be SIGKILL or SIGSTOP).
+        /// `handler` is `SIG_DFL` (0), `SIG_IGN` (1), or a function pointer.
+        /// If `old_handler_out` is non-zero, the previous handler is written there.
+        /// Returns 0 on success, or a negated errno on failure.
+        fn task_sigaction(signum: usize, handler: usize, old_handler_out: usize) = 0x06;
+
+        /// Restore pre-signal user context after a signal handler returns.
+        ///
+        /// Called from the signal trampoline. Restores all registers from
+        /// the `SignalFrame` saved on the user stack before re-entering
+        /// userspace at the interrupted instruction.
+        fn task_sigreturn() = 0x07;
+
+        /// Set process group ID.
+        ///
+        /// If `pid` is 0, uses the calling process. If `pgid` is 0, uses `pid`
+        /// as the new PGID (creating a new process group). The target must be
+        /// the caller or a child of the caller.
+        fn task_setpgid(pid: usize, pgid: usize) = 0x08;
+
+        /// Get process group ID.
+        ///
+        /// If `pid` is 0, returns the calling process's PGID.
+        fn task_getpgid(pid: usize) = 0x09;
     }
 
     /// Handle operations.

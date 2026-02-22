@@ -104,13 +104,10 @@ impl Future for ConsoleReadFuture<'_> {
             return Poll::Ready(Ok(n));
         }
 
-        // Check for pending signals.
-        if let Some(fg_pid) = crate::proc::foreground_pid() {
-            if let Some(proc) = crate::proc::lookup_process(fg_pid) {
-                if proc.signals.has_pending() {
-                    return Poll::Ready(Err(FsError::Interrupted));
-                }
-            }
+        // Check for pending signals on the current (reading) process.
+        let has_signal = crate::proc::try_current_process(|proc| proc.signals.has_pending());
+        if has_signal == Some(true) {
+            return Poll::Ready(Err(FsError::Interrupted));
         }
 
         Poll::Pending

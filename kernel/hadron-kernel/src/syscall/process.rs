@@ -1,4 +1,5 @@
-//! Task syscall handlers: task_exit, task_info, task_spawn, task_wait, task_kill.
+//! Task syscall handlers: task_exit, task_info, task_spawn, task_wait, task_kill,
+//! task_sigaction, task_sigreturn.
 
 use crate::arch::x86_64::registers::control::Cr3;
 use crate::arch::x86_64::registers::model_specific::{IA32_GS_BASE, IA32_KERNEL_GS_BASE};
@@ -264,5 +265,185 @@ pub(super) fn sys_task_kill(pid: usize, signum: usize) -> isize {
             0
         }
         None => -(crate::syscall::EINVAL),
+    }
+}
+
+/// `sys_task_setpgid` — set process group ID.
+///
+/// If `pid` is 0, uses the calling process. If `pgid` is 0, uses `pid` as
+/// the new PGID. The target must be the caller or a child of the caller.
+#[expect(clippy::cast_possible_truncation, reason = "PID/PGID fits in u32")]
+pub(super) fn sys_task_setpgid(pid: usize, pgid: usize) -> isize {
+    use core::sync::atomic::Ordering;
+
+    let current_pid = crate::proc::with_current_process(|p| p.pid);
+    let target_pid = if pid == 0 {
+        current_pid
+    } else {
+        crate::id::Pid::new(pid as u32)
+    };
+    let new_pgid = if pgid == 0 {
+        target_pid.as_u32()
+    } else {
+        pgid as u32
+    };
+
+    let target = match crate::proc::lookup_process(target_pid) {
+        Some(p) => p,
+        None => return -(crate::syscall::EINVAL),
+    };
+
+    // Must be self or a child of the caller.
+    if target.pid != current_pid && target.parent_pid != Some(current_pid) {
+        return -(crate::syscall::EACCES);
+    }
+
+    target.pgid.store(new_pgid, Ordering::Release);
+    0
+}
+
+/// `sys_task_getpgid` — get process group ID.
+///
+/// If `pid` is 0, returns the calling process's PGID.
+#[expect(
+    clippy::cast_possible_wrap,
+    reason = "PGID is small u32, wrapping impossible"
+)]
+#[expect(clippy::cast_possible_truncation, reason = "PID fits in u32")]
+pub(super) fn sys_task_getpgid(pid: usize) -> isize {
+    use core::sync::atomic::Ordering;
+
+    let target_pid = if pid == 0 {
+        crate::proc::with_current_process(|p| p.pid)
+    } else {
+        crate::id::Pid::new(pid as u32)
+    };
+
+    match crate::proc::lookup_process(target_pid) {
+        Some(p) => p.pgid.load(Ordering::Acquire) as isize,
+        None => -(crate::syscall::EINVAL),
+    }
+}
+
+/// `sys_task_sigaction` — register a signal handler.
+///
+/// `signum` is the signal number (1-63). SIGKILL and SIGSTOP cannot be caught.
+/// `handler` is `SIG_DFL` (0), `SIG_IGN` (1), or a userspace function pointer.
+/// If `old_handler_out` is non-zero, the previous handler address is written there.
+///
+/// Returns 0 on success, or a negated errno on failure.
+pub(super) fn sys_task_sigaction(
+    signum: usize,
+    handler: usize,
+    old_handler_out: usize,
+) -> isize {
+    crate::proc::with_current_process(|process| {
+        let old = match process.signals.set_handler(signum, handler as u64) {
+            Some(old) => old,
+            None => return -(crate::syscall::EINVAL),
+        };
+
+        // Write old handler to userspace if requested.
+        if old_handler_out != 0 {
+            match UserSlice::new(old_handler_out, core::mem::size_of::<u64>()) {
+                Ok(slice) => {
+                    // SAFETY: The pointer was validated by UserSlice and user CR3
+                    // is still active (we're in a syscall from userspace).
+                    unsafe {
+                        core::ptr::write(slice.addr() as *mut u64, old);
+                    }
+                }
+                Err(e) => return e,
+            }
+        }
+
+        0
+    })
+}
+
+/// `sys_task_sigreturn` — restore pre-signal context.
+///
+/// Called from the signal return trampoline after a signal handler finishes.
+/// Reads the [`SignalFrame`] from the user stack and restores all registers,
+/// then resumes execution at the interrupted instruction.
+///
+/// This works by restoring the kernel context from the syscall entry (like
+/// other blocking syscalls) and setting up the TRAP to re-enter userspace
+/// at the restored instruction pointer.
+pub(super) fn sys_task_sigreturn() -> isize {
+    use crate::proc::SignalFrame;
+
+    // Read the SignalFrame from the user stack.
+    // The current user RSP points to just past the return address that was
+    // consumed by the `ret` from the signal handler. The frame starts at
+    // the current RSP (which is the RSP we set up, pointing to the frame).
+    //
+    // Actually, when the signal handler does `ret`, it pops ret_addr and RSP
+    // advances past it. But we set RSP to point to the start of the frame
+    // (where ret_addr lives), so after `ret`, RSP = &frame + 8. However,
+    // the trampoline then does `syscall` which enters the kernel. At that
+    // point, the user RSP in the percpu struct points past ret_addr.
+    //
+    // We need to read from (user_rsp - 8) to get back to the frame start,
+    // or we can read from the user RSP that was saved in the SignalFrame itself.
+    //
+    // Simpler approach: the trampoline calls sigreturn immediately, so
+    // user RSP = &frame.signum (right after ret_addr was popped by `ret`).
+    // We read from (user_rsp - 8) to get the full frame.
+
+    let frame: SignalFrame = crate::proc::with_current_process(|_process| {
+        let user_rsp = crate::percpu::current_cpu().user_rsp;
+        let frame_addr = user_rsp - 8; // Back up past the popped ret_addr.
+
+        // Read the frame from user memory.
+        // SAFETY: User CR3 is still active (we're in a syscall). The frame
+        // was written by deliver_signal_to_handler at a validated address.
+        unsafe { core::ptr::read(frame_addr as *const SignalFrame) }
+    });
+
+    // Now we need to restore the kernel context and set up for re-entry.
+    // We use the same TRAP mechanism as sys_task_wait: longjmp back to
+    // process_task, which will resume userspace with the restored context.
+    let kernel_cr3 = crate::proc::kernel_cr3();
+
+    // SAFETY: Standard kernel context restore pattern (same as sys_task_exit/sys_task_wait).
+    unsafe {
+        Cr3::write(kernel_cr3);
+        let percpu = IA32_GS_BASE.read();
+        IA32_KERNEL_GS_BASE.write(percpu);
+    }
+
+    // Populate USER_CONTEXT with the saved registers from the SignalFrame.
+    // SAFETY: USER_CONTEXT is per-CPU and we are the only accessor right now.
+    unsafe {
+        let ctx = &mut *crate::proc::USER_CONTEXT.get().get();
+        ctx.rax = frame.rax;
+        ctx.rbx = frame.rbx;
+        ctx.rcx = frame.rcx;
+        ctx.rdx = frame.rdx;
+        ctx.rsi = frame.rsi;
+        ctx.rdi = frame.rdi;
+        ctx.rbp = frame.rbp;
+        ctx.r8 = frame.r8;
+        ctx.r9 = frame.r9;
+        ctx.r10 = frame.r10;
+        ctx.r11 = frame.r11;
+        ctx.r12 = frame.r12;
+        ctx.r13 = frame.r13;
+        ctx.r14 = frame.r14;
+        ctx.r15 = frame.r15;
+        ctx.rip = frame.rip;
+        ctx.rsp = frame.rsp;
+        ctx.rflags = frame.rflags;
+    }
+
+    // Set trap reason to Preempted so process_task resumes via enter_userspace_resume_wrapper
+    // with the restored USER_CONTEXT.
+    crate::proc::set_trap_reason(crate::proc::TrapReason::Preempted);
+
+    let saved_rsp = crate::proc::saved_kernel_rsp();
+    // SAFETY: saved_rsp is the kernel RSP saved by enter_userspace_save.
+    unsafe {
+        restore_kernel_context(saved_rsp);
     }
 }

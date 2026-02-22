@@ -460,6 +460,8 @@ fn execute(pipeline: &Pipeline<'_>, jobs: &mut JobTable) {
     // Collect PIDs for waitpid.
     let mut child_pids = [0u32; MAX_STAGES];
     let mut spawned = 0;
+    // PGID for the pipeline: set to first child's PID.
+    let mut pipeline_pgid: u32 = 0;
 
     // Save original stdin/stdout by opening /dev/console.
     let saved_stdin = io::open("/dev/console", 1); // READ = 1
@@ -586,7 +588,14 @@ fn execute(pipeline: &Pipeline<'_>, jobs: &mut JobTable) {
         if ret < 0 {
             println!("hsh: {}: command not found", stage.args[0]);
         } else {
-            child_pids[spawned] = ret as u32;
+            let child_pid = ret as u32;
+            // First child becomes the pipeline's process group leader.
+            if pipeline_pgid == 0 {
+                pipeline_pgid = child_pid;
+            }
+            // Place all pipeline children in the same process group.
+            sys::setpgid(child_pid, pipeline_pgid);
+            child_pids[spawned] = child_pid;
             spawned += 1;
         }
     }
@@ -905,6 +914,9 @@ fn read_line(buf: &mut [u8]) -> usize {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn main(_args: &[&str]) -> i32 {
+    // Ignore SIGINT so Ctrl+C kills foreground children, not the shell itself.
+    sys::signal(sys::SIGINT, sys::SIG_IGN);
+
     println!("hsh — Hadron SHell");
     println!("Type 'help' for available commands.\n");
 

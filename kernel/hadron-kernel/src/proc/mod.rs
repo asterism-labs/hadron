@@ -32,11 +32,53 @@ use crate::mm::layout::VirtRegion;
 use crate::mm::region::FreeRegionAllocator;
 use crate::percpu::{CpuLocal, MAX_CPUS};
 use crate::sync::SpinLock;
-use crate::{kdebug, kinfo};
+use crate::{kdebug, kinfo, kwarn};
 
 use crate::fs::file::{FileDescriptorTable, OpenFlags};
 use crate::id::Fd;
 use crate::sync::HeapWaitQueue;
+
+// ── Signal trampoline ──────────────────────────────────────────────
+
+/// Virtual address of the signal trampoline page mapped into every user process.
+///
+/// Contains a tiny code stub: `mov rax, SYS_TASK_SIGRETURN; syscall`.
+/// When a signal handler returns, execution falls through to this stub,
+/// which invokes `sigreturn` to restore the pre-signal context.
+pub const SIGRETURN_TRAMPOLINE_ADDR: u64 = 0x7FFF_FFFE_0000;
+
+/// Layout saved on the user stack before invoking a signal handler.
+///
+/// The signal handler's return address points to [`SIGRETURN_TRAMPOLINE_ADDR`],
+/// which calls `task_sigreturn()`. The kernel then restores these registers
+/// and resumes execution at the interrupted instruction.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SignalFrame {
+    /// Return address (trampoline addr, at top of frame).
+    pub ret_addr: u64,
+    /// Signal number that was delivered.
+    pub signum: u64,
+    // Saved user registers:
+    pub rax: u64,
+    pub rbx: u64,
+    pub rcx: u64,
+    pub rdx: u64,
+    pub rsi: u64,
+    pub rdi: u64,
+    pub rbp: u64,
+    pub r8: u64,
+    pub r9: u64,
+    pub r10: u64,
+    pub r11: u64,
+    pub r12: u64,
+    pub r13: u64,
+    pub r14: u64,
+    pub r15: u64,
+    pub rip: u64,
+    pub rsp: u64,
+    pub rflags: u64,
+}
 
 // ── Trap reason ─────────────────────────────────────────────────────
 
@@ -169,21 +211,35 @@ static IO_BUF_LEN: CpuLocal<AtomicU64> = CpuLocal::new([const { AtomicU64::new(0
 /// Per-CPU I/O direction for TRAP_IO: 0 = read, 1 = write.
 static IO_IS_WRITE: CpuLocal<AtomicU8> = CpuLocal::new([const { AtomicU8::new(0) }; MAX_CPUS]);
 
-/// PID of the current foreground process (the one that receives Ctrl+C).
+/// Process group ID of the current foreground group (receives Ctrl+C).
 ///
-/// Set to the child PID in TRAP_WAIT before await, reset to 0 after.
-/// Accessed from the keyboard input handler to deliver SIGINT.
-static FOREGROUND_PID: AtomicU32 = AtomicU32::new(0);
+/// Set to the child's PGID in TRAP_WAIT before await, reset to 0 after.
+/// Accessed from the keyboard input handler to deliver SIGINT to all
+/// processes in the foreground group.
+static FOREGROUND_PGID: AtomicU32 = AtomicU32::new(0);
 
-/// Sets the foreground process PID (called from `process_task` during TRAP_WAIT).
-pub fn set_foreground_pid(pid: Pid) {
-    FOREGROUND_PID.store(pid.as_u32(), Ordering::Release);
+/// Sets the foreground process group ID.
+pub fn set_foreground_pgid(pgid: u32) {
+    FOREGROUND_PGID.store(pgid, Ordering::Release);
 }
 
-/// Returns the current foreground process PID, or `None` if none.
-pub fn foreground_pid() -> Option<Pid> {
-    let raw = FOREGROUND_PID.load(Ordering::Acquire);
-    if raw == 0 { None } else { Some(Pid::new(raw)) }
+/// Returns the current foreground process group ID, or `None` if none.
+pub fn foreground_pgid() -> Option<u32> {
+    let raw = FOREGROUND_PGID.load(Ordering::Acquire);
+    if raw == 0 { None } else { Some(raw) }
+}
+
+/// Send a signal to all processes in a process group.
+///
+/// Iterates the global process table and posts the signal to every
+/// process whose `pgid` matches the given group ID.
+pub fn signal_process_group(pgid: u32, signum: usize) {
+    let table = PROCESS_TABLE.lock();
+    for proc in table.values() {
+        if proc.pgid.load(Ordering::Acquire) == pgid {
+            proc.signals.post(signum);
+        }
+    }
 }
 
 // ── Global process table ────────────────────────────────────────────
@@ -244,6 +300,10 @@ pub struct Process {
     pub pid: Pid,
     /// Parent process ID (`None` for init).
     pub parent_pid: Option<Pid>,
+    /// Process group ID. Initialized to own PID on spawn.
+    pub pgid: AtomicU32,
+    /// Session ID. Initialized to parent's session, or own PID for session leaders.
+    pub session_id: AtomicU32,
     /// Physical address of the user PML4 (cached for fast CR3 switch).
     pub user_cr3: PhysAddr,
     /// User address space (owns the PML4, freed on drop).
@@ -269,12 +329,25 @@ impl Process {
     }
 
     /// Creates a new process with the given address space and parent PID.
+    ///
+    /// The process group ID is initialized to the process's own PID.
+    /// The session ID is inherited from the parent, or set to own PID if init.
     pub fn new(address_space: AddressSpace<PageTableMapper>, parent_pid: Option<Pid>) -> Self {
         let user_cr3 = address_space.root_phys();
         let mmap_region = VirtRegion::new(VirtAddr::new(USER_MMAP_BASE), USER_MMAP_MAX_SIZE);
+        let pid = Pid::new(NEXT_PID.fetch_add(1, Ordering::Relaxed));
+
+        // Inherit session ID from parent, or use own PID for session leaders.
+        let session = parent_pid
+            .and_then(|ppid| lookup_process(ppid))
+            .map(|p| p.session_id.load(Ordering::Acquire))
+            .unwrap_or(pid.as_u32());
+
         Self {
-            pid: Pid::new(NEXT_PID.fetch_add(1, Ordering::Relaxed)),
+            pid,
             parent_pid,
+            pgid: AtomicU32::new(pid.as_u32()),
+            session_id: AtomicU32::new(session),
             user_cr3,
             address_space,
             fd_table: SpinLock::leveled("fd_table", 4, FileDescriptorTable::new()),
@@ -578,24 +651,132 @@ pub fn set_io_params(fd: Fd, buf_ptr: usize, buf_len: usize, is_write: bool) {
         .store(u8::from(is_write), Ordering::Release);
 }
 
+/// Result of checking pending signals.
+enum SignalCheckResult {
+    /// No actionable signal; continue normally.
+    None,
+    /// Process should be terminated with this exit code.
+    Terminate(u64),
+    /// A signal was delivered to a userspace handler; USER_CONTEXT was modified
+    /// to enter the handler. The caller should `continue` the loop to re-enter
+    /// userspace.
+    Delivered,
+}
+
 /// Check for pending signals and handle them.
 ///
-/// Returns `true` if the process should be terminated (the caller should
-/// set exit status and break out of the process loop).
-fn check_signals(process: &Process) -> Option<u64> {
+/// Must be called after `USER_CONTEXT` has been fully populated with the
+/// state that would be resumed. If a custom handler is installed, this
+/// function pushes a [`SignalFrame`] onto the user stack and modifies
+/// `USER_CONTEXT` to enter the handler.
+///
+/// Only delivers one custom-handler signal per call. Remaining signals
+/// will be handled on the next kernel re-entry after the handler returns
+/// via `sigreturn`.
+fn check_signals(process: &Process) -> SignalCheckResult {
     while let Some(sig) = process.signals.dequeue() {
-        let action = signal::default_action(sig.0);
-        match action {
-            signal::SignalAction::Terminate => {
+        match process.signals.disposition(sig.0) {
+            signal::SignalDisposition::Default(signal::SignalAction::Terminate) => {
                 // Exit status = 128 + signal number (Unix convention).
-                return Some(128 + sig.0 as u64);
+                return SignalCheckResult::Terminate(128 + sig.0 as u64);
             }
-            signal::SignalAction::Ignore => {
-                // Discard the signal.
+            signal::SignalDisposition::Default(signal::SignalAction::Ignore)
+            | signal::SignalDisposition::Ignore => {
+                // Discard the signal, check next.
+                continue;
+            }
+            signal::SignalDisposition::Handler(handler_addr) => {
+                // Deliver to userspace handler by modifying USER_CONTEXT.
+                if deliver_signal_to_handler(process, sig.0, handler_addr) {
+                    return SignalCheckResult::Delivered;
+                }
+                // If delivery failed (e.g. stack overflow), fall through to terminate.
+                kwarn!(
+                    "Process {}: signal {} handler delivery failed, terminating",
+                    process.pid,
+                    sig.0
+                );
+                return SignalCheckResult::Terminate(128 + sig.0 as u64);
             }
         }
     }
-    None
+    SignalCheckResult::None
+}
+
+/// Push a [`SignalFrame`] onto the user stack and redirect `USER_CONTEXT` to
+/// the signal handler.
+///
+/// Returns `true` on success, `false` if the user stack is too small for the frame.
+fn deliver_signal_to_handler(process: &Process, signum: usize, handler_addr: u64) -> bool {
+    // SAFETY: USER_CONTEXT is per-CPU, only accessed from this task and the
+    // preemption stub (mutually exclusive). We are in the process loop between
+    // userspace entries.
+    let ctx = unsafe { &mut *USER_CONTEXT.get().get() };
+
+    // Build the signal frame from the current (about-to-be-resumed) context.
+    let frame = SignalFrame {
+        ret_addr: SIGRETURN_TRAMPOLINE_ADDR,
+        signum: signum as u64,
+        rax: ctx.rax,
+        rbx: ctx.rbx,
+        rcx: ctx.rcx,
+        rdx: ctx.rdx,
+        rsi: ctx.rsi,
+        rdi: ctx.rdi,
+        rbp: ctx.rbp,
+        r8: ctx.r8,
+        r9: ctx.r9,
+        r10: ctx.r10,
+        r11: ctx.r11,
+        r12: ctx.r12,
+        r13: ctx.r13,
+        r14: ctx.r14,
+        r15: ctx.r15,
+        rip: ctx.rip,
+        rsp: ctx.rsp,
+        rflags: ctx.rflags,
+    };
+
+    let frame_size = core::mem::size_of::<SignalFrame>() as u64;
+
+    // Compute new stack pointer: below the frame, 16-byte aligned.
+    // The frame starts at (rsp - frame_size), aligned down to 16 bytes.
+    let new_rsp = (ctx.rsp - frame_size) & !0xF;
+
+    // Basic sanity check: don't let the stack pointer wrap or go too low.
+    if new_rsp < 0x1000 || new_rsp > ctx.rsp {
+        return false;
+    }
+
+    // Write the SignalFrame to user memory via the process's address space.
+    // SAFETY: Switching to user CR3 to access user memory. The kernel upper
+    // half is identity-mapped in both address spaces.
+    unsafe {
+        use crate::arch::x86_64::registers::control::Cr3;
+        Cr3::write(process.user_cr3);
+    }
+
+    // SAFETY: new_rsp is in user address space and we switched to user CR3.
+    // The frame is repr(C) and we write it atomically via ptr::write.
+    unsafe {
+        core::ptr::write(new_rsp as *mut SignalFrame, frame);
+    }
+
+    // Restore kernel CR3.
+    unsafe {
+        use crate::arch::x86_64::registers::control::Cr3;
+        Cr3::write(kernel_cr3());
+    }
+
+    // Redirect userspace execution to the signal handler.
+    ctx.rip = handler_addr;
+    ctx.rdi = signum as u64; // First argument: signal number.
+    ctx.rsp = new_rsp; // Stack points to the SignalFrame (ret_addr at top).
+    // Clear other argument registers for cleanliness.
+    ctx.rsi = 0;
+    ctx.rdx = 0;
+
+    true
 }
 
 /// The async task that represents a running process.
@@ -653,21 +834,27 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                 // Yield to the executor so other tasks can run.
                 crate::sched::primitives::yield_now().await;
 
-                // Check for pending signals before re-entering userspace.
-                if let Some(exit_code) = check_signals(&process) {
-                    kinfo!("Process {} killed by signal (exit {})", pid, exit_code);
-                    *process.exit_status.lock() = Some(exit_code);
-                    process.exit_notify.wake_all();
-                    break;
-                }
-
-                // Restore our saved context back before re-entering
-                // userspace. Another process may have overwritten it
-                // during our yield.
+                // Restore our saved context back before checking signals.
+                // Signal delivery modifies USER_CONTEXT in place, so it
+                // must be populated first.
                 // SAFETY: No other task accesses USER_CONTEXT between
                 // here and enter_userspace_resume_wrapper (no .await).
                 unsafe {
                     *USER_CONTEXT.get().get() = saved_ctx;
+                }
+
+                // Check for pending signals before re-entering userspace.
+                match check_signals(&process) {
+                    SignalCheckResult::Terminate(exit_code) => {
+                        kinfo!("Process {} killed by signal (exit {})", pid, exit_code);
+                        *process.exit_status.lock() = Some(exit_code);
+                        process.exit_notify.wake_all();
+                        break;
+                    }
+                    SignalCheckResult::Delivered | SignalCheckResult::None => {
+                        // Either a handler was set up in USER_CONTEXT or no signal.
+                        // Either way, continue to re-enter userspace.
+                    }
                 }
                 continue;
             }
@@ -715,23 +902,17 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                     )
                 };
 
-                // Set foreground PID so Ctrl+C delivers SIGINT to the child.
+                // Set foreground PGID so Ctrl+C delivers SIGINT to the child's group.
                 if target.as_u32() != 0 {
-                    set_foreground_pid(target);
+                    if let Some(child_proc) = lookup_process(target) {
+                        set_foreground_pgid(child_proc.pgid.load(Ordering::Acquire));
+                    }
                 }
 
                 let (result, exit_code) = handle_wait(pid, target).await;
 
-                // Clear foreground PID.
-                set_foreground_pid(Pid::new(0));
-
-                // Check for pending signals after wait completes.
-                if let Some(exit_code) = check_signals(&process) {
-                    kinfo!("Process {} killed by signal (exit {})", pid, exit_code);
-                    *process.exit_status.lock() = Some(exit_code);
-                    process.exit_notify.wake_all();
-                    break;
-                }
+                // Clear foreground PGID.
+                set_foreground_pgid(0);
 
                 // Write exit status to user memory under user CR3.
                 if status_ptr != 0 && result >= 0 {
@@ -758,6 +939,8 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                 }
 
                 // Populate USER_CONTEXT from the snapshotted registers.
+                // Must happen before check_signals so signal delivery can
+                // modify the context to enter a handler.
                 // SAFETY: USER_CONTEXT is per-CPU, only accessed from this
                 // task and the preemption stub (mutually exclusive).
                 unsafe {
@@ -781,6 +964,17 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                     ctx.r9 = 0;
                     ctx.r10 = 0;
                     ctx.r11 = 0;
+                }
+
+                // Check for pending signals after wait completes.
+                match check_signals(&process) {
+                    SignalCheckResult::Terminate(exit_code) => {
+                        kinfo!("Process {} killed by signal (exit {})", pid, exit_code);
+                        *process.exit_status.lock() = Some(exit_code);
+                        process.exit_notify.wake_all();
+                        break;
+                    }
+                    SignalCheckResult::Delivered | SignalCheckResult::None => {}
                 }
                 continue;
             }
@@ -914,15 +1108,9 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                     -crate::syscall::EBADF
                 };
 
-                // Check for pending signals after I/O completes.
-                if let Some(exit_code) = check_signals(&process) {
-                    kinfo!("Process {} killed by signal (exit {})", pid, exit_code);
-                    *process.exit_status.lock() = Some(exit_code);
-                    process.exit_notify.wake_all();
-                    break;
-                }
-
                 // Restore user registers and set result in rax.
+                // Must happen before check_signals so signal delivery can
+                // modify the context to enter a handler.
                 // SAFETY: USER_CONTEXT is per-CPU, only accessed from this
                 // task and the preemption stub (mutually exclusive).
                 unsafe {
@@ -945,6 +1133,17 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                     ctx.r9 = 0;
                     ctx.r10 = 0;
                     ctx.r11 = 0;
+                }
+
+                // Check for pending signals after I/O completes.
+                match check_signals(&process) {
+                    SignalCheckResult::Terminate(exit_code) => {
+                        kinfo!("Process {} killed by signal (exit {})", pid, exit_code);
+                        *process.exit_status.lock() = Some(exit_code);
+                        process.exit_notify.wake_all();
+                        break;
+                    }
+                    SignalCheckResult::Delivered | SignalCheckResult::None => {}
                 }
                 continue;
             }

@@ -1,16 +1,22 @@
 //! Process signal infrastructure.
 //!
-//! Provides a bitmask-based pending signal set and signal-to-action mapping.
-//! Each process has a [`SignalState`] that stores pending signals as bits in
-//! an `AtomicU64`. Signal delivery is checked at kernel re-entry points
-//! (after preemption, after blocking I/O, after waitpid).
+//! Provides a bitmask-based pending signal set, per-signal handler registration,
+//! and signal-to-action mapping. Each process has a [`SignalState`] that stores
+//! pending signals as bits in an `AtomicU64` and a handler table mapping signal
+//! numbers to dispositions (`SIG_DFL`, `SIG_IGN`, or a userspace function pointer).
+//! Signal delivery is checked at kernel re-entry points (after preemption, after
+//! blocking I/O, after waitpid).
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use crate::syscall::{SIGCHLD, SIGINT, SIGKILL, SIGPIPE, SIGSEGV, SIGTERM};
+use crate::syscall::{SIGCHLD, SIGINT, SIGKILL, SIGPIPE, SIGQUIT, SIGSEGV, SIGSTOP, SIGTERM};
+use crate::syscall::{SIG_DFL, SIG_IGN};
 
 /// Maximum signal number supported (bits 1..63).
 const MAX_SIGNAL: usize = 63;
+
+/// Number of entries in the handler table (indexed 0..63, slot 0 unused).
+const HANDLER_TABLE_SIZE: usize = 64;
 
 /// A Unix-style signal number.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,26 +41,43 @@ pub enum SignalAction {
 /// Returns the default action for a signal number.
 pub fn default_action(signum: usize) -> SignalAction {
     match signum {
-        SIGINT | SIGKILL | SIGSEGV | SIGPIPE | SIGTERM => SignalAction::Terminate,
+        SIGINT | SIGKILL | SIGQUIT | SIGSEGV | SIGPIPE | SIGTERM => SignalAction::Terminate,
         SIGCHLD => SignalAction::Ignore,
         _ => SignalAction::Terminate, // Unknown signals terminate by default.
     }
 }
 
-/// Per-process signal state using an atomic bitmask.
+/// Result of resolving how a signal should be handled.
+#[derive(Debug, Clone, Copy)]
+pub enum SignalDisposition {
+    /// Apply the default action for this signal.
+    Default(SignalAction),
+    /// Ignore the signal entirely.
+    Ignore,
+    /// Deliver to a userspace handler at the given address.
+    Handler(u64),
+}
+
+/// Per-process signal state using an atomic bitmask and handler table.
 ///
-/// Bit N represents signal number N (1-indexed, so bit 0 is unused).
-/// This allows lock-free signal posting from interrupt context.
+/// Bit N of `pending` represents signal number N (1-indexed, so bit 0 is unused).
+/// `handlers[N]` stores the disposition for signal N: `SIG_DFL` (0), `SIG_IGN` (1),
+/// or a userspace function pointer address.
+///
+/// Both pending and handlers are atomic for lock-free access from interrupt context.
 pub struct SignalState {
     /// Pending signal bitmask. Bit N = signal N is pending.
     pending: AtomicU64,
+    /// Per-signal handler table. `SIG_DFL` = 0, `SIG_IGN` = 1, else = handler addr.
+    handlers: [AtomicU64; HANDLER_TABLE_SIZE],
 }
 
 impl SignalState {
-    /// Creates a new signal state with no pending signals.
+    /// Creates a new signal state with no pending signals and all handlers set to `SIG_DFL`.
     pub const fn new() -> Self {
         Self {
             pending: AtomicU64::new(0),
+            handlers: [const { AtomicU64::new(SIG_DFL as u64) }; HANDLER_TABLE_SIZE],
         }
     }
 
@@ -104,5 +127,39 @@ impl SignalState {
     /// Returns `true` if any signal is pending.
     pub fn has_pending(&self) -> bool {
         self.pending.load(Ordering::Acquire) != 0
+    }
+
+    /// Set the handler for a signal number. Returns the previous handler value.
+    ///
+    /// SIGKILL and SIGSTOP cannot be caught or ignored — returns `None` for those.
+    pub fn set_handler(&self, signum: usize, handler: u64) -> Option<u64> {
+        if !Signal::is_valid(signum) || signum == SIGKILL || signum == SIGSTOP {
+            return None;
+        }
+        let old = self.handlers[signum].swap(handler, Ordering::AcqRel);
+        Some(old)
+    }
+
+    /// Get the current handler for a signal number.
+    pub fn get_handler(&self, signum: usize) -> u64 {
+        if !Signal::is_valid(signum) {
+            return SIG_DFL as u64;
+        }
+        self.handlers[signum].load(Ordering::Acquire)
+    }
+
+    /// Resolve how a signal should be handled based on the handler table.
+    pub fn disposition(&self, signum: usize) -> SignalDisposition {
+        // SIGKILL and SIGSTOP always use default action, regardless of handler table.
+        if signum == SIGKILL || signum == SIGSTOP {
+            return SignalDisposition::Default(default_action(signum));
+        }
+
+        let handler = self.get_handler(signum);
+        match handler as usize {
+            SIG_DFL => SignalDisposition::Default(default_action(signum)),
+            SIG_IGN => SignalDisposition::Ignore,
+            _ => SignalDisposition::Handler(handler),
+        }
     }
 }
