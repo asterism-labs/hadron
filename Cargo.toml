@@ -5,8 +5,13 @@ members = [
     "kernel/hadron-kernel",
     "kernel/hadron-drivers",
     "kernel/boot/*",
+    "tools/gluon",
 ]
 exclude = [ "userspace" ]
+default-members = [
+    "crates/*/*",
+    "tools/gluon",
+]
 
 [workspace.package]
 version = "0.1.0"
