@@ -144,7 +144,7 @@ host.add("hadron-driver-macros", "crates/driver/hadron-driver-macros")
     .crate_type(PROC_MACRO)
     .deps(#{ syn: "syn", quote: "quote", proc_macro2: "proc-macro2" });
 
-host.add("hadron-binparse-macros", "crates/parse/hadron-binparse-macros")
+host.add("hadron-binparse-macros", "crates/parse/binparse-macros")
     .edition("2024")
     .crate_type(PROC_MACRO)
     .deps(#{ syn: "syn", quote: "quote", proc_macro2: "proc-macro2" });

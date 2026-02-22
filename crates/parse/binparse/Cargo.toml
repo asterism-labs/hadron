@@ -10,7 +10,7 @@ readme.workspace = true
 publish = true
 
 [dependencies]
-hadron-binparse-macros = { path = "../hadron-binparse-macros" }
+hadron-binparse-macros = { path = "../binparse-macros" }
 
 [lints]
 workspace = true

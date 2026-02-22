@@ -48,7 +48,7 @@ hadron/
 │   ├── parse/
 │   │   ├── acpi/                     # ACPI table parsing (hadron-acpi)
 │   │   ├── binparse/                 # Binary format parser (hadron-binparse)
-│   │   ├── hadron-binparse-macros/   # Companion proc-macro
+│   │   ├── binparse-macros/           # Companion proc-macro
 │   │   ├── dwarf/                    # DWARF debug info (hadron-dwarf)
 │   │   └── elf/                      # ELF64 parser (hadron-elf)
 │   ├── boot/
