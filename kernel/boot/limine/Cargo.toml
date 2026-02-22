@@ -17,7 +17,7 @@ doctest = false
 hadron-drivers = { workspace = true }
 hadron-kernel = { workspace = true }
 limine = { workspace = true }
-noalloc = { workspace = true }
+planck-noalloc = { workspace = true }
 
 [lints]
 workspace = true

@@ -1,4 +1,4 @@
-# noalloc
+# planck-noalloc
 
 A no-std, no-alloc collections library.
 

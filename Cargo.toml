@@ -37,7 +37,7 @@ hadron-syscall-macros = { path = "crates/hadron-syscall-macros" }
 hadron-bench = { path = "crates/hadron-bench", default-features = false }
 hadron-test = { path = "crates/hadron-test", default-features = false }
 limine = { path = "crates/limine" }
-noalloc = { path = "crates/noalloc" }
+planck-noalloc = { path = "crates/planck-noalloc" }
 uefi = { path = "crates/uefi" }
 
 # External dependencies

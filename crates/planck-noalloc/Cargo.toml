@@ -1,5 +1,5 @@
 [package]
-name = "noalloc"
+name = "planck-noalloc"
 version.workspace = true
 rust-version.workspace = true
 edition.workspace = true

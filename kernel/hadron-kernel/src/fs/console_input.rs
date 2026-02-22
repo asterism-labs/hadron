@@ -14,7 +14,7 @@ use core::task::Waker;
 
 use crate::sync::IrqSpinLock;
 use crate::driver_api::input::KeyCode;
-use noalloc::ringbuf::RingBuf;
+use planck_noalloc::ringbuf::RingBuf;
 
 /// Diagnostic counters for debugging keyboard input pipeline issues.
 ///

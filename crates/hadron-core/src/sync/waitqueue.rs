@@ -11,7 +11,7 @@ use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll, Waker};
 
-use noalloc::vec::ArrayVec;
+use planck_noalloc::vec::ArrayVec;
 
 use crate::sync::IrqSpinLock;
 

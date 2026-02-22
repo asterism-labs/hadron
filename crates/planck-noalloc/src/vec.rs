@@ -28,7 +28,7 @@
 //! # Examples
 //!
 //! ```
-//! use noalloc::vec::ArrayVec;
+//! use planck_noalloc::vec::ArrayVec;
 //!
 //! let mut vec = ArrayVec::<i32, 10>::new();
 //!
@@ -67,7 +67,7 @@ use core::mem::MaybeUninit;
 /// # Examples
 ///
 /// ```
-/// use noalloc::vec::ArrayVec;
+/// use planck_noalloc::vec::ArrayVec;
 ///
 /// // Create a vector with capacity 4
 /// let mut vec = ArrayVec::<String, 4>::new();
@@ -111,7 +111,7 @@ impl<T, const N: usize> ArrayVec<T, N> {
     /// # Examples
     ///
     /// ```
-    /// use noalloc::vec::ArrayVec;
+    /// use planck_noalloc::vec::ArrayVec;
     ///
     /// let mut vec = ArrayVec::<u8, 4>::new();
     /// assert_eq!(vec.len(), 0);
@@ -134,7 +134,7 @@ impl<T, const N: usize> ArrayVec<T, N> {
     /// # Examples
     ///
     /// ```
-    /// use noalloc::vec::ArrayVec;
+    /// use planck_noalloc::vec::ArrayVec;
     ///
     /// let mut vec = ArrayVec::<u8, 1>::new();
     /// assert!(vec.try_push(1).is_ok());
@@ -194,7 +194,7 @@ impl<T, const N: usize> ArrayVec<T, N> {
     /// # Examples
     ///
     /// ```
-    /// use noalloc::vec::ArrayVec;
+    /// use planck_noalloc::vec::ArrayVec;
     ///
     /// let mut vec = ArrayVec::<u8, 4>::new();
     /// assert_eq!(vec.len(), 0);
@@ -213,7 +213,7 @@ impl<T, const N: usize> ArrayVec<T, N> {
     /// # Examples
     ///
     /// ```
-    /// use noalloc::vec::ArrayVec;
+    /// use planck_noalloc::vec::ArrayVec;
     ///
     /// let mut vec = ArrayVec::<u8, 4>::new();
     /// assert!(vec.is_empty());
@@ -230,7 +230,7 @@ impl<T, const N: usize> ArrayVec<T, N> {
     /// # Examples
     ///
     /// ```
-    /// use noalloc::vec::ArrayVec;
+    /// use planck_noalloc::vec::ArrayVec;
     ///
     /// let mut vec = ArrayVec::<u8, 4>::new();
     /// vec.push(1);
@@ -252,7 +252,7 @@ impl<T, const N: usize> ArrayVec<T, N> {
     /// # Examples
     ///
     /// ```
-    /// use noalloc::vec::ArrayVec;
+    /// use planck_noalloc::vec::ArrayVec;
     ///
     /// let mut vec = ArrayVec::<u8, 4>::new();
     /// vec.push(1);
@@ -274,7 +274,7 @@ impl<T, const N: usize> ArrayVec<T, N> {
     /// # Examples
     ///
     /// ```
-    /// use noalloc::vec::ArrayVec;
+    /// use planck_noalloc::vec::ArrayVec;
     ///
     /// let mut vec = ArrayVec::<u8, 4>::new();
     /// vec.push(1);
@@ -296,7 +296,7 @@ impl<T, const N: usize> ArrayVec<T, N> {
     /// # Examples
     ///
     /// ```
-    /// use noalloc::vec::ArrayVec;
+    /// use planck_noalloc::vec::ArrayVec;
     ///
     /// let mut vec = ArrayVec::<u8, 4>::new();
     /// vec.push(1);
@@ -318,7 +318,7 @@ impl<T, const N: usize> ArrayVec<T, N> {
     /// # Examples
     ///
     /// ```
-    /// use noalloc::vec::ArrayVec;
+    /// use planck_noalloc::vec::ArrayVec;
     ///
     /// let mut vec = ArrayVec::<u8, 4>::new();
     /// vec.push(1);
@@ -414,7 +414,7 @@ where
     ///
     /// # Examples
     /// ```
-    /// use noalloc::vec::ArrayVec;
+    /// use planck_noalloc::vec::ArrayVec;
     ///
     /// let mut vec = ArrayVec::<u8, 4>::new();
     /// vec.push(1);
@@ -442,7 +442,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use noalloc::vec::ArrayVec;
+    /// use planck_noalloc::vec::ArrayVec;
     ///
     /// let mut vec = ArrayVec::<u8, 4>::new();
     /// vec.push(1);
@@ -471,7 +471,7 @@ impl<T, const N: usize> core::ops::Index<usize> for ArrayVec<T, N> {
     /// # Examples
     ///
     /// ```
-    /// use noalloc::vec::ArrayVec;
+    /// use planck_noalloc::vec::ArrayVec;
     ///
     /// let mut vec = ArrayVec::<u8, 4>::new();
     /// vec.push(1);
@@ -501,7 +501,7 @@ impl<T, const N: usize> core::ops::IndexMut<usize> for ArrayVec<T, N> {
     /// # Examples
     ///
     /// ```
-    /// use noalloc::vec::ArrayVec;
+    /// use planck_noalloc::vec::ArrayVec;
     ///
     /// let mut vec = ArrayVec::<u8, 4>::new();
     /// vec.push(1);

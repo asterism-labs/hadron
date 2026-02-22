@@ -159,9 +159,9 @@ host.add("hadron-mmio-macros", "crates/hadron-mmio-macros")
 
 let kernel_libs = group("kernel-libs").target("x86_64-unknown-hadron").edition("2024").config(true);
 
-kernel_libs.add("noalloc", "crates/noalloc");
+kernel_libs.add("planck-noalloc", "crates/planck-noalloc");
 kernel_libs.add("hadron-core", "crates/hadron-core")
-    .deps(#{ noalloc: "noalloc" });
+    .deps(#{ planck_noalloc: "planck-noalloc" });
 kernel_libs.add("hadron-linkset", "crates/linkset");
 kernel_libs.add("hadron-binparse", "crates/binparse")
     .deps(#{ hadron_binparse_macros: #{ "crate": "hadron-binparse-macros", proc_macro: true } });
@@ -238,13 +238,13 @@ kernel_main.add("hadron-kernel", "kernel/hadron-kernel")
         hadron_elf: "hadron-elf",
         hadron_linkset: "hadron-linkset",
         hadron_syscall: "hadron-syscall",
-        noalloc: "noalloc"
+        planck_noalloc: "planck-noalloc"
     })
     .dev_deps(#{
         hadron_bench: "hadron-bench",
         hadron_test: "hadron-test",
         limine: "limine",
-        noalloc: "noalloc"
+        planck_noalloc: "planck-noalloc"
     });
 
 kernel_main.add("hadron-boot-limine", "kernel/boot/limine")
@@ -255,7 +255,7 @@ kernel_main.add("hadron-boot-limine", "kernel/boot/limine")
         hadron_drivers: "hadron-drivers",
         hadron_kernel: "hadron-kernel",
         limine: "limine",
-        noalloc: "noalloc"
+        planck_noalloc: "planck-noalloc"
     });
 
 // ===========================================================================
@@ -359,7 +359,7 @@ tests()
         "hadron-core",
         "hadron-dwarf",
         "hadron-elf",
-        "noalloc",
+        "planck-noalloc",
         "hadron-drivers",
         "hadron-kernel"
     ])

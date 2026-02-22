@@ -6,7 +6,7 @@
 
 use core::fmt;
 
-use noalloc::vec::ArrayVec;
+use planck_noalloc::vec::ArrayVec;
 
 use crate::addr::VirtAddr;
 use crate::mm::layout::VirtRegion;

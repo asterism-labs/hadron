@@ -5,7 +5,7 @@
 //! loaded via a separate module loader path.
 
 use hadron_elf::ElfType;
-use noalloc::vec::ArrayVec;
+use planck_noalloc::vec::ArrayVec;
 
 use super::{BinaryError, BinaryFormat, ExecImage, ExecSegment, SegmentFlags};
 

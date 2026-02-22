@@ -21,7 +21,7 @@ use hadron_kernel::boot::{
     MAX_MEMORY_REGIONS, MAX_SMP_CPUS, MemoryRegion, MemoryRegionKind, PagingMode, PixelFormat,
     SmpCpuEntry,
 };
-use noalloc::vec::ArrayVec;
+use planck_noalloc::vec::ArrayVec;
 
 unsafe extern "C" {
     static __text_start: u8;

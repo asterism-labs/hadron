@@ -37,7 +37,7 @@
 //! # Examples
 //!
 //! ```
-//! use noalloc::ringbuf::RingBuf;
+//! use planck_noalloc::ringbuf::RingBuf;
 //!
 //! // Create a ring buffer with size 8 (capacity 7)
 //! let mut buf = RingBuf::<u8, 8>::new();
@@ -62,7 +62,7 @@
 //! ## Error Handling
 //!
 //! ```
-//! use noalloc::ringbuf::RingBuf;
+//! use planck_noalloc::ringbuf::RingBuf;
 //!
 //! let mut buf = RingBuf::<u8, 4>::new();
 //!
@@ -101,7 +101,7 @@ use core::mem::MaybeUninit;
 /// # Examples
 ///
 /// ```
-/// use noalloc::ringbuf::RingBuf;
+/// use planck_noalloc::ringbuf::RingBuf;
 ///
 /// let mut buf = RingBuf::<i32, 16>::new();
 ///
@@ -142,7 +142,7 @@ where
     ///
     /// # Example
     /// ```
-    /// use noalloc::ringbuf::RingBuf;
+    /// use planck_noalloc::ringbuf::RingBuf;
     ///
     /// // Create an empty ringbuf
     /// let ringbuf = RingBuf::<u8, 8>::new();
@@ -161,7 +161,7 @@ where
     ///
     /// # Example
     /// ```
-    /// use noalloc::ringbuf::RingBuf;
+    /// use planck_noalloc::ringbuf::RingBuf;
     ///
     /// // Create an empty ringbuf
     /// let mut ringbuf = RingBuf::<u8, 8>::new();
@@ -180,7 +180,7 @@ where
     ///
     /// # Example
     /// ```
-    /// use noalloc::ringbuf::RingBuf;
+    /// use planck_noalloc::ringbuf::RingBuf;
     ///
     /// // Create an empty ringbuf
     /// let mut ringbuf = RingBuf::<u8, 8>::new();
@@ -203,7 +203,7 @@ where
     ///
     /// # Example
     /// ```
-    /// use noalloc::ringbuf::RingBuf;
+    /// use planck_noalloc::ringbuf::RingBuf;
     ///
     /// // Create an empty ringbuf
     /// let mut ringbuf = RingBuf::<u8, 8>::new();

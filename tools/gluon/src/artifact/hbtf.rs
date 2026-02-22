@@ -526,8 +526,8 @@ mod tests {
             "kernel/hadron-kernel/src/boot.rs"
         );
         assert_eq!(
-            simplify_path("/home/user/hadron/crates/noalloc/src/lib.rs"),
-            "crates/noalloc/src/lib.rs"
+            simplify_path("/home/user/hadron/crates/planck-noalloc/src/lib.rs"),
+            "crates/planck-noalloc/src/lib.rs"
         );
         assert_eq!(
             simplify_path("/home/user/.cargo/registry/src/bitflags-2.0/src/lib.rs"),

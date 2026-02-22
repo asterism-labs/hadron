@@ -11,7 +11,7 @@ pub mod script;
 
 use core::fmt;
 
-use noalloc::vec::ArrayVec;
+use planck_noalloc::vec::ArrayVec;
 
 /// Maximum number of loadable segments an [`ExecImage`] can hold.
 const MAX_SEGMENTS: usize = 16;

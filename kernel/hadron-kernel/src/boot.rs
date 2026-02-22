@@ -8,7 +8,7 @@ extern crate alloc;
 use alloc::boxed::Box;
 
 use crate::addr::{PhysAddr, VirtAddr};
-use noalloc::vec::ArrayVec;
+use planck_noalloc::vec::ArrayVec;
 
 /// The kind of a physical memory region.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

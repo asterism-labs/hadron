@@ -20,7 +20,7 @@
 //!
 //! # When to Use This Crate
 //!
-//! Use `noalloc` when:
+//! Use `planck_noalloc` when:
 //! - You're working in a `no_std` environment without an allocator
 //! - You need predictable memory usage and performance
 //! - You want to avoid heap fragmentation
@@ -32,7 +32,7 @@
 //! ## Using `ArrayVec`
 //!
 //! ```
-//! use noalloc::vec::ArrayVec;
+//! use planck_noalloc::vec::ArrayVec;
 //!
 //! // Create a vector that can hold up to 5 elements on the stack
 //! let mut vec = ArrayVec::<i32, 5>::new();
@@ -52,7 +52,7 @@
 //! ## Using `RingBuf`
 //!
 //! ```
-//! use noalloc::ringbuf::RingBuf;
+//! use planck_noalloc::ringbuf::RingBuf;
 //!
 //! // Create a ring buffer that can hold up to 7 elements (SIZE-1)
 //! let mut buf = RingBuf::<u8, 8>::new();

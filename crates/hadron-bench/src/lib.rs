@@ -509,7 +509,7 @@ macro_rules! bench_entry_point_with_init {
                 }
             }
 
-            let mut memory_map = ::noalloc::vec::ArrayVec::new();
+            let mut memory_map = ::planck_noalloc::vec::ArrayVec::new();
             for entry in memmap.entries() {
                 use ::limine::memmap::MemMapEntryType;
                 let kind = match entry.type_ {
@@ -553,7 +553,7 @@ macro_rules! bench_entry_point_with_init {
                     virtual_base: ::hadron_kernel::addr::VirtAddr::new(exec_addr.virt_base),
                 },
                 paging_mode: ::hadron_kernel::boot::PagingMode::Level4,
-                framebuffers: ::noalloc::vec::ArrayVec::new(),
+                framebuffers: ::planck_noalloc::vec::ArrayVec::new(),
                 rsdp_address: None,
                 dtb_address: None,
                 command_line: _CMDLINE_REQUEST.response().map(|r| r.cmdline()),
@@ -563,7 +563,7 @@ macro_rules! bench_entry_point_with_init {
                     page_table_root & 0x000F_FFFF_FFFF_F000,
                 ),
                 initrd: None,
-                smp_cpus: ::noalloc::vec::ArrayVec::new(),
+                smp_cpus: ::planck_noalloc::vec::ArrayVec::new(),
                 bsp_lapic_id: 0,
             };
 

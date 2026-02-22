@@ -8,7 +8,7 @@ use alloc::collections::BinaryHeap;
 use core::cmp::{Ordering, Reverse};
 use core::task::Waker;
 
-use noalloc::vec::ArrayVec;
+use planck_noalloc::vec::ArrayVec;
 
 use crate::sync::IrqSpinLock;
 
