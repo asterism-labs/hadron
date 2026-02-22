@@ -17,17 +17,23 @@
 //!   1    HEAP                                                 allocator
 //!   2    VMM                                                  mm
 //!   3    PMM                                                  mm
-//!   4    PROCESS_TABLE, VFS, DEVICE_REGISTRY, CURSOR,         kernel
+//!   4    PROCESS_TABLE, VFS, DEVICE_REGISTRY,                  kernel
 //!        HPET_DRIVER, HKIF_STATE, fd_table, mmap_alloc,
 //!        exit_status
-//!   5    LOGGER                                               logging
 //!   6    AHCI_DISK_INDEX, VIRTIO_DISK_INDEX                   drivers
 //!  10    SCANCODE_BUF, CONSOLE_INPUT_STATE                    input
 //!  11    PLATFORM (ACPI)                                      arch
 //!  12    SLEEP_QUEUE                                          sched
 //!  13    Executor.ready_queues                                sched
 //!  14    Executor.tasks                                       sched
+//!
+//!   0    LOGGER, CURSOR                                       logging/display
 //! ```
+//!
+//! `LOGGER` and `CURSOR` use level 0 (opt out of lockdep ordering) because
+//! the logger is a cross-cutting concern called from within any lock's
+//! critical section. Their ordering is enforced structurally: `CURSOR` is
+//! only ever acquired inside `LOGGER` (via `LogSink::write_str`).
 //!
 //! Common nesting paths:
 //! - Heap grow: `HEAP(1) → VMM(2) → PMM(3)`
