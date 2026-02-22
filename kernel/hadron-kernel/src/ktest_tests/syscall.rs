@@ -1,20 +1,14 @@
-#![no_std]
-#![no_main]
-#![feature(custom_test_frameworks)]
-#![test_runner(hadron_test::test_runner)]
-#![reexport_test_harness_main = "test_main"]
+//! Syscall tests — raw `syscall` instruction verification.
 
-extern crate alloc;
+use hadron_ktest::kernel_test;
 
-hadron_test::test_entry_point_with_init!();
-
-#[test_case]
+#[kernel_test(stage = "before_executor")]
 fn test_syscall_task_info() {
     let result: isize;
     unsafe {
         core::arch::asm!(
             "syscall",
-            in("rax") hadron_kernel::syscall::SYS_TASK_INFO,
+            in("rax") crate::syscall::SYS_TASK_INFO,
             lateout("rax") result,
             out("rcx") _,
             out("r11") _,
@@ -24,7 +18,7 @@ fn test_syscall_task_info() {
     assert!(result >= 0, "sys_task_info returned {}", result);
 }
 
-#[test_case]
+#[kernel_test(stage = "before_executor")]
 fn test_syscall_unknown_returns_enosys() {
     let result: isize;
     unsafe {
@@ -39,19 +33,19 @@ fn test_syscall_unknown_returns_enosys() {
     }
     assert_eq!(
         result,
-        -(hadron_kernel::syscall::ENOSYS),
+        -(crate::syscall::ENOSYS),
         "unknown syscall should return -ENOSYS"
     );
 }
 
-#[test_case]
+#[kernel_test(stage = "before_executor")]
 fn test_syscall_debug_log() {
     let msg = b"syscall debug_log test\n";
     let result: isize;
     unsafe {
         core::arch::asm!(
             "syscall",
-            in("rax") hadron_kernel::syscall::SYS_DEBUG_LOG,
+            in("rax") crate::syscall::SYS_DEBUG_LOG,
             in("rdi") msg.as_ptr() as usize,
             in("rsi") msg.len(),
             lateout("rax") result,
@@ -67,10 +61,10 @@ fn test_syscall_debug_log() {
     );
 }
 
-#[test_case]
+#[kernel_test(stage = "before_executor")]
 fn test_syscall_clock_gettime() {
     // Use sentinel values to confirm the syscall overwrites the struct.
-    let mut ts = hadron_kernel::syscall::Timespec {
+    let mut ts = crate::syscall::Timespec {
         tv_sec: u64::MAX,
         tv_nsec: u64::MAX,
     };
@@ -78,8 +72,8 @@ fn test_syscall_clock_gettime() {
     unsafe {
         core::arch::asm!(
             "syscall",
-            in("rax") hadron_kernel::syscall::SYS_CLOCK_GETTIME,
-            in("rdi") hadron_kernel::syscall::CLOCK_MONOTONIC,
+            in("rax") crate::syscall::SYS_CLOCK_GETTIME,
+            in("rdi") crate::syscall::CLOCK_MONOTONIC,
             in("rsi") &mut ts as *mut _ as usize,
             lateout("rax") result,
             out("rcx") _,
@@ -87,16 +81,13 @@ fn test_syscall_clock_gettime() {
         );
     }
     assert_eq!(result, 0, "clock_gettime should succeed");
-    // Syscall must have overwritten the sentinel values.
     assert_ne!(ts.tv_nsec, u64::MAX, "tv_nsec should be overwritten");
-    // tv_nsec must always be in [0, 999_999_999].
-    // Time may be 0 if HPET is not initialized (test harness skips ACPI init).
     assert!(ts.tv_nsec < 1_000_000_000, "tv_nsec must be < 1 billion");
 }
 
-#[test_case]
+#[kernel_test(stage = "before_executor")]
 fn test_syscall_clock_gettime_invalid_clock() {
-    let mut ts = hadron_kernel::syscall::Timespec {
+    let mut ts = crate::syscall::Timespec {
         tv_sec: 0,
         tv_nsec: 0,
     };
@@ -104,7 +95,7 @@ fn test_syscall_clock_gettime_invalid_clock() {
     unsafe {
         core::arch::asm!(
             "syscall",
-            in("rax") hadron_kernel::syscall::SYS_CLOCK_GETTIME,
+            in("rax") crate::syscall::SYS_CLOCK_GETTIME,
             in("rdi") 99usize, // invalid clock ID
             in("rsi") &mut ts as *mut _ as usize,
             lateout("rax") result,
@@ -114,7 +105,7 @@ fn test_syscall_clock_gettime_invalid_clock() {
     }
     assert_eq!(
         result,
-        -(hadron_kernel::syscall::EINVAL),
+        -(crate::syscall::EINVAL),
         "invalid clock should return -EINVAL"
     );
 }

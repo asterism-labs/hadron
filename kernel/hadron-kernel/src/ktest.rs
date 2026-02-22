@@ -203,7 +203,7 @@ async fn run_instanced_async_test(test: &KernelTestDescriptor) {
         crate::sched::primitives::yield_now().await;
     }
     // Give instances time to complete by yielding several times.
-    for _ in 0..100 {
+    for _ in 0..1000 {
         crate::sched::primitives::yield_now().await;
         // Check if barrier has been fully released (all instances done).
         // For now we just yield enough times for cooperative tasks to complete.

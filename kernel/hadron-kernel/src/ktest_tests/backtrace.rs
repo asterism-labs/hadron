@@ -1,29 +1,14 @@
-//! Integration tests for the kernel backtrace module.
-//!
-//! Exercises `panic_backtrace()` as a regular function (not via panic) to
-//! validate frame-pointer stack walking and HKIF symbolication in QEMU.
-//!
-//! Each test binary gets its own HKIF data via the two-pass link process:
-//! pass 1 produces the ELF, HKIF is generated from its symbols, then pass 2
-//! relinks with the HKIF object embedded in `.hadron_hkif`.
-
-#![no_std]
-#![no_main]
-#![allow(missing_docs)] // integration test
-#![feature(custom_test_frameworks)]
-#![test_runner(hadron_test::test_runner)]
-#![reexport_test_harness_main = "test_main"]
+//! Backtrace tests — frame-pointer stack walking and HKIF symbolication.
 
 extern crate alloc;
 
-hadron_test::test_entry_point_with_init!();
-
 use alloc::string::String;
+use hadron_ktest::kernel_test;
 
-#[test_case]
+#[kernel_test(stage = "early_boot")]
 fn test_backtrace_captures_frames() {
     let mut output = String::new();
-    hadron_kernel::backtrace::panic_backtrace(&mut output);
+    crate::backtrace::panic_backtrace(&mut output);
     // Frame walking should capture at least one frame (this test function
     // plus the test runner are on the call stack with frame pointers).
     assert!(
@@ -32,10 +17,10 @@ fn test_backtrace_captures_frames() {
     );
 }
 
-#[test_case]
+#[kernel_test(stage = "early_boot")]
 fn test_backtrace_symbolicated() {
     let mut output = String::new();
-    hadron_kernel::backtrace::panic_backtrace(&mut output);
+    crate::backtrace::panic_backtrace(&mut output);
     assert!(
         output.contains(" - "),
         "Expected symbolicated frames (containing ' - '), got: {output}"
@@ -54,10 +39,10 @@ fn nested_b(output: &mut String) {
 
 #[inline(never)]
 fn nested_c(output: &mut String) {
-    hadron_kernel::backtrace::panic_backtrace(output);
+    crate::backtrace::panic_backtrace(output);
 }
 
-#[test_case]
+#[kernel_test(stage = "early_boot")]
 fn test_backtrace_nested_calls() {
     // Call through 3 nested #[inline(never)] functions.
     // This produces at least 3 frames on the stack.

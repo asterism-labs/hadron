@@ -1,20 +1,6 @@
-//! Integration test: emit raw HPRF binary data over serial.
-//!
-//! Writes a minimal but valid HPRF stream (header + 2 sample records +
-//! end-of-stream marker) to COM1 using direct port I/O. This test
-//! verifies the full pipeline: kernel emits HPRF → serial capture →
-//! `gluon perf report` can parse the output.
-//!
-//! Uses `test_entry_point!()` — no full kernel init needed, just serial
-//! and QEMU exit.
+//! Profiling tests — HPRF binary stream emission over serial.
 
-#![no_std]
-#![no_main]
-#![feature(custom_test_frameworks)]
-#![test_runner(hadron_test::test_runner)]
-#![reexport_test_harness_main = "test_main"]
-
-hadron_test::test_entry_point!();
+use hadron_ktest::kernel_test;
 
 // ---------------------------------------------------------------------------
 // Raw COM1 byte output (bypasses serial_println! text translation)
@@ -107,7 +93,7 @@ fn emit_hprf_stream() {
 // Test
 // ---------------------------------------------------------------------------
 
-#[test_case]
-fn emit_hprf_binary() {
+#[kernel_test(stage = "early_boot")]
+fn test_emit_hprf_binary() {
     emit_hprf_stream();
 }
