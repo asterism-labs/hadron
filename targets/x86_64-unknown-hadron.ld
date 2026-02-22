@@ -76,6 +76,11 @@ SECTIONS {
         KEEP(*(.hadron_initramfs))
         __hadron_initramfs_end = .;
 
+        /* Kernel test descriptors (populated only with --cfg ktest) */
+        __hadron_kernel_tests_start = .;
+        KEEP(*(.hadron_kernel_tests))
+        __hadron_kernel_tests_end = .;
+
         *(.rodata .rodata.*)
     } :rodata
 

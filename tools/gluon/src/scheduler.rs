@@ -309,6 +309,7 @@ pub fn execute_pipeline(
                         config_rlib.as_deref(),
                         None,
                         job.mode,
+                        &[],
                     );
                     let elapsed = start.elapsed();
                     drop(arts);
@@ -930,6 +931,8 @@ fn execute_rule(
                                 &arts,
                                 config_rlib.as_deref(),
                                 &[hkif_obj],
+                                &[],
+                                None,
                             )?;
                             drop(arts);
 

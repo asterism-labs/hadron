@@ -826,10 +826,17 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     // Stop all other CPUs first to prevent garbled output and cascading panics.
     hadron_kernel::sched::smp::panic_halt_other_cpus();
 
-    hadron_kernel::log::panic_serial(info);
-    loop {
-        unsafe {
-            core::arch::asm!("cli; hlt", options(nomem, nostack, preserves_flags));
+    // In ktest mode, delegate to the ktest panic handler (exits QEMU).
+    #[cfg(ktest)]
+    hadron_kernel::ktest::on_panic(info);
+
+    #[cfg(not(ktest))]
+    {
+        hadron_kernel::log::panic_serial(info);
+        loop {
+            unsafe {
+                core::arch::asm!("cli; hlt", options(nomem, nostack, preserves_flags));
+            }
         }
     }
 }

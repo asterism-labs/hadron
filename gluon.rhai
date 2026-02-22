@@ -142,6 +142,11 @@ host.add("hadron-mmio-macros", "crates/driver/hadron-mmio-macros")
     .crate_type(PROC_MACRO)
     .deps(#{ syn: "syn", quote: "quote", proc_macro2: "proc-macro2" });
 
+host.add("hadron-ktest-macros", "crates/test/hadron-ktest-macros")
+    .edition("2024")
+    .crate_type(PROC_MACRO)
+    .deps(#{ syn: "syn", quote: "quote", proc_macro2: "proc-macro2" });
+
 // ===========================================================================
 // Project kernel library crates
 // ===========================================================================
@@ -194,6 +199,12 @@ kernel_libs.add("uefi", "crates/boot/uefi")
 kernel_libs.add("hadron-syscall", "crates/syscall/hadron-syscall")
     .features(["kernel"])
     .deps(#{ hadron_syscall_macros: #{ "crate": "hadron-syscall-macros", proc_macro: true } });
+
+kernel_libs.add("hadron-ktest", "crates/test/hadron-ktest")
+    .deps(#{
+        hadron_linkset: "hadron-linkset",
+        hadron_ktest_macros: #{ "crate": "hadron-ktest-macros", proc_macro: true }
+    });
 
 
 // ===========================================================================
@@ -249,6 +260,7 @@ kernel_main.add("hadron-kernel", "kernel/hadron-kernel")
         hadron_core: "hadron-core",
         hadron_elf: "hadron-elf",
         hadron_fs: "hadron-fs",
+        hadron_ktest: "hadron-ktest",
         hadron_linkset: "hadron-linkset",
         hadron_mm: "hadron-mm",
         hadron_sched: "hadron-sched",
@@ -334,13 +346,12 @@ pipeline()
 // ===========================================================================
 
 qemu("q35", 256)
-    .extra_args(["-serial", "stdio"])
+    .extra_args(["-serial", "stdio", "-no-reboot"])
     .test_success_code(33)
     .test_timeout(30)
     .test_extra_args([
         "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
-        "-display", "none",
-        "-no-reboot"
+        "-display", "none"
     ]);
 
 // ===========================================================================

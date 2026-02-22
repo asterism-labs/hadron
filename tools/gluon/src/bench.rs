@@ -161,6 +161,7 @@ fn compile_kernel_benchmarks(
                 config_rlib.as_deref(),
                 None,
                 CompileMode::Build,
+                &[],
             )?;
             state.artifacts.insert(&krate.name, artifact);
         }

@@ -384,6 +384,10 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
     crate::mm::heap::init();
     crate::kinfo!("Heap allocator initialized");
 
+    // [KTEST] Run early_boot stage tests (CPU, HHDM, PMM, VMM, heap available).
+    #[cfg(ktest)]
+    crate::ktest::run_sync_stage(hadron_ktest::TestStage::EarlyBoot);
+
     // 5b. Initialize device registry (before driver probing).
     crate::drivers::device_registry::init();
 
@@ -452,17 +456,20 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
     #[cfg(target_arch = "x86_64")]
     crate::arch::x86_64::smp::boot_aps(boot_info);
 
-    // 9. Spawn platform tasks + heartbeat.
-    crate::arch::spawn_platform_tasks();
+    // 9. Spawn platform tasks + heartbeat (skipped in ktest mode).
+    #[cfg(not(ktest))]
+    {
+        crate::arch::spawn_platform_tasks();
 
-    crate::sched::spawn_background("heartbeat", async {
-        let mut n = 0u64;
-        loop {
-            crate::sched::primitives::sleep_ms(5000).await;
-            n += 1;
-            crate::kdebug!("[heartbeat] {}s elapsed", n * 5);
-        }
-    });
+        crate::sched::spawn_background("heartbeat", async {
+            let mut n = 0u64;
+            loop {
+                crate::sched::primitives::sleep_ms(5000).await;
+                n += 1;
+                crate::kdebug!("[heartbeat] {}s elapsed", n * 5);
+            }
+        });
+    }
 
     // 10. Extract initrd data via HHDM.
     let initrd_info = boot_info.initrd().expect("no initrd loaded by bootloader");
@@ -572,6 +579,14 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
         }
     }
 
+    // [KTEST] Run before_executor stage and spawn async test runner.
+    #[cfg(ktest)]
+    {
+        crate::ktest::run_sync_stage(hadron_ktest::TestStage::BeforeExecutor);
+        crate::sched::spawn_background("ktest", crate::ktest::run_async_stages());
+    }
+
+    #[cfg(not(ktest))]
     crate::proc::spawn_init();
 
     // 11. Enable BSP interrupts now that all init is done and APs are online.

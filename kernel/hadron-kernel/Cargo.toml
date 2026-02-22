@@ -22,6 +22,7 @@ hadron-fs = { workspace = true }
 hadron-mm = { workspace = true }
 hadron-sched = { workspace = true }
 hadron-elf = { workspace = true }
+hadron-ktest = { workspace = true }
 hadron-linkset = { workspace = true }
 hadron-syscall = { workspace = true, features = [ "kernel" ] }
 planck-noalloc = { workspace = true }

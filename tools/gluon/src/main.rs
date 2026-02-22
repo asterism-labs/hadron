@@ -249,18 +249,28 @@ fn cmd_clippy(cli: &cli::Cli) -> Result<()> {
 
 /// Run tests.
 fn cmd_test(cli: &cli::Cli, args: &cli::TestArgs) -> Result<()> {
-    let run_host = !args.kernel_only && !args.crash_only;
-    let run_kernel = !args.host_only && !args.crash_only;
+    let run_host = !args.kernel_only && !args.crash_only && !args.ktest_only;
+    let run_kernel = !args.host_only && !args.crash_only && !args.ktest_only;
+    let run_ktest = !args.host_only && !args.kernel_only && !args.crash_only || args.ktest_only;
 
     if run_host {
         let (resolved, _model) = resolve_config(cli)?;
         test::run_host_tests(&resolved, cli.jobs.unwrap_or(0))?;
     }
 
-    if run_kernel {
+    // Both kernel integration tests and ktest share the build step.
+    if run_kernel || run_ktest {
         let (mut state, model) = do_build(cli)?;
-        let test_binaries = test::compile_kernel_tests(&model, &mut state)?;
-        test::run_kernel_test_binaries(&state.config, &test_binaries, &args.extra_args)?;
+
+        if run_kernel {
+            let test_binaries = test::compile_kernel_tests(&model, &mut state)?;
+            test::run_kernel_test_binaries(&state.config, &test_binaries, &args.extra_args)?;
+        }
+
+        if run_ktest {
+            let ktest_binary = test::compile_ktest_kernel(&model, &mut state)?;
+            test::run_ktest_kernel(&state.config, &ktest_binary, &args.extra_args)?;
+        }
     }
 
     if args.crash_only {

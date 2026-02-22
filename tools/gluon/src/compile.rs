@@ -26,7 +26,7 @@ pub enum CompileMode {
 }
 
 /// Tracks compiled artifacts so downstream crates can find their --extern paths.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ArtifactMap {
     /// Maps crate name -> path to rlib/dylib.
     artifacts: HashMap<String, PathBuf>,
@@ -201,6 +201,7 @@ pub fn compile_crate(
     config_rlib: Option<&Path>,
     out_dir_suffix: Option<&str>,
     mode: CompileMode,
+    extra_cfgs: &[&str],
 ) -> Result<PathBuf> {
     let is_host = krate.target == "host";
 
@@ -217,6 +218,7 @@ pub fn compile_crate(
             out_dir_suffix,
             mode,
             &[],
+            extra_cfgs,
         )
     }
 }
@@ -233,6 +235,8 @@ pub fn relink_with_objects(
     artifacts: &ArtifactMap,
     config_rlib: Option<&Path>,
     extra_objects: &[PathBuf],
+    extra_cfgs: &[&str],
+    out_dir_suffix: Option<&str>,
 ) -> Result<PathBuf> {
     compile_crate_cross(
         krate,
@@ -241,9 +245,10 @@ pub fn relink_with_objects(
         sysroot_dir,
         artifacts,
         config_rlib,
-        None,
+        out_dir_suffix,
         CompileMode::Build,
         extra_objects,
+        extra_cfgs,
     )
 }
 
@@ -258,6 +263,7 @@ fn compile_crate_cross(
     out_dir_suffix: Option<&str>,
     mode: CompileMode,
     extra_link_objects: &[PathBuf],
+    extra_cfgs: &[&str],
 ) -> Result<PathBuf> {
     let suffix = out_dir_suffix.unwrap_or(&krate.target);
     let out_dir = config
@@ -311,8 +317,16 @@ fn compile_crate_cross(
     cmd.target(target_spec).sysroot(sysroot_dir);
 
     // Search paths for transitive deps and host proc-macros.
-    cmd.search_path(&out_dir)
-        .search_path(&config.root.join("build/host"));
+    cmd.search_path(&out_dir);
+    // When using a custom output directory (e.g. ktest), also search the
+    // default target directory for transitive dependency artifacts.
+    if out_dir_suffix.is_some() && out_dir_suffix != Some(&krate.target) {
+        let default_dir = config.root.join("build/kernel").join(&krate.target).join("debug");
+        if default_dir.exists() {
+            cmd.search_path(&default_dir);
+        }
+    }
+    cmd.search_path(&config.root.join("build/host"));
 
     // Linker args for binary crates (only in Build mode).
     if !is_check && krate.crate_type == CrateType::Bin {
@@ -376,6 +390,11 @@ fn compile_crate_cross(
                 }
             }
         }
+    }
+
+    // Extra cfgs (e.g. "ktest" for kernel-internal test builds).
+    for flag in extra_cfgs {
+        cmd.cfg(flag);
     }
 
     // Extern deps.

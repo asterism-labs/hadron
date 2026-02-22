@@ -207,6 +207,7 @@ pub fn compile_kernel_tests(
                 config_rlib.as_deref(),
                 None,
                 CompileMode::Build,
+                &[],
             )?;
             state.artifacts.insert(&krate.name, artifact);
         }
@@ -462,4 +463,125 @@ pub fn run_kernel_test_binaries(
     }
 
     Ok(())
+}
+
+// ===========================================================================
+// Kernel-internal tests (ktest)
+// ===========================================================================
+
+/// Compile the ktest kernel: rebuild key crates with `--cfg ktest`.
+///
+/// Recompiles hadron-kernel, hadron-drivers, and the boot binary with the
+/// `ktest` cfg flag into a separate output directory (`build/kernel/ktest/`),
+/// reusing all other pre-compiled artifacts from the normal build.
+pub fn compile_ktest_kernel(
+    model: &BuildModel,
+    state: &mut PipelineState,
+) -> Result<PathBuf> {
+    let boot_binary_name = &state.config.profile.boot_binary;
+    let boot_def = model.crates.get(boot_binary_name)
+        .ok_or_else(|| anyhow::anyhow!("boot binary '{boot_binary_name}' not found in model"))?;
+
+    let target = &boot_def.target;
+    let target_spec = state.target_specs.get(target)
+        .ok_or_else(|| anyhow::anyhow!("target spec for '{target}' not resolved"))?
+        .clone();
+    let sysroot_dir = state.sysroots.get(target)
+        .ok_or_else(|| anyhow::anyhow!("sysroot for '{target}' not built"))?
+        .clone();
+    let config_rlib = state.config_rlibs.get(target).cloned();
+    let sysroot_src = sysroot::sysroot_src_dir()?;
+
+    println!("\nCompiling ktest kernel...");
+
+    // Resolve the kernel crate groups to get ResolvedCrate definitions.
+    let kernel_libs = crate_graph::resolve_group_from_model(
+        model, "kernel-libs", &state.config.root, &sysroot_src,
+    )?;
+    let kernel_drivers = crate_graph::resolve_group_from_model(
+        model, "kernel-drivers", &state.config.root, &sysroot_src,
+    )?;
+    let kernel_main = crate_graph::resolve_group_from_model(
+        model, "kernel-main", &state.config.root, &sysroot_src,
+    )?;
+
+    // Build a ktest artifact map starting from the normal build artifacts.
+    let mut ktest_artifacts = state.artifacts.clone();
+
+    // Crates that need --cfg ktest: hadron-kernel, hadron-drivers, boot binary.
+    let ktest_crate_names = ["hadron-kernel", "hadron-drivers", boot_binary_name.as_str()];
+    let ktest_cfgs: &[&str] = &["ktest"];
+
+    // Find and recompile each ktest-affected crate in dependency order.
+    let all_resolved: Vec<&crate_graph::ResolvedCrate> = kernel_libs.iter()
+        .chain(kernel_drivers.iter())
+        .chain(kernel_main.iter())
+        .collect();
+
+    for crate_name in &ktest_crate_names {
+        let resolved = all_resolved.iter()
+            .find(|c| c.name == *crate_name)
+            .ok_or_else(|| anyhow::anyhow!("crate '{crate_name}' not found in resolved groups"))?;
+
+        println!("  Compiling {crate_name} (ktest)...");
+        let artifact = compile::compile_crate(
+            resolved,
+            &state.config,
+            Some(&target_spec),
+            Some(&sysroot_dir),
+            &ktest_artifacts,
+            config_rlib.as_deref(),
+            Some("ktest"),
+            CompileMode::Build,
+            ktest_cfgs,
+        )?;
+        ktest_artifacts.insert(crate_name, artifact);
+    }
+
+    // HKIF generation for the ktest boot binary.
+    let ktest_out_dir = state.config.root.join("build/kernel/ktest/debug");
+    let boot_binary = ktest_out_dir.join(compile::crate_name_sanitized(boot_binary_name));
+
+    println!("  Generating HKIF for ktest kernel...");
+    let hkif_bin = ktest_out_dir.join("ktest.hkif.bin");
+    let hkif_asm = ktest_out_dir.join("ktest.hkif.S");
+    let hkif_obj = ktest_out_dir.join("ktest.hkif.o");
+
+    hkif::generate_hkif(&boot_binary, &hkif_bin, state.config.profile.debug_info)?;
+    hkif::generate_hkif_asm(&hkif_bin, &hkif_asm)?;
+    hkif::assemble_hkif(&hkif_asm, &hkif_obj)?;
+
+    // Re-link the boot binary with HKIF embedded.
+    let boot_resolved = all_resolved.iter()
+        .find(|c| c.name == *boot_binary_name)
+        .unwrap();
+
+    println!("  Re-linking ktest kernel with HKIF...");
+    let final_binary = compile::relink_with_objects(
+        boot_resolved,
+        &state.config,
+        &target_spec,
+        &sysroot_dir,
+        &ktest_artifacts,
+        config_rlib.as_deref(),
+        &[hkif_obj],
+        ktest_cfgs,
+        Some("ktest"),
+    )?;
+
+    println!("  Ktest kernel: {}", final_binary.display());
+    Ok(final_binary)
+}
+
+/// Run the ktest kernel in QEMU.
+///
+/// Boots the ktest kernel binary and checks for test success/failure via
+/// the isa-debug-exit device (same as integration tests).
+pub fn run_ktest_kernel(
+    config: &ResolvedConfig,
+    kernel_binary: &Path,
+    extra_args: &[String],
+) -> Result<()> {
+    println!("\nRunning ktest kernel...");
+    run::run_kernel_tests(config, kernel_binary, extra_args)
 }

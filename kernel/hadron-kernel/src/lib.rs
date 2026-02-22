@@ -67,6 +67,11 @@ pub mod syscall;
 #[cfg(target_os = "none")]
 pub mod time;
 
+#[cfg(all(target_os = "none", ktest))]
+pub mod ktest;
+#[cfg(ktest)]
+mod ktest_tests;
+
 #[cfg(target_os = "none")]
 pub use boot::kernel_init;
 #[cfg(target_os = "none")]

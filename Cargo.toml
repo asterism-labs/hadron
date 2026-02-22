@@ -46,6 +46,8 @@ hadron-linkset = { path = "crates/core/linkset" }
 hadron-syscall = { path = "crates/syscall/hadron-syscall" }
 hadron-syscall-macros = { path = "crates/syscall/hadron-syscall-macros" }
 hadron-bench = { path = "crates/test/hadron-bench", default-features = false }
+hadron-ktest = { path = "crates/test/hadron-ktest" }
+hadron-ktest-macros = { path = "crates/test/hadron-ktest-macros" }
 hadron-test = { path = "crates/test/hadron-test", default-features = false }
 limine = { path = "crates/boot/limine" }
 uefi = { path = "crates/boot/uefi" }
