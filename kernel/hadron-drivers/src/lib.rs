@@ -11,6 +11,8 @@ extern crate alloc;
 pub mod ahci;
 pub mod block;
 pub mod display;
+#[cfg(target_arch = "x86_64")]
+pub mod e1000e;
 #[cfg(target_os = "none")]
 pub mod fs;
 pub mod input;
