@@ -224,8 +224,8 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
             crate::kdebug!("ACPI: HPET at {:#x}, minimum tick {}", hpet_addr, min_tick);
             Some(h)
         }
-        Err(_) => {
-            crate::kwarn!("ACPI: HPET not found");
+        Err(e) => {
+            crate::kwarn!("ACPI: HPET not available: {:?}", e);
             None
         }
     };

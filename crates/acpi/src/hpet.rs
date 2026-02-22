@@ -34,7 +34,7 @@ pub struct GenericAddress {
 struct HpetRaw {
     event_timer_block_id: u32,
     base_address: GenericAddress,
-    hpet_number: u16,
+    hpet_number: u8,
     minimum_tick: u16,
     page_protection: u8,
 }
@@ -47,7 +47,7 @@ pub struct HpetTable {
     /// Base address of the HPET register block.
     pub base_address: GenericAddress,
     /// HPET sequence number (used when multiple HPETs are present).
-    pub hpet_number: u16,
+    pub hpet_number: u8,
     /// Minimum clock tick in periodic mode, in femtoseconds.
     pub minimum_tick: u16,
     /// Page protection and OEM attribute.
