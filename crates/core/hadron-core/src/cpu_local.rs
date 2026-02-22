@@ -81,13 +81,16 @@ pub fn current_cpu_id() -> u32 {
 pub fn cpu_is_initialized() -> bool {
     #[cfg(all(target_os = "none", target_arch = "x86_64"))]
     {
-        // SAFETY: GS:[0] contains the self_ptr. If it is null (GS not yet
-        // set up), we are in early boot — return false. Otherwise, GS:[29]
-        // holds the initialized AtomicBool.
+        // SAFETY: GS:[0] contains the self_ptr. Before GS base is set up
+        // (e.g. AP early boot with GS base = 0), reading GS:[0] fetches from
+        // VA 0, which holds real-mode IVT entries — non-zero but well below
+        // the kernel half. We check that the self-pointer is in the kernel
+        // upper half (>= 0xFFFF_8000_0000_0000) to catch both null and
+        // garbage reads.
         unsafe {
             let self_ptr: u64;
             core::arch::asm!("mov {}, gs:[0]", out(reg) self_ptr, options(readonly, nostack));
-            if self_ptr == 0 {
+            if self_ptr < 0xFFFF_8000_0000_0000 {
                 return false;
             }
             let init: u8;

@@ -24,7 +24,9 @@
 //! Gated behind `cfg(hadron_lockdep)`.
 
 use core::fmt;
-use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicU16, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{
+    AtomicBool, AtomicPtr, AtomicU8, AtomicU16, AtomicU32, AtomicU64, AtomicUsize, Ordering,
+};
 
 use crate::cpu_local::{CpuLocal, MAX_CPUS};
 
@@ -467,9 +469,8 @@ impl HeldLocks {
 }
 
 /// Per-CPU held-lock stacks.
-static HELD: CpuLocal<core::cell::UnsafeCell<HeldLocks>> = CpuLocal::new(
-    [const { core::cell::UnsafeCell::new(HeldLocks::new()) }; MAX_CPUS],
-);
+static HELD: CpuLocal<core::cell::UnsafeCell<HeldLocks>> =
+    CpuLocal::new([const { core::cell::UnsafeCell::new(HeldLocks::new()) }; MAX_CPUS]);
 
 /// Per-CPU reentrancy guard. Prevents infinite recursion when lockdep
 /// hooks trigger allocation or logging that re-enters lock acquisition.
@@ -481,9 +482,35 @@ static IN_LOCKDEP: CpuLocal<AtomicBool> =
 // ---------------------------------------------------------------------------
 
 /// Returns `true` if lockdep hooks should be skipped (before per-CPU init).
+///
+/// On x86_64 kernel targets, this validates that GS points to a kernel-space
+/// PerCpu struct before accessing any CpuLocal data. When APs run before
+/// their GS base is set (GS base = 0), reading GS:[0] fetches from VA 0
+/// (physical address 0), which contains real-mode IVT entries — non-zero
+/// but well below the kernel half. This check catches uninitialized APs
+/// without needing a separate global flag.
 #[inline]
 fn should_skip() -> bool {
-    #[cfg(target_os = "none")]
+    #[cfg(all(target_os = "none", target_arch = "x86_64"))]
+    {
+        unsafe {
+            // Read the self-pointer from GS:[0].
+            let self_ptr: u64;
+            core::arch::asm!("mov {}, gs:[0]", out(reg) self_ptr, options(readonly, nostack));
+            // Valid per-CPU pointers are in the kernel upper half (>= 0xFFFF_8000...).
+            // If GS base is 0 (AP before init), self_ptr reads from VA 0 (physical 0),
+            // which contains low addresses from the real-mode IVT — well below the
+            // kernel half. This catches uninitialized APs without needing a global flag.
+            if self_ptr < 0xFFFF_8000_0000_0000 {
+                return true;
+            }
+            // GS is valid — check the initialized flag at GS:[29].
+            let init: u8;
+            core::arch::asm!("mov {}, gs:[29]", out(reg_byte) init, options(readonly, nostack));
+            init == 0
+        }
+    }
+    #[cfg(all(target_os = "none", not(target_arch = "x86_64")))]
     {
         !crate::cpu_local::cpu_is_initialized()
     }
@@ -613,10 +640,7 @@ fn get_or_register_full(
 /// This is the preferred API for locks that share a class (e.g., per-inode
 /// locks, per-device locks). All instances referencing the same key+subclass
 /// share a single lockdep class.
-pub fn get_or_register_class(
-    class_ref: &LockClassRef,
-    kind: LockKind,
-) -> LockClassId {
+pub fn get_or_register_class(class_ref: &LockClassRef, kind: LockKind) -> LockClassId {
     get_or_register_with_subclass(
         class_ref.key as *const LockClassKey as usize,
         class_ref.subclass,
@@ -646,8 +670,14 @@ pub fn lock_acquired(class: LockClassId) {
 
     // Record IRQ usage context.
     let irq = in_irq_context();
-    let usage_bit = if irq { IRQ_USED_IN_IRQ } else { IRQ_USED_IN_NON_IRQ };
-    let prev_usage = CLASSES[class.index()].irq_usage.fetch_or(usage_bit, Ordering::Relaxed);
+    let usage_bit = if irq {
+        IRQ_USED_IN_IRQ
+    } else {
+        IRQ_USED_IN_NON_IRQ
+    };
+    let prev_usage = CLASSES[class.index()]
+        .irq_usage
+        .fetch_or(usage_bit, Ordering::Relaxed);
 
     // IRQ-safety cross-check: if this class was previously used in non-IRQ
     // context and we're now in IRQ context, that's a potential deadlock
@@ -1009,7 +1039,14 @@ pub fn dump_lock_stats(w: &mut impl core::fmt::Write) -> core::fmt::Result {
     writeln!(
         w,
         "{:<24} {:<12} {:>10} {:>12} {:>10} {:>12} {:>10} {:>12}",
-        "CLASS", "KIND", "ACQUIRES", "CONTENTIONS", "MAX_HOLD", "TOTAL_HOLD", "MAX_WAIT", "TOTAL_WAIT"
+        "CLASS",
+        "KIND",
+        "ACQUIRES",
+        "CONTENTIONS",
+        "MAX_HOLD",
+        "TOTAL_HOLD",
+        "MAX_WAIT",
+        "TOTAL_WAIT"
     )?;
 
     for i in 0..count {
@@ -1137,7 +1174,10 @@ mod tests {
         setup();
         let c1 = get_or_register_with_subclass(0x1000, 0, "inode.data", LockKind::SpinLock);
         let c2 = get_or_register_with_subclass(0x1000, 1, "inode.meta", LockKind::SpinLock);
-        assert_ne!(c1, c2, "different subclasses should yield different classes");
+        assert_ne!(
+            c1, c2,
+            "different subclasses should yield different classes"
+        );
     }
 
     #[test]
@@ -1156,7 +1196,10 @@ mod tests {
         let key_addr = 0x5000;
         let c1 = get_or_register_with_subclass(key_addr, 0, "shared", LockKind::SpinLock);
         let c2 = get_or_register_with_subclass(key_addr, 0, "shared", LockKind::SpinLock);
-        assert_eq!(c1, c2, "multiple instances with same key should share class");
+        assert_eq!(
+            c1, c2,
+            "multiple instances with same key should share class"
+        );
     }
 
     // --- Consistent ordering (no false positives) ---
@@ -1267,7 +1310,10 @@ mod tests {
         lock_released(a);
 
         assert!(graph_test(a.index(), b.index()), "edge A→B should exist");
-        assert!(!graph_test(b.index(), a.index()), "edge B→A should not exist");
+        assert!(
+            !graph_test(b.index(), a.index()),
+            "edge B→A should not exist"
+        );
     }
 
     #[test]

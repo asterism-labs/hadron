@@ -204,10 +204,13 @@ impl Executor {
     ) -> TaskId {
         let id = TaskId(self.next_id.fetch_add(1, Ordering::Relaxed));
         let priority = meta.priority;
+        // Allocate the boxed future BEFORE acquiring the tasks lock to avoid
+        // a level ordering violation (tasks=14 → HEAP=1 is descending).
+        let boxed_future = Box::pin(future);
         self.tasks.lock().insert(
             id,
             TaskEntry {
-                future: Box::pin(future),
+                future: boxed_future,
                 meta,
             },
         );

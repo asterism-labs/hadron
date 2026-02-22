@@ -331,9 +331,7 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
 
     // 3. Initialize PMM (bitmap from memory map).
     crate::mm::pmm::init(boot_info);
-    let (free, total) = crate::mm::pmm::with_pmm(|pmm| {
-        (pmm.free_frames(), pmm.total_frames())
-    });
+    let (free, total) = crate::mm::pmm::with_pmm(|pmm| (pmm.free_frames(), pmm.total_frames()));
     crate::kinfo!(
         "PMM: {} MiB free / {} MiB total",
         free * 4 / 1024,
@@ -347,13 +345,17 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
     // 4b. Allocate a guarded kernel syscall stack (replaces the early BSS stack).
     {
         use crate::mm::pmm::BitmapFrameAllocRef;
-        let (bottom, top, guard) = crate::mm::pmm::with_pmm(|pmm| {
-            let mut alloc = BitmapFrameAllocRef(pmm);
-            crate::mm::vmm::with_vmm(|vmm| {
+        let (bottom, top, guard) = crate::mm::vmm::with_vmm(|vmm| {
+            crate::mm::pmm::with_pmm(|pmm| {
+                let mut alloc = BitmapFrameAllocRef(pmm);
                 let stack = vmm
                     .alloc_kernel_stack(&mut alloc, None)
                     .expect("failed to allocate guarded kernel stack");
-                let info = (stack.bottom().as_u64(), stack.top().as_u64(), stack.guard().as_u64());
+                let info = (
+                    stack.bottom().as_u64(),
+                    stack.top().as_u64(),
+                    stack.guard().as_u64(),
+                );
                 // SAFETY: The stack was just allocated and mapped. Setting
                 // kernel_rsp and RSP0 to its top is safe because no
                 // syscall or interrupt will use the old stack between
@@ -368,7 +370,9 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
         // Log after releasing PMM + VMM locks to avoid ordering violations.
         crate::kinfo!(
             "Guarded kernel stack: {:#x}..{:#x} (guard at {:#x})",
-            bottom, top, guard,
+            bottom,
+            top,
+            guard,
         );
     }
 
@@ -404,7 +408,10 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
         );
         // SAFETY: `boot_nanos` is a lock-free function reading HPET via MMIO.
         unsafe { hadron_core::sync::stress::set_nanos_fn(crate::time::boot_nanos) };
-        crate::kinfo!("Lock stress delays enabled (max {}µs)", crate::config::LOCK_STRESS_MAX_US);
+        crate::kinfo!(
+            "Lock stress delays enabled (max {}µs)",
+            crate::config::LOCK_STRESS_MAX_US
+        );
     }
 
     // 8b. Auto-start profiling if configured (sampling profiler / ftrace).
@@ -416,9 +423,9 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
     //    wrote to the same physical framebuffer (via HHDM) but the driver may
     //    have re-initialized it, so we re-zero and reset the cursor.
     #[cfg(target_arch = "x86_64")]
-    if let Some(fb) =
-        crate::drivers::device_registry::with_device_registry(|dr| dr.take_framebuffer("bochs-vga-0"))
-    {
+    if let Some(fb) = crate::drivers::device_registry::with_device_registry(|dr| {
+        dr.take_framebuffer("bochs-vga-0")
+    }) {
         let info = fb.info();
         let total = info.pitch as usize * info.height as usize;
         // SAFETY: Entire framebuffer is within the mapped MMIO region.
@@ -554,14 +561,12 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
         // SAFETY: We have exclusive BSP access during init. The pointers
         // are to static CpuLocal elements that live forever.
         unsafe {
-            let percpu_mut =
-                percpu as *const crate::percpu::PerCpu as *mut crate::percpu::PerCpu;
+            let percpu_mut = percpu as *const crate::percpu::PerCpu as *mut crate::percpu::PerCpu;
             (*percpu_mut).user_context_ptr = crate::proc::user_context_ptr() as u64;
             (*percpu_mut).saved_kernel_rsp_ptr = crate::proc::saved_kernel_rsp_ptr() as u64;
             (*percpu_mut).trap_reason_ptr = crate::proc::trap_reason_ptr() as u64;
-            (*percpu_mut).saved_regs_ptr = crate::arch::x86_64::syscall::SYSCALL_SAVED_REGS
-                .get()
-                .get() as u64;
+            (*percpu_mut).saved_regs_ptr =
+                crate::arch::x86_64::syscall::SYSCALL_SAVED_REGS.get().get() as u64;
         }
     }
 
@@ -618,9 +623,9 @@ fn mount_block_device(
 /// call from any context including interrupt handlers.
 #[cfg(hadron_lockdep)]
 fn lockdep_serial_report(args: core::fmt::Arguments<'_>) {
-    use core::fmt::Write;
     use crate::drivers::early_console::{COM1, EarlySerial};
     use crate::log::SerialWriter;
+    use core::fmt::Write;
 
     let mut w = SerialWriter(EarlySerial::new(COM1));
     let _ = w.write_fmt(args);
