@@ -14,6 +14,12 @@ test = false
 bench = false
 doctest = false
 
+# This integration test is a no_std/no_main QEMU test run via gluon,
+# not the standard cargo test harness.
+[[test]]
+name = "basic_boot"
+test = false
+
 [dependencies]
 bitflags = { workspace = true }
 

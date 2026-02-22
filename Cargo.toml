@@ -4,10 +4,9 @@ members = [
     "crates/*/*",
     "kernel/hadron-kernel",
     "kernel/hadron-drivers",
-    "kernel/boot/*",
     "tools/gluon",
 ]
-exclude = [ "userspace" ]
+exclude = [ "userspace", "kernel/boot" ]
 default-members = [
     "crates/*/*",
     "tools/gluon",

@@ -1,11 +1,13 @@
 [package]
 name = "hadron-boot-limine"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-authors.workspace = true
-license.workspace = true
-publish.workspace = true
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+authors = [ "hxyulin" ]
+license = "GPL-3.0-only"
+publish = false
+
+[workspace]
 
 [[bin]]
 name = "hadron-boot-limine"
@@ -14,10 +16,7 @@ bench = false
 doctest = false
 
 [dependencies]
-hadron-drivers = { workspace = true }
-hadron-kernel = { workspace = true }
-limine = { workspace = true }
-planck-noalloc = { workspace = true }
-
-[lints]
-workspace = true
+hadron-drivers = { path = "../../hadron-drivers" }
+hadron-kernel = { path = "../../hadron-kernel" }
+limine = { path = "../../../crates/boot/limine" }
+planck-noalloc = { version = "0.1.1", default-features = false }
