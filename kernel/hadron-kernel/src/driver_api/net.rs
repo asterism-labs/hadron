@@ -4,6 +4,7 @@
 //! network drivers such as VirtIO-net.
 
 use core::fmt;
+use core::future::Future;
 
 /// A 6-byte MAC (Ethernet hardware) address.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,16 +59,18 @@ impl fmt::Display for NetError {
 /// Drivers implementing this trait provide send/receive access to network
 /// devices. All I/O operations are async to allow cooperative scheduling while
 /// waiting for hardware completion.
-#[expect(async_fn_in_trait, reason = "internal trait, no dyn dispatch needed")]
+///
+/// The `Send` bound on the returned futures is required so that tasks using
+/// a network device can be spawned on the multi-threaded executor.
 pub trait NetworkDevice: Send + Sync {
     /// Receives a single Ethernet frame into `buf`.
     ///
     /// Returns the number of bytes written to `buf`. Blocks (async) until a
     /// frame is available.
-    async fn recv(&self, buf: &mut [u8]) -> Result<usize, NetError>;
+    fn recv(&self, buf: &mut [u8]) -> impl Future<Output = Result<usize, NetError>> + Send;
 
     /// Sends a single Ethernet frame from `buf`.
-    async fn send(&self, buf: &[u8]) -> Result<(), NetError>;
+    fn send(&self, buf: &[u8]) -> impl Future<Output = Result<(), NetError>> + Send;
 
     /// Returns the device's MAC address.
     fn mac_address(&self) -> MacAddress;

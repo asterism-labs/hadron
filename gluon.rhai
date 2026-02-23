@@ -70,6 +70,13 @@ profile("profile")
     .inherits("default")
     .preset("perf");
 
+profile("net")
+    .inherits("default")
+    .qemu_extra_args([
+        "-netdev", "tap,id=net0,ifname=tap0,script=no,downscript=no",
+        "-device", "virtio-net-pci,netdev=net0,mac=52:54:00:12:34:56"
+    ]);
+
 // ===========================================================================
 // Sysroot crates (built first, for kernel target)
 // ===========================================================================

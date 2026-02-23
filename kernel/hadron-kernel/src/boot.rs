@@ -477,6 +477,8 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
                 crate::kdebug!("[heartbeat] {}s elapsed", n * 5);
             }
         });
+
+        crate::net::init();
     }
 
     // 10. Extract initrd data via HHDM.

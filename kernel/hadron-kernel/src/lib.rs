@@ -53,6 +53,8 @@ pub mod log;
 #[cfg(target_os = "none")]
 pub mod mm;
 #[cfg(target_os = "none")]
+pub mod net;
+#[cfg(target_os = "none")]
 pub mod pci;
 #[cfg(target_os = "none")]
 pub mod percpu;

@@ -118,13 +118,13 @@ pub trait DynNetDevice: Send + Sync {
     fn dyn_recv<'a>(
         &'a self,
         buf: &'a mut [u8],
-    ) -> Pin<Box<dyn Future<Output = Result<usize, NetError>> + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = Result<usize, NetError>> + Send + 'a>>;
 
     /// Sends a single Ethernet frame from `buf` (dyn-dispatch version).
     fn dyn_send<'a>(
         &'a self,
         buf: &'a [u8],
-    ) -> Pin<Box<dyn Future<Output = Result<(), NetError>> + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = Result<(), NetError>> + Send + 'a>>;
 
     /// Returns the device's MAC address.
     fn mac_address(&self) -> MacAddress;
@@ -140,14 +140,14 @@ impl<D: NetworkDevice> DynNetDevice for DynNetDeviceWrapper<D> {
     fn dyn_recv<'a>(
         &'a self,
         buf: &'a mut [u8],
-    ) -> Pin<Box<dyn Future<Output = Result<usize, NetError>> + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<usize, NetError>> + Send + 'a>> {
         Box::pin(self.0.recv(buf))
     }
 
     fn dyn_send<'a>(
         &'a self,
         buf: &'a [u8],
-    ) -> Pin<Box<dyn Future<Output = Result<(), NetError>> + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<(), NetError>> + Send + 'a>> {
         Box::pin(self.0.send(buf))
     }
 
