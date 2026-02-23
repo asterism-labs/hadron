@@ -70,8 +70,8 @@ pub struct SysrootEntry {
 pub struct InitrdEntry {
     /// Mtime of the initrd output file.
     pub output_mtime_secs: i64,
-    /// Mtimes of userspace crate root source files, for change detection.
-    pub source_mtimes: HashMap<PathBuf, i64>,
+    /// Mtimes of compiled userspace binary artifacts, for change detection.
+    pub artifact_mtimes: HashMap<PathBuf, i64>,
 }
 
 /// Cache entry for a single compiled crate.
@@ -203,8 +203,8 @@ impl CacheManifest {
     /// Check if the initrd output is still fresh.
     ///
     /// Checks output file existence + mtime, and also that none of the
-    /// userspace source root files have changed mtimes.
-    pub fn is_initrd_fresh(&self, output_path: &Path, source_roots: &[PathBuf]) -> bool {
+    /// compiled userspace binary artifacts have changed mtimes.
+    pub fn is_initrd_fresh(&self, output_path: &Path, artifacts: &[(String, PathBuf)]) -> bool {
         let entry = match &self.initrd {
             Some(e) => e,
             None => return false,
@@ -216,10 +216,10 @@ impl CacheManifest {
             _ => return false,
         }
 
-        // Check each source root file.
-        for src in source_roots {
-            let current = file_mtime_secs(src);
-            let stored = entry.source_mtimes.get(src).copied();
+        // Check each compiled binary artifact.
+        for (_name, path) in artifacts {
+            let current = file_mtime_secs(path);
+            let stored = entry.artifact_mtimes.get(path).copied();
             match (stored, current) {
                 (Some(s), Some(c)) if s == c => {}
                 _ => return false,
@@ -230,17 +230,17 @@ impl CacheManifest {
     }
 
     /// Record a freshly-built initrd in the manifest.
-    pub fn record_initrd(&mut self, output_path: &Path, source_roots: &[PathBuf]) {
+    pub fn record_initrd(&mut self, output_path: &Path, artifacts: &[(String, PathBuf)]) {
         let mtime = file_mtime_secs(output_path).unwrap_or(0);
-        let mut source_mtimes = HashMap::new();
-        for src in source_roots {
-            if let Some(m) = file_mtime_secs(src) {
-                source_mtimes.insert(src.clone(), m);
+        let mut artifact_mtimes = HashMap::new();
+        for (_name, path) in artifacts {
+            if let Some(m) = file_mtime_secs(path) {
+                artifact_mtimes.insert(path.clone(), m);
             }
         }
         self.initrd = Some(InitrdEntry {
             output_mtime_secs: mtime,
-            source_mtimes,
+            artifact_mtimes,
         });
     }
 }

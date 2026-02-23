@@ -847,17 +847,8 @@ fn execute_rule(
                         }
                     }
 
-                    // Track source roots for freshness.
-                    let user_source_roots: Vec<PathBuf> = rule.inputs.iter()
-                        .filter_map(|name| model.crates.get(name))
-                        .map(|def| {
-                            let resolved_path = root.join(&def.path);
-                            def.root_file(&resolved_path)
-                        })
-                        .collect();
-
                     let initrd_fresh = !force
-                        && cache.is_initrd_fresh(&initrd_path, &user_source_roots)
+                        && cache.is_initrd_fresh(&initrd_path, &bin_artifacts)
                         && target_initrd.exists();
 
                     if initrd_fresh {
@@ -868,7 +859,7 @@ fn execute_rule(
                             config,
                             &bin_artifacts,
                         )?;
-                        cache.record_initrd(&built, &user_source_roots);
+                        cache.record_initrd(&built, &bin_artifacts);
                         cache.save(&config.root)?;
 
                         std::fs::create_dir_all(target_initrd.parent().unwrap())?;
