@@ -3,6 +3,7 @@
 //! Routes incoming syscall numbers to individual handler functions via the
 //! generated [`SyscallHandler`] trait from `hadron-syscall`.
 
+mod channel;
 mod event;
 mod io;
 mod ioctl;
@@ -123,6 +124,18 @@ impl SyscallHandler for HadronDispatch {
         vfs::sys_handle_pipe2(fds_ptr, flags)
     }
 
+    fn sys_channel_create(&self, fds_ptr: usize) -> isize {
+        channel::sys_channel_create(fds_ptr)
+    }
+
+    fn sys_channel_send(&self, handle: usize, buf_ptr: usize, buf_len: usize) -> isize {
+        channel::sys_channel_send(handle, buf_ptr, buf_len)
+    }
+
+    fn sys_channel_recv(&self, handle: usize, buf_ptr: usize, buf_len: usize) -> isize {
+        channel::sys_channel_recv(handle, buf_ptr, buf_len)
+    }
+
     fn sys_vnode_open(&self, path_ptr: usize, path_len: usize, flags: usize) -> isize {
         vfs::sys_vnode_open(path_ptr, path_len, flags)
     }
@@ -227,6 +240,14 @@ impl SyscallHandler for HadronDispatch {
 
     fn sys_mem_brk(&self, addr: usize) -> isize {
         memory::sys_mem_brk(addr)
+    }
+
+    fn sys_mem_create_shared(&self, size: usize) -> isize {
+        memory::sys_mem_create_shared(size)
+    }
+
+    fn sys_mem_map_shared(&self, fd: usize, size: usize, prot: usize) -> isize {
+        memory::sys_mem_map_shared(fd, size, prot)
     }
 
     fn sys_clock_gettime(&self, clock_id: usize, tp: usize) -> isize {

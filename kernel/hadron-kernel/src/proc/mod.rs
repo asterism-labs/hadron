@@ -416,6 +416,9 @@ pub(crate) enum MappingKind {
     Anonymous { page_count: usize },
     /// Device-backed mapping: physical pages belong to hardware and must NOT be freed.
     Device { page_count: usize },
+    /// Shared memory mapping: physical pages are owned by a `ShmObject` and must
+    /// NOT be freed on unmap (the `ShmObject`'s `Drop` handles deallocation).
+    Shared { page_count: usize },
 }
 
 /// A user-mode process (or thread).

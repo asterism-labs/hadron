@@ -294,6 +294,15 @@ pub trait Inode: Send + Sync {
         Box::pin(core::future::ready(Err(FsError::NotSupported)))
     }
 
+    /// Returns the physical frame addresses for shared memory mapping.
+    ///
+    /// Only meaningful for shared memory objects. Returns a vector of
+    /// physical addresses, one per 4 KiB page. Default returns
+    /// [`FsError::NotSupported`].
+    fn shared_phys_frames(&self) -> Result<Vec<u64>, FsError> {
+        Err(FsError::NotSupported)
+    }
+
     /// Check I/O readiness for poll/select.
     ///
     /// Returns a bitmask of poll events (`POLLIN`, `POLLOUT`, `POLLHUP`,

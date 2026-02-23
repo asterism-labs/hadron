@@ -1,12 +1,14 @@
-//! Memory syscall handlers: mem_map, mem_unmap, mem_brk.
+//! Memory syscall handlers: mem_map, mem_unmap, mem_brk, mem_create_shared, mem_map_shared.
 //!
-//! Implements anonymous and device-backed memory mapping for userspace
+//! Implements anonymous, device-backed, and shared memory mapping for userspace
 //! processes. Each process owns a
 //! [`FreeRegionAllocator`](crate::mm::region::FreeRegionAllocator) that tracks
 //! the mmap virtual address region. Physical frames are allocated from the PMM
-//! (anonymous) or come from device MMIO regions (device-backed).
+//! (anonymous) or come from device MMIO regions (device-backed) or shared
+//! memory objects (shared).
 
 use crate::addr::{PhysAddr, VirtAddr};
+use crate::fs::file::OpenFlags;
 use crate::id::Fd;
 use crate::mm::PAGE_SIZE;
 use crate::mm::mapper::MapFlags;
@@ -248,8 +250,10 @@ pub(super) fn sys_mem_unmap(addr: usize, length: usize) -> isize {
         let page_count = aligned_length / PAGE_SIZE;
 
         match mapping_kind {
-            Some(MappingKind::Device { .. }) => {
-                // Device mapping: unmap PTEs but do NOT free physical frames.
+            Some(MappingKind::Device { .. } | MappingKind::Shared { .. }) => {
+                // Device/shared mapping: unmap PTEs but do NOT free physical frames.
+                // Device frames belong to hardware; shared frames are owned by
+                // the ShmObject and freed when its last Arc ref is dropped.
                 for i in 0..page_count {
                     let page_vaddr = base.as_u64() + (i as u64) * PAGE_SIZE as u64;
                     let page = Page::<Size4KiB>::containing_address(VirtAddr::new(page_vaddr));
@@ -362,4 +366,128 @@ pub(super) fn sys_mem_brk(addr: usize) -> isize {
         *brk = addr;
         addr as isize
     })
+}
+
+/// `sys_mem_create_shared` — create a shared memory object.
+///
+/// Allocates `size` bytes of zeroed physical memory (page-aligned) and
+/// returns a file descriptor referring to the `ShmObject`. Multiple
+/// processes can map this fd to share the same physical pages.
+#[expect(
+    clippy::cast_possible_wrap,
+    reason = "fd numbers are small, wrap is impossible"
+)]
+pub(super) fn sys_mem_create_shared(size: usize) -> isize {
+    if size == 0 {
+        return -EINVAL;
+    }
+
+    let shm = match crate::ipc::shm::ShmObject::new(size) {
+        Some(s) => s,
+        None => return -ENOMEM,
+    };
+
+    let fd = ProcessTable::with_current(|process| {
+        let mut fd_table = process.fd_table.lock();
+        fd_table.open(shm, OpenFlags::READ | OpenFlags::WRITE)
+    });
+
+    fd.as_u32() as isize
+}
+
+/// `sys_mem_map_shared` — map a shared memory object into the process address space.
+///
+/// `fd` is a shared memory fd from [`sys_mem_create_shared`]. `size` is the
+/// mapping length (must not exceed the object's page-aligned size). `prot`
+/// is a bitmask of `PROT_READ`/`PROT_WRITE`.
+///
+/// Returns the mapped virtual address on success, or negated errno on failure.
+#[expect(
+    clippy::cast_possible_wrap,
+    reason = "returning virtual address as isize; upper bit is never set for user addresses"
+)]
+pub(super) fn sys_mem_map_shared(fd: usize, size: usize, prot: usize) -> isize {
+    use hadron_syscall::{PROT_EXEC, PROT_READ, PROT_WRITE};
+
+    let fd = Fd::new(fd as u32);
+
+    if size == 0 {
+        return -EINVAL;
+    }
+
+    // Look up the inode from the fd table.
+    let inode = ProcessTable::with_current(|process| {
+        let fd_table = process.fd_table.lock();
+        fd_table.get(fd).map(|f| f.inode.clone())
+    });
+
+    let Some(inode) = inode else {
+        return -EBADF;
+    };
+
+    // Get the physical frame addresses from the shm object.
+    let phys_addrs = match inode.shared_phys_frames() {
+        Ok(addrs) => addrs,
+        Err(e) => return -e.to_errno(),
+    };
+
+    let aligned_size = page_align_up(size);
+    let page_count = aligned_size / PAGE_SIZE;
+
+    if page_count > phys_addrs.len() {
+        return -EINVAL;
+    }
+
+    // Build page table flags from prot.
+    let mut map_flags = MapFlags::USER;
+    if prot & PROT_WRITE != 0 {
+        map_flags |= MapFlags::WRITABLE;
+    }
+    if prot & PROT_EXEC != 0 {
+        map_flags |= MapFlags::EXECUTABLE;
+    }
+    let _ = prot & PROT_READ;
+
+    // Allocate virtual region from the process's mmap allocator.
+    let vaddr = ProcessTable::with_current(|process| {
+        let mut mmap = process.mmap_alloc.lock();
+        mmap.allocate(aligned_size as u64)
+    });
+
+    let base_vaddr = match vaddr {
+        Some(v) => v,
+        None => return -EINVAL,
+    };
+
+    // Map the shared physical frames into user address space.
+    let map_result = ProcessTable::with_current(|process| {
+        pmm::with(|pmm| {
+            let mut alloc = BitmapFrameAllocRef(pmm);
+            for i in 0..page_count {
+                let page_vaddr = base_vaddr.as_u64() + (i as u64) * PAGE_SIZE as u64;
+                let page = Page::<Size4KiB>::containing_address(VirtAddr::new(page_vaddr));
+                let frame = PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(phys_addrs[i]));
+
+                if let Err(_e) = process
+                    .address_space()
+                    .map_user_page(page, frame, map_flags, &mut alloc)
+                {
+                    return Err(i);
+                }
+            }
+            Ok(())
+        })
+    });
+
+    if let Err(_partial_count) = map_result {
+        return -EINVAL;
+    }
+
+    // Track as a shared mapping (frames must NOT be freed on unmap).
+    ProcessTable::with_current(|process| {
+        let mut mappings = process.mmap_mappings.lock();
+        mappings.insert(base_vaddr.as_u64(), MappingKind::Shared { page_count });
+    });
+
+    base_vaddr.as_u64() as isize
 }

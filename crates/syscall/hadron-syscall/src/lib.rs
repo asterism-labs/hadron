@@ -586,16 +586,24 @@ hadron_syscall_macros::define_syscalls! {
 
     /// Channel IPC.
     group channel(0x20..0x30) {
-        /// Create a channel pair.
-        #[reserved]
-        fn channel_create() = 0x00;
+        /// Create a bidirectional channel pair.
+        ///
+        /// Writes two file descriptor numbers `[fd_a, fd_b]` to the user
+        /// buffer at `fds_ptr`. Each endpoint can send and receive messages.
+        fn channel_create(fds_ptr: usize) = 0x00;
 
-        /// Send a message on a channel.
-        #[reserved]
+        /// Send a message on a channel endpoint.
+        ///
+        /// `handle` is the channel fd. `buf_ptr`/`buf_len` describe the
+        /// message to send (max 4096 bytes). Messages are discrete — not
+        /// a byte stream. Blocks if the send queue is full.
         fn channel_send(handle: usize, buf_ptr: usize, buf_len: usize) = 0x01;
 
-        /// Receive a message from a channel.
-        #[reserved]
+        /// Receive a message from a channel endpoint.
+        ///
+        /// `handle` is the channel fd. The next queued message is copied
+        /// into `(buf_ptr, buf_len)`. Returns the message length (truncated
+        /// if the buffer is smaller). Blocks if the receive queue is empty.
         fn channel_recv(handle: usize, buf_ptr: usize, buf_len: usize) = 0x02;
 
         /// Synchronous call on a channel.
@@ -711,12 +719,20 @@ hadron_syscall_macros::define_syscalls! {
         fn mem_brk(addr: usize) = 0x02;
 
         /// Create a shared memory object.
-        #[reserved]
-        fn mem_create_shared() = 0x03;
+        ///
+        /// Allocates `size` bytes of physical memory (page-aligned) and
+        /// returns a file descriptor referring to the shared memory object.
+        /// The memory is zero-filled. Multiple processes can map the same
+        /// object to share memory.
+        fn mem_create_shared(size: usize) = 0x03;
 
-        /// Map a shared memory object.
-        #[reserved]
-        fn mem_map_shared() = 0x04;
+        /// Map a shared memory object into the calling process's address space.
+        ///
+        /// `fd` is a shared memory fd from [`mem_create_shared`]. `size` is
+        /// the mapping length (must not exceed the object size). `prot` is a
+        /// bitmask of `PROT_READ`/`PROT_WRITE`.
+        /// Returns the mapped virtual address on success, or negated errno.
+        fn mem_map_shared(fd: usize, size: usize, prot: usize) = 0x04;
     }
 
     /// Events and time.

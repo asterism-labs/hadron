@@ -1,10 +1,10 @@
-//! System calls: exit, getpid, spawn, waitpid, kill, pipe, query, clock.
+//! System calls: exit, getpid, spawn, waitpid, kill, pipe, channel, shm, query, clock.
 
 use hadron_syscall::wrappers;
 use hadron_syscall::{
-    CLOCK_MONOTONIC, KernelVersionInfo, MAP_ANONYMOUS, MAP_SHARED, MemoryInfo, POLLIN, PROT_READ,
-    PROT_WRITE, PollFd, ProcessInfo, QUERY_KERNEL_VERSION, QUERY_MEMORY, QUERY_PROCESSES,
-    QUERY_UPTIME, SpawnArg, Timespec, UptimeInfo,
+    CLOCK_MONOTONIC, FdMapEntry, KernelVersionInfo, MAP_ANONYMOUS, MAP_SHARED, MemoryInfo, POLLIN,
+    PROT_READ, PROT_WRITE, PollFd, ProcessInfo, QUERY_KERNEL_VERSION, QUERY_MEMORY,
+    QUERY_PROCESSES, QUERY_UPTIME, SpawnArg, Timespec, UptimeInfo,
 };
 
 pub use hadron_syscall::{
@@ -328,4 +328,153 @@ pub fn mem_map_device(fd: usize, length: usize) -> Option<*mut u8> {
 /// Returns `true` on success.
 pub fn mem_unmap(addr: *mut u8, length: usize) -> bool {
     wrappers::sys_mem_unmap(addr as usize, length) == 0
+}
+
+// ── Channel IPC ──────────────────────────────────────────────────────
+
+/// Create a bidirectional channel pair.
+///
+/// Returns `(fd_a, fd_b)` on success. Messages sent on one endpoint
+/// are received on the other.
+pub fn channel_create() -> Result<(usize, usize), isize> {
+    let mut fds: [usize; 2] = [0; 2];
+    let ret = wrappers::sys_channel_create(fds.as_mut_ptr() as usize);
+    if ret < 0 {
+        Err(ret)
+    } else {
+        Ok((fds[0], fds[1]))
+    }
+}
+
+/// Send a message on a channel endpoint.
+///
+/// Returns the number of bytes sent on success, or a negative errno.
+pub fn channel_send(handle: usize, buf: &[u8]) -> Result<usize, isize> {
+    let ret = wrappers::sys_channel_send(handle, buf.as_ptr() as usize, buf.len());
+    if ret < 0 { Err(ret) } else { Ok(ret as usize) }
+}
+
+/// Receive a message from a channel endpoint.
+///
+/// Returns the message length on success (may exceed `buf.len()` if
+/// the message was truncated). Returns a negative errno on failure.
+pub fn channel_recv(handle: usize, buf: &mut [u8]) -> Result<usize, isize> {
+    let ret = wrappers::sys_channel_recv(handle, buf.as_mut_ptr() as usize, buf.len());
+    if ret < 0 { Err(ret) } else { Ok(ret as usize) }
+}
+
+// ── Shared memory ────────────────────────────────────────────────────
+
+/// Create a shared memory object of the given size.
+///
+/// Returns a file descriptor on success. The memory is zero-filled.
+pub fn mem_create_shared(size: usize) -> Result<usize, isize> {
+    let ret = wrappers::sys_mem_create_shared(size);
+    if ret < 0 { Err(ret) } else { Ok(ret as usize) }
+}
+
+/// Map a shared memory object into the process address space.
+///
+/// Returns a pointer to the mapped region, or `None` on failure.
+pub fn mem_map_shared(fd: usize, size: usize) -> Option<*mut u8> {
+    let ret = wrappers::sys_mem_map_shared(fd, size, PROT_READ | PROT_WRITE);
+    if ret > 0 { Some(ret as *mut u8) } else { None }
+}
+
+// ── Extended spawn ───────────────────────────────────────────────────
+
+/// Spawn a new process with explicit file descriptor mappings.
+///
+/// `fd_map` maps parent fds to child fd numbers: each `(child_fd, parent_fd)`
+/// pair causes the child to inherit `parent_fd` as `child_fd`. If `fd_map`
+/// is empty, the default behavior applies (inherit fds 0/1/2).
+///
+/// Returns the child PID on success, or a negative errno on failure.
+pub fn spawn_with_fds(path: &str, argv: &[&str], fd_map: &[(u32, u32)]) -> isize {
+    // Build the env block from the current environment.
+    let env_block = crate::env::build_env_block();
+    let env_refs: alloc::vec::Vec<&str> = env_block.iter().map(|s| s.as_str()).collect();
+
+    // Build SpawnArg descriptors for argv.
+    let mut argv_descs = [SpawnArg { ptr: 0, len: 0 }; 32];
+    let argv_count = argv.len().min(32);
+    for (i, arg) in argv[..argv_count].iter().enumerate() {
+        argv_descs[i] = SpawnArg {
+            ptr: arg.as_ptr() as usize,
+            len: arg.len(),
+        };
+    }
+
+    // Build SpawnArg descriptors for envp.
+    let mut envp_descs = [SpawnArg { ptr: 0, len: 0 }; 64];
+    let envp_count = env_refs.len().min(64);
+    for (i, env) in env_refs[..envp_count].iter().enumerate() {
+        envp_descs[i] = SpawnArg {
+            ptr: env.as_ptr() as usize,
+            len: env.len(),
+        };
+    }
+
+    // Build FdMapEntry array.
+    let mut fd_entries = [FdMapEntry {
+        child_fd: 0,
+        parent_fd: 0,
+    }; 16];
+    let fd_count = fd_map.len().min(16);
+    for (i, &(child, parent)) in fd_map[..fd_count].iter().enumerate() {
+        fd_entries[i] = FdMapEntry {
+            child_fd: child,
+            parent_fd: parent,
+        };
+    }
+
+    let info = hadron_syscall::SpawnInfo {
+        path_ptr: path.as_ptr() as usize,
+        path_len: path.len(),
+        argv_ptr: if argv_count > 0 {
+            argv_descs.as_ptr() as usize
+        } else {
+            0
+        },
+        argv_count,
+        envp_ptr: if envp_count > 0 {
+            envp_descs.as_ptr() as usize
+        } else {
+            0
+        },
+        envp_count,
+        fd_map_ptr: if fd_count > 0 {
+            fd_entries.as_ptr() as usize
+        } else {
+            0
+        },
+        fd_map_count: fd_count,
+        cwd_ptr: 0,
+        cwd_len: 0,
+    };
+
+    wrappers::sys_task_spawn(
+        &info as *const hadron_syscall::SpawnInfo as usize,
+        core::mem::size_of::<hadron_syscall::SpawnInfo>(),
+    )
+}
+
+/// Close a file descriptor.
+///
+/// Returns 0 on success, or a negative errno on failure.
+pub fn close(fd: usize) -> isize {
+    wrappers::sys_handle_close(fd)
+}
+
+/// Non-blocking poll of a file descriptor for readability.
+///
+/// Returns `true` if data is available to read on `fd`.
+pub fn poll_fd_read(fd: usize) -> bool {
+    let mut fds = [PollFd {
+        fd: fd as u32,
+        events: POLLIN,
+        revents: 0,
+    }];
+    let ret = wrappers::sys_event_wait_many(fds.as_mut_ptr() as usize, 1, 0);
+    ret > 0 && fds[0].revents & POLLIN != 0
 }
