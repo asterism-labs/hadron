@@ -104,12 +104,10 @@ fn gen_syscall_constants(defs: &SyscallDefs) -> TokenStream {
                 let const_name = format_ident!("SYS_{}", s.name.to_string().to_uppercase());
                 let attrs = &s.attrs;
 
-                if let Some(ref res) = s.reserved {
-                    let phase = res.phase;
-                    let reason = format!("reserved for Phase {phase}");
+                if s.reserved {
                     quote! {
                         #(#attrs)*
-                        #[allow(dead_code, reason = #reason)]
+                        #[allow(dead_code, reason = "reserved syscall")]
                         pub const #const_name: usize = #number;
                     }
                 } else {
@@ -184,7 +182,7 @@ fn gen_syscall_enum(defs: &SyscallDefs) -> TokenStream {
             let number = syscall.number(group.range_start);
             let name_str = syscall.name.to_string();
             let arg_count = syscall.args.len();
-            let is_reserved = syscall.reserved.is_some();
+            let is_reserved = syscall.reserved;
             let attrs = &syscall.attrs;
 
             let arg_name_strs: Vec<_> = syscall.args.iter().map(|a| a.name.to_string()).collect();

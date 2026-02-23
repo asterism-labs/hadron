@@ -141,23 +141,12 @@ fn parse_syscall(input: ParseStream<'_>) -> syn::Result<SyscallDef> {
     let attrs = input.call(Attribute::parse_outer)?;
     let span = input.span();
 
-    // Check for #[reserved(phase = N)]
-    let mut reserved = None;
+    // Check for #[reserved]
+    let mut reserved = false;
     let mut remaining_attrs = Vec::new();
     for attr in attrs {
         if attr.path().is_ident("reserved") {
-            attr.parse_nested_meta(|meta| {
-                if meta.path.is_ident("phase") {
-                    meta.input.parse::<Token![=]>()?;
-                    let lit: LitInt = meta.input.parse()?;
-                    reserved = Some(ReservedInfo {
-                        phase: lit.base10_parse()?,
-                    });
-                    Ok(())
-                } else {
-                    Err(meta.error("expected `phase`"))
-                }
-            })?;
+            reserved = true;
         } else {
             remaining_attrs.push(attr);
         }

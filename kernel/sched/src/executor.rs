@@ -4,7 +4,7 @@
 //! Each task is a heap-allocated, pinned, dynamically-dispatched future.
 //! Each CPU runs its own executor instance (accessed via [`global`] /
 //! [`for_cpu`]). Tasks stay on their spawning CPU unless migrated by work
-//! stealing (Phase 12.6).
+//! stealing.
 //!
 //! Tasks are organized into three strict priority tiers: Critical, Normal,
 //! and Background. The executor always drains higher-priority tiers first.
@@ -56,7 +56,7 @@ type TaskFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 /// work-stealing function pointers.
 pub struct TaskEntry {
     future: TaskFuture,
-    #[allow(dead_code, reason = "reserved for Phase 7+ task debugging")]
+    #[allow(dead_code, reason = "reserved for task debugging diagnostics")]
     meta: TaskMeta,
 }
 

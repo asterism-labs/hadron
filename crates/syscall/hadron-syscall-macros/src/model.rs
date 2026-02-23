@@ -55,7 +55,7 @@ pub(crate) struct SyscallDef {
     pub name: Ident,
     pub args: Vec<ArgDef>,
     pub offset: usize,
-    pub reserved: Option<ReservedInfo>,
+    pub reserved: bool,
     pub span: Span,
 }
 
@@ -63,11 +63,6 @@ pub(crate) struct SyscallDef {
 pub(crate) struct ArgDef {
     pub name: Ident,
     pub ty: Type,
-}
-
-/// Metadata for `#[reserved(phase = N)]`.
-pub(crate) struct ReservedInfo {
-    pub phase: usize,
 }
 
 impl SyscallDef {

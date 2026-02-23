@@ -107,7 +107,7 @@ impl BlockDevice for AhciDisk {
     }
 
     async fn write_sector(&self, _sector: u64, _buf: &[u8]) -> Result<(), IoError> {
-        // Phase 10: write support not yet implemented.
+        // TODO: write support not yet implemented.
         Err(IoError::NotReady)
     }
 

@@ -18,7 +18,7 @@ const SFMASK_VALUE: u64 = 0x600;
 /// registers (RBX, RBP, R12-R15), RIP, and RFLAGS to be preserved; caller-saved
 /// registers may be zeroed on resume.
 ///
-/// BSP-only; Phase 12 makes this per-CPU.
+/// Per-CPU via CpuLocal (one instance per CPU).
 #[repr(C)]
 pub struct SyscallSavedRegs {
     /// User return RIP (from CPU RCX). Offset 0.
@@ -45,7 +45,7 @@ pub struct SyscallSavedRegs {
 ///
 /// Only written by SYSCALL entry assembly with interrupts masked (SFMASK
 /// clears IF). Read by `process_task` between userspace entries. No
-/// concurrent access on BSP. Phase 12 makes this per-CPU.
+/// concurrent access on BSP. Per-CPU via CpuLocal; no concurrent access on any given CPU.
 #[repr(transparent)]
 pub struct SyncSavedRegs(UnsafeCell<SyscallSavedRegs>);
 

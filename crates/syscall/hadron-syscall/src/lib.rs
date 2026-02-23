@@ -214,7 +214,7 @@ hadron_syscall_macros::define_syscalls! {
         fn task_kill(pid: usize, signum: usize) = 0x03;
 
         /// Detach a task.
-        #[reserved(phase = 11)]
+        #[reserved]
         fn task_detach() = 0x04;
 
         /// Query task information (returns task ID for now).
@@ -257,7 +257,7 @@ hadron_syscall_macros::define_syscalls! {
         fn handle_dup(old_fd: usize, new_fd: usize) = 0x01;
 
         /// Query handle info.
-        #[reserved(phase = 11)]
+        #[reserved]
         fn handle_info(handle: usize) = 0x02;
 
         /// Create a pipe. Writes [read_fd, write_fd] to `fds_ptr`.
@@ -278,19 +278,19 @@ hadron_syscall_macros::define_syscalls! {
     /// Channel IPC.
     group channel(0x20..0x30) {
         /// Create a channel pair.
-        #[reserved(phase = 11)]
+        #[reserved]
         fn channel_create() = 0x00;
 
         /// Send a message on a channel.
-        #[reserved(phase = 11)]
+        #[reserved]
         fn channel_send(handle: usize, buf_ptr: usize, buf_len: usize) = 0x01;
 
         /// Receive a message from a channel.
-        #[reserved(phase = 11)]
+        #[reserved]
         fn channel_recv(handle: usize, buf_ptr: usize, buf_len: usize) = 0x02;
 
         /// Synchronous call on a channel.
-        #[reserved(phase = 11)]
+        #[reserved]
         fn channel_call(handle: usize, buf_ptr: usize, buf_len: usize) = 0x03;
     }
 
@@ -312,7 +312,7 @@ hadron_syscall_macros::define_syscalls! {
         fn vnode_readdir(fd: usize, buf_ptr: usize, buf_len: usize) = 0x04;
 
         /// Unlink a vnode.
-        #[reserved(phase = 10)]
+        #[reserved]
         fn vnode_unlink(path_ptr: usize, path_len: usize) = 0x05;
     }
 
@@ -335,41 +335,41 @@ hadron_syscall_macros::define_syscalls! {
         fn mem_unmap(addr: usize, length: usize) = 0x01;
 
         /// Change memory protection flags.
-        #[reserved(phase = 9)]
+        #[reserved]
         fn mem_protect() = 0x02;
 
         /// Create a shared memory object.
-        #[reserved(phase = 11)]
+        #[reserved]
         fn mem_create_shared() = 0x03;
 
         /// Map a shared memory object.
-        #[reserved(phase = 11)]
+        #[reserved]
         fn mem_map_shared() = 0x04;
     }
 
     /// Events and time.
     group event(0x50..0x60) {
         /// Create an event object.
-        #[reserved(phase = 11)]
+        #[reserved]
         fn event_create() = 0x00;
 
         /// Signal an event.
-        #[reserved(phase = 11)]
+        #[reserved]
         fn event_signal(handle: usize) = 0x01;
 
         /// Wait for an event.
-        #[reserved(phase = 11)]
+        #[reserved]
         fn event_wait(handle: usize) = 0x02;
 
         /// Wait for multiple events.
-        #[reserved(phase = 11)]
+        #[reserved]
         fn event_wait_many(handles_ptr: usize, handles_len: usize) = 0x03;
 
         /// Get current time.
         fn clock_gettime(clock_id: usize, tp: usize) = 0x04;
 
         /// Create a timer.
-        #[reserved(phase = 11)]
+        #[reserved]
         fn timer_create() = 0x05;
     }
 

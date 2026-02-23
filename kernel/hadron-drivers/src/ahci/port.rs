@@ -51,12 +51,12 @@ pub struct AhciPort {
     /// Number of command slots supported by the HBA.
     num_cmd_slots: u8,
     /// Physical address of the CLB+FB DMA page.
-    #[allow(dead_code, reason = "needed for Drop cleanup in Phase 10")]
+    #[allow(dead_code, reason = "needed for DMA page cleanup in Drop")]
     clb_fb_phys: u64,
     /// Virtual address of the CLB+FB DMA page.
     clb_fb_virt: u64,
     /// Physical addresses of per-slot command tables.
-    #[allow(dead_code, reason = "needed for Drop cleanup in Phase 10")]
+    #[allow(dead_code, reason = "needed for DMA page cleanup in Drop")]
     cmd_table_phys: [u64; 32],
     /// Virtual addresses of per-slot command tables.
     cmd_table_virt: [u64; 32],

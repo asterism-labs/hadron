@@ -186,7 +186,7 @@ fn timer_handler(_vector: IrqVector) {
 
 /// Initialize ACPI tables and all interrupt controllers.
 ///
-/// This is the main Phase 5 init function, called from `kernel_setup` after
+/// This is the main ACPI init function, called from `kernel_setup` after
 /// the heap is ready. It:
 /// 1. Parses ACPI tables (RSDP -> MADT, HPET, MCFG, FADT, SRAT, SLIT, DMAR, IVRS, BGRT, DSDT/SSDT)
 /// 2. Disables legacy PIC

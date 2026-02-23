@@ -144,8 +144,9 @@ static CURRENT_PROCESS: CpuLocal<SpinLock<Option<Arc<Process>>>> =
 ///
 /// Only accessed single-threaded: from the BSP's process task and from
 /// the timer preemption stub (which runs with interrupts disabled while
-/// userspace was executing, so the process task is suspended). Phase 12
-/// will make this per-CPU.
+/// userspace was executing, so the process task is suspended). Per-CPU
+/// via CpuLocal; only accessed from this CPU's process task or timer
+/// stub with interrupts disabled.
 pub(crate) struct SyncUserContext(UnsafeCell<UserRegisters>);
 
 // SAFETY: See SyncUserContext doc comment — no concurrent access.

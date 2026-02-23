@@ -37,13 +37,11 @@ fn gen_handler_trait(defs: &SyscallDefs) -> TokenStream {
                 })
                 .collect();
 
-            if let Some(ref reserved) = syscall.reserved {
-                let phase = reserved.phase;
-                let reason = format!("reserved for Phase {phase}");
+            if syscall.reserved {
                 // Reserved syscalls get a default -ENOSYS implementation.
                 methods.push(quote! {
                     #(#attrs)*
-                    #[allow(unused_variables, reason = #reason)]
+                    #[allow(unused_variables, reason = "reserved syscall")]
                     fn #method_name(&self, #(#params),*) -> isize {
                         -ENOSYS
                     }

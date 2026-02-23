@@ -48,7 +48,7 @@ pub struct QemuTestConfig {
 /// Bootloader configuration.
 #[derive(Debug, Clone)]
 pub struct BootloaderConfig {
-    #[allow(dead_code)] // Phase 9+: image generation
+    #[allow(dead_code)] // future: image generation
     pub kind: String,
     pub config_file: Option<String>,
 }
@@ -68,13 +68,13 @@ pub struct TestsConfig {
     pub kernel_tests_crate: Option<String>,
     /// Linker script for kernel test binaries.
     pub kernel_tests_linker_script: Option<String>,
-    #[allow(dead_code)] // Phase 9+: crash test execution
+    #[allow(dead_code)] // future: crash test execution
     pub crash: Vec<CrashTest>,
 }
 
 /// A crash test definition.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // Phase 9+: crash test execution
+#[allow(dead_code)] // future: crash test execution
 pub struct CrashTest {
     pub name: String,
     pub source: String,

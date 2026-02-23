@@ -179,7 +179,7 @@ fn gen_typed_wrappers(defs: &SyscallDefs) -> TokenStream {
     for group in &defs.groups {
         for syscall in &group.syscalls {
             // Skip reserved syscalls.
-            if syscall.reserved.is_some() {
+            if syscall.reserved {
                 continue;
             }
 

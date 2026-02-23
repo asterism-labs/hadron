@@ -190,7 +190,7 @@ pub struct CrateDef {
     /// Per-crate linker script (e.g. for kernel binary crates).
     pub linker_script: Option<String>,
     /// The group this crate belongs to (for future group-based queries).
-    #[allow(dead_code)] // Phase 9+: group-based queries
+    #[allow(dead_code)] // future: group-based queries
     pub group: Option<String>,
     /// Whether this crate is a project crate (for clippy linting).
     pub is_project_crate: bool,
@@ -205,7 +205,7 @@ pub struct CrateDef {
 pub struct DepDef {
     pub extern_name: String,
     pub crate_name: String,
-    #[allow(dead_code)] // Phase 9+: feature-gated compilation
+    #[allow(dead_code)] // future: feature-gated compilation
     pub features: Vec<String>,
     /// Resolved version of this dependency (from vendor resolution).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -256,7 +256,7 @@ pub struct GroupDef {
     pub target: String,
     pub default_edition: String,
     pub crates: Vec<String>,
-    #[allow(dead_code)] // Phase 9+: shared-flag compilation
+    #[allow(dead_code)] // future: shared-flag compilation
     pub shared_flags: Vec<String>,
     /// Whether crates in this group are project crates (for clippy linting).
     pub is_project: bool,
@@ -295,7 +295,7 @@ pub enum RuleHandler {
     /// A built-in Rust function identified by name (e.g. "hbtf", "initrd", "config_crate").
     Builtin(String),
     /// A Rhai function name to call for user-defined rules.
-    #[allow(dead_code)] // Phase 9+: user-defined script rules
+    #[allow(dead_code)] // future: user-defined script rules
     Script(String),
 }
 
