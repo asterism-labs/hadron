@@ -21,6 +21,7 @@ pub mod cell;
 pub mod cpu_features;
 pub mod cpu_local;
 pub mod id;
+pub mod mem;
 pub mod paging;
 pub mod safety;
 pub mod sched;

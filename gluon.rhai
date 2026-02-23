@@ -88,7 +88,7 @@ sysroot.add("core", "{sysroot}/core")
 
 sysroot.add("compiler_builtins", "{sysroot}/compiler-builtins/compiler-builtins")
     .root("src/lib.rs")
-    .features(["compiler-builtins", "mem", "rustc-dep-of-std"])
+    .features(["compiler-builtins", "rustc-dep-of-std"])
     .deps(#{ core: "core" });
 
 sysroot.add("alloc", "{sysroot}/alloc")

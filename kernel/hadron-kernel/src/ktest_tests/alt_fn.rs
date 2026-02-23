@@ -110,35 +110,32 @@ fn test_kernel_fpu_guard_restores_interrupts() {
 // ---------------------------------------------------------------------------
 
 #[cfg(hadron_alt_instructions)]
-#[kernel_test(stage = "early_boot", timeout = 5)]
+#[kernel_test(stage = "before_executor", timeout = 5)]
 fn test_alt_fn_entries_exist() {
     let entries = crate::arch::x86_64::alt_fn::alt_fn_entries();
     // With kernel_fpu enabled, at least the SSE2 memcpy entry should exist.
-    // Without kernel_fpu, the entry list may be empty (cfg'd away).
-    #[cfg(hadron_kernel_fpu)]
+    // Without kernel_fpu, the baseline dispatch entries still exist.
     assert!(
         !entries.is_empty(),
-        "alt_fn entries should not be empty with kernel_fpu enabled"
+        "alt_fn entries should not be empty with builtin mem dispatch"
     );
-    let _ = entries; // suppress unused warning when kernel_fpu is off
+    let _ = entries; // suppress unused warning
 }
 
 // ---------------------------------------------------------------------------
 // Memcpy dispatch tests
 // ---------------------------------------------------------------------------
 
-#[cfg(hadron_alt_instructions)]
 #[kernel_test(stage = "early_boot", timeout = 5)]
 fn test_kernel_memcpy_small() {
     let src = [0xABu8; 32];
     let mut dst = [0u8; 32];
     unsafe {
-        crate::arch::x86_64::mem::kernel_memcpy(dst.as_mut_ptr(), src.as_ptr(), src.len());
+        hadron_core::mem::dispatch::kernel_memcpy(dst.as_mut_ptr(), src.as_ptr(), src.len());
     }
     assert_eq!(dst, src, "small memcpy should copy correctly");
 }
 
-#[cfg(hadron_alt_instructions)]
 #[kernel_test(stage = "early_boot", timeout = 5)]
 fn test_kernel_memcpy_large() {
     // Large enough to trigger the SSE2 path (>= 128 bytes).
@@ -146,23 +143,21 @@ fn test_kernel_memcpy_large() {
     let src: alloc::vec::Vec<u8> = (0..256).map(|i| i as u8).collect();
     let mut dst = alloc::vec![0u8; 256];
     unsafe {
-        crate::arch::x86_64::mem::kernel_memcpy(dst.as_mut_ptr(), src.as_ptr(), src.len());
+        hadron_core::mem::dispatch::kernel_memcpy(dst.as_mut_ptr(), src.as_ptr(), src.len());
     }
     assert_eq!(dst, src, "large memcpy should copy correctly");
 }
 
-#[cfg(hadron_alt_instructions)]
 #[kernel_test(stage = "early_boot", timeout = 5)]
 fn test_kernel_memcpy_zero_length() {
     let src = [0xFFu8; 8];
     let mut dst = [0u8; 8];
     unsafe {
-        crate::arch::x86_64::mem::kernel_memcpy(dst.as_mut_ptr(), src.as_ptr(), 0);
+        hadron_core::mem::dispatch::kernel_memcpy(dst.as_mut_ptr(), src.as_ptr(), 0);
     }
     assert_eq!(dst, [0u8; 8], "zero-length memcpy should not modify dst");
 }
 
-#[cfg(hadron_alt_instructions)]
 #[kernel_test(stage = "early_boot", timeout = 5)]
 fn test_kernel_memcpy_unaligned() {
     // Test with unaligned source and destination.
@@ -172,7 +167,7 @@ fn test_kernel_memcpy_unaligned() {
     // Offset by 3 bytes to force unalignment.
     let len = 150;
     unsafe {
-        crate::arch::x86_64::mem::kernel_memcpy(
+        hadron_core::mem::dispatch::kernel_memcpy(
             dst_buf[3..].as_mut_ptr(),
             src_buf[3..].as_ptr(),
             len,
@@ -189,31 +184,28 @@ fn test_kernel_memcpy_unaligned() {
 // Memzero dispatch tests
 // ---------------------------------------------------------------------------
 
-#[cfg(hadron_alt_instructions)]
 #[kernel_test(stage = "early_boot", timeout = 5)]
 fn test_kernel_memzero_small() {
     let mut buf = [0xFFu8; 32];
-    unsafe { crate::arch::x86_64::mem::kernel_memzero(buf.as_mut_ptr(), buf.len()) };
+    unsafe { hadron_core::mem::dispatch::kernel_memzero(buf.as_mut_ptr(), buf.len()) };
     assert_eq!(buf, [0u8; 32], "small memzero should zero all bytes");
 }
 
-#[cfg(hadron_alt_instructions)]
 #[kernel_test(stage = "early_boot", timeout = 5)]
 fn test_kernel_memzero_large() {
     extern crate alloc;
     let mut buf = alloc::vec![0xFFu8; 256];
-    unsafe { crate::arch::x86_64::mem::kernel_memzero(buf.as_mut_ptr(), buf.len()) };
+    unsafe { hadron_core::mem::dispatch::kernel_memzero(buf.as_mut_ptr(), buf.len()) };
     assert!(
         buf.iter().all(|&b| b == 0),
         "large memzero should zero all bytes"
     );
 }
 
-#[cfg(hadron_alt_instructions)]
 #[kernel_test(stage = "early_boot", timeout = 5)]
 fn test_kernel_memzero_zero_length() {
     let mut buf = [0xFFu8; 8];
-    unsafe { crate::arch::x86_64::mem::kernel_memzero(buf.as_mut_ptr(), 0) };
+    unsafe { hadron_core::mem::dispatch::kernel_memzero(buf.as_mut_ptr(), 0) };
     assert_eq!(
         buf, [0xFFu8; 8],
         "zero-length memzero should not modify buffer"
@@ -224,18 +216,16 @@ fn test_kernel_memzero_zero_length() {
 // Memmove dispatch tests
 // ---------------------------------------------------------------------------
 
-#[cfg(hadron_alt_instructions)]
 #[kernel_test(stage = "early_boot", timeout = 5)]
 fn test_kernel_memmove_non_overlapping() {
     let src = [0xABu8; 64];
     let mut dst = [0u8; 64];
     unsafe {
-        crate::arch::x86_64::mem::kernel_memmove(dst.as_mut_ptr(), src.as_ptr(), src.len());
+        hadron_core::mem::dispatch::kernel_memmove(dst.as_mut_ptr(), src.as_ptr(), src.len());
     }
     assert_eq!(dst, src, "non-overlapping memmove should copy correctly");
 }
 
-#[cfg(hadron_alt_instructions)]
 #[kernel_test(stage = "early_boot", timeout = 5)]
 fn test_kernel_memmove_overlapping_forward() {
     // Overlapping: copy buf[0..64] to buf[16..80].
@@ -246,7 +236,7 @@ fn test_kernel_memmove_overlapping_forward() {
     }
     let expected: alloc::vec::Vec<u8> = (0..64).map(|i| i as u8).collect();
     unsafe {
-        crate::arch::x86_64::mem::kernel_memmove(buf.as_mut_ptr().add(16), buf.as_ptr(), 64);
+        hadron_core::mem::dispatch::kernel_memmove(buf.as_mut_ptr().add(16), buf.as_ptr(), 64);
     }
     assert_eq!(
         &buf[16..80],
@@ -255,7 +245,6 @@ fn test_kernel_memmove_overlapping_forward() {
     );
 }
 
-#[cfg(hadron_alt_instructions)]
 #[kernel_test(stage = "early_boot", timeout = 5)]
 fn test_kernel_memmove_overlapping_backward() {
     // Overlapping: copy buf[16..80] to buf[0..64].
@@ -266,7 +255,7 @@ fn test_kernel_memmove_overlapping_backward() {
     }
     let expected: alloc::vec::Vec<u8> = (0..64).map(|i| i as u8).collect();
     unsafe {
-        crate::arch::x86_64::mem::kernel_memmove(buf.as_mut_ptr(), buf.as_ptr().add(16), 64);
+        hadron_core::mem::dispatch::kernel_memmove(buf.as_mut_ptr(), buf.as_ptr().add(16), 64);
     }
     assert_eq!(
         &buf[0..64],
@@ -279,42 +268,38 @@ fn test_kernel_memmove_overlapping_backward() {
 // Memcmp dispatch tests
 // ---------------------------------------------------------------------------
 
-#[cfg(hadron_alt_instructions)]
 #[kernel_test(stage = "early_boot", timeout = 5)]
 fn test_kernel_memcmp_equal() {
     let a = [0xABu8; 64];
     let b = [0xABu8; 64];
     let result =
-        unsafe { crate::arch::x86_64::mem::kernel_memcmp(a.as_ptr(), b.as_ptr(), a.len()) };
+        unsafe { hadron_core::mem::dispatch::kernel_memcmp(a.as_ptr(), b.as_ptr(), a.len()) };
     assert_eq!(result, 0, "equal buffers should return 0");
 }
 
-#[cfg(hadron_alt_instructions)]
 #[kernel_test(stage = "early_boot", timeout = 5)]
 fn test_kernel_memcmp_less() {
     let a = [0x10u8; 64];
     let b = [0x20u8; 64];
     let result =
-        unsafe { crate::arch::x86_64::mem::kernel_memcmp(a.as_ptr(), b.as_ptr(), a.len()) };
+        unsafe { hadron_core::mem::dispatch::kernel_memcmp(a.as_ptr(), b.as_ptr(), a.len()) };
     assert!(result < 0, "a < b should return negative, got {}", result);
 }
 
-#[cfg(hadron_alt_instructions)]
 #[kernel_test(stage = "early_boot", timeout = 5)]
 fn test_kernel_memcmp_greater() {
     let a = [0x30u8; 64];
     let b = [0x20u8; 64];
     let result =
-        unsafe { crate::arch::x86_64::mem::kernel_memcmp(a.as_ptr(), b.as_ptr(), a.len()) };
+        unsafe { hadron_core::mem::dispatch::kernel_memcmp(a.as_ptr(), b.as_ptr(), a.len()) };
     assert!(result > 0, "a > b should return positive, got {}", result);
 }
 
-#[cfg(hadron_alt_instructions)]
 #[kernel_test(stage = "early_boot", timeout = 5)]
 fn test_kernel_memcmp_zero_length() {
     let a = [0xFFu8; 8];
     let b = [0x00u8; 8];
-    let result = unsafe { crate::arch::x86_64::mem::kernel_memcmp(a.as_ptr(), b.as_ptr(), 0) };
+    let result = unsafe { hadron_core::mem::dispatch::kernel_memcmp(a.as_ptr(), b.as_ptr(), 0) };
     assert_eq!(result, 0, "zero-length memcmp should return 0");
 }
 

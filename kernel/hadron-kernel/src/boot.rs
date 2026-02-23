@@ -330,12 +330,9 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
     #[cfg(target_arch = "x86_64")]
     crate::mm::mapper::register_tlb_flush(crate::arch::x86_64::instructions::tlb::flush);
 
-    // 2b. Apply alternative-instruction patches (pre-PMM).
-    #[cfg(all(target_arch = "x86_64", hadron_alt_instructions))]
-    unsafe {
-        crate::arch::x86_64::alt_fn::apply();
-        crate::arch::x86_64::alt_instr::apply();
-    }
+    // 2b. Alt-fn/alt-instr patching deferred until after SMP boot (step 8c)
+    // so that APs complete init (FPU, GS base) before SSE2 alternatives
+    // are installed.
 
     // 2c. Initialize backtrace support from embedded HKIF data.
     crate::backtrace::Backtrace::init_from_embedded(
@@ -470,6 +467,16 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
     crate::sched::smp::init();
     #[cfg(target_arch = "x86_64")]
     crate::arch::x86_64::smp::boot_aps(boot_info);
+
+    // 8c. Apply alt-fn (atomic pointer swaps) and alt-instr (binary .text
+    // patches) now that all APs are online with FPU enabled and GS base set.
+    // Before this point, all memory operations use baseline rep movsb/stosb.
+    // APs are parked in their executor loops, so .text patching is safe.
+    #[cfg(all(target_arch = "x86_64", hadron_alt_instructions))]
+    unsafe {
+        crate::arch::x86_64::alt_fn::apply();
+        crate::arch::x86_64::alt_instr::apply();
+    }
 
     // 9. Spawn platform tasks + heartbeat (skipped in ktest mode).
     #[cfg(not(ktest))]

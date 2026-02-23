@@ -12,7 +12,6 @@ pub mod hw;
 pub mod idt;
 pub mod instructions;
 pub mod interrupts;
-#[cfg(hadron_alt_instructions)]
 pub mod mem;
 pub mod paging;
 pub mod registers;

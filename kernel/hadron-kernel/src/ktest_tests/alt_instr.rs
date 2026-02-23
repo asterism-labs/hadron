@@ -28,7 +28,7 @@ fn test_alt_instr_entry_alignment() {
 // Patching applied test
 // ---------------------------------------------------------------------------
 
-#[kernel_test(stage = "early_boot", timeout = 5)]
+#[kernel_test(stage = "before_executor", timeout = 5)]
 fn test_alt_instr_apply_ran() {
     // After boot, alt_instr::apply() should have run without panic.
     // We verify the entries are accessible (may be empty if no alt_instr!

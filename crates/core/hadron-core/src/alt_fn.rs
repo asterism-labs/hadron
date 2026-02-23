@@ -210,7 +210,7 @@ macro_rules! alt_fn {
 #[macro_export]
 macro_rules! alt_fn_alternative {
     (
-        dispatch = $dispatch_mod:path,
+        dispatch = $($dispatch_mod:ident)::+,
         $(#[$alt_meta:meta])*
         ($feature:expr, $priority:expr, $alt:path)
     ) => {
@@ -221,7 +221,7 @@ macro_rules! alt_fn_alternative {
             #[unsafe(link_section = ".hadron_alt_fn")]
             static ENTRY: $crate::alt_fn::AltFnEntry =
                 $crate::alt_fn::AltFnEntry {
-                    fn_ptr: <$dispatch_mod>::DISPATCH.as_atomic_ptr(),
+                    fn_ptr: $($dispatch_mod)::+::DISPATCH.as_atomic_ptr(),
                     replacement: $alt as *const (),
                     feature: $feature,
                     priority: $priority,

@@ -23,14 +23,3 @@ pub mod heap;
 pub mod pmm;
 pub mod scope;
 pub mod vmm;
-
-/// Zeroes a 4 KiB page frame using the dispatched `kernel_memzero`.
-///
-/// # Safety
-///
-/// `ptr` must point to a writable, 4 KiB-aligned region of at least
-/// [`PAGE_SIZE`] bytes.
-#[cfg(hadron_alt_instructions)]
-pub unsafe fn kernel_zero_frame(ptr: *mut u8) {
-    unsafe { crate::arch::x86_64::mem::kernel_memzero(ptr, PAGE_SIZE) };
-}
