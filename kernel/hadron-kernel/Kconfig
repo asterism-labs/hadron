@@ -39,6 +39,23 @@ config MAX_CPUS
 
 endmenu
 
+menu "CPU Features"
+
+config alt_instructions
+    bool "Enable alternative-instruction patching"
+    default y
+    binding cfg
+    help "Detect CPU features via CPUID at boot and patch function pointers to optimized implementations"
+
+config kernel_fpu
+    bool "Enable kernel FPU/SIMD usage"
+    default y
+    depends on alt_instructions
+    binding cfg
+    help "Allow the kernel to use SSE/AVX registers for bulk memory operations via KernelFpuGuard"
+
+endmenu
+
 menu "Hardware"
 
 config acpi

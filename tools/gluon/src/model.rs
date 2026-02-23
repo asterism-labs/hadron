@@ -196,6 +196,8 @@ pub struct CrateDef {
     pub is_project_crate: bool,
     /// Extra `--cfg` flags for this crate (e.g. `wrap_proc_macro` for proc-macro2).
     pub cfg_flags: Vec<String>,
+    /// Extra `rustc` flags for this crate (e.g. `-Ctarget-feature=+sse2`).
+    pub rustc_flags: Vec<String>,
     /// Config options that must be enabled for this crate to be compiled.
     pub requires_config: Vec<String>,
 }
@@ -245,6 +247,8 @@ pub struct ExternalDepDef {
     pub default_features: bool,
     /// Extra `--cfg` flags to pass when compiling this dependency.
     pub cfg_flags: Vec<String>,
+    /// Extra `rustc` flags to pass when compiling this dependency.
+    pub rustc_flags: Vec<String>,
 }
 
 /// A group of crates with shared compilation behavior.

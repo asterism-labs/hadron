@@ -15,6 +15,11 @@ pub fn cpu_init() {
         unsafe { x86_64::idt::init() };
         unsafe { crate::percpu::init_gs_base() };
         unsafe { crate::arch::x86_64::syscall::init() };
+        x86_64::cpuid::init();
+        #[cfg(hadron_kernel_fpu)]
+        unsafe {
+            x86_64::fpu::enable_fpu_support();
+        }
     }
     #[cfg(target_arch = "aarch64")]
     {

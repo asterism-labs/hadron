@@ -81,6 +81,21 @@ SECTIONS {
         KEEP(*(.hadron_kernel_tests))
         __hadron_kernel_tests_end = .;
 
+        /* Alt-instruction function pointer entries */
+        __hadron_alt_fn_start = .;
+        KEEP(*(.hadron_alt_fn))
+        __hadron_alt_fn_end = .;
+
+        /* Alt-instruction inline patching entries */
+        __hadron_alt_instr_start = .;
+        KEEP(*(.hadron_alt_instr))
+        __hadron_alt_instr_end = .;
+
+        /* Alt-instruction replacement byte sequences */
+        __hadron_alt_instr_replacement_start = .;
+        KEEP(*(.hadron_alt_instr_replacement))
+        __hadron_alt_instr_replacement_end = .;
+
         *(.rodata .rodata.*)
     } :rodata
 

@@ -397,6 +397,11 @@ fn compile_crate_cross(
         cmd.cfg(flag);
     }
 
+    // Per-crate rustc flags (e.g. -Ctarget-feature=+sse2).
+    for flag in &krate.rustc_flags {
+        cmd.arg(flag);
+    }
+
     // Extern deps.
     for dep in &krate.deps {
         if let Some(path) = artifacts.get(&dep.crate_name) {
@@ -486,6 +491,11 @@ fn compile_crate_host(
     // Per-crate cfg flags (e.g. proc-macro2 needs `wrap_proc_macro`).
     for flag in &krate.cfg_flags {
         cmd.cfg(flag);
+    }
+
+    // Per-crate rustc flags.
+    for flag in &krate.rustc_flags {
+        cmd.arg(flag);
     }
 
     // Features.

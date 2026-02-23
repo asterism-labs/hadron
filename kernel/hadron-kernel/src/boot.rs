@@ -330,7 +330,14 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
     #[cfg(target_arch = "x86_64")]
     crate::mm::mapper::register_tlb_flush(crate::arch::x86_64::instructions::tlb::flush);
 
-    // 2b. Initialize backtrace support from embedded HKIF data.
+    // 2b. Apply alternative-instruction patches (pre-PMM).
+    #[cfg(all(target_arch = "x86_64", hadron_alt_instructions))]
+    unsafe {
+        crate::arch::x86_64::alt_fn::apply();
+        crate::arch::x86_64::alt_instr::apply();
+    }
+
+    // 2c. Initialize backtrace support from embedded HKIF data.
     crate::backtrace::Backtrace::init_from_embedded(boot_info.kernel_address().virtual_base.as_u64());
 
     // 3. Initialize PMM (bitmap from memory map).
@@ -598,6 +605,8 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
             (*percpu_mut).trap_reason_ptr = crate::proc::TrapContext::trap_reason_ptr() as u64;
             (*percpu_mut).saved_regs_ptr =
                 crate::arch::x86_64::syscall::SYSCALL_SAVED_REGS.get().get() as u64;
+            (*percpu_mut).user_fpu_context_ptr =
+                crate::proc::TrapContext::user_fpu_context_ptr() as u64;
         }
     }
 

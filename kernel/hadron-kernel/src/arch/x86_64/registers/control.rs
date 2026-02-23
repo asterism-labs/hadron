@@ -20,13 +20,19 @@ bitflags::bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct Cr4Flags: u64 {
         /// Page Size Extensions.
-        const PSE  = 1 << 4;
+        const PSE     = 1 << 4;
         /// Physical Address Extension.
-        const PAE  = 1 << 5;
+        const PAE     = 1 << 5;
         /// Page Global Enable.
-        const PGE  = 1 << 7;
+        const PGE     = 1 << 7;
+        /// FXSAVE/FXRSTOR support (enables SSE/SSE2 in kernel).
+        const OSFXSR     = 1 << 9;
+        /// OS handles SIMD floating-point exceptions (#XM, vector 19).
+        const OSXMMEXCPT = 1 << 10;
         /// 57-bit linear addresses (5-level paging).
-        const LA57 = 1 << 12;
+        const LA57       = 1 << 12;
+        /// XSAVE/XRSTOR and XGETBV/XSETBV support.
+        const OSXSAVE    = 1 << 18;
     }
 }
 

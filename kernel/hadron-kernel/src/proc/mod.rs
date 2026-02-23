@@ -187,6 +187,49 @@ impl SyncUserContext {
 pub(crate) static USER_CONTEXT: CpuLocal<SyncUserContext> =
     CpuLocal::new([const { SyncUserContext::new() }; MAX_CPUS]);
 
+/// FXSAVE64 save area for user FPU/SSE state.
+///
+/// 512 bytes, 64-byte aligned (required by FXSAVE64 and compatible with
+/// XSAVE alignment requirements).
+#[repr(C, align(64))]
+#[derive(Clone)]
+pub(crate) struct UserFpuSaveArea {
+    data: [u8; 512],
+}
+
+impl UserFpuSaveArea {
+    const fn new() -> Self {
+        Self { data: [0; 512] }
+    }
+}
+
+/// Wrapper to make `UnsafeCell<UserFpuSaveArea>` usable in a `static`.
+///
+/// # Safety
+///
+/// Same access pattern as `SyncUserContext`: only accessed from this CPU's
+/// process task or timer stub with interrupts disabled.
+pub(crate) struct SyncUserFpuContext(UnsafeCell<UserFpuSaveArea>);
+
+// SAFETY: See SyncUserFpuContext doc comment — no concurrent access.
+unsafe impl Sync for SyncUserFpuContext {}
+
+impl SyncUserFpuContext {
+    const fn new() -> Self {
+        Self(UnsafeCell::new(UserFpuSaveArea::new()))
+    }
+
+    pub(crate) fn get(&self) -> *mut UserFpuSaveArea {
+        self.0.get()
+    }
+}
+
+/// Per-CPU saved user FPU state. Written by `fxsave64` in the timer
+/// preemption stub when preempting from ring 3. Restored by `fxrstor64`
+/// before re-entering userspace.
+pub(crate) static USER_FPU_CONTEXT: CpuLocal<SyncUserFpuContext> =
+    CpuLocal::new([const { SyncUserFpuContext::new() }; MAX_CPUS]);
+
 /// Per-CPU trap reason. Set before `restore_kernel_context`.
 /// `pub(crate)` for access from the timer preemption stub.
 pub(crate) static TRAP_REASON: CpuLocal<AtomicU8> =
@@ -482,6 +525,14 @@ impl TrapContext {
     pub fn kernel_cr3_ptr() -> *const u64 {
         core::ptr::addr_of!(KERNEL_CR3) as *const u64
     }
+
+    /// Returns a raw pointer to the current CPU's `USER_FPU_CONTEXT`.
+    ///
+    /// Used by the timer preemption stub to save user FPU state via
+    /// `fxsave64`, and by the resume path to restore via `fxrstor64`.
+    pub fn user_fpu_context_ptr() -> *mut u8 {
+        USER_FPU_CONTEXT.get().get() as *mut u8
+    }
 }
 
 /// Terminates the current user process due to a fault.
@@ -550,6 +601,9 @@ fn enter_userspace_first(process: &Process, entry: u64, stack_top: u64) {
         IA32_KERNEL_GS_BASE.write(percpu_addr);
         IA32_GS_BASE.write(0);
 
+        // Initialize FPU to clean state for the new process.
+        core::arch::asm!("fninit", options(nostack));
+
         // Switch to user address space.
         Cr3::write(process.user_cr3);
 
@@ -567,6 +621,7 @@ fn enter_userspace_resume_wrapper(process: &Process) {
     // needs current_cpu() which reads GS:[0]).
     let saved_rsp_ptr = SAVED_KERNEL_RSP.get() as *const AtomicU64 as *mut u64;
     let ctx = USER_CONTEXT.get().get();
+    let fpu_ctx = USER_FPU_CONTEXT.get().get() as *const u8;
 
     // SAFETY: CLI to mask interrupts during CR3/GS manipulation.
     unsafe {
@@ -578,6 +633,9 @@ fn enter_userspace_resume_wrapper(process: &Process) {
         IA32_KERNEL_GS_BASE.write(percpu_addr);
         IA32_GS_BASE.write(0);
         Cr3::write(process.user_cr3);
+
+        // Restore user FPU state before entering userspace.
+        core::arch::asm!("fxrstor64 [{}]", in(reg) fpu_ctx, options(nostack));
 
         // SAFETY: USER_CONTEXT was written by the timer preemption stub
         // and contains the user's register state at the point of preemption.
@@ -854,6 +912,7 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                 // with interrupts disabled while userspace was running.
                 // No concurrent access from here.
                 let saved_ctx = unsafe { (*USER_CONTEXT.get().get()).clone() };
+                let saved_fpu = unsafe { (*USER_FPU_CONTEXT.get().get()).clone() };
 
                 // Yield to the executor so other tasks can run.
                 crate::sched::primitives::yield_now().await;
@@ -865,6 +924,7 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                 // here and enter_userspace_resume_wrapper (no .await).
                 unsafe {
                     *USER_CONTEXT.get().get() = saved_ctx;
+                    *USER_FPU_CONTEXT.get().get() = saved_fpu;
                 }
 
                 // Check for pending signals before re-entering userspace.
@@ -926,6 +986,15 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                     )
                 };
 
+                // Snapshot user FPU state before yielding (syscall path
+                // doesn't save FPU, but we may await and get rescheduled
+                // on a different CPU or after another process runs).
+                unsafe {
+                    let fpu_ptr = USER_FPU_CONTEXT.get().get() as *mut u8;
+                    core::arch::asm!("fxsave64 [{}]", in(reg) fpu_ptr, options(nostack));
+                }
+                let saved_fpu = unsafe { (*USER_FPU_CONTEXT.get().get()).clone() };
+
                 // Set foreground PID so Ctrl+C delivers SIGINT to the child.
                 if target.as_u32() != 0 {
                     WaitState::set_foreground(target);
@@ -959,6 +1028,11 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                     unsafe {
                         Cr3::write(TrapContext::kernel_cr3());
                     }
+                }
+
+                // Restore FPU state after await.
+                unsafe {
+                    *USER_FPU_CONTEXT.get().get() = saved_fpu;
                 }
 
                 // Populate USER_CONTEXT from the snapshotted registers.
@@ -1036,6 +1110,13 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                         crate::percpu::PerCpuState::current().user_rsp,
                     )
                 };
+
+                // Snapshot user FPU state before any .await (same as TRAP_WAIT).
+                unsafe {
+                    let fpu_ptr = USER_FPU_CONTEXT.get().get() as *mut u8;
+                    core::arch::asm!("fxsave64 [{}]", in(reg) fpu_ptr, options(nostack));
+                }
+                let saved_fpu = unsafe { (*USER_FPU_CONTEXT.get().get()).clone() };
 
                 // Get inode from the process fd table.
                 let io_result = {
@@ -1135,6 +1216,11 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                 } else {
                     -crate::syscall::EBADF
                 };
+
+                // Restore FPU state after I/O await.
+                unsafe {
+                    *USER_FPU_CONTEXT.get().get() = saved_fpu;
+                }
 
                 // Restore user registers and set result in rax.
                 // Must happen before check_signals so signal delivery can

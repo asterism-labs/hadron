@@ -91,6 +91,9 @@ pub(crate) unsafe extern "C" fn timer_preempt_stub() {
         "mov [rax + 128], rcx",
         "mov rcx, [rsp + 16]",
         "mov [rax + 136], rcx",
+        // Save user FPU state (FXSAVE64 requires 64-byte aligned ptr).
+        "mov rax, gs:[64]",
+        "fxsave64 [rax]",
         "sub rsp, 8",
         "call {dispatch}",
         "add rsp, 8",
@@ -206,6 +209,9 @@ pub(crate) unsafe extern "C" fn timer_preempt_stub() {
         "mov [rax + 128], rcx",
         "mov rcx, [rsp + 16]",
         "mov [rax + 136], rcx",
+        // Save user FPU state (FXSAVE64 requires 64-byte aligned ptr).
+        "mov rax, gs:[64]",
+        "fxsave64 [rax]",
         "sub rsp, 8",
         "call {dispatch}",
         "add rsp, 8",

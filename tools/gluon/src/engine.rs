@@ -748,6 +748,7 @@ fn register_group_api(engine: &mut Engine, model: SharedModel) {
                     group: Some(builder.name.clone()),
                     is_project_crate: is_project,
                     cfg_flags: Vec::new(),
+                    rustc_flags: Vec::new(),
                     requires_config: Vec::new(),
                 },
             );
@@ -820,6 +821,17 @@ fn register_group_api(engine: &mut Engine, model: SharedModel) {
         |builder, model, script: &str| {
             if let Some(krate) = model.crates.get_mut(&builder.name) {
                 krate.linker_script = Some(script.into());
+            }
+        }
+    );
+
+    builder_method!(engine, "rustc_flags", CrateBuilder,
+        |builder, model, flags: rhai::Array| {
+            if let Some(krate) = model.crates.get_mut(&builder.name) {
+                krate.rustc_flags = flags
+                    .into_iter()
+                    .filter_map(|v| v.into_string().ok())
+                    .collect();
             }
         }
     );
@@ -1147,6 +1159,7 @@ fn register_dependency_api(engine: &mut Engine, model: SharedModel) {
             features: Vec::new(),
             default_features: true,
             cfg_flags: Vec::new(),
+            rustc_flags: Vec::new(),
         });
         DependencyBuilder {
             model: m.clone(),
@@ -1243,6 +1256,18 @@ fn register_dependency_api(engine: &mut Engine, model: SharedModel) {
         |builder, model, flags: rhai::Array| {
             if let Some(dep) = model.dependencies.get_mut(&builder.name) {
                 dep.cfg_flags = flags
+                    .into_iter()
+                    .filter_map(|v| v.into_string().ok())
+                    .collect();
+            }
+        }
+    );
+
+    // .rustc_flags([...]) — extra rustc flags for compilation
+    builder_method!(engine, "rustc_flags", DependencyBuilder,
+        |builder, model, flags: rhai::Array| {
+            if let Some(dep) = model.dependencies.get_mut(&builder.name) {
+                dep.rustc_flags = flags
                     .into_iter()
                     .filter_map(|v| v.into_string().ok())
                     .collect();

@@ -51,6 +51,7 @@ static mut SYSCALL_STACK: AlignedStack = AlignedStack([0; EARLY_SYSCALL_STACK_SI
 /// - offset 40: `saved_kernel_rsp_ptr`
 /// - offset 48: `trap_reason_ptr`
 /// - offset 56: `saved_regs_ptr`
+/// - offset 64: `user_fpu_context_ptr`
 ///
 /// Each CPU's GS base points to its own `PerCpu` instance.
 /// `PerCpuState::current()` reads `GS:[0]` to get the self-pointer,
@@ -92,6 +93,11 @@ pub struct PerCpu {
     /// Used by the syscall entry stub via `GS:[56]` to save callee-saved
     /// registers for blocking syscall resume.
     pub saved_regs_ptr: u64,
+    /// Pointer to this CPU's `USER_FPU_CONTEXT` (offset 64).
+    ///
+    /// Used by the timer preemption stub via `GS:[64]` to save/restore
+    /// user FPU state with `fxsave64`/`fxrstor64`.
+    pub user_fpu_context_ptr: u64,
 }
 
 impl PerCpu {
@@ -108,6 +114,7 @@ impl PerCpu {
             saved_kernel_rsp_ptr: 0,
             trap_reason_ptr: 0,
             saved_regs_ptr: 0,
+            user_fpu_context_ptr: 0,
         }
     }
 
@@ -204,6 +211,14 @@ pub unsafe fn init_gs_base() {
         (*percpu_ptr).saved_regs_ptr = crate::arch::x86_64::syscall::SYSCALL_SAVED_REGS
             .get_for(CpuId::new(0))
             .get() as u64;
+
+        // Initialize the USER_FPU_CONTEXT pointer for the BSP so that
+        // the timer preemption stub (GS:[64]) can fxsave64 user FPU
+        // state without dereferencing a null pointer. Same rationale
+        // as saved_regs_ptr above — needed before kernel_init runs.
+        (*percpu_ptr).user_fpu_context_ptr = crate::proc::USER_FPU_CONTEXT
+            .get_for(CpuId::new(0))
+            .get() as *const _ as u64;
 
         IA32_GS_BASE.write(percpu_addr);
         IA32_KERNEL_GS_BASE.write(percpu_addr);

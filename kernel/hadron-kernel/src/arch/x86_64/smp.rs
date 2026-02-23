@@ -254,6 +254,13 @@ fn ap_entry(_mp_info: u64, percpu_addr: u64) -> ! {
     // SAFETY: IDT is initialized by BSP and is a shared immutable static.
     unsafe { super::idt::init() };
 
+    // 3b. Verify CPUID features match BSP and enable FPU support.
+    super::cpuid::verify_ap();
+    #[cfg(hadron_kernel_fpu)]
+    unsafe {
+        super::fpu::enable_fpu_support();
+    }
+
     // 4. Initialize SYSCALL/SYSRET MSRs.
     // SAFETY: GDT is loaded, GS base is set.
     unsafe { crate::arch::x86_64::syscall::init() };
@@ -274,6 +281,8 @@ fn ap_entry(_mp_info: u64, percpu_addr: u64) -> ! {
         (*percpu_mut).saved_regs_ptr = crate::arch::x86_64::syscall::SYSCALL_SAVED_REGS
             .get_for(cpu_id)
             .get() as u64;
+        (*percpu_mut).user_fpu_context_ptr =
+            proc::USER_FPU_CONTEXT.get_for(cpu_id).get() as *const _ as u64;
     }
 
     // 5. Enable this AP's Local APIC and start its timer.

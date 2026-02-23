@@ -27,6 +27,8 @@ pub struct ResolvedCrate {
     pub is_project_crate: bool,
     /// Extra `--cfg` flags for this crate.
     pub cfg_flags: Vec<String>,
+    /// Extra `rustc` flags for this crate (e.g. `-Ctarget-feature=+sse2`).
+    pub rustc_flags: Vec<String>,
 }
 
 /// A resolved dependency.
@@ -143,6 +145,7 @@ pub fn resolve_group_from_model(
             linker_script: def.linker_script.clone(),
             is_project_crate: def.is_project_crate,
             cfg_flags: def.cfg_flags.clone(),
+            rustc_flags: def.rustc_flags.clone(),
         });
     }
 
@@ -263,6 +266,7 @@ mod tests {
                     group: Some(GROUP.into()),
                     is_project_crate: true,
                     cfg_flags: vec![],
+                    rustc_flags: vec![],
                     requires_config: vec![],
                 },
             );

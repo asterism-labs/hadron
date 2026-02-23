@@ -19,6 +19,7 @@ hadris-io = { workspace = true }
 hadron-acpi = { workspace = true, features = ["alloc"] }
 hadron-core = { workspace = true }
 hadron-fs = { workspace = true }
+hadron-intrinsics = { workspace = true }
 hadron-mm = { workspace = true }
 hadron-sched = { workspace = true }
 hadron-elf = { workspace = true }

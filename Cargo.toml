@@ -42,6 +42,7 @@ hadron-sched = { path = "kernel/sched" }
 hadron-dwarf = { path = "crates/parse/dwarf" }
 hadron-elf = { path = "crates/parse/elf" }
 hadron-kernel = { path = "kernel/hadron-kernel" }
+hadron-intrinsics = { path = "crates/core/hadron-intrinsics" }
 hadron-linkset = { path = "crates/core/linkset" }
 hadron-syscall = { path = "crates/syscall/hadron-syscall" }
 hadron-syscall-macros = { path = "crates/syscall/hadron-syscall-macros" }

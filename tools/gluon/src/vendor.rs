@@ -1659,9 +1659,12 @@ pub fn auto_register_dependencies(
             .to_string_lossy()
             .to_string();
 
-        // Look up cfg_flags from the dependency declaration.
+        // Look up cfg_flags and rustc_flags from the dependency declaration.
         let cfg_flags = model.dependencies.get(&dep.name)
             .map(|d| d.cfg_flags.clone())
+            .unwrap_or_default();
+        let rustc_flags = model.dependencies.get(&dep.name)
+            .map(|d| d.rustc_flags.clone())
             .unwrap_or_default();
 
         let crate_def = crate::model::CrateDef {
@@ -1678,6 +1681,7 @@ pub fn auto_register_dependencies(
             group: Some(group_name.clone()),
             is_project_crate: false,
             cfg_flags,
+            rustc_flags,
             requires_config: Vec::new(),
         };
 

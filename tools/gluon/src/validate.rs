@@ -550,6 +550,7 @@ mod tests {
             group: None,
             is_project_crate: true,
             cfg_flags: Vec::new(),
+            rustc_flags: Vec::new(),
             requires_config: Vec::new(),
         }
     }
@@ -816,6 +817,7 @@ mod tests {
                 features: Vec::new(),
                 default_features: true,
                 cfg_flags: Vec::new(),
+                rustc_flags: Vec::new(),
             },
         );
 
@@ -844,6 +846,7 @@ mod tests {
                 features: Vec::new(),
                 default_features: true,
                 cfg_flags: Vec::new(),
+                rustc_flags: Vec::new(),
             },
         );
 
@@ -913,6 +916,7 @@ mod tests {
                 features: Vec::new(),
                 default_features: true,
                 cfg_flags: Vec::new(),
+                rustc_flags: Vec::new(),
             },
         );
 

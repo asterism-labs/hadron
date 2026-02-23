@@ -5,6 +5,9 @@
 
 extern crate alloc;
 
+mod alt_fn;
+#[cfg(hadron_alt_instructions)]
+mod alt_instr;
 mod boot;
 mod heap;
 mod pmm;
