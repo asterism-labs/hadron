@@ -40,6 +40,7 @@ bitflags! {
 }
 
 /// An open file descriptor.
+#[derive(Clone)]
 pub struct FileDescriptor {
     /// The inode backing this fd.
     pub inode: Arc<dyn Inode>,
@@ -50,6 +51,7 @@ pub struct FileDescriptor {
 }
 
 /// Per-process file descriptor table.
+#[derive(Clone)]
 pub struct FileDescriptorTable {
     /// Open file descriptors.
     fds: BTreeMap<Fd, FileDescriptor>,

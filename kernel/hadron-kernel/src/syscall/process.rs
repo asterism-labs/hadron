@@ -681,16 +681,109 @@ pub(super) fn sys_task_execve(info_ptr: usize, info_len: usize) -> isize {
     }
 }
 
-/// `sys_task_clone` — create a new thread with shared address space.
+/// `sys_task_clone` — create a new thread sharing the caller's address space.
 ///
-/// Currently returns `-ENOSYS`: full thread support (shared page tables,
-/// fd table, signal handlers) requires substantial infrastructure. This
-/// stub allows the syscall ABI to be wired up so userspace can detect
-/// the missing feature gracefully.
-#[expect(
-    unused_variables,
-    reason = "stub — parameters documented for future implementation"
-)]
+/// Creates a new `Process` that shares the parent's address space (page
+/// tables), file descriptor table, and/or signal handlers based on `flags`.
+///
+/// The new thread begins executing at the caller's return address (the
+/// instruction after the `syscall`), with `stack_ptr` as its stack pointer.
+/// Returns the child PID to the parent, and 0 to the child (in rax).
+///
+/// `flags` is a bitmask of `CLONE_VM`, `CLONE_FILES`, `CLONE_SIGHAND`,
+/// `CLONE_SETTLS`. `CLONE_VM` is required; cloning without shared address
+/// space (i.e. fork-like semantics) is not supported.
+#[expect(clippy::cast_possible_wrap, reason = "child PID fits in isize")]
 pub(super) fn sys_task_clone(flags: usize, stack_ptr: usize, tls_ptr: usize) -> isize {
-    -(crate::syscall::ENOSYS)
+    use alloc::sync::Arc;
+
+    // CLONE_VM is required — we don't support CoW page table cloning.
+    if flags & hadron_syscall::CLONE_VM == 0 {
+        return -(crate::syscall::EINVAL);
+    }
+
+    // Validate stack pointer is in user space.
+    if stack_ptr == 0 || stack_ptr >= 0x0000_8000_0000_0000 {
+        return -(crate::syscall::EINVAL);
+    }
+
+    // Read the caller's saved registers so we can set up the child's
+    // initial context. The child resumes at the same RIP as the parent
+    // (the instruction after syscall), but with a different stack and
+    // rax=0 (to distinguish child from parent).
+    let (child_rip, child_rflags, child_rbx, child_rbp, child_r12, child_r13, child_r14, child_r15) = unsafe {
+        let saved = &*crate::arch::x86_64::syscall::SYSCALL_SAVED_REGS.get().get();
+        (
+            saved.user_rip,
+            saved.user_rflags,
+            saved.rbx,
+            saved.rbp,
+            saved.r12,
+            saved.r13,
+            saved.r14,
+            saved.r15,
+        )
+    };
+
+    let child = crate::proc::ProcessTable::with_current(|parent| {
+        let child = crate::proc::Process::clone_thread(parent, flags);
+        Arc::new(child)
+    });
+
+    let child_pid = child.pid;
+
+    // Register the child in the process table.
+    crate::proc::ProcessTable::register(&child);
+
+    // Spawn the child's process_task. It will start in userspace at
+    // child_rip with the provided stack_ptr. We pass entry=child_rip
+    // and stack_top=stack_ptr, but process_task's first_entry path
+    // sets up USER_CONTEXT from these values.
+    //
+    // However, process_task expects to set up context from scratch on
+    // first_entry. For a clone, we need the child to resume at the
+    // exact instruction after the syscall with specific register state.
+    // We use a dedicated clone_task instead.
+    crate::sched::spawn(clone_task(
+        child,
+        child_rip,
+        stack_ptr as u64,
+        child_rflags,
+        child_rbx,
+        child_rbp,
+        child_r12,
+        child_r13,
+        child_r14,
+        child_r15,
+        if flags & hadron_syscall::CLONE_SETTLS != 0 {
+            Some(tls_ptr as u64)
+        } else {
+            None
+        },
+    ));
+
+    child_pid.as_u32() as isize
+}
+
+/// Async task for a cloned thread.
+///
+/// Similar to `process_task` but starts with pre-populated register state
+/// (child sees rax=0, different stack) instead of a fresh entry point.
+async fn clone_task(
+    process: alloc::sync::Arc<crate::proc::Process>,
+    rip: u64,
+    rsp: u64,
+    rflags: u64,
+    rbx: u64,
+    rbp: u64,
+    r12: u64,
+    r13: u64,
+    r14: u64,
+    r15: u64,
+    tls: Option<u64>,
+) {
+    // Delegate to process_task_clone in proc module which has access
+    // to the full trap/context machinery.
+    crate::proc::process_task_clone(process, rip, rsp, rflags, rbx, rbp, r12, r13, r14, r15, tls)
+        .await;
 }

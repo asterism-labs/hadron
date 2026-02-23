@@ -19,6 +19,9 @@ pub const MSR_LSTAR: Msr = Msr(0xC000_0082);
 /// SFMASK MSR — RFLAGS mask applied on SYSCALL entry.
 pub const MSR_SFMASK: Msr = Msr(0xC000_0084);
 
+/// IA32_FS_BASE MSR — current FS base address (used for TLS).
+pub const IA32_FS_BASE: Msr = Msr(0xC000_0100);
+
 /// IA32_GS_BASE MSR — current GS base address.
 pub const IA32_GS_BASE: Msr = Msr(0xC000_0101);
 

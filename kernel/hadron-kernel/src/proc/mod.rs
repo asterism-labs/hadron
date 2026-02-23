@@ -413,10 +413,13 @@ pub(crate) enum MappingKind {
     Device { page_count: usize },
 }
 
-/// A user-mode process.
+/// A user-mode process (or thread).
 ///
-/// Owns an [`AddressSpace`] which is freed automatically on drop via
-/// the stored deallocation callback.
+/// Fields that may be shared between threads via `task_clone` are wrapped
+/// in `Arc<SpinLock<T>>`. When `CLONE_VM` is used, the address space,
+/// mmap state, and program break are shared; when `CLONE_FILES` is used,
+/// the fd table is shared. Unshared fields (pid, signals, exit status)
+/// are per-thread.
 pub struct Process {
     /// Process ID.
     pub pid: Pid,
@@ -429,16 +432,19 @@ pub struct Process {
     /// Physical address of the user PML4 (cached for fast CR3 switch).
     /// Stored as `AtomicU64` to allow safe updates during `execve`.
     user_cr3: AtomicU64,
-    /// User address space (owns the PML4, freed on drop).
-    /// Wrapped in `SpinLock` to allow replacement during `execve`.
-    address_space: SpinLock<AddressSpace<PageTableMapper>>,
+    /// User address space (owns the PML4, freed when last reference is dropped).
+    /// Shared between threads created with `CLONE_VM`.
+    address_space: Arc<SpinLock<AddressSpace<PageTableMapper>>>,
     /// Per-process file descriptor table.
-    pub fd_table: SpinLock<FileDescriptorTable>,
+    /// Shared between threads created with `CLONE_FILES`.
+    pub fd_table: Arc<SpinLock<FileDescriptorTable>>,
     /// Virtual address region allocator for `sys_mem_map` mappings.
-    pub(crate) mmap_alloc: SpinLock<FreeRegionAllocator<MMAP_FREE_LIST_CAPACITY>>,
+    /// Shared with address space (`CLONE_VM`).
+    pub(crate) mmap_alloc: Arc<SpinLock<FreeRegionAllocator<MMAP_FREE_LIST_CAPACITY>>>,
     /// Tracks mapping kind (anonymous vs device) for each mmap virtual address.
-    pub(crate) mmap_mappings: SpinLock<BTreeMap<u64, MappingKind>>,
-    /// Pending signals for this process.
+    /// Shared with address space (`CLONE_VM`).
+    pub(crate) mmap_mappings: Arc<SpinLock<BTreeMap<u64, MappingKind>>>,
+    /// Pending signals for this process (per-thread).
     pub signals: signal::SignalState,
     /// Exit status, set when the process terminates.
     pub exit_status: SpinLock<Option<u64>>,
@@ -447,7 +453,8 @@ pub struct Process {
     /// Current working directory (absolute path).
     pub cwd: SpinLock<String>,
     /// Program break address (heap boundary) for `brk()`.
-    pub program_break: SpinLock<u64>,
+    /// Shared with address space (`CLONE_VM`).
+    pub program_break: Arc<SpinLock<u64>>,
 }
 
 impl Process {
@@ -498,15 +505,75 @@ impl Process {
             pgid: AtomicU32::new(pid.as_u32()),
             session_id: AtomicU32::new(session),
             user_cr3: AtomicU64::new(user_cr3.as_u64()),
-            address_space: SpinLock::leveled("address_space", 3, address_space),
-            fd_table: SpinLock::leveled("fd_table", 4, FileDescriptorTable::new()),
-            mmap_alloc: SpinLock::leveled("mmap_alloc", 4, FreeRegionAllocator::new(mmap_region)),
-            mmap_mappings: SpinLock::leveled("mmap_mappings", 4, BTreeMap::new()),
+            address_space: Arc::new(SpinLock::leveled("address_space", 3, address_space)),
+            fd_table: Arc::new(SpinLock::leveled("fd_table", 4, FileDescriptorTable::new())),
+            mmap_alloc: Arc::new(SpinLock::leveled(
+                "mmap_alloc",
+                4,
+                FreeRegionAllocator::new(mmap_region),
+            )),
+            mmap_mappings: Arc::new(SpinLock::leveled("mmap_mappings", 4, BTreeMap::new())),
             signals: signal::SignalState::new(),
             exit_status: SpinLock::leveled("exit_status", 4, None),
             exit_notify: HeapWaitQueue::new(),
             cwd: SpinLock::leveled("cwd", 4, String::from("/")),
-            program_break: SpinLock::leveled("program_break", 4, 0),
+            program_break: Arc::new(SpinLock::leveled("program_break", 4, 0)),
+        }
+    }
+
+    /// Creates a new thread that shares state with `parent` based on `flags`.
+    ///
+    /// `CLONE_VM`: shares address space, mmap state, and program break.
+    /// `CLONE_FILES`: shares file descriptor table.
+    ///
+    /// The new thread gets its own PID, signal state, and exit status.
+    /// Returns the new Process (not yet registered or spawned).
+    pub(crate) fn clone_thread(parent: &Process, flags: usize) -> Self {
+        use hadron_syscall::{CLONE_FILES, CLONE_VM};
+
+        let pid = Pid::new(NEXT_PID.fetch_add(1, Ordering::Relaxed));
+        let pgid = parent.pgid.load(Ordering::Acquire);
+        let session = parent.session_id.load(Ordering::Acquire);
+        let user_cr3_val = parent.user_cr3.load(Ordering::Acquire);
+
+        // CLONE_VM: share address space, mmap state, and program break.
+        let (address_space, mmap_alloc, mmap_mappings, program_break) = if flags & CLONE_VM != 0 {
+            (
+                Arc::clone(&parent.address_space),
+                Arc::clone(&parent.mmap_alloc),
+                Arc::clone(&parent.mmap_mappings),
+                Arc::clone(&parent.program_break),
+            )
+        } else {
+            // Non-VM-sharing clone is not supported (would require CoW page tables).
+            // Caller must validate flags before calling this.
+            panic!("clone_thread requires CLONE_VM");
+        };
+
+        // CLONE_FILES: share fd table.
+        let fd_table = if flags & CLONE_FILES != 0 {
+            Arc::clone(&parent.fd_table)
+        } else {
+            // Copy the fd table for independent file descriptors.
+            let parent_fds = parent.fd_table.lock();
+            Arc::new(SpinLock::leveled("fd_table", 4, parent_fds.clone()))
+        };
+
+        Self {
+            pid,
+            parent_pid: Some(parent.pid),
+            pgid: AtomicU32::new(pgid),
+            session_id: AtomicU32::new(session),
+            user_cr3: AtomicU64::new(user_cr3_val),
+            address_space,
+            fd_table,
+            mmap_alloc,
+            mmap_mappings,
+            signals: signal::SignalState::new(),
+            exit_status: SpinLock::leveled("exit_status", 4, None),
+            exit_notify: HeapWaitQueue::new(),
+            cwd: SpinLock::leveled("cwd", 4, parent.cwd.lock().clone()),
+            program_break,
         }
     }
 }
@@ -968,8 +1035,17 @@ fn deliver_signal_to_handler(process: &Process, signum: usize, handler_addr: u64
 /// Enters userspace and re-enters after preemption in a loop.
 /// Exits when the process calls `sys_task_exit` or is killed by a fault.
 pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u64) {
+    process_task_inner(process, Some((entry, stack_top))).await;
+}
+
+/// Inner event loop shared by `process_task` and `process_task_clone`.
+///
+/// If `first_entry_args` is `Some((entry, stack_top))`, the first iteration
+/// uses `enter_userspace_first`; otherwise it uses `enter_userspace_resume_wrapper`
+/// (for cloned threads whose `USER_CONTEXT` is already populated).
+async fn process_task_inner(process: Arc<Process>, first_entry_args: Option<(u64, u64)>) {
     let pid = process.pid;
-    let mut first_entry = true;
+    let mut first_entry = first_entry_args;
 
     loop {
         // Set the current process so syscall handlers can access it.
@@ -978,8 +1054,7 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
             *current = Some(process.clone());
         }
 
-        if first_entry {
-            first_entry = false;
+        if let Some((entry, stack_top)) = first_entry.take() {
             enter_userspace_first(&process, entry, stack_top);
         } else {
             enter_userspace_resume_wrapper(&process);
@@ -1509,7 +1584,7 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                         }
 
                         // Re-enter as if first entry with new address space.
-                        first_entry = true;
+                        first_entry = Some((new_entry, new_stack_top));
                         continue;
                     }
                     Err(errno) => {
@@ -1675,6 +1750,90 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
     // The Arc in PROCESS_TABLE keeps the Process alive so handle_wait
     // can still look it up and read exit_status.
     drop(process);
+}
+
+/// Async task for a thread created via `task_clone`.
+///
+/// Populates `USER_CONTEXT` with the cloned register state (rax=0 for
+/// child, caller-provided stack) and enters the standard `process_task`
+/// event loop via the resume path (not first-entry).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "register state requires many parameters"
+)]
+pub(crate) async fn process_task_clone(
+    process: Arc<Process>,
+    rip: u64,
+    rsp: u64,
+    rflags: u64,
+    rbx: u64,
+    rbp: u64,
+    r12: u64,
+    r13: u64,
+    r14: u64,
+    r15: u64,
+    tls: Option<u64>,
+) {
+    let pid = process.pid;
+
+    // Set up USER_CONTEXT with the cloned register state.
+    // SAFETY: USER_CONTEXT is per-CPU and we haven't entered userspace yet.
+    unsafe {
+        let ctx = &mut *USER_CONTEXT.get().get();
+        ctx.rip = rip;
+        ctx.rsp = rsp;
+        ctx.rflags = rflags;
+        ctx.rax = 0; // Child sees 0 from clone().
+        ctx.rbx = rbx;
+        ctx.rbp = rbp;
+        ctx.r12 = r12;
+        ctx.r13 = r13;
+        ctx.r14 = r14;
+        ctx.r15 = r15;
+        // Caller-saved registers start at 0.
+        ctx.rcx = 0;
+        ctx.rdx = 0;
+        ctx.rsi = 0;
+        ctx.rdi = 0;
+        ctx.r8 = 0;
+        ctx.r9 = 0;
+        ctx.r10 = 0;
+        ctx.r11 = 0;
+    }
+
+    // Initialize FPU context to a clean state for the new thread.
+    // The FXSAVE area is 512 bytes: zero it, then set MXCSR (offset 24)
+    // and FCW (offset 0) to their default values.
+    // SAFETY: Per-CPU FPU context, not yet entered userspace.
+    unsafe {
+        let fpu = &mut *USER_FPU_CONTEXT.get().get();
+        core::ptr::write_bytes(fpu.data.as_mut_ptr(), 0, 512);
+        // FCW at offset 0: default 0x037F (all x87 exceptions masked).
+        fpu.data[0] = 0x7F;
+        fpu.data[1] = 0x03;
+        // MXCSR at offset 24: default 0x1F80 (all SSE exceptions masked).
+        fpu.data[24] = 0x80;
+        fpu.data[25] = 0x1F;
+    }
+
+    // If CLONE_SETTLS, set the FS base for the child thread.
+    if let Some(tls_addr) = tls {
+        // SAFETY: Writing FS_BASE MSR is the standard way to set TLS.
+        unsafe {
+            crate::arch::x86_64::registers::model_specific::IA32_FS_BASE.write(tls_addr);
+        }
+    }
+
+    kinfo!(
+        "Thread {}: clone started (rip={:#x}, rsp={:#x})",
+        pid,
+        rip,
+        rsp
+    );
+
+    // Enter the standard process_task event loop. We use first_entry=false
+    // so it takes the resume path (USER_CONTEXT is already populated).
+    process_task_inner(process, None).await;
 }
 
 /// Handles a `TRAP_WAIT` by awaiting the target child's exit.
