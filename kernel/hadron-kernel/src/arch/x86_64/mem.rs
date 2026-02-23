@@ -39,7 +39,7 @@ unsafe fn memcpy_sse2(dst: *mut u8, src: *const u8, len: usize) {
     unsafe { hadron_intrinsics::x86_64::sse2::memcpy_sse2_inner(dst, src, len) };
 }
 
-crate::alt_fn! {
+hadron_core::alt_fn! {
     /// Dispatched kernel memcpy — patched at boot to the best implementation.
     pub fn kernel_memcpy(dst: *mut u8, src: *const u8, len: usize),
     baseline = memcpy_baseline,
@@ -87,7 +87,7 @@ unsafe fn memzero_erms(dst: *mut u8, len: usize) {
     unsafe { memzero_baseline(dst, len) };
 }
 
-crate::alt_fn! {
+hadron_core::alt_fn! {
     /// Dispatched kernel memzero — patched at boot to the best implementation.
     pub fn kernel_memzero(dst: *mut u8, len: usize),
     baseline = memzero_baseline,
@@ -123,7 +123,7 @@ unsafe fn memmove_sse2(dst: *mut u8, src: *const u8, len: usize) {
     unsafe { hadron_intrinsics::x86_64::sse2::memmove_sse2_inner(dst, src, len) };
 }
 
-crate::alt_fn! {
+hadron_core::alt_fn! {
     /// Dispatched kernel memmove — patched at boot to the best implementation.
     pub fn kernel_memmove(dst: *mut u8, src: *const u8, len: usize),
     baseline = memmove_baseline,
@@ -163,7 +163,7 @@ unsafe fn memcmp_sse2(a: *const u8, b: *const u8, len: usize) -> i32 {
     unsafe { hadron_intrinsics::x86_64::sse2::memcmp_sse2_inner(a, b, len) }
 }
 
-crate::alt_fn! {
+hadron_core::alt_fn! {
     /// Dispatched kernel memcmp — patched at boot to the best implementation.
     pub fn kernel_memcmp(a: *const u8, b: *const u8, len: usize) -> i32,
     baseline = memcmp_baseline,

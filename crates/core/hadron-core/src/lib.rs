@@ -15,7 +15,10 @@
 extern crate alloc;
 
 pub mod addr;
+pub mod alt_fn;
+pub mod alt_instr;
 pub mod cell;
+pub mod cpu_features;
 pub mod cpu_local;
 pub mod id;
 pub mod paging;

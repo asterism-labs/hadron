@@ -161,7 +161,7 @@ host.add("hadron-ktest-macros", "crates/test/hadron-ktest-macros")
 let kernel_libs = group("kernel-libs").target("x86_64-unknown-hadron").edition("2024").config(true);
 
 kernel_libs.add("hadron-core", "crates/core/hadron-core")
-    .deps(#{ planck_noalloc: "planck-noalloc" });
+    .deps(#{ bitflags: "bitflags", hadron_linkset: "hadron-linkset", planck_noalloc: "planck-noalloc" });
 kernel_libs.add("hadron-linkset", "crates/core/linkset");
 kernel_libs.add("hadron-intrinsics", "crates/core/hadron-intrinsics")
     .rustc_flags(["-Ctarget-feature=+sse,+sse2,-soft-float"]);

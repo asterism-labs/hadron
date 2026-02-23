@@ -13,6 +13,8 @@ bench = false
 doctest = false
 
 [dependencies]
+bitflags = { workspace = true }
+hadron-linkset = { workspace = true }
 planck-noalloc = { workspace = true }
 
 [lints.rust]
