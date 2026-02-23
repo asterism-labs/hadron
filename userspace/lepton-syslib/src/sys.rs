@@ -265,6 +265,15 @@ pub fn sleep_secs(secs: u64) {
     );
 }
 
+/// Sleep for the given number of milliseconds.
+pub fn sleep_ms(ms: u64) {
+    let req = Timespec {
+        tv_sec: ms / 1000,
+        tv_nsec: (ms % 1000) * 1_000_000,
+    };
+    wrappers::sys_clock_nanosleep(CLOCK_MONOTONIC, 0, &req as *const Timespec as usize, 0);
+}
+
 /// Non-blocking poll of stdin (fd 0) for available input.
 ///
 /// Returns `true` if data is available to read.

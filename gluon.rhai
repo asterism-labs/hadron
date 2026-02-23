@@ -324,13 +324,35 @@ userspace.add("lepton-coreutils", "userspace/coreutils")
 userspace.add("lepton-gfx", "userspace/lepton-gfx")
     .deps(#{});
 
+userspace.add("lepton-display-protocol", "userspace/lepton-display-protocol")
+    .deps(#{});
+
+userspace.add("lepton-display-client", "userspace/lepton-display-client")
+    .deps(#{
+        lepton_syslib: "lepton-syslib",
+        lepton_display_protocol: "lepton-display-protocol",
+        lepton_gfx: "lepton-gfx"
+    });
+
 userspace.add("lepton-fbdemo", "userspace/fbdemo")
     .crate_type(BIN).root("src/main.rs")
     .deps(#{ lepton_syslib: "lepton-syslib", lepton_gfx: "lepton-gfx" });
 
+userspace.add("lepton-compositor", "userspace/lepton-compositor")
+    .crate_type(BIN).root("src/main.rs")
+    .deps(#{
+        lepton_syslib: "lepton-syslib",
+        lepton_gfx: "lepton-gfx",
+        lepton_display_protocol: "lepton-display-protocol"
+    });
+
 userspace.add("lepton-sysmon", "userspace/lepton-sysmon")
     .crate_type(BIN).root("src/main.rs")
-    .deps(#{ lepton_syslib: "lepton-syslib", lepton_gfx: "lepton-gfx" });
+    .deps(#{
+        lepton_syslib: "lepton-syslib",
+        lepton_gfx: "lepton-gfx",
+        lepton_display_client: "lepton-display-client"
+    });
 
 // ===========================================================================
 // Rules (custom artifact generation)
@@ -342,7 +364,7 @@ rule("hkif")
     .handler("hkif");
 
 rule("initrd")
-    .inputs(["lepton-init", "lsh", "lepton-coreutils", "lepton-fbdemo", "lepton-sysmon"])
+    .inputs(["lepton-init", "lsh", "lepton-coreutils", "lepton-fbdemo", "lepton-sysmon", "lepton-compositor"])
     .output("build/initrd.cpio")
     .handler("initrd");
 
