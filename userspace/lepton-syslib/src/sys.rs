@@ -1,13 +1,9 @@
 //! System calls: exit, getpid, spawn, waitpid, kill, pipe, query, clock.
 
-use hadron_syscall::raw::{syscall0, syscall1, syscall2, syscall3, syscall4, syscall5};
+use hadron_syscall::wrappers;
 use hadron_syscall::{
     CLOCK_MONOTONIC, KernelVersionInfo, MAP_ANONYMOUS, MAP_SHARED, MemoryInfo, PROT_READ,
-    PROT_WRITE, QUERY_KERNEL_VERSION, QUERY_MEMORY, QUERY_UPTIME, SYS_CLOCK_GETTIME,
-    SYS_HANDLE_DUP, SYS_HANDLE_PIPE, SYS_HANDLE_TCGETPGRP, SYS_HANDLE_TCSETPGRP, SYS_MEM_MAP,
-    SYS_MEM_UNMAP, SYS_QUERY, SYS_TASK_EXIT, SYS_TASK_GETPGID, SYS_TASK_INFO, SYS_TASK_KILL,
-    SYS_TASK_SETPGID, SYS_TASK_SIGACTION, SYS_TASK_SPAWN, SYS_TASK_WAIT, SpawnArg, Timespec,
-    UptimeInfo,
+    PROT_WRITE, QUERY_KERNEL_VERSION, QUERY_MEMORY, QUERY_UPTIME, SpawnArg, Timespec, UptimeInfo,
 };
 
 pub use hadron_syscall::{
@@ -18,7 +14,7 @@ pub use hadron_syscall::{
 
 /// Terminate the current process with the given exit status.
 pub fn exit(status: usize) -> ! {
-    syscall1(SYS_TASK_EXIT, status);
+    wrappers::sys_task_exit(status);
     // The kernel should never return from exit, but just in case:
     loop {
         // SAFETY: hlt is safe in ring 3 (it's a no-op that yields to the OS),
@@ -33,7 +29,7 @@ pub fn exit(status: usize) -> ! {
     reason = "PIDs fit in u32; isize is sufficient"
 )]
 pub fn getpid() -> u32 {
-    syscall0(SYS_TASK_INFO) as u32
+    wrappers::sys_task_info() as u32
 }
 
 /// Spawn a new process from an ELF binary at the given path.
@@ -94,8 +90,7 @@ pub fn spawn_with_env(path: &str, argv: &[&str], envp: &[&str]) -> isize {
         cwd_len: 0,
     };
 
-    syscall2(
-        SYS_TASK_SPAWN,
+    wrappers::sys_task_spawn(
         &info as *const hadron_syscall::SpawnInfo as usize,
         core::mem::size_of::<hadron_syscall::SpawnInfo>(),
     )
@@ -110,14 +105,14 @@ pub fn waitpid(pid: u32, status_out: Option<&mut u64>) -> isize {
         Some(s) => s as *mut u64 as usize,
         None => 0,
     };
-    syscall2(SYS_TASK_WAIT, pid as usize, status_ptr)
+    wrappers::sys_task_wait(pid as usize, status_ptr, 0)
 }
 
 /// Send a signal to a process.
 ///
 /// Returns 0 on success, or a negative errno on failure.
 pub fn kill(pid: u32, signum: usize) -> isize {
-    syscall2(SYS_TASK_KILL, pid as usize, signum)
+    wrappers::sys_task_kill(pid as usize, signum)
 }
 
 /// Register a signal handler for the given signal number.
@@ -129,10 +124,10 @@ pub fn kill(pid: u32, signum: usize) -> isize {
 /// Returns the previous handler on success, or a negative errno on failure.
 pub fn signal(signum: usize, handler: usize) -> isize {
     let mut old_handler: u64 = 0;
-    let ret = syscall3(
-        SYS_TASK_SIGACTION,
+    let ret = wrappers::sys_task_sigaction(
         signum,
         handler,
+        0, // flags
         &mut old_handler as *mut u64 as usize,
     );
     if ret < 0 { ret } else { old_handler as isize }
@@ -143,7 +138,7 @@ pub fn signal(signum: usize, handler: usize) -> isize {
 /// If `pid` is 0, uses the calling process. If `pgid` is 0, uses `pid` as the
 /// new PGID. Returns 0 on success, or a negative errno on failure.
 pub fn setpgid(pid: u32, pgid: u32) -> isize {
-    syscall2(SYS_TASK_SETPGID, pid as usize, pgid as usize)
+    wrappers::sys_task_setpgid(pid as usize, pgid as usize)
 }
 
 /// Get process group ID.
@@ -151,21 +146,21 @@ pub fn setpgid(pid: u32, pgid: u32) -> isize {
 /// If `pid` is 0, returns the calling process's PGID.
 /// Returns the PGID on success, or a negative errno on failure.
 pub fn getpgid(pid: u32) -> isize {
-    syscall1(SYS_TASK_GETPGID, pid as usize)
+    wrappers::sys_task_getpgid(pid as usize)
 }
 
 /// Set the foreground process group of the terminal associated with `fd`.
 ///
 /// Returns 0 on success, or a negative errno on failure.
 pub fn tcsetpgrp(fd: usize, pgid: u32) -> isize {
-    syscall2(SYS_HANDLE_TCSETPGRP, fd, pgid as usize)
+    wrappers::sys_handle_tcsetpgrp(fd, pgid as usize)
 }
 
 /// Get the foreground process group of the terminal associated with `fd`.
 ///
 /// Returns the PGID on success, or a negative errno on failure.
 pub fn tcgetpgrp(fd: usize) -> isize {
-    syscall1(SYS_HANDLE_TCGETPGRP, fd)
+    wrappers::sys_handle_tcgetpgrp(fd)
 }
 
 /// Duplicate a file descriptor (dup2 semantics).
@@ -173,13 +168,13 @@ pub fn tcgetpgrp(fd: usize) -> isize {
 /// Copies `old_fd` to `new_fd`, closing `new_fd` first if it was open.
 /// Returns `new_fd` on success, or a negative errno on failure.
 pub fn dup2(old_fd: usize, new_fd: usize) -> isize {
-    syscall2(SYS_HANDLE_DUP, old_fd, new_fd)
+    wrappers::sys_handle_dup(old_fd, new_fd)
 }
 
 /// Create a pipe. Returns `(read_fd, write_fd)` on success.
 pub fn pipe() -> Result<(usize, usize), isize> {
     let mut fds: [usize; 2] = [0; 2];
-    let ret = syscall1(SYS_HANDLE_PIPE, fds.as_mut_ptr() as usize);
+    let ret = wrappers::sys_handle_pipe(fds.as_mut_ptr() as usize);
     if ret < 0 {
         Err(ret)
     } else {
@@ -190,8 +185,7 @@ pub fn pipe() -> Result<(usize, usize), isize> {
 /// Query physical memory statistics.
 pub fn query_memory() -> Option<MemoryInfo> {
     let mut info = core::mem::MaybeUninit::<MemoryInfo>::uninit();
-    let ret = syscall4(
-        SYS_QUERY,
+    let ret = wrappers::sys_query(
         QUERY_MEMORY as usize,
         0, // sub_id (reserved)
         info.as_mut_ptr() as usize,
@@ -208,8 +202,7 @@ pub fn query_memory() -> Option<MemoryInfo> {
 /// Query time since boot.
 pub fn query_uptime() -> Option<UptimeInfo> {
     let mut info = core::mem::MaybeUninit::<UptimeInfo>::uninit();
-    let ret = syscall4(
-        SYS_QUERY,
+    let ret = wrappers::sys_query(
         QUERY_UPTIME as usize,
         0, // sub_id (reserved)
         info.as_mut_ptr() as usize,
@@ -226,8 +219,7 @@ pub fn query_uptime() -> Option<UptimeInfo> {
 /// Query kernel version information.
 pub fn query_kernel_version() -> Option<KernelVersionInfo> {
     let mut info = core::mem::MaybeUninit::<KernelVersionInfo>::uninit();
-    let ret = syscall4(
-        SYS_QUERY,
+    let ret = wrappers::sys_query(
         QUERY_KERNEL_VERSION as usize,
         0, // sub_id (reserved)
         info.as_mut_ptr() as usize,
@@ -244,7 +236,7 @@ pub fn query_kernel_version() -> Option<KernelVersionInfo> {
 /// Get the current monotonic time.
 pub fn clock_gettime() -> Option<Timespec> {
     let mut ts = core::mem::MaybeUninit::<Timespec>::uninit();
-    let ret = syscall2(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, ts.as_mut_ptr() as usize);
+    let ret = wrappers::sys_clock_gettime(CLOCK_MONOTONIC, ts.as_mut_ptr() as usize);
     if ret >= 0 {
         // SAFETY: The kernel wrote a valid Timespec into the buffer on success.
         Some(unsafe { ts.assume_init() })
@@ -258,8 +250,7 @@ pub fn clock_gettime() -> Option<Timespec> {
 /// Returns a pointer to the mapped region, or `None` if the mapping failed.
 /// The returned pointer is page-aligned. `length` is rounded up to page size.
 pub fn mem_map(length: usize) -> Option<*mut u8> {
-    let ret = syscall5(
-        SYS_MEM_MAP,
+    let ret = wrappers::sys_mem_map(
         0, // addr_hint (kernel chooses)
         length,
         PROT_READ | PROT_WRITE,
@@ -274,8 +265,7 @@ pub fn mem_map(length: usize) -> Option<*mut u8> {
 /// The device inode must support `mmap_phys()`. Returns a pointer to the
 /// mapped region, or `None` if the mapping failed.
 pub fn mem_map_device(fd: usize, length: usize) -> Option<*mut u8> {
-    let ret = syscall5(
-        SYS_MEM_MAP,
+    let ret = wrappers::sys_mem_map(
         0, // addr_hint
         length,
         PROT_READ | PROT_WRITE,
@@ -292,5 +282,5 @@ pub fn mem_map_device(fd: usize, length: usize) -> Option<*mut u8> {
 ///
 /// Returns `true` on success.
 pub fn mem_unmap(addr: *mut u8, length: usize) -> bool {
-    syscall2(SYS_MEM_UNMAP, addr as usize, length) == 0
+    wrappers::sys_mem_unmap(addr as usize, length) == 0
 }

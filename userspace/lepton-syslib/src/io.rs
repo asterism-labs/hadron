@@ -1,10 +1,7 @@
 //! I/O primitives: `read`, `write`, and `print!`/`println!` macros.
 
-use hadron_syscall::raw::{syscall1, syscall3};
-use hadron_syscall::{
-    DirEntryInfo, SYS_HANDLE_CLOSE, SYS_HANDLE_IOCTL, SYS_VNODE_OPEN, SYS_VNODE_READ,
-    SYS_VNODE_READDIR, SYS_VNODE_STAT, SYS_VNODE_WRITE, StatInfo,
-};
+use hadron_syscall::wrappers;
+use hadron_syscall::{DirEntryInfo, StatInfo};
 
 // ── File descriptor constants ─────────────────────────────────────────
 
@@ -19,36 +16,35 @@ pub const STDERR: usize = 2;
 
 /// Read from a file descriptor into `buf`. Returns bytes read or negative errno.
 pub fn read(fd: usize, buf: &mut [u8]) -> isize {
-    syscall3(SYS_VNODE_READ, fd, buf.as_mut_ptr() as usize, buf.len())
+    wrappers::sys_vnode_read(fd, buf.as_mut_ptr() as usize, buf.len())
 }
 
 /// Write `buf` to a file descriptor. Returns bytes written or negative errno.
 pub fn write(fd: usize, buf: &[u8]) -> isize {
-    syscall3(SYS_VNODE_WRITE, fd, buf.as_ptr() as usize, buf.len())
+    wrappers::sys_vnode_write(fd, buf.as_ptr() as usize, buf.len())
 }
 
 /// Open a file by path. Returns a file descriptor or negative errno.
 pub fn open(path: &str, flags: usize) -> isize {
-    syscall3(SYS_VNODE_OPEN, path.as_ptr() as usize, path.len(), flags)
+    wrappers::sys_vnode_open(path.as_ptr() as usize, path.len(), flags)
 }
 
 /// Close a file descriptor. Returns 0 on success or negative errno.
 pub fn close(fd: usize) -> isize {
-    syscall1(SYS_HANDLE_CLOSE, fd)
+    wrappers::sys_handle_close(fd)
 }
 
 /// Perform a device-specific ioctl on a file descriptor.
 ///
 /// Returns 0 on success, or a negative errno on failure.
 pub fn ioctl(fd: usize, cmd: usize, arg: usize) -> isize {
-    syscall3(SYS_HANDLE_IOCTL, fd, cmd, arg)
+    wrappers::sys_handle_ioctl(fd, cmd, arg)
 }
 
 /// Stat a file descriptor. Returns `Some(StatInfo)` on success, or `None`.
 pub fn stat(fd: usize) -> Option<StatInfo> {
     let mut info = core::mem::MaybeUninit::<StatInfo>::uninit();
-    let ret = syscall3(
-        SYS_VNODE_STAT,
+    let ret = wrappers::sys_vnode_stat(
         fd,
         info.as_mut_ptr() as usize,
         core::mem::size_of::<StatInfo>(),
@@ -67,7 +63,7 @@ pub fn stat(fd: usize) -> Option<StatInfo> {
 /// Each entry is a [`DirEntryInfo`].
 pub fn readdir(fd: usize, buf: &mut [DirEntryInfo]) -> isize {
     let byte_len = buf.len() * core::mem::size_of::<DirEntryInfo>();
-    syscall3(SYS_VNODE_READDIR, fd, buf.as_mut_ptr() as usize, byte_len)
+    wrappers::sys_vnode_readdir(fd, buf.as_mut_ptr() as usize, byte_len)
 }
 
 // ── fmt::Write implementation for stdout/stderr ───────────────────────

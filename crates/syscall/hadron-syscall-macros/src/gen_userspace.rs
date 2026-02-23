@@ -29,7 +29,7 @@ fn gen_raw_stubs() -> TokenStream {
         /// `RCX` and `R11` are clobbered by the `syscall` instruction.
         /// All other caller-saved registers (`RDI`, `RSI`, `RDX`, `R8`,
         /// `R9`, `R10`) may be clobbered by the kernel and must be declared.
-        pub mod raw {
+        pub(crate) mod raw {
             /// Issue a syscall with 0 arguments.
             #[inline(always)]
             pub fn syscall0(nr: usize) -> isize {
