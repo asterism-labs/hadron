@@ -10,6 +10,17 @@ description: Use when creating commits, branching, rebasing, merging, or creatin
 - Create a worktree per feature branch — do not switch branches in the main worktree
 - Clean up worktrees after merging: `git worktree remove <path>`
 
+## Pre-Commit Quality Gates
+
+Before every `git commit`, all three checks must pass:
+
+1. `just fmt --check` — formatting is correct (fix with `just fmt` if needed)
+2. `just clippy` — no lint warnings (pedantic clippy)
+3. `just test --host-only` — host-side unit tests pass
+
+Delegate these to parallel Task subagents to keep the main context clean.
+Do not commit until all three pass. Re-run only the failing check after fixes.
+
 ## Commit Message Format
 
 ```

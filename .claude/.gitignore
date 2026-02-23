@@ -11,3 +11,7 @@
 !skills/
 !skills/*/
 !skills/**/SKILL.md
+
+# Allow project hooks (shared)
+!hooks/
+!hooks/**
