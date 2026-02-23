@@ -258,6 +258,61 @@ pub trait Inode: Send + Sync {
     ) -> Result<Arc<dyn Inode>, FsError> {
         Err(FsError::NotSupported)
     }
+
+    /// Rename a child entry, moving it to another directory.
+    ///
+    /// `old_name` is the entry in `self`, `new_parent` is the target
+    /// directory, `new_name` is the new entry name.
+    /// Default implementation returns [`FsError::NotSupported`].
+    fn rename<'a>(
+        &'a self,
+        _old_name: &'a str,
+        _new_parent: &'a dyn Inode,
+        _new_name: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), FsError>> + Send + 'a>> {
+        Box::pin(core::future::ready(Err(FsError::NotSupported)))
+    }
+
+    /// Create a hard link in this directory pointing to `target`.
+    ///
+    /// Default implementation returns [`FsError::NotSupported`].
+    fn link<'a>(
+        &'a self,
+        _name: &'a str,
+        _target: &'a dyn Inode,
+    ) -> Pin<Box<dyn Future<Output = Result<(), FsError>> + Send + 'a>> {
+        Box::pin(core::future::ready(Err(FsError::NotSupported)))
+    }
+
+    /// Truncate (or extend) the file to the given length.
+    ///
+    /// Default implementation returns [`FsError::NotSupported`].
+    fn truncate<'a>(
+        &'a self,
+        _len: usize,
+    ) -> Pin<Box<dyn Future<Output = Result<(), FsError>> + Send + 'a>> {
+        Box::pin(core::future::ready(Err(FsError::NotSupported)))
+    }
+
+    /// Check I/O readiness for poll/select.
+    ///
+    /// Returns a bitmask of poll events (`POLLIN`, `POLLOUT`, `POLLHUP`,
+    /// `POLLERR`) that are currently ready. If a waker is provided, the
+    /// inode should register it for notification when readiness changes.
+    ///
+    /// Default: regular files report always readable and writable.
+    fn poll_readiness(&self, _waker: Option<&core::task::Waker>) -> u16 {
+        hadron_syscall::POLLIN | hadron_syscall::POLLOUT
+    }
+
+    /// Called when this inode is opened. Returns a replacement inode if the
+    /// open should bind the fd to a different inode (e.g. `/dev/ptmx`
+    /// allocates a new PTY master on each open).
+    ///
+    /// Default: returns `None` (use this inode directly).
+    fn on_open(&self) -> Result<Option<Arc<dyn Inode>>, FsError> {
+        Ok(None)
+    }
 }
 
 /// A mounted filesystem.

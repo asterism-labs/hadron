@@ -1,4 +1,4 @@
-//! Memory syscall handlers: mem_map, mem_unmap.
+//! Memory syscall handlers: mem_map, mem_unmap, mem_brk.
 //!
 //! Implements anonymous and device-backed memory mapping for userspace
 //! processes. Each process owns a
@@ -13,7 +13,7 @@ use crate::mm::mapper::MapFlags;
 use crate::mm::pmm::{self, BitmapFrameAllocRef};
 use crate::paging::{Page, PhysFrame, Size4KiB};
 use crate::proc::{MappingKind, ProcessTable};
-use crate::syscall::{EBADF, EINVAL, ENOSYS};
+use crate::syscall::{EBADF, EINVAL, ENOMEM, ENOSYS};
 
 /// Page-align `size` upward (round to next 4 KiB boundary).
 const fn page_align_up(size: usize) -> usize {
@@ -278,4 +278,88 @@ pub(super) fn sys_mem_unmap(addr: usize, length: usize) -> isize {
     });
 
     0
+}
+
+/// `sys_mem_brk` — adjust the program break (heap boundary).
+///
+/// If `addr` is 0, returns the current break address.
+/// If `addr > current_break`, the heap is expanded by mapping new pages.
+/// If `addr < current_break`, the heap is shrunk by unmapping pages.
+///
+/// Returns the new break address on success, or negated errno on failure.
+#[expect(
+    clippy::cast_possible_wrap,
+    reason = "returning virtual address as isize; upper bit is never set for user addresses"
+)]
+pub(super) fn sys_mem_brk(addr: usize) -> isize {
+    let addr = addr as u64;
+
+    ProcessTable::with_current(|process| {
+        let mut brk = process.program_break.lock();
+        let current = *brk;
+
+        // Query current break.
+        if addr == 0 {
+            return current as isize;
+        }
+
+        let new_brk = page_align_up(addr as usize) as u64;
+        let old_brk = page_align_up(current as usize) as u64;
+
+        if new_brk > old_brk {
+            // Expand: allocate and map new pages.
+            let hhdm_offset = crate::mm::hhdm::offset();
+            let pages_needed = ((new_brk - old_brk) / PAGE_SIZE as u64) as usize;
+
+            let result = pmm::with(|pmm| {
+                let mut alloc = BitmapFrameAllocRef(pmm);
+                for i in 0..pages_needed {
+                    let page_vaddr = old_brk + (i as u64) * PAGE_SIZE as u64;
+                    let frame = match alloc.0.allocate_frame() {
+                        Some(f) => f,
+                        None => return Err(()),
+                    };
+
+                    let page = Page::<Size4KiB>::containing_address(VirtAddr::new(page_vaddr));
+                    if process
+                        .address_space()
+                        .map_user_page(page, frame, MapFlags::USER | MapFlags::WRITABLE, &mut alloc)
+                        .is_err()
+                    {
+                        return Err(());
+                    }
+
+                    // Zero the page via HHDM.
+                    let frame_ptr = (hhdm_offset + frame.start_address().as_u64()) as *mut u8;
+                    // SAFETY: Frame was just allocated; zeroing via HHDM is safe.
+                    unsafe {
+                        core::ptr::write_bytes(frame_ptr, 0, PAGE_SIZE);
+                    }
+                }
+                Ok(())
+            });
+
+            if result.is_err() {
+                return -ENOMEM;
+            }
+        } else if new_brk < old_brk {
+            // Shrink: unmap and free pages.
+            let pages_to_free = ((old_brk - new_brk) / PAGE_SIZE as u64) as usize;
+
+            pmm::with(|pmm| {
+                for i in 0..pages_to_free {
+                    let page_vaddr = new_brk + (i as u64) * PAGE_SIZE as u64;
+                    let page = Page::<Size4KiB>::containing_address(VirtAddr::new(page_vaddr));
+                    if let Ok(frame) = process.address_space().unmap_user_page(page) {
+                        // SAFETY: The frame was allocated by brk expansion and
+                        // is no longer referenced by any page table entry.
+                        let _ = unsafe { pmm.deallocate_frame(frame) };
+                    }
+                }
+            });
+        }
+
+        *brk = addr;
+        addr as isize
+    })
 }

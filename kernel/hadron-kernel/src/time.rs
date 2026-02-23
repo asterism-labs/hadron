@@ -21,6 +21,8 @@ static HPET_BASE: AtomicU64 = AtomicU64::new(0);
 static HPET_PERIOD_FS: AtomicU64 = AtomicU64::new(0);
 /// HPET counter value at the time of initialization (boot reference).
 static HPET_START: AtomicU64 = AtomicU64::new(0);
+/// Unix epoch seconds at the time of boot (from CMOS RTC).
+static BOOT_EPOCH_SECS: AtomicU64 = AtomicU64::new(0);
 
 /// Zero-sized facade for the global time subsystem.
 pub struct Time;
@@ -50,6 +52,30 @@ impl Time {
         let elapsed = current.wrapping_sub(start);
         // ticks * period_fs / 1_000_000 = nanoseconds
         (elapsed as u128 * period_fs as u128 / 1_000_000) as u64
+    }
+
+    /// Initialize the wall-clock epoch from the CMOS RTC.
+    ///
+    /// Must be called early in boot (interrupts disabled). Stores the
+    /// Unix epoch seconds at boot time for `CLOCK_REALTIME`.
+    pub fn init_rtc_epoch() {
+        // SAFETY: Called early in boot with interrupts disabled.
+        let epoch = unsafe { crate::arch::x86_64::hw::rtc::read_rtc() };
+        BOOT_EPOCH_SECS.store(epoch, Ordering::Release);
+    }
+
+    /// Returns the current wall-clock time as nanoseconds since the Unix epoch.
+    ///
+    /// Computed as: `(boot_epoch_seconds * 1e9) + boot_nanos()`.
+    /// Returns 0 if the RTC has not been initialized.
+    pub fn realtime_nanos() -> u64 {
+        let epoch_secs = BOOT_EPOCH_SECS.load(Ordering::Acquire);
+        if epoch_secs == 0 {
+            return 0;
+        }
+        epoch_secs
+            .saturating_mul(1_000_000_000)
+            .saturating_add(Self::boot_nanos())
     }
 
     /// Stores the HPET driver instance for [`ClockSource`] trait access.

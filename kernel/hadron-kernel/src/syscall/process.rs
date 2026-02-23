@@ -1,5 +1,7 @@
 //! Task syscall handlers: task_exit, task_info, task_spawn, task_wait, task_kill,
-//! task_sigaction, task_sigreturn.
+//! task_sigaction, task_sigreturn, task_getppid, task_getcwd, task_chdir.
+
+extern crate alloc;
 
 use crate::arch::x86_64::registers::control::Cr3;
 use crate::arch::x86_64::registers::model_specific::{IA32_GS_BASE, IA32_KERNEL_GS_BASE};
@@ -199,9 +201,63 @@ pub(super) fn sys_task_spawn(info_ptr: usize, info_len: usize) -> isize {
     build_str_slice(&env_storage, &env_offsets, env_count, &mut env_strs);
     let envs = &env_strs[..env_count];
 
+    // Read fd_map entries if provided.
+    const MAX_FD_MAP: usize = 32;
+    let mut fd_map_storage = [(0u32, 0u32); MAX_FD_MAP];
+    let fd_map_count;
+
+    if info.fd_map_ptr != 0 && info.fd_map_count > 0 {
+        if info.fd_map_count > MAX_FD_MAP {
+            return -(crate::syscall::EINVAL);
+        }
+        let entry_size = core::mem::size_of::<hadron_syscall::FdMapEntry>();
+        let map_bytes = entry_size * info.fd_map_count;
+        let map_slice = match UserSlice::new(info.fd_map_ptr, map_bytes) {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        // SAFETY: FdMapEntry is repr(C) with only u32 fields; any bit pattern is valid.
+        let entries = unsafe {
+            core::slice::from_raw_parts(
+                map_slice.addr() as *const hadron_syscall::FdMapEntry,
+                info.fd_map_count,
+            )
+        };
+        for (i, entry) in entries.iter().enumerate() {
+            fd_map_storage[i] = (entry.child_fd, entry.parent_fd);
+        }
+        fd_map_count = info.fd_map_count;
+    } else {
+        fd_map_count = 0;
+    }
+
+    // Read CWD path if provided.
+    let cwd = if info.cwd_ptr != 0 && info.cwd_len > 0 {
+        let cwd_slice = match UserSlice::new(info.cwd_ptr, info.cwd_len) {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        let cwd_bytes = unsafe { cwd_slice.as_slice() };
+        match core::str::from_utf8(cwd_bytes) {
+            Ok(s) => Some(alloc::string::String::from(s)),
+            Err(_) => return -(crate::syscall::EINVAL),
+        }
+    } else {
+        None
+    };
+
+    let opts = crate::proc::exec::SpawnOptions {
+        fd_map: if fd_map_count > 0 {
+            Some(&fd_map_storage[..fd_map_count])
+        } else {
+            None
+        },
+        cwd,
+    };
+
     let parent_pid = crate::proc::ProcessTable::with_current(|p| p.pid);
 
-    match crate::proc::exec::spawn_process(path, parent_pid, args, envs) {
+    match crate::proc::exec::spawn_process(path, parent_pid, args, envs, Some(opts)) {
         Ok(child) => child.pid.as_u32() as isize,
         Err(_) => -(crate::syscall::ENOENT),
     }
@@ -213,9 +269,12 @@ pub(super) fn sys_task_spawn(info_ptr: usize, info_len: usize) -> isize {
 /// Sets up the wait parameters and longjmps back to `process_task`,
 /// which handles the async wait in its event loop.
 ///
+/// `flags` is a bitmask: `WNOHANG` for non-blocking, `WUNTRACED` to
+/// also report stopped children.
+///
 /// Never returns to the caller — execution resumes when `process_task`
 /// re-enters userspace with the result in RAX.
-pub(super) fn sys_task_wait(pid: usize, status_ptr: usize) -> isize {
+pub(super) fn sys_task_wait(pid: usize, status_ptr: usize, flags: usize) -> isize {
     // Validate status_ptr if non-null.
     if status_ptr != 0 {
         if let Err(e) = UserSlice::new(status_ptr, core::mem::size_of::<u64>()) {
@@ -236,7 +295,11 @@ pub(super) fn sys_task_wait(pid: usize, status_ptr: usize) -> isize {
 
     // Set up wait parameters for process_task to read.
     #[expect(clippy::cast_possible_truncation, reason = "PID fits in u32")]
-    crate::proc::WaitState::set_params(crate::id::Pid::new(pid as u32), status_ptr as u64);
+    crate::proc::WaitState::set_params(
+        crate::id::Pid::new(pid as u32),
+        status_ptr as u64,
+        flags as u64,
+    );
     crate::proc::TrapContext::set_trap_reason(crate::proc::TrapReason::Wait);
 
     let saved_rsp = crate::proc::TrapContext::saved_kernel_rsp();
@@ -325,16 +388,25 @@ pub(super) fn sys_task_getpgid(pid: usize) -> isize {
     }
 }
 
-/// `sys_task_sigaction` — register a signal handler.
+/// `sys_task_sigaction` — register a signal handler with flags.
 ///
 /// `signum` is the signal number (1-63). SIGKILL and SIGSTOP cannot be caught.
 /// `handler` is `SIG_DFL` (0), `SIG_IGN` (1), or a userspace function pointer.
+/// `flags` is a bitmask of `SA_RESTART`, `SA_RESETHAND`, etc.
 /// If `old_handler_out` is non-zero, the previous handler address is written there.
 ///
 /// Returns 0 on success, or a negated errno on failure.
-pub(super) fn sys_task_sigaction(signum: usize, handler: usize, old_handler_out: usize) -> isize {
+pub(super) fn sys_task_sigaction(
+    signum: usize,
+    handler: usize,
+    flags: usize,
+    old_handler_out: usize,
+) -> isize {
     crate::proc::ProcessTable::with_current(|process| {
-        let old = match process.signals.set_handler(signum, handler as u64) {
+        let old = match process
+            .signals
+            .set_handler(signum, handler as u64, flags as u32)
+        {
             Some(old) => old,
             None => return -(crate::syscall::EINVAL),
         };
@@ -442,4 +514,183 @@ pub(super) fn sys_task_sigreturn() -> isize {
     unsafe {
         restore_kernel_context(saved_rsp);
     }
+}
+
+/// `sys_task_getppid` — returns the parent process ID of the current process.
+///
+/// Returns 0 if the process has no parent (e.g. the init process).
+#[expect(
+    clippy::cast_possible_wrap,
+    reason = "PIDs are small u32 values, wrap is impossible"
+)]
+pub(super) fn sys_task_getppid() -> isize {
+    crate::proc::ProcessTable::with_current(|process| {
+        process.parent_pid.map_or(0, |pid| pid.as_u32() as isize)
+    })
+}
+
+/// `sys_task_getcwd` — copy the current working directory path to a user buffer.
+///
+/// Returns the length of the CWD string on success, or a negated errno.
+#[expect(
+    clippy::cast_possible_wrap,
+    reason = "CWD lengths are small, wrap is impossible"
+)]
+pub(super) fn sys_task_getcwd(buf_ptr: usize, buf_len: usize) -> isize {
+    let Ok(user_slice) = UserSlice::new(buf_ptr, buf_len) else {
+        return -crate::syscall::EFAULT;
+    };
+
+    crate::proc::ProcessTable::with_current(|process| {
+        let cwd = process.cwd.lock();
+        let cwd_bytes = cwd.as_bytes();
+
+        if cwd_bytes.len() > buf_len {
+            return -crate::syscall::EINVAL;
+        }
+
+        // SAFETY: UserSlice validated the pointer range is in user space.
+        let buf = unsafe { user_slice.as_mut_slice() };
+        buf[..cwd_bytes.len()].copy_from_slice(cwd_bytes);
+        cwd_bytes.len() as isize
+    })
+}
+
+/// `sys_task_chdir` — change the current working directory.
+///
+/// Returns 0 on success, or a negated errno on failure.
+pub(super) fn sys_task_chdir(path_ptr: usize, path_len: usize) -> isize {
+    let Ok(user_slice) = UserSlice::new(path_ptr, path_len) else {
+        return -crate::syscall::EFAULT;
+    };
+
+    // SAFETY: UserSlice validated the pointer range is in user space.
+    let path_bytes = unsafe { user_slice.as_slice() };
+    let Ok(path) = core::str::from_utf8(path_bytes) else {
+        return -crate::syscall::EINVAL;
+    };
+
+    // Resolve relative paths against current CWD.
+    let resolved = if path.starts_with('/') {
+        alloc::string::String::from(path)
+    } else {
+        let cwd = crate::proc::ProcessTable::with_current(|p| p.cwd.lock().clone());
+        if cwd == "/" {
+            alloc::format!("/{path}")
+        } else {
+            alloc::format!("{cwd}/{path}")
+        }
+    };
+
+    // Verify the path exists and is a directory.
+    let inode = match crate::fs::vfs::with_vfs(|vfs| vfs.resolve(&resolved)) {
+        Ok(inode) => inode,
+        Err(e) => return -e.to_errno(),
+    };
+
+    if !matches!(inode.inode_type(), crate::fs::InodeType::Directory) {
+        return -crate::syscall::ENOTDIR;
+    }
+
+    // Update the process CWD.
+    crate::proc::ProcessTable::with_current(|process| {
+        let mut cwd = process.cwd.lock();
+        *cwd = resolved;
+    });
+
+    0
+}
+
+/// `sys_task_setsid` — create a new session.
+///
+/// The calling process becomes the session leader and process group leader.
+/// Returns the new session ID on success, or a negated errno on failure.
+#[expect(
+    clippy::cast_possible_wrap,
+    reason = "session IDs are small u32 values, wrap is impossible"
+)]
+pub(super) fn sys_task_setsid() -> isize {
+    use core::sync::atomic::Ordering;
+
+    crate::proc::ProcessTable::with_current(|process| {
+        let pid = process.pid.as_u32();
+
+        // Fail if already a session leader.
+        if process.session_id.load(Ordering::Acquire) == pid {
+            return -crate::syscall::EINVAL;
+        }
+
+        // Become session leader and process group leader.
+        process.session_id.store(pid, Ordering::Release);
+        process.pgid.store(pid, Ordering::Release);
+        pid as isize
+    })
+}
+
+/// `sys_task_sigprocmask` — get/set the signal mask (blocked signals).
+///
+/// `how` controls application of `set`: `SIG_BLOCK`, `SIG_UNBLOCK`, or `SIG_SETMASK`.
+/// If `oldset_out` is non-zero, the previous mask is written there.
+///
+/// Returns 0 on success, or a negated errno on failure.
+pub(super) fn sys_task_sigprocmask(how: usize, set: usize, oldset_out: usize) -> isize {
+    crate::proc::ProcessTable::with_current(|process| {
+        let old_mask = process.signals.set_mask(how, set as u64);
+
+        if oldset_out != 0 {
+            // Write old mask to user pointer.
+            let Ok(user_ptr) = crate::syscall::userptr::UserPtr::<u64>::new(oldset_out) else {
+                return -crate::syscall::EFAULT;
+            };
+            // SAFETY: UserPtr validated alignment and range.
+            unsafe {
+                core::ptr::write(user_ptr.addr() as *mut u64, old_mask);
+            }
+        }
+
+        0
+    })
+}
+
+/// `sys_task_execve` — replace the current process image with a new program.
+///
+/// Reads the SpawnInfo from `info_ptr`, triggers TRAP_EXEC to return to
+/// `process_task`, which handles the async VFS read and address space
+/// replacement. Does not return on success.
+pub(super) fn sys_task_execve(info_ptr: usize, info_len: usize) -> isize {
+    if info_len < core::mem::size_of::<hadron_syscall::SpawnInfo>() {
+        return -(crate::syscall::EINVAL);
+    }
+
+    let kernel_cr3 = crate::proc::TrapContext::kernel_cr3();
+
+    // SAFETY: Restoring kernel CR3 and GS bases is the standard pattern.
+    unsafe {
+        Cr3::write(kernel_cr3);
+        let percpu = IA32_GS_BASE.read();
+        IA32_KERNEL_GS_BASE.write(percpu);
+    }
+
+    crate::proc::ExecState::set_params(info_ptr as u64, info_len as u64);
+    crate::proc::TrapContext::set_trap_reason(crate::proc::TrapReason::Exec);
+
+    let saved_rsp = crate::proc::TrapContext::saved_kernel_rsp();
+    // SAFETY: saved_rsp is the kernel RSP saved by enter_userspace_save.
+    unsafe {
+        restore_kernel_context(saved_rsp);
+    }
+}
+
+/// `sys_task_clone` — create a new thread with shared address space.
+///
+/// Currently returns `-ENOSYS`: full thread support (shared page tables,
+/// fd table, signal handlers) requires substantial infrastructure. This
+/// stub allows the syscall ABI to be wired up so userspace can detect
+/// the missing feature gracefully.
+#[expect(
+    unused_variables,
+    reason = "stub — parameters documented for future implementation"
+)]
+pub(super) fn sys_task_clone(flags: usize, stack_ptr: usize, tls_ptr: usize) -> isize {
+    -(crate::syscall::ENOSYS)
 }

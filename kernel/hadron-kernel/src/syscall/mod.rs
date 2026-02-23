@@ -3,6 +3,7 @@
 //! Routes incoming syscall numbers to individual handler functions via the
 //! generated [`SyscallHandler`] trait from `hadron-syscall`.
 
+mod event;
 mod io;
 mod ioctl;
 mod memory;
@@ -28,8 +29,8 @@ impl SyscallHandler for HadronDispatch {
         process::sys_task_spawn(info_ptr, info_len)
     }
 
-    fn sys_task_wait(&self, pid: usize, status_ptr: usize) -> isize {
-        process::sys_task_wait(pid, status_ptr)
+    fn sys_task_wait(&self, pid: usize, status_ptr: usize, flags: usize) -> isize {
+        process::sys_task_wait(pid, status_ptr, flags)
     }
 
     fn sys_task_kill(&self, pid: usize, signum: usize) -> isize {
@@ -40,8 +41,14 @@ impl SyscallHandler for HadronDispatch {
         process::sys_task_info()
     }
 
-    fn sys_task_sigaction(&self, signum: usize, handler: usize, old_handler_out: usize) -> isize {
-        process::sys_task_sigaction(signum, handler, old_handler_out)
+    fn sys_task_sigaction(
+        &self,
+        signum: usize,
+        handler: usize,
+        flags: usize,
+        old_handler_out: usize,
+    ) -> isize {
+        process::sys_task_sigaction(signum, handler, flags, old_handler_out)
     }
 
     fn sys_task_sigreturn(&self) -> isize {
@@ -56,12 +63,40 @@ impl SyscallHandler for HadronDispatch {
         process::sys_task_getpgid(pid)
     }
 
+    fn sys_task_getppid(&self) -> isize {
+        process::sys_task_getppid()
+    }
+
+    fn sys_task_getcwd(&self, buf_ptr: usize, buf_len: usize) -> isize {
+        process::sys_task_getcwd(buf_ptr, buf_len)
+    }
+
+    fn sys_task_chdir(&self, path_ptr: usize, path_len: usize) -> isize {
+        process::sys_task_chdir(path_ptr, path_len)
+    }
+
+    fn sys_task_setsid(&self) -> isize {
+        process::sys_task_setsid()
+    }
+
+    fn sys_task_sigprocmask(&self, how: usize, set: usize, oldset_out: usize) -> isize {
+        process::sys_task_sigprocmask(how, set, oldset_out)
+    }
+
+    fn sys_task_execve(&self, info_ptr: usize, info_len: usize) -> isize {
+        process::sys_task_execve(info_ptr, info_len)
+    }
+
     fn sys_handle_close(&self, handle: usize) -> isize {
         vfs::sys_handle_close(handle)
     }
 
     fn sys_handle_dup(&self, old_fd: usize, new_fd: usize) -> isize {
         vfs::sys_handle_dup(old_fd, new_fd)
+    }
+
+    fn sys_handle_dup_lowest(&self, old_fd: usize) -> isize {
+        vfs::sys_handle_dup_lowest(old_fd)
     }
 
     fn sys_handle_pipe(&self, fds_ptr: usize) -> isize {
@@ -78,6 +113,14 @@ impl SyscallHandler for HadronDispatch {
 
     fn sys_handle_ioctl(&self, fd: usize, cmd: usize, arg_ptr: usize) -> isize {
         ioctl::sys_handle_ioctl(fd, cmd, arg_ptr)
+    }
+
+    fn sys_handle_fcntl(&self, fd: usize, cmd: usize, arg: usize) -> isize {
+        vfs::sys_handle_fcntl(fd, cmd, arg)
+    }
+
+    fn sys_handle_pipe2(&self, fds_ptr: usize, flags: usize) -> isize {
+        vfs::sys_handle_pipe2(fds_ptr, flags)
     }
 
     fn sys_vnode_open(&self, path_ptr: usize, path_len: usize, flags: usize) -> isize {
@@ -100,6 +143,73 @@ impl SyscallHandler for HadronDispatch {
         vfs::sys_vnode_readdir(fd, buf_ptr, buf_len)
     }
 
+    fn sys_vnode_unlink(&self, path_ptr: usize, path_len: usize) -> isize {
+        vfs::sys_vnode_unlink(path_ptr, path_len)
+    }
+
+    fn sys_vnode_seek(&self, fd: usize, offset: usize, whence: usize) -> isize {
+        vfs::sys_vnode_seek(fd, offset, whence)
+    }
+
+    fn sys_vnode_mkdir(&self, path_ptr: usize, path_len: usize, permissions: usize) -> isize {
+        vfs::sys_vnode_mkdir(path_ptr, path_len, permissions)
+    }
+
+    fn sys_vnode_rename(
+        &self,
+        old_ptr: usize,
+        old_len: usize,
+        new_ptr: usize,
+        new_len: usize,
+    ) -> isize {
+        vfs::sys_vnode_rename(old_ptr, old_len, new_ptr, new_len)
+    }
+
+    fn sys_vnode_symlink(
+        &self,
+        target_ptr: usize,
+        target_len: usize,
+        link_ptr: usize,
+        link_len: usize,
+    ) -> isize {
+        vfs::sys_vnode_symlink(target_ptr, target_len, link_ptr, link_len)
+    }
+
+    fn sys_vnode_link(
+        &self,
+        target_ptr: usize,
+        target_len: usize,
+        link_ptr: usize,
+        link_len: usize,
+    ) -> isize {
+        vfs::sys_vnode_link(target_ptr, target_len, link_ptr, link_len)
+    }
+
+    fn sys_vnode_readlink(
+        &self,
+        path_ptr: usize,
+        path_len: usize,
+        buf_ptr: usize,
+        buf_len: usize,
+    ) -> isize {
+        vfs::sys_vnode_readlink(path_ptr, path_len, buf_ptr, buf_len)
+    }
+
+    fn sys_vnode_truncate(&self, fd: usize, len: usize) -> isize {
+        vfs::sys_vnode_truncate(fd, len)
+    }
+
+    fn sys_vnode_fstatat(
+        &self,
+        dirfd: usize,
+        path_ptr: usize,
+        path_len: usize,
+        buf: usize,
+        flags: usize,
+    ) -> isize {
+        vfs::sys_vnode_fstatat(dirfd, path_ptr, path_len, buf, flags)
+    }
+
     fn sys_mem_map(
         &self,
         addr_hint: usize,
@@ -115,8 +225,34 @@ impl SyscallHandler for HadronDispatch {
         memory::sys_mem_unmap(addr, length)
     }
 
+    fn sys_mem_brk(&self, addr: usize) -> isize {
+        memory::sys_mem_brk(addr)
+    }
+
     fn sys_clock_gettime(&self, clock_id: usize, tp: usize) -> isize {
         time::sys_clock_gettime(clock_id, tp)
+    }
+
+    fn sys_clock_nanosleep(
+        &self,
+        clock_id: usize,
+        flags: usize,
+        req_ptr: usize,
+        rem_ptr: usize,
+    ) -> isize {
+        time::sys_clock_nanosleep(clock_id, flags, req_ptr, rem_ptr)
+    }
+
+    fn sys_task_clone(&self, flags: usize, stack_ptr: usize, tls_ptr: usize) -> isize {
+        process::sys_task_clone(flags, stack_ptr, tls_ptr)
+    }
+
+    fn sys_event_wait_many(&self, fds_ptr: usize, nfds: usize, timeout_ms: usize) -> isize {
+        event::sys_event_wait_many(fds_ptr, nfds, timeout_ms)
+    }
+
+    fn sys_futex(&self, addr: usize, op: usize, val: usize, timeout_ms: usize) -> isize {
+        event::sys_futex(addr, op, val, timeout_ms)
     }
 
     fn sys_query(&self, topic: usize, sub_id: usize, out_buf: usize, out_len: usize) -> isize {

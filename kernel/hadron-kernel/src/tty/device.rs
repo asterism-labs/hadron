@@ -13,6 +13,7 @@ use core::pin::Pin;
 use core::task::{Context, Poll};
 
 use crate::fs::{DirEntry, FsError, Inode, InodeType, Permissions};
+use hadron_syscall::{Termios, Winsize};
 
 use super::Tty;
 
@@ -165,5 +166,63 @@ impl Inode for DevTty {
         _name: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), FsError>> + Send + 'a>> {
         Box::pin(async { Err(FsError::NotADirectory) })
+    }
+
+    fn ioctl(&self, cmd: u32, arg: usize) -> Result<usize, FsError> {
+        use hadron_syscall::{
+            TCGETS, TCSETS, TCSETSF, TCSETSW, TIOCGPGRP, TIOCGWINSZ, TIOCSPGRP, TIOCSWINSZ,
+        };
+
+        match cmd {
+            TCGETS => {
+                let t = self.tty.get_termios();
+                // SAFETY: arg is a user pointer validated by sys_handle_ioctl.
+                unsafe { core::ptr::write_volatile(arg as *mut Termios, t) };
+                Ok(0)
+            }
+            TCSETS | TCSETSW | TCSETSF => {
+                // SAFETY: arg is a user pointer validated by sys_handle_ioctl.
+                let t = unsafe { core::ptr::read(arg as *const Termios) };
+                self.tty.set_termios(&t);
+                Ok(0)
+            }
+            TIOCGPGRP => {
+                let pgid = self.tty.foreground_pgid().unwrap_or(0);
+                // SAFETY: arg is a user pointer validated by sys_handle_ioctl.
+                unsafe { core::ptr::write_volatile(arg as *mut u32, pgid) };
+                Ok(0)
+            }
+            TIOCSPGRP => {
+                // SAFETY: arg is a user pointer validated by sys_handle_ioctl.
+                let pgid = unsafe { core::ptr::read(arg as *const u32) };
+                self.tty.set_foreground_pgid(pgid);
+                Ok(0)
+            }
+            TIOCGWINSZ => {
+                let ws = self.tty.get_winsize();
+                // SAFETY: arg is a user pointer validated by sys_handle_ioctl.
+                unsafe { core::ptr::write_volatile(arg as *mut Winsize, ws) };
+                Ok(0)
+            }
+            TIOCSWINSZ => {
+                // Window size is read-only for now (derived from fbcon).
+                Ok(0)
+            }
+            _ => Err(FsError::NotSupported),
+        }
+    }
+
+    fn poll_readiness(&self, waker: Option<&core::task::Waker>) -> u16 {
+        use hadron_syscall::{POLLIN, POLLOUT};
+
+        if let Some(w) = waker {
+            self.tty.subscribe(w);
+        }
+        self.tty.poll_hardware();
+        let mut events = POLLOUT; // TTY is always writable.
+        if self.tty.has_input() {
+            events |= POLLIN;
+        }
+        events
     }
 }

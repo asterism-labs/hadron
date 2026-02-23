@@ -15,9 +15,20 @@ use crate::{kdebug, kinfo};
 
 extern crate alloc;
 
+use alloc::string::String;
 use alloc::sync::Arc;
 
 use super::Process;
+
+/// Options for `spawn_process` controlling fd inheritance and child CWD.
+pub struct SpawnOptions<'a> {
+    /// Explicit fd remapping: `(child_fd, parent_fd)` pairs.
+    /// If `None`, the default behavior applies (inherit fds 0/1/2).
+    pub fd_map: Option<&'a [(u32, u32)]>,
+    /// Working directory for the child process.
+    /// If `None`, the child inherits the parent's CWD.
+    pub cwd: Option<String>,
+}
 use super::binfmt::{self, BinaryError, ExecSegment};
 
 /// User stack top address. Placed just below the non-canonical hole.
@@ -492,9 +503,11 @@ pub fn spawn_process(
     parent_pid: Pid,
     args: &[&str],
     envs: &[&str],
+    opts: Option<SpawnOptions<'_>>,
 ) -> Result<Arc<Process>, BinaryError> {
     use crate::fs::file::OpenFlags;
     use crate::fs::{poll_immediate, vfs};
+    use crate::id::Fd;
 
     let inode = vfs::with_vfs(|vfs| vfs.resolve(path))
         .map_err(|_| BinaryError::ParseError("path not found"))?;
@@ -509,9 +522,12 @@ pub fn spawn_process(
 
     // Write argv and envp onto the child's user stack.
     let hhdm_offset = crate::mm::hhdm::offset();
-    let stack_top = write_startup_data(process.address_space(), args, envs, hhdm_offset)?;
+    let stack_top = write_startup_data(&*process.address_space(), args, envs, hhdm_offset)?;
 
-    // Inherit fd 0/1/2 from parent, or fall back to /dev/console.
+    let fd_map = opts.as_ref().and_then(|o| o.fd_map);
+    let child_cwd = opts.as_ref().and_then(|o| o.cwd.clone());
+
+    // Inherit file descriptors into the child process.
     // Resolve /dev/console BEFORE locking any fd_table to maintain the
     // VFS -> fd_table ordering (same as spawn_init).
     {
@@ -523,22 +539,40 @@ pub fn spawn_process(
             super::ProcessTable::lookup(parent_pid).expect("spawn_process: parent not found");
         let parent_fds = parent.fd_table.lock();
         let mut fd_table = process.fd_table.lock();
-        for &fd in &[
-            crate::id::Fd::STDIN,
-            crate::id::Fd::STDOUT,
-            crate::id::Fd::STDERR,
-        ] {
-            if let Some(parent_fd) = parent_fds.get(fd) {
-                fd_table.insert_at(fd, parent_fd.inode.clone(), parent_fd.flags);
-            } else {
-                let flags = if fd == crate::id::Fd::STDIN {
-                    OpenFlags::READ
+
+        if let Some(fd_map) = fd_map {
+            // Explicit fd remapping: only the listed fds are inherited.
+            for &(child_fd, parent_fd) in fd_map {
+                let child_fd = Fd::new(child_fd);
+                let parent_fd = Fd::new(parent_fd);
+                if let Some(src) = parent_fds.get(parent_fd) {
+                    fd_table.insert_at(child_fd, src.inode.clone(), src.flags);
+                }
+            }
+        } else {
+            // Default: inherit fds 0/1/2 from parent.
+            for &fd in &[Fd::STDIN, Fd::STDOUT, Fd::STDERR] {
+                if let Some(parent_fd) = parent_fds.get(fd) {
+                    fd_table.insert_at(fd, parent_fd.inode.clone(), parent_fd.flags);
                 } else {
-                    OpenFlags::WRITE
-                };
-                fd_table.insert_at(fd, console.clone(), flags);
+                    let flags = if fd == Fd::STDIN {
+                        OpenFlags::READ
+                    } else {
+                        OpenFlags::WRITE
+                    };
+                    fd_table.insert_at(fd, console.clone(), flags);
+                }
             }
         }
+    }
+
+    // Set child CWD: use explicit value, or inherit from parent.
+    if let Some(cwd) = child_cwd {
+        *process.cwd.lock() = cwd;
+    } else {
+        let parent =
+            super::ProcessTable::lookup(parent_pid).expect("spawn_process: parent not found");
+        *process.cwd.lock() = parent.cwd.lock().clone();
     }
 
     let process = Arc::new(process);
@@ -555,4 +589,171 @@ pub fn spawn_process(
     crate::sched::spawn(super::process_task(process.clone(), entry, stack_top));
 
     Ok(process)
+}
+
+// ── Execve ─────────────────────────────────────────────────────────
+
+/// Public constants for use by the Exec trap handler.
+pub const USER_MMAP_BASE: u64 = 0x0000_4000_0000_0000;
+/// Maximum mmap region size.
+pub const USER_MMAP_MAX_SIZE: u64 = 256 * 1024 * 1024 * 1024 * 1024;
+
+/// Handle `task_execve`: load a new binary and replace the process's address space.
+///
+/// Called from `process_task` under user CR3 (to read SpawnInfo from user memory).
+/// Returns `(entry_point, stack_top)` on success, or negated errno on failure.
+///
+/// On success, the process's address space has been replaced (old one dropped).
+#[expect(
+    clippy::cast_possible_wrap,
+    reason = "returning negated errno as isize"
+)]
+pub fn handle_execve(
+    process: &Process,
+    info_ptr: usize,
+    info_len: usize,
+) -> Result<(u64, u64), isize> {
+    use crate::syscall::{EINVAL, ENOENT};
+    use hadron_syscall::SpawnInfo;
+
+    if info_len < core::mem::size_of::<SpawnInfo>() {
+        return Err(EINVAL);
+    }
+
+    // SAFETY: Caller switched to user CR3. info_ptr is in user memory.
+    let info = unsafe { core::ptr::read(info_ptr as *const SpawnInfo) };
+
+    // Read path from user memory.
+    let path_slice =
+        unsafe { core::slice::from_raw_parts(info.path_ptr as *const u8, info.path_len) };
+    let path = core::str::from_utf8(path_slice).map_err(|_| EINVAL)?;
+
+    // Read argv and envp from user memory.
+    let args = read_user_string_array(info.argv_ptr, info.argv_count);
+    let envs = read_user_string_array(info.envp_ptr, info.envp_count);
+
+    // Switch back to kernel CR3 for VFS operations.
+    unsafe {
+        crate::arch::x86_64::registers::control::Cr3::write(super::TrapContext::kernel_cr3());
+    }
+
+    // Resolve and read the binary from VFS.
+    let inode = crate::fs::vfs::with_vfs(|vfs| vfs.resolve(path)).map_err(|_| ENOENT)?;
+    let file_size = inode.size();
+    let mut buf = alloc::vec![0u8; file_size];
+    crate::fs::poll_immediate(inode.read(0, &mut buf)).map_err(|_| ENOENT)?;
+    let binary_data = buf;
+
+    // Load the binary and create a new address space.
+    let (new_space, entry, _stack_top) = match create_address_space_from_binary(&binary_data) {
+        Ok(result) => result,
+        Err(_e) => return Err(EINVAL),
+    };
+
+    // Write argv/envp onto the new stack.
+    let hhdm_offset = crate::mm::hhdm::offset();
+    let args_refs: alloc::vec::Vec<&str> = args.iter().map(alloc::string::String::as_str).collect();
+    let envs_refs: alloc::vec::Vec<&str> = envs.iter().map(alloc::string::String::as_str).collect();
+    let stack_top = match write_startup_data(&new_space, &args_refs, &envs_refs, hhdm_offset) {
+        Ok(st) => st,
+        Err(_e) => return Err(EINVAL),
+    };
+
+    // Replace the process's address space (drops the old one).
+    let _old_space = process.replace_address_space(new_space);
+
+    // Switch to the new user CR3 for subsequent operations.
+    unsafe {
+        crate::arch::x86_64::registers::control::Cr3::write(process.user_cr3());
+    }
+
+    kinfo!(
+        "Process {}: execve to {} (entry={:#x}, stack={:#x})",
+        process.pid,
+        path,
+        entry,
+        stack_top
+    );
+
+    Ok((entry, stack_top))
+}
+
+/// Read an array of C strings from user memory.
+fn read_user_string_array(ptr: usize, count: usize) -> alloc::vec::Vec<String> {
+    if ptr == 0 || count == 0 {
+        return alloc::vec::Vec::new();
+    }
+    let mut result = alloc::vec::Vec::with_capacity(count);
+    // SAFETY: ptr points to an array of (ptr, len) pairs in user memory,
+    // and caller has switched to user CR3.
+    let pairs = unsafe { core::slice::from_raw_parts(ptr as *const [usize; 2], count) };
+    for pair in pairs {
+        let s_ptr = pair[0];
+        let s_len = pair[1];
+        if s_ptr == 0 || s_len == 0 {
+            result.push(String::new());
+            continue;
+        }
+        let bytes = unsafe { core::slice::from_raw_parts(s_ptr as *const u8, s_len) };
+        result.push(String::from_utf8_lossy(bytes).into_owned());
+    }
+    result
+}
+
+/// Create a new address space from binary data without creating a Process.
+///
+/// Returns `(AddressSpace, entry_point, stack_top)`.
+fn create_address_space_from_binary(
+    data: &[u8],
+) -> Result<
+    (
+        AddressSpace<crate::arch::x86_64::paging::PageTableMapper>,
+        u64,
+        u64,
+    ),
+    BinaryError,
+> {
+    #[cfg(target_arch = "x86_64")]
+    type KernelMapper = crate::arch::x86_64::paging::PageTableMapper;
+
+    let image = binfmt::load_binary(data)?;
+    let entry = image.entry_point;
+
+    let kernel_cr3 = super::TrapContext::kernel_cr3();
+    let hhdm_offset = crate::mm::hhdm::offset();
+    let mapper = KernelMapper::new(hhdm_offset);
+
+    let address_space = crate::mm::pmm::with(|pmm| -> Result<_, BinaryError> {
+        let mut alloc = BitmapFrameAllocRef(pmm);
+
+        // SAFETY: Same as create_process_from_binary.
+        let address_space = unsafe {
+            AddressSpace::new_user(kernel_cr3, mapper, hhdm_offset, &mut alloc, dealloc_frame)
+                .expect("failed to create user address space")
+        };
+
+        for seg in image.segments() {
+            map_segment(&address_space, seg, hhdm_offset, &mut alloc);
+        }
+
+        if image.needs_relocation {
+            if let Some(elf_data) = image.elf_data {
+                let elf = hadron_elf::ElfFile::parse(elf_data)
+                    .expect("ELF already validated during load");
+                binfmt::reloc::apply_dyn_relocations(
+                    &address_space,
+                    &elf,
+                    image.base_addr,
+                    hhdm_offset,
+                )?;
+            }
+        }
+
+        map_user_stack(&address_space, &mut alloc);
+        map_sigreturn_trampoline(&address_space, hhdm_offset, &mut alloc);
+
+        Ok(address_space)
+    })?;
+
+    Ok((address_space, entry, USER_STACK_TOP))
 }

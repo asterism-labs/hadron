@@ -211,6 +211,25 @@ impl Inode for PipeReader {
     ) -> Pin<Box<dyn Future<Output = Result<(), FsError>> + Send + 'a>> {
         Box::pin(async { Err(FsError::NotADirectory) })
     }
+
+    fn poll_readiness(&self, waker: Option<&core::task::Waker>) -> u16 {
+        use hadron_syscall::{POLLHUP, POLLIN};
+
+        if let Some(w) = waker {
+            self.0.read_wq.register_waker(w);
+        }
+        let buffer = self.0.buffer.lock();
+        let mut events = 0u16;
+        if !buffer.is_empty() {
+            events |= POLLIN;
+        }
+        if self.0.writers.load(Ordering::Acquire) == 0 {
+            events |= POLLHUP;
+            // EOF also counts as readable (read returns 0).
+            events |= POLLIN;
+        }
+        events
+    }
 }
 
 impl Inode for PipeWriter {
@@ -301,5 +320,22 @@ impl Inode for PipeWriter {
         _name: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), FsError>> + Send + 'a>> {
         Box::pin(async { Err(FsError::NotADirectory) })
+    }
+
+    fn poll_readiness(&self, waker: Option<&core::task::Waker>) -> u16 {
+        use hadron_syscall::{POLLERR, POLLOUT};
+
+        if let Some(w) = waker {
+            self.0.write_wq.register_waker(w);
+        }
+        let buffer = self.0.buffer.lock();
+        let mut events = 0u16;
+        if !buffer.is_full() {
+            events |= POLLOUT;
+        }
+        if self.0.readers.load(Ordering::Acquire) == 0 {
+            events |= POLLERR; // Broken pipe.
+        }
+        events
     }
 }

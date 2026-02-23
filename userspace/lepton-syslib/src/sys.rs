@@ -88,6 +88,10 @@ pub fn spawn_with_env(path: &str, argv: &[&str], envp: &[&str]) -> isize {
             0
         },
         envp_count,
+        fd_map_ptr: 0,
+        fd_map_count: 0,
+        cwd_ptr: 0,
+        cwd_len: 0,
     };
 
     syscall2(

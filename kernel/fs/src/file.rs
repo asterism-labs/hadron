@@ -19,13 +19,23 @@ bitflags! {
     #[derive(Debug, Clone, Copy)]
     pub struct OpenFlags: u32 {
         /// Open for reading.
-        const READ    = 0b0001;
+        const READ      = 0x0001;
         /// Open for writing.
-        const WRITE   = 0b0010;
+        const WRITE     = 0x0002;
         /// Create the file if it does not exist.
-        const CREATE  = 0b0100;
+        const CREATE    = 0x0004;
         /// Truncate the file to zero length on open.
-        const TRUNCATE = 0b1000;
+        const TRUNCATE  = 0x0008;
+        /// Writes always append to end of file.
+        const APPEND    = 0x0010;
+        /// Close this fd on `execve`.
+        const CLOEXEC   = 0x0020;
+        /// Non-blocking I/O mode.
+        const NONBLOCK  = 0x0040;
+        /// Fail if the path does not refer to a directory.
+        const DIRECTORY = 0x0080;
+        /// With `CREATE`, fail if the file already exists.
+        const EXCL      = 0x0100;
     }
 }
 
@@ -107,6 +117,13 @@ impl FileDescriptorTable {
         Ok(())
     }
 
+    /// Close all file descriptors that have `CLOEXEC` set.
+    /// Called during `execve` to prevent fd leaks.
+    pub fn close_cloexec(&mut self) {
+        self.fds
+            .retain(|_, desc| !desc.flags.contains(OpenFlags::CLOEXEC));
+    }
+
     /// Get a shared reference to a file descriptor.
     #[must_use]
     pub fn get(&self, fd: Fd) -> Option<&FileDescriptor> {
@@ -116,5 +133,49 @@ impl FileDescriptorTable {
     /// Get a mutable reference to a file descriptor.
     pub fn get_mut(&mut self, fd: Fd) -> Option<&mut FileDescriptor> {
         self.fds.get_mut(&fd)
+    }
+
+    /// Duplicate a file descriptor to the lowest available fd number.
+    ///
+    /// Returns the newly allocated fd, or `None` if `src_fd` is not open.
+    pub fn dup_lowest(&mut self, src_fd: Fd) -> Option<Fd> {
+        self.dup_lowest_from(src_fd, Fd::new(0), OpenFlags::empty())
+    }
+
+    /// Duplicate a file descriptor to the lowest available fd >= `min_fd`.
+    ///
+    /// `extra_flags` are OR'd onto the new fd's flags (e.g. `CLOEXEC`).
+    /// Returns the newly allocated fd, or `None` if `src_fd` is not open.
+    pub fn dup_lowest_from(
+        &mut self,
+        src_fd: Fd,
+        min_fd: Fd,
+        extra_flags: OpenFlags,
+    ) -> Option<Fd> {
+        let src = self.fds.get(&src_fd)?;
+        let inode = src.inode.clone();
+        let offset = src.offset;
+        let flags = src.flags | extra_flags;
+
+        // Find the lowest unused fd number starting from min_fd.
+        let mut candidate = min_fd;
+        while self.fds.contains_key(&candidate) {
+            candidate = Fd::new(candidate.as_u32() + 1);
+        }
+
+        self.fds.insert(
+            candidate,
+            FileDescriptor {
+                inode,
+                offset,
+                flags,
+            },
+        );
+
+        if candidate >= self.next_fd {
+            self.next_fd = Fd::new(candidate.as_u32() + 1);
+        }
+
+        Some(candidate)
     }
 }

@@ -640,6 +640,10 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
         // Initialize global time source from HPET — timestamps become real after this.
         crate::time::Time::init_hpet(hpet_virt, hpet.period_fs());
 
+        // Read CMOS RTC to establish wall-clock epoch for CLOCK_REALTIME.
+        // Interrupts are still disabled, which is required for CMOS access.
+        crate::time::Time::init_rtc_epoch();
+
         crate::kinfo!(
             "HPET: Enabled, {} Hz, {} comparators",
             hpet.frequency_hz(),

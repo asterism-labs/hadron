@@ -14,6 +14,7 @@ pub mod signal;
 extern crate alloc;
 
 use alloc::collections::BTreeMap;
+use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::cell::UnsafeCell;
@@ -99,6 +100,12 @@ pub enum TrapReason {
     Wait = 3,
     /// Syscall requested blocking I/O (pipe read/write).
     Io = 4,
+    /// Syscall requested sleep (clock_nanosleep).
+    Sleep = 5,
+    /// Syscall requested execve (replace process image).
+    Exec = 6,
+    /// Syscall requested futex wait (sleep on address).
+    Futex = 7,
 }
 
 impl TrapReason {
@@ -109,6 +116,9 @@ impl TrapReason {
             2 => Self::Fault,
             3 => Self::Wait,
             4 => Self::Io,
+            5 => Self::Sleep,
+            6 => Self::Exec,
+            7 => Self::Futex,
             _ => Self::Exit,
         }
     }
@@ -243,6 +253,9 @@ static WAIT_TARGET_PID: CpuLocal<AtomicU32> =
 static WAIT_STATUS_PTR: CpuLocal<AtomicU64> =
     CpuLocal::new([const { AtomicU64::new(0) }; MAX_CPUS]);
 
+/// Per-CPU wait flags (WNOHANG, WUNTRACED) for `sys_task_wait`.
+static WAIT_FLAGS: CpuLocal<AtomicU64> = CpuLocal::new([const { AtomicU64::new(0) }; MAX_CPUS]);
+
 /// Per-CPU file descriptor for TRAP_IO.
 static IO_FD: CpuLocal<AtomicU64> = CpuLocal::new([const { AtomicU64::new(0) }; MAX_CPUS]);
 
@@ -254,6 +267,19 @@ static IO_BUF_LEN: CpuLocal<AtomicU64> = CpuLocal::new([const { AtomicU64::new(0
 
 /// Per-CPU I/O direction for TRAP_IO: 0 = read, 1 = write.
 static IO_IS_WRITE: CpuLocal<AtomicU8> = CpuLocal::new([const { AtomicU8::new(0) }; MAX_CPUS]);
+
+/// Per-CPU sleep duration in milliseconds for TRAP_SLEEP.
+static SLEEP_MS: CpuLocal<AtomicU64> = CpuLocal::new([const { AtomicU64::new(0) }; MAX_CPUS]);
+
+/// Per-CPU SpawnInfo pointer for TRAP_EXEC.
+static EXEC_INFO_PTR: CpuLocal<AtomicU64> = CpuLocal::new([const { AtomicU64::new(0) }; MAX_CPUS]);
+/// Per-CPU SpawnInfo length for TRAP_EXEC.
+static EXEC_INFO_LEN: CpuLocal<AtomicU64> = CpuLocal::new([const { AtomicU64::new(0) }; MAX_CPUS]);
+
+/// Per-CPU futex address for TRAP_FUTEX.
+static FUTEX_ADDR: CpuLocal<AtomicU64> = CpuLocal::new([const { AtomicU64::new(0) }; MAX_CPUS]);
+/// Per-CPU futex expected value for TRAP_FUTEX.
+static FUTEX_VAL: CpuLocal<AtomicU64> = CpuLocal::new([const { AtomicU64::new(0) }; MAX_CPUS]);
 
 /// Send a signal to all processes in a process group.
 ///
@@ -289,12 +315,13 @@ impl WaitState {
         if raw == 0 { None } else { Some(Pid::new(raw)) }
     }
 
-    /// Sets the target PID and status pointer for a `TRAP_WAIT` syscall.
-    pub fn set_params(target_pid: Pid, status_ptr: u64) {
+    /// Sets the target PID, status pointer, and flags for a `TRAP_WAIT` syscall.
+    pub fn set_params(target_pid: Pid, status_ptr: u64, flags: u64) {
         WAIT_TARGET_PID
             .get()
             .store(target_pid.as_u32(), Ordering::Release);
         WAIT_STATUS_PTR.get().store(status_ptr, Ordering::Release);
+        WAIT_FLAGS.get().store(flags, Ordering::Release);
     }
 }
 
@@ -400,11 +427,11 @@ pub struct Process {
     /// Session ID. Initialized to parent's session, or own PID for session leaders.
     pub session_id: AtomicU32,
     /// Physical address of the user PML4 (cached for fast CR3 switch).
-    pub user_cr3: PhysAddr,
+    /// Stored as `AtomicU64` to allow safe updates during `execve`.
+    user_cr3: AtomicU64,
     /// User address space (owns the PML4, freed on drop).
-    /// Held for its `Drop` impl — not read directly.
-    #[allow(dead_code, reason = "held for RAII cleanup in Drop")]
-    address_space: AddressSpace<PageTableMapper>,
+    /// Wrapped in `SpinLock` to allow replacement during `execve`.
+    address_space: SpinLock<AddressSpace<PageTableMapper>>,
     /// Per-process file descriptor table.
     pub fd_table: SpinLock<FileDescriptorTable>,
     /// Virtual address region allocator for `sys_mem_map` mappings.
@@ -417,12 +444,37 @@ pub struct Process {
     pub exit_status: SpinLock<Option<u64>>,
     /// Wait queue notified when this process exits.
     pub exit_notify: HeapWaitQueue,
+    /// Current working directory (absolute path).
+    pub cwd: SpinLock<String>,
+    /// Program break address (heap boundary) for `brk()`.
+    pub program_break: SpinLock<u64>,
 }
 
 impl Process {
-    /// Returns a reference to the process's address space.
-    pub(crate) fn address_space(&self) -> &AddressSpace<PageTableMapper> {
-        &self.address_space
+    /// Returns a reference to the process's address space (borrows the lock).
+    pub(crate) fn address_space(
+        &self,
+    ) -> crate::sync::SpinLockGuard<'_, AddressSpace<PageTableMapper>> {
+        self.address_space.lock()
+    }
+
+    /// Returns the cached user CR3 physical address.
+    pub fn user_cr3(&self) -> PhysAddr {
+        PhysAddr::new(self.user_cr3.load(Ordering::Acquire))
+    }
+
+    /// Replace the address space (for `execve`). Returns the old address space
+    /// which will be dropped by the caller, freeing its PML4 and page tables.
+    /// Also updates the cached `user_cr3`.
+    pub(crate) fn replace_address_space(
+        &self,
+        new_space: AddressSpace<PageTableMapper>,
+    ) -> AddressSpace<PageTableMapper> {
+        let new_cr3 = new_space.root_phys();
+        let mut guard = self.address_space.lock();
+        let old = core::mem::replace(&mut *guard, new_space);
+        self.user_cr3.store(new_cr3.as_u64(), Ordering::Release);
+        old
     }
 
     /// Creates a new process with the given address space and parent PID.
@@ -445,14 +497,16 @@ impl Process {
             parent_pid,
             pgid: AtomicU32::new(pid.as_u32()),
             session_id: AtomicU32::new(session),
-            user_cr3,
-            address_space,
+            user_cr3: AtomicU64::new(user_cr3.as_u64()),
+            address_space: SpinLock::leveled("address_space", 3, address_space),
             fd_table: SpinLock::leveled("fd_table", 4, FileDescriptorTable::new()),
             mmap_alloc: SpinLock::leveled("mmap_alloc", 4, FreeRegionAllocator::new(mmap_region)),
             mmap_mappings: SpinLock::leveled("mmap_mappings", 4, BTreeMap::new()),
             signals: signal::SignalState::new(),
             exit_status: SpinLock::leveled("exit_status", 4, None),
             exit_notify: HeapWaitQueue::new(),
+            cwd: SpinLock::leveled("cwd", 4, String::from("/")),
+            program_break: SpinLock::leveled("program_break", 4, 0),
         }
     }
 }
@@ -617,7 +671,7 @@ fn enter_userspace_first(process: &Process, entry: u64, stack_top: u64) {
         core::arch::asm!("fninit", options(nostack));
 
         // Switch to user address space.
-        Cr3::write(process.user_cr3);
+        Cr3::write(process.user_cr3());
 
         enter_userspace_save(entry, stack_top, saved_rsp_ptr);
     }
@@ -644,7 +698,7 @@ fn enter_userspace_resume_wrapper(process: &Process) {
     unsafe {
         IA32_KERNEL_GS_BASE.write(percpu_addr);
         IA32_GS_BASE.write(0);
-        Cr3::write(process.user_cr3);
+        Cr3::write(process.user_cr3());
 
         // Restore user FPU state before entering userspace.
         core::arch::asm!("fxrstor64 [{}]", in(reg) fpu_ctx, options(nostack));
@@ -676,7 +730,7 @@ pub fn spawn_init() {
 
     // Write argv onto the init process's stack: ["/bin/init"].
     let hhdm_offset = crate::mm::hhdm::offset();
-    let stack_top = exec::write_argv_to_init_stack(process.address_space(), hhdm_offset)
+    let stack_top = exec::write_argv_to_init_stack(&*process.address_space(), hhdm_offset)
         .expect("failed to write argv for init");
 
     // Set up stdin/stdout/stderr pointing to /dev/console.
@@ -742,6 +796,42 @@ impl IoState {
         IO_IS_WRITE
             .get()
             .store(u8::from(is_write), Ordering::Release);
+    }
+}
+
+// ── SleepState facade ──────────────────────────────────────────────
+
+/// Zero-sized facade for sleep syscall parameters.
+pub struct SleepState;
+
+impl SleepState {
+    /// Sets the sleep duration for a `TRAP_SLEEP`.
+    pub fn set_ms(ms: u64) {
+        SLEEP_MS.get().store(ms, Ordering::Release);
+    }
+}
+
+// ── ExecState facade ──────────────────────────────────────────────
+
+/// Zero-sized facade for execve syscall parameters.
+pub struct ExecState;
+
+impl ExecState {
+    /// Sets the SpawnInfo pointer and length for a `TRAP_EXEC`.
+    pub fn set_params(info_ptr: u64, info_len: u64) {
+        EXEC_INFO_PTR.get().store(info_ptr, Ordering::Release);
+        EXEC_INFO_LEN.get().store(info_len, Ordering::Release);
+    }
+}
+
+/// Zero-sized facade for futex syscall parameters.
+pub struct FutexState;
+
+impl FutexState {
+    /// Sets the futex address and expected value for a `TRAP_FUTEX`.
+    pub fn set_params(addr: u64, val: u64) {
+        FUTEX_ADDR.get().store(addr, Ordering::Release);
+        FUTEX_VAL.get().store(val, Ordering::Release);
     }
 }
 
@@ -847,7 +937,7 @@ fn deliver_signal_to_handler(process: &Process, signum: usize, handler_addr: u64
     // half is identity-mapped in both address spaces.
     unsafe {
         use crate::arch::x86_64::registers::control::Cr3;
-        Cr3::write(process.user_cr3);
+        Cr3::write(process.user_cr3());
     }
 
     // SAFETY: new_rsp is in user address space and we switched to user CR3.
@@ -966,6 +1056,7 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                 // We await the child's exit here (async context).
                 let target = Pid::new(WAIT_TARGET_PID.get().load(Ordering::Acquire));
                 let status_ptr = WAIT_STATUS_PTR.get().load(Ordering::Acquire);
+                let wait_flags = WAIT_FLAGS.get().load(Ordering::Acquire);
 
                 // Snapshot the saved user registers and RSP BEFORE yielding.
                 // SYSCALL_SAVED_REGS and percpu.user_rsp are global statics
@@ -1012,7 +1103,7 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                     WaitState::set_foreground(target);
                 }
 
-                let (result, exit_code) = handle_wait(pid, target).await;
+                let (result, exit_code) = handle_wait(pid, target, wait_flags).await;
 
                 // Clear foreground PID.
                 WaitState::set_foreground(Pid::new(0));
@@ -1022,7 +1113,7 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                     // SAFETY: Switching to user CR3 is safe because the kernel
                     // upper half is identity-mapped in both address spaces.
                     unsafe {
-                        Cr3::write(process.user_cr3);
+                        Cr3::write(process.user_cr3());
                     }
                     let uslice = crate::syscall::userptr::UserSlice::new(
                         status_ptr as usize,
@@ -1146,7 +1237,7 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                             let mut kbuf = alloc::vec![0u8; io_buf_len];
                             // SAFETY: Switching to user CR3 to copy data.
                             unsafe {
-                                Cr3::write(process.user_cr3);
+                                Cr3::write(process.user_cr3());
                             }
                             let uslice =
                                 crate::syscall::userptr::UserSlice::new(io_buf_ptr, io_buf_len);
@@ -1192,7 +1283,7 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                                     // Copy kernel buffer to user memory under user CR3.
                                     // SAFETY: Switching to user CR3.
                                     unsafe {
-                                        Cr3::write(process.user_cr3);
+                                        Cr3::write(process.user_cr3());
                                     }
                                     let uslice =
                                         crate::syscall::userptr::UserSlice::new(io_buf_ptr, n);
@@ -1272,6 +1363,311 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                 }
                 continue;
             }
+            TrapReason::Sleep => {
+                let sleep_ms = SLEEP_MS.get().load(Ordering::Acquire);
+
+                // Snapshot saved user registers (same pattern as TRAP_IO).
+                // SAFETY: SYSCALL_SAVED_REGS is only written by syscall entry
+                // assembly with interrupts masked, and we haven't yielded yet.
+                let (
+                    saved_rip,
+                    saved_rflags,
+                    saved_rbx,
+                    saved_rbp,
+                    saved_r12,
+                    saved_r13,
+                    saved_r14,
+                    saved_r15,
+                    saved_user_rsp,
+                ) = unsafe {
+                    let saved = &*crate::arch::x86_64::syscall::SYSCALL_SAVED_REGS.get().get();
+                    (
+                        saved.user_rip,
+                        saved.user_rflags,
+                        saved.rbx,
+                        saved.rbp,
+                        saved.r12,
+                        saved.r13,
+                        saved.r14,
+                        saved.r15,
+                        crate::percpu::PerCpuState::current().user_rsp,
+                    )
+                };
+
+                // Snapshot user FPU state before the .await.
+                unsafe {
+                    let fpu_ptr = USER_FPU_CONTEXT.get().get() as *mut u8;
+                    core::arch::asm!("fxsave64 [{}]", in(reg) fpu_ptr, options(nostack));
+                }
+                let saved_fpu = unsafe { (*USER_FPU_CONTEXT.get().get()).clone() };
+
+                // Sleep for the requested duration.
+                crate::sched::primitives::sleep_ms(sleep_ms).await;
+
+                // Restore FPU state after sleep.
+                unsafe {
+                    *USER_FPU_CONTEXT.get().get() = saved_fpu;
+                }
+
+                // Restore user registers, returning 0 (success) in rax.
+                unsafe {
+                    let ctx = &mut *USER_CONTEXT.get().get();
+                    ctx.rip = saved_rip;
+                    ctx.rflags = saved_rflags;
+                    ctx.rsp = saved_user_rsp;
+                    ctx.rbx = saved_rbx;
+                    ctx.rbp = saved_rbp;
+                    ctx.r12 = saved_r12;
+                    ctx.r13 = saved_r13;
+                    ctx.r14 = saved_r14;
+                    ctx.r15 = saved_r15;
+                    ctx.rax = 0; // Success
+                    ctx.rcx = 0;
+                    ctx.rdx = 0;
+                    ctx.rsi = 0;
+                    ctx.rdi = 0;
+                    ctx.r8 = 0;
+                    ctx.r9 = 0;
+                    ctx.r10 = 0;
+                    ctx.r11 = 0;
+                }
+
+                // Check for pending signals after sleep completes.
+                match check_signals(&process) {
+                    SignalCheckResult::Terminate(exit_code) => {
+                        kinfo!("Process {} killed by signal (exit {})", pid, exit_code);
+                        *process.exit_status.lock() = Some(exit_code);
+                        process.exit_notify.wake_all();
+                        break;
+                    }
+                    SignalCheckResult::Delivered | SignalCheckResult::None => {}
+                }
+                continue;
+            }
+            TrapReason::Exec => {
+                // The syscall handler set EXEC_INFO_PTR and EXEC_INFO_LEN.
+                // We need to read the SpawnInfo (which was in user memory),
+                // resolve the binary, create a new address space, and replace.
+                let exec_info_ptr = EXEC_INFO_PTR.get().load(Ordering::Acquire) as usize;
+                let exec_info_len = EXEC_INFO_LEN.get().load(Ordering::Acquire) as usize;
+
+                // Read SpawnInfo from user memory under user CR3.
+                unsafe {
+                    Cr3::write(process.user_cr3());
+                }
+                let exec_result = exec::handle_execve(&process, exec_info_ptr, exec_info_len);
+                // Restore kernel CR3.
+                unsafe {
+                    Cr3::write(TrapContext::kernel_cr3());
+                }
+
+                match exec_result {
+                    Ok((new_entry, new_stack_top)) => {
+                        // Reset signal handlers to SIG_DFL.
+                        process.signals.reset_handlers();
+
+                        // Close CLOEXEC file descriptors.
+                        {
+                            let mut fd_table = process.fd_table.lock();
+                            fd_table.close_cloexec();
+                        }
+
+                        // Reset mmap state.
+                        {
+                            let mut mmap = process.mmap_alloc.lock();
+                            let mmap_region =
+                                VirtRegion::new(VirtAddr::new(USER_MMAP_BASE), USER_MMAP_MAX_SIZE);
+                            *mmap = FreeRegionAllocator::new(mmap_region);
+                        }
+                        {
+                            let mut mappings = process.mmap_mappings.lock();
+                            mappings.clear();
+                        }
+                        *process.program_break.lock() = 0;
+
+                        // Set up USER_CONTEXT for the new entry point.
+                        unsafe {
+                            let ctx = &mut *USER_CONTEXT.get().get();
+                            ctx.rip = new_entry;
+                            ctx.rsp = new_stack_top;
+                            ctx.rflags = 0x202; // IF=1
+                            ctx.rax = 0;
+                            ctx.rbx = 0;
+                            ctx.rcx = 0;
+                            ctx.rdx = 0;
+                            ctx.rsi = 0;
+                            ctx.rdi = 0;
+                            ctx.rbp = 0;
+                            ctx.r8 = 0;
+                            ctx.r9 = 0;
+                            ctx.r10 = 0;
+                            ctx.r11 = 0;
+                            ctx.r12 = 0;
+                            ctx.r13 = 0;
+                            ctx.r14 = 0;
+                            ctx.r15 = 0;
+                        }
+
+                        // Re-enter as if first entry with new address space.
+                        first_entry = true;
+                        continue;
+                    }
+                    Err(errno) => {
+                        // Execve failed — return error to caller.
+                        // Restore saved user registers and return the error.
+                        let (
+                            saved_rip,
+                            saved_rflags,
+                            saved_rbx,
+                            saved_rbp,
+                            saved_r12,
+                            saved_r13,
+                            saved_r14,
+                            saved_r15,
+                            saved_user_rsp,
+                        ) = unsafe {
+                            let saved =
+                                &*crate::arch::x86_64::syscall::SYSCALL_SAVED_REGS.get().get();
+                            (
+                                saved.user_rip,
+                                saved.user_rflags,
+                                saved.rbx,
+                                saved.rbp,
+                                saved.r12,
+                                saved.r13,
+                                saved.r14,
+                                saved.r15,
+                                crate::percpu::PerCpuState::current().user_rsp,
+                            )
+                        };
+
+                        unsafe {
+                            let ctx = &mut *USER_CONTEXT.get().get();
+                            ctx.rip = saved_rip;
+                            ctx.rflags = saved_rflags;
+                            ctx.rsp = saved_user_rsp;
+                            ctx.rbx = saved_rbx;
+                            ctx.rbp = saved_rbp;
+                            ctx.r12 = saved_r12;
+                            ctx.r13 = saved_r13;
+                            ctx.r14 = saved_r14;
+                            ctx.r15 = saved_r15;
+                            ctx.rax = (-errno) as u64;
+                            ctx.rcx = 0;
+                            ctx.rdx = 0;
+                            ctx.rsi = 0;
+                            ctx.rdi = 0;
+                            ctx.r8 = 0;
+                            ctx.r9 = 0;
+                            ctx.r10 = 0;
+                            ctx.r11 = 0;
+                        }
+                        continue;
+                    }
+                }
+            }
+            TrapReason::Futex => {
+                let futex_addr = FUTEX_ADDR.get().load(Ordering::Acquire) as usize;
+                let futex_val = FUTEX_VAL.get().load(Ordering::Acquire) as u32;
+
+                // Snapshot saved user registers (same pattern as TRAP_SLEEP).
+                // SAFETY: SYSCALL_SAVED_REGS is only written by syscall entry
+                // assembly with interrupts masked, and we haven't yielded yet.
+                let (
+                    saved_rip,
+                    saved_rflags,
+                    saved_rbx,
+                    saved_rbp,
+                    saved_r12,
+                    saved_r13,
+                    saved_r14,
+                    saved_r15,
+                    saved_user_rsp,
+                ) = unsafe {
+                    let saved = &*crate::arch::x86_64::syscall::SYSCALL_SAVED_REGS.get().get();
+                    (
+                        saved.user_rip,
+                        saved.user_rflags,
+                        saved.rbx,
+                        saved.rbp,
+                        saved.r12,
+                        saved.r13,
+                        saved.r14,
+                        saved.r15,
+                        crate::percpu::PerCpuState::current().user_rsp,
+                    )
+                };
+
+                // Snapshot user FPU state before the .await.
+                unsafe {
+                    let fpu_ptr = USER_FPU_CONTEXT.get().get() as *mut u8;
+                    core::arch::asm!("fxsave64 [{}]", in(reg) fpu_ptr, options(nostack));
+                }
+                let saved_fpu = unsafe { (*USER_FPU_CONTEXT.get().get()).clone() };
+
+                // Wait until woken by futex_wake.
+                // The poll_fn checks the futex condition under user CR3 and
+                // registers a waker. If the value has changed, we return
+                // immediately (spurious wakeup is fine per POSIX).
+                core::future::poll_fn(|cx| {
+                    // Switch to user CR3 to read the user futex word.
+                    unsafe {
+                        Cr3::write(process.user_cr3());
+                    }
+                    let should_sleep =
+                        crate::ipc::futex::futex_wait_check(futex_addr, futex_val, cx.waker());
+                    unsafe {
+                        Cr3::write(TrapContext::kernel_cr3());
+                    }
+
+                    if should_sleep {
+                        core::task::Poll::Pending
+                    } else {
+                        core::task::Poll::Ready(())
+                    }
+                })
+                .await;
+
+                // Restore FPU state after futex wait.
+                unsafe {
+                    *USER_FPU_CONTEXT.get().get() = saved_fpu;
+                }
+
+                // Restore user registers, returning 0 (success) in rax.
+                unsafe {
+                    let ctx = &mut *USER_CONTEXT.get().get();
+                    ctx.rip = saved_rip;
+                    ctx.rflags = saved_rflags;
+                    ctx.rsp = saved_user_rsp;
+                    ctx.rbx = saved_rbx;
+                    ctx.rbp = saved_rbp;
+                    ctx.r12 = saved_r12;
+                    ctx.r13 = saved_r13;
+                    ctx.r14 = saved_r14;
+                    ctx.r15 = saved_r15;
+                    ctx.rax = 0; // Futex wait returned successfully
+                    ctx.rcx = 0;
+                    ctx.rdx = 0;
+                    ctx.rsi = 0;
+                    ctx.rdi = 0;
+                    ctx.r8 = 0;
+                    ctx.r9 = 0;
+                    ctx.r10 = 0;
+                    ctx.r11 = 0;
+                }
+
+                // Check for pending signals after futex wait completes.
+                match check_signals(&process) {
+                    SignalCheckResult::Terminate(exit_code) => {
+                        kinfo!("Process {} killed by signal (exit {})", pid, exit_code);
+                        *process.exit_status.lock() = Some(exit_code);
+                        process.exit_notify.wake_all();
+                        break;
+                    }
+                    SignalCheckResult::Delivered | SignalCheckResult::None => {}
+                }
+                continue;
+            }
         }
     }
 
@@ -1290,12 +1686,36 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
     clippy::cast_possible_wrap,
     reason = "returning negated errno as isize"
 )]
-async fn handle_wait(parent_pid: Pid, target_pid: Pid) -> (isize, u64) {
+async fn handle_wait(parent_pid: Pid, target_pid: Pid, flags: u64) -> (isize, u64) {
+    use hadron_syscall::WNOHANG;
+
+    let wnohang = flags as usize & WNOHANG != 0;
+
     if target_pid.as_u32() == 0 {
         // Wait for any child — scan for the first zombie.
         let children = ProcessTable::children_of(parent_pid);
         if children.is_empty() {
-            return (-(crate::syscall::EINVAL), 0);
+            return (-(crate::syscall::ECHILD), 0);
+        }
+
+        // Check once for any zombie child.
+        for &child_pid in &children {
+            if let Some(child) = ProcessTable::lookup(child_pid) {
+                let status = child.exit_status.lock();
+                if let Some(exit_code) = *status {
+                    drop(status);
+                    ProcessTable::unregister(child_pid);
+                    #[expect(clippy::cast_possible_wrap, reason = "PID fits in isize")]
+                    {
+                        return (child_pid.as_u32() as isize, exit_code);
+                    }
+                }
+            }
+        }
+
+        // WNOHANG: return 0 immediately if no child has exited.
+        if wnohang {
+            return (0, 0);
         }
 
         let (zombie_pid, exit_code) = core::future::poll_fn(|cx| {
@@ -1341,12 +1761,28 @@ async fn handle_wait(parent_pid: Pid, target_pid: Pid) -> (isize, u64) {
         // Wait for a specific child.
         let child = match ProcessTable::lookup(target_pid) {
             Some(c) => c,
-            None => return (-(crate::syscall::EINVAL), 0),
+            None => return (-(crate::syscall::ECHILD), 0),
         };
 
         // Verify it's actually our child.
         if child.parent_pid != Some(parent_pid) {
-            return (-(crate::syscall::EINVAL), 0);
+            return (-(crate::syscall::ECHILD), 0);
+        }
+
+        // Check once for already-exited.
+        {
+            let status = child.exit_status.lock();
+            if let Some(exit_code) = *status {
+                drop(status);
+                let pid = child.pid.as_u32() as isize;
+                ProcessTable::unregister(child.pid);
+                return (pid, exit_code);
+            }
+        }
+
+        // WNOHANG: return 0 immediately if child hasn't exited.
+        if wnohang {
+            return (0, 0);
         }
 
         // Wait for the child to exit using the double-check pattern to

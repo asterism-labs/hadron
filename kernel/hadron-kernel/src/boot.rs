@@ -562,6 +562,16 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
                 ));
             }
         }
+        // Register /dev/ptmx and /dev/pts for pseudoterminals.
+        dev_devices.push((
+            "ptmx",
+            Arc::new(crate::tty::pty::DevPtmx) as Arc<dyn fs::Inode>,
+        ));
+        dev_devices.push((
+            "pts",
+            Arc::new(crate::tty::pty::DevPtsDir) as Arc<dyn fs::Inode>,
+        ));
+
         // Register /dev/fb0 if a framebuffer device is available.
         if let Some(fb) = crate::drivers::device_registry::DeviceRegistry::with(|dr| {
             dr.take_framebuffer("bochs-vga-0")

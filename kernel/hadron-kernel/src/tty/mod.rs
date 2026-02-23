@@ -19,6 +19,7 @@ extern crate alloc;
 
 pub mod device;
 pub mod ldisc;
+pub mod pty;
 
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
@@ -26,6 +27,7 @@ use core::task::Waker;
 
 use crate::drivers::fbcon::FbCon;
 use crate::sync::{IrqSpinLock, SpinLock};
+use hadron_syscall::Termios;
 use ldisc::{LdiscAction, LineDiscipline};
 use planck_noalloc::ringbuf::RingBuf;
 
@@ -51,6 +53,25 @@ static SCANCODES_PENDING: AtomicBool = AtomicBool::new(false);
 static SCANCODE_BUF: IrqSpinLock<RingBuf<u8, SCANCODE_BUF_SIZE>> =
     IrqSpinLock::leveled("TTY_SCANCODE", 10, RingBuf::new());
 
+/// Default termios: canonical mode with echo and signal generation.
+const fn default_termios() -> Termios {
+    let mut cc = [0u8; 32];
+    cc[hadron_syscall::VINTR] = 0x03; // Ctrl+C
+    cc[hadron_syscall::VQUIT] = 0x1C; // Ctrl+backslash
+    cc[hadron_syscall::VERASE] = 0x7F; // DEL
+    cc[hadron_syscall::VKILL] = 0x15; // Ctrl+U
+    cc[hadron_syscall::VEOF] = 0x04; // Ctrl+D
+    cc[hadron_syscall::VMIN] = 1;
+    cc[hadron_syscall::VTIME] = 0;
+    Termios {
+        iflag: hadron_syscall::ICRNL,
+        oflag: hadron_syscall::OPOST | hadron_syscall::ONLCR,
+        cflag: 0,
+        lflag: hadron_syscall::ICANON | hadron_syscall::ECHO | hadron_syscall::ISIG,
+        cc,
+    }
+}
+
 /// Global TTY table. Slots are initialized lazily by [`init`].
 static TTY_TABLE: [Tty; MAX_TTYS] = [const { Tty::new() }; MAX_TTYS];
 
@@ -69,6 +90,8 @@ pub struct Tty {
     input_waker: IrqSpinLock<Option<Waker>>,
     /// Per-VT framebuffer console (set during boot, then read-only).
     fbcon: SpinLock<Option<Arc<FbCon>>>,
+    /// Terminal I/O settings (termios).
+    termios: IrqSpinLock<Termios>,
 }
 
 // SAFETY: Tty is Sync because all mutable state is behind IrqSpinLock,
@@ -83,6 +106,38 @@ impl Tty {
             foreground_pgid: AtomicU32::new(0),
             input_waker: IrqSpinLock::named("TTY_WAKER", None),
             fbcon: SpinLock::named("TTY_FBCON", None),
+            termios: IrqSpinLock::named("TTY_TERMIOS", default_termios()),
+        }
+    }
+
+    /// Get the current termios settings.
+    pub fn get_termios(&self) -> Termios {
+        *self.termios.lock()
+    }
+
+    /// Set the termios settings.
+    pub fn set_termios(&self, t: &Termios) {
+        *self.termios.lock() = *t;
+    }
+
+    /// Get the window size from the attached framebuffer console.
+    pub fn get_winsize(&self) -> hadron_syscall::Winsize {
+        let fbcon = self.fbcon.lock().clone();
+        if let Some(ref fbcon) = fbcon {
+            let (cols, rows) = fbcon.dimensions();
+            hadron_syscall::Winsize {
+                rows: rows as u16,
+                cols: cols as u16,
+                xpixel: 0,
+                ypixel: 0,
+            }
+        } else {
+            hadron_syscall::Winsize {
+                rows: 25,
+                cols: 80,
+                xpixel: 0,
+                ypixel: 0,
+            }
         }
     }
 
@@ -229,6 +284,13 @@ impl Tty {
     /// Returns `Some(n)` with data, `Some(0)` for EOF, or `None` for no data.
     pub fn try_read(&self, buf: &mut [u8]) -> Option<usize> {
         self.ldisc.lock().try_read(buf)
+    }
+
+    /// Check if the line discipline has data available for reading.
+    ///
+    /// Non-destructive: does not consume any data.
+    pub fn has_input(&self) -> bool {
+        self.ldisc.lock().has_data()
     }
 }
 

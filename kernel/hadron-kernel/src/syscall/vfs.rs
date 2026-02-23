@@ -1,4 +1,5 @@
-//! VFS syscall handlers: open, read, write, close, stat, readdir, dup.
+//! VFS syscall handlers: open, read, write, close, stat, readdir, dup, seek,
+//! mkdir, unlink, and related operations.
 
 use crate::id::Fd;
 use crate::syscall::EFAULT;
@@ -36,6 +37,14 @@ pub(super) fn sys_vnode_open(path_ptr: usize, path_len: usize, flags: usize) -> 
     // Resolve path via VFS.
     let Ok(inode) = crate::fs::vfs::with_vfs(|vfs| vfs.resolve(path)) else {
         return -crate::syscall::ENOENT;
+    };
+
+    // Check if the inode wants to substitute a different inode on open
+    // (e.g. /dev/ptmx allocates a new PTY master).
+    let inode = match inode.on_open() {
+        Ok(Some(replacement)) => replacement,
+        Ok(None) => inode,
+        Err(e) => return -e.to_errno(),
     };
 
     // Allocate fd in the current process's fd table.
@@ -405,6 +414,635 @@ pub(super) fn sys_vnode_readdir(fd: usize, buf_ptr: usize, buf_len: usize) -> is
 
         written as isize
     })
+}
+
+/// `sys_vnode_unlink` — remove a file or empty directory by path.
+///
+/// Arguments:
+/// - `path_ptr`: user-space pointer to the path string
+/// - `path_len`: length of the path string
+///
+/// Returns 0 on success, or a negative errno on failure.
+pub(super) fn sys_vnode_unlink(path_ptr: usize, path_len: usize) -> isize {
+    let Ok(user_slice) = UserSlice::new(path_ptr, path_len) else {
+        return -EFAULT;
+    };
+
+    // SAFETY: UserSlice validated that [path_ptr, path_ptr+path_len) is in user space.
+    let path_bytes = unsafe { user_slice.as_slice() };
+    let Ok(path) = core::str::from_utf8(path_bytes) else {
+        return -crate::syscall::EINVAL;
+    };
+
+    // Split into parent directory path and entry name.
+    let (parent_path, name) = match path.rsplit_once('/') {
+        Some((parent, name)) => {
+            let parent = if parent.is_empty() { "/" } else { parent };
+            (parent, name)
+        }
+        None => return -crate::syscall::EINVAL,
+    };
+
+    if name.is_empty() {
+        return -crate::syscall::EINVAL;
+    }
+
+    // Resolve the parent directory.
+    let parent_inode = match crate::fs::vfs::with_vfs(|vfs| vfs.resolve(parent_path)) {
+        Ok(inode) => inode,
+        Err(e) => return -e.to_errno(),
+    };
+
+    // Call unlink on the parent.
+    match crate::fs::poll_immediate(parent_inode.unlink(name)) {
+        Ok(()) => 0,
+        Err(e) => -e.to_errno(),
+    }
+}
+
+/// `sys_vnode_seek` — reposition the file offset of an open fd.
+///
+/// Arguments:
+/// - `fd`: file descriptor number
+/// - `offset`: offset value (interpretation depends on `whence`)
+/// - `whence`: `SEEK_SET` (0), `SEEK_CUR` (1), or `SEEK_END` (2)
+///
+/// Returns the new absolute offset on success, or a negative errno on failure.
+#[expect(
+    clippy::cast_possible_wrap,
+    reason = "file offsets are small, wrap is impossible"
+)]
+pub(super) fn sys_vnode_seek(fd: usize, offset: usize, whence: usize) -> isize {
+    use crate::syscall::{EINVAL, ESPIPE, SEEK_CUR, SEEK_END, SEEK_SET};
+
+    let fd = Fd::new(fd as u32);
+    let offset = offset as isize;
+
+    crate::proc::ProcessTable::with_current(|process| {
+        let mut fd_table = process.fd_table.lock();
+        let Some(file) = fd_table.get_mut(fd) else {
+            return -crate::syscall::EBADF;
+        };
+
+        // Pipes and character devices are not seekable.
+        if matches!(file.inode.inode_type(), crate::fs::InodeType::CharDevice) {
+            return -ESPIPE;
+        }
+
+        let file_size = file.inode.size();
+        let current = file.offset as isize;
+
+        let new_offset = match whence {
+            SEEK_SET => offset,
+            SEEK_CUR => current.saturating_add(offset),
+            SEEK_END => (file_size as isize).saturating_add(offset),
+            _ => return -EINVAL,
+        };
+
+        if new_offset < 0 {
+            return -EINVAL;
+        }
+
+        file.offset = new_offset as usize;
+        new_offset as isize
+    })
+}
+
+/// `sys_vnode_mkdir` — create a directory.
+///
+/// Arguments:
+/// - `path_ptr`: user-space pointer to the path string
+/// - `path_len`: length of the path string
+/// - `permissions`: permission bitmask (bit 0=read, 1=write, 2=exec)
+///
+/// Returns 0 on success, or a negative errno on failure.
+pub(super) fn sys_vnode_mkdir(path_ptr: usize, path_len: usize, permissions: usize) -> isize {
+    let Ok(user_slice) = UserSlice::new(path_ptr, path_len) else {
+        return -EFAULT;
+    };
+
+    // SAFETY: UserSlice validated that [path_ptr, path_ptr+path_len) is in user space.
+    let path_bytes = unsafe { user_slice.as_slice() };
+    let Ok(path) = core::str::from_utf8(path_bytes) else {
+        return -crate::syscall::EINVAL;
+    };
+
+    // Split into parent directory path and new directory name.
+    let (parent_path, name) = match path.rsplit_once('/') {
+        Some((parent, name)) => {
+            let parent = if parent.is_empty() { "/" } else { parent };
+            (parent, name)
+        }
+        None => return -crate::syscall::EINVAL,
+    };
+
+    if name.is_empty() {
+        return -crate::syscall::EINVAL;
+    }
+
+    let perms = crate::fs::Permissions {
+        read: permissions & 0x1 != 0,
+        write: permissions & 0x2 != 0,
+        execute: permissions & 0x4 != 0,
+    };
+
+    // Resolve the parent directory.
+    let parent_inode = match crate::fs::vfs::with_vfs(|vfs| vfs.resolve(parent_path)) {
+        Ok(inode) => inode,
+        Err(e) => return -e.to_errno(),
+    };
+
+    // Create the directory entry.
+    match crate::fs::poll_immediate(parent_inode.create(
+        name,
+        crate::fs::InodeType::Directory,
+        perms,
+    )) {
+        Ok(_inode) => 0,
+        Err(e) => -e.to_errno(),
+    }
+}
+
+/// `sys_handle_dup_lowest` — duplicate a file descriptor to the lowest free fd.
+///
+/// Arguments:
+/// - `old_fd`: source file descriptor
+///
+/// Returns the new fd on success, or a negative errno on failure.
+#[expect(
+    clippy::cast_possible_wrap,
+    reason = "fd numbers are small, wrap is impossible"
+)]
+pub(super) fn sys_handle_dup_lowest(old_fd: usize) -> isize {
+    let old_fd = Fd::new(old_fd as u32);
+    crate::proc::ProcessTable::with_current(|process| {
+        let mut fd_table = process.fd_table.lock();
+        match fd_table.dup_lowest(old_fd) {
+            Some(new_fd) => new_fd.as_u32() as isize,
+            None => -crate::syscall::EBADF,
+        }
+    })
+}
+
+/// `sys_handle_fcntl` — perform fcntl operations on a file descriptor.
+///
+/// Commands:
+/// - `F_DUPFD(arg)`: duplicate to lowest free fd >= arg
+/// - `F_DUPFD_CLOEXEC(arg)`: same, with CLOEXEC set
+/// - `F_GETFD`: return `FD_CLOEXEC` if CLOEXEC is set, else 0
+/// - `F_SETFD(arg)`: set/clear CLOEXEC based on `arg & FD_CLOEXEC`
+/// - `F_GETFL`: return file status flags (APPEND, NONBLOCK, READ, WRITE)
+/// - `F_SETFL(arg)`: set modifiable flags (APPEND, NONBLOCK)
+#[expect(
+    clippy::cast_possible_wrap,
+    reason = "fd numbers and flag values are small, wrap is impossible"
+)]
+pub(super) fn sys_handle_fcntl(fd: usize, cmd: usize, arg: usize) -> isize {
+    use crate::syscall::{
+        EINVAL, F_DUPFD, F_DUPFD_CLOEXEC, F_GETFD, F_GETFL, F_SETFD, F_SETFL, FD_CLOEXEC,
+    };
+
+    let fd = Fd::new(fd as u32);
+
+    match cmd {
+        F_DUPFD => crate::proc::ProcessTable::with_current(|process| {
+            let mut fd_table = process.fd_table.lock();
+            match fd_table.dup_lowest_from(fd, Fd::new(arg as u32), OpenFlags::empty()) {
+                Some(new_fd) => new_fd.as_u32() as isize,
+                None => -crate::syscall::EBADF,
+            }
+        }),
+        F_DUPFD_CLOEXEC => crate::proc::ProcessTable::with_current(|process| {
+            let mut fd_table = process.fd_table.lock();
+            match fd_table.dup_lowest_from(fd, Fd::new(arg as u32), OpenFlags::CLOEXEC) {
+                Some(new_fd) => new_fd.as_u32() as isize,
+                None => -crate::syscall::EBADF,
+            }
+        }),
+        F_GETFD => crate::proc::ProcessTable::with_current(|process| {
+            let fd_table = process.fd_table.lock();
+            match fd_table.get(fd) {
+                Some(f) => {
+                    if f.flags.contains(OpenFlags::CLOEXEC) {
+                        FD_CLOEXEC as isize
+                    } else {
+                        0
+                    }
+                }
+                None => -crate::syscall::EBADF,
+            }
+        }),
+        F_SETFD => crate::proc::ProcessTable::with_current(|process| {
+            let mut fd_table = process.fd_table.lock();
+            match fd_table.get_mut(fd) {
+                Some(f) => {
+                    if arg & FD_CLOEXEC != 0 {
+                        f.flags |= OpenFlags::CLOEXEC;
+                    } else {
+                        f.flags -= OpenFlags::CLOEXEC;
+                    }
+                    0
+                }
+                None => -crate::syscall::EBADF,
+            }
+        }),
+        F_GETFL => crate::proc::ProcessTable::with_current(|process| {
+            let fd_table = process.fd_table.lock();
+            match fd_table.get(fd) {
+                Some(f) => f.flags.bits() as isize,
+                None => -crate::syscall::EBADF,
+            }
+        }),
+        F_SETFL => {
+            // Only APPEND and NONBLOCK are modifiable via F_SETFL.
+            let modifiable = OpenFlags::APPEND | OpenFlags::NONBLOCK;
+            #[expect(clippy::cast_possible_truncation, reason = "flags fit in u32")]
+            let new_bits = OpenFlags::from_bits_truncate(arg as u32) & modifiable;
+
+            crate::proc::ProcessTable::with_current(|process| {
+                let mut fd_table = process.fd_table.lock();
+                match fd_table.get_mut(fd) {
+                    Some(f) => {
+                        f.flags = (f.flags - modifiable) | new_bits;
+                        0
+                    }
+                    None => -crate::syscall::EBADF,
+                }
+            })
+        }
+        _ => -EINVAL,
+    }
+}
+
+/// `sys_handle_pipe2` — create a pipe with flags.
+///
+/// Arguments:
+/// - `fds_ptr`: user-space pointer to write two `usize` values (read_fd, write_fd)
+/// - `flags`: `PIPE_CLOEXEC` and/or `PIPE_NONBLOCK`
+///
+/// Returns 0 on success, or a negative errno on failure.
+#[expect(
+    clippy::cast_possible_wrap,
+    reason = "fd numbers are small, wrap is impossible"
+)]
+pub(super) fn sys_handle_pipe2(fds_ptr: usize, flags: usize) -> isize {
+    let Ok(user_slice) = UserSlice::new(fds_ptr, 2 * core::mem::size_of::<usize>()) else {
+        return -EFAULT;
+    };
+
+    let (reader, writer) = crate::ipc::pipe::pipe();
+
+    let mut read_flags = OpenFlags::READ;
+    let mut write_flags = OpenFlags::WRITE;
+
+    if flags & crate::syscall::PIPE_CLOEXEC != 0 {
+        read_flags |= OpenFlags::CLOEXEC;
+        write_flags |= OpenFlags::CLOEXEC;
+    }
+    if flags & crate::syscall::PIPE_NONBLOCK != 0 {
+        read_flags |= OpenFlags::NONBLOCK;
+        write_flags |= OpenFlags::NONBLOCK;
+    }
+
+    let (read_fd, write_fd) = crate::proc::ProcessTable::with_current(|process| {
+        let mut fd_table = process.fd_table.lock();
+        let rfd = fd_table.open(reader, read_flags);
+        let wfd = fd_table.open(writer, write_flags);
+        (rfd, wfd)
+    });
+
+    // SAFETY: UserSlice validated the pointer range is in user space.
+    unsafe {
+        let dst = user_slice.addr() as *mut usize;
+        core::ptr::write(dst, read_fd.as_usize());
+        core::ptr::write(dst.add(1), write_fd.as_usize());
+    }
+
+    0
+}
+
+/// `sys_vnode_rename` — rename (move) a file or directory.
+pub(super) fn sys_vnode_rename(
+    old_ptr: usize,
+    old_len: usize,
+    new_ptr: usize,
+    new_len: usize,
+) -> isize {
+    let Ok(old_slice) = UserSlice::new(old_ptr, old_len) else {
+        return -EFAULT;
+    };
+    let Ok(new_slice) = UserSlice::new(new_ptr, new_len) else {
+        return -EFAULT;
+    };
+
+    // SAFETY: UserSlice validated ranges.
+    let old_bytes = unsafe { old_slice.as_slice() };
+    let new_bytes = unsafe { new_slice.as_slice() };
+
+    let Ok(old_path) = core::str::from_utf8(old_bytes) else {
+        return -crate::syscall::EINVAL;
+    };
+    let Ok(new_path) = core::str::from_utf8(new_bytes) else {
+        return -crate::syscall::EINVAL;
+    };
+
+    // Split old path into parent + name.
+    let (old_parent, old_name) = match old_path.rsplit_once('/') {
+        Some((p, n)) => (if p.is_empty() { "/" } else { p }, n),
+        None => return -crate::syscall::EINVAL,
+    };
+
+    // Split new path into parent + name.
+    let (new_parent, new_name) = match new_path.rsplit_once('/') {
+        Some((p, n)) => (if p.is_empty() { "/" } else { p }, n),
+        None => return -crate::syscall::EINVAL,
+    };
+
+    if old_name.is_empty() || new_name.is_empty() {
+        return -crate::syscall::EINVAL;
+    }
+
+    let old_parent_inode = match crate::fs::vfs::with_vfs(|vfs| vfs.resolve(old_parent)) {
+        Ok(i) => i,
+        Err(e) => return -e.to_errno(),
+    };
+
+    let new_parent_inode = match crate::fs::vfs::with_vfs(|vfs| vfs.resolve(new_parent)) {
+        Ok(i) => i,
+        Err(e) => return -e.to_errno(),
+    };
+
+    match crate::fs::poll_immediate(old_parent_inode.rename(old_name, &*new_parent_inode, new_name))
+    {
+        Ok(()) => 0,
+        Err(e) => -e.to_errno(),
+    }
+}
+
+/// `sys_vnode_symlink` — create a symbolic link.
+pub(super) fn sys_vnode_symlink(
+    target_ptr: usize,
+    target_len: usize,
+    link_ptr: usize,
+    link_len: usize,
+) -> isize {
+    let Ok(target_slice) = UserSlice::new(target_ptr, target_len) else {
+        return -EFAULT;
+    };
+    let Ok(link_slice) = UserSlice::new(link_ptr, link_len) else {
+        return -EFAULT;
+    };
+
+    let target_bytes = unsafe { target_slice.as_slice() };
+    let link_bytes = unsafe { link_slice.as_slice() };
+
+    let Ok(target) = core::str::from_utf8(target_bytes) else {
+        return -crate::syscall::EINVAL;
+    };
+    let Ok(link_path) = core::str::from_utf8(link_bytes) else {
+        return -crate::syscall::EINVAL;
+    };
+
+    // Split link path into parent + name.
+    let (parent_path, name) = match link_path.rsplit_once('/') {
+        Some((p, n)) => (if p.is_empty() { "/" } else { p }, n),
+        None => return -crate::syscall::EINVAL,
+    };
+
+    if name.is_empty() {
+        return -crate::syscall::EINVAL;
+    }
+
+    let parent_inode = match crate::fs::vfs::with_vfs(|vfs| vfs.resolve(parent_path)) {
+        Ok(i) => i,
+        Err(e) => return -e.to_errno(),
+    };
+
+    let perms = crate::fs::Permissions {
+        read: true,
+        write: true,
+        execute: true,
+    };
+
+    match parent_inode.create_symlink(name, target, perms) {
+        Ok(_) => 0,
+        Err(e) => -e.to_errno(),
+    }
+}
+
+/// `sys_vnode_link` — create a hard link.
+pub(super) fn sys_vnode_link(
+    target_ptr: usize,
+    target_len: usize,
+    link_ptr: usize,
+    link_len: usize,
+) -> isize {
+    let Ok(target_slice) = UserSlice::new(target_ptr, target_len) else {
+        return -EFAULT;
+    };
+    let Ok(link_slice) = UserSlice::new(link_ptr, link_len) else {
+        return -EFAULT;
+    };
+
+    let target_bytes = unsafe { target_slice.as_slice() };
+    let link_bytes = unsafe { link_slice.as_slice() };
+
+    let Ok(target_path) = core::str::from_utf8(target_bytes) else {
+        return -crate::syscall::EINVAL;
+    };
+    let Ok(link_path) = core::str::from_utf8(link_bytes) else {
+        return -crate::syscall::EINVAL;
+    };
+
+    // Resolve the target inode.
+    let target_inode = match crate::fs::vfs::with_vfs(|vfs| vfs.resolve(target_path)) {
+        Ok(i) => i,
+        Err(e) => return -e.to_errno(),
+    };
+
+    // Split link path into parent + name.
+    let (parent_path, name) = match link_path.rsplit_once('/') {
+        Some((p, n)) => (if p.is_empty() { "/" } else { p }, n),
+        None => return -crate::syscall::EINVAL,
+    };
+
+    if name.is_empty() {
+        return -crate::syscall::EINVAL;
+    }
+
+    let parent_inode = match crate::fs::vfs::with_vfs(|vfs| vfs.resolve(parent_path)) {
+        Ok(i) => i,
+        Err(e) => return -e.to_errno(),
+    };
+
+    match crate::fs::poll_immediate(parent_inode.link(name, &*target_inode)) {
+        Ok(()) => 0,
+        Err(e) => -e.to_errno(),
+    }
+}
+
+/// `sys_vnode_readlink` — read the target of a symbolic link.
+#[expect(
+    clippy::cast_possible_wrap,
+    reason = "link target lengths are small, wrap is impossible"
+)]
+pub(super) fn sys_vnode_readlink(
+    path_ptr: usize,
+    path_len: usize,
+    buf_ptr: usize,
+    buf_len: usize,
+) -> isize {
+    let Ok(path_slice) = UserSlice::new(path_ptr, path_len) else {
+        return -EFAULT;
+    };
+    let Ok(buf_slice) = UserSlice::new(buf_ptr, buf_len) else {
+        return -EFAULT;
+    };
+
+    let path_bytes = unsafe { path_slice.as_slice() };
+    let Ok(path) = core::str::from_utf8(path_bytes) else {
+        return -crate::syscall::EINVAL;
+    };
+
+    // Resolve without following the final symlink — we need the symlink itself.
+    // For now, resolve normally (VFS follows symlinks). We look up the parent
+    // and then call read_link on the child name.
+    let (parent_path, name) = match path.rsplit_once('/') {
+        Some((p, n)) => (if p.is_empty() { "/" } else { p }, n),
+        None => return -crate::syscall::EINVAL,
+    };
+
+    if name.is_empty() {
+        return -crate::syscall::EINVAL;
+    }
+
+    let parent_inode = match crate::fs::vfs::with_vfs(|vfs| vfs.resolve(parent_path)) {
+        Ok(i) => i,
+        Err(e) => return -e.to_errno(),
+    };
+
+    // Lookup the child without following symlinks.
+    let child = match crate::fs::poll_immediate(parent_inode.lookup(name)) {
+        Ok(i) => i,
+        Err(e) => return -e.to_errno(),
+    };
+
+    let target = match child.read_link() {
+        Ok(t) => t,
+        Err(e) => return -e.to_errno(),
+    };
+
+    let target_bytes = target.as_bytes();
+    if target_bytes.len() > buf_len {
+        return -crate::syscall::EINVAL;
+    }
+
+    let buf = unsafe { buf_slice.as_mut_slice() };
+    buf[..target_bytes.len()].copy_from_slice(target_bytes);
+    target_bytes.len() as isize
+}
+
+/// `sys_vnode_truncate` — truncate a file to a specified length.
+pub(super) fn sys_vnode_truncate(fd: usize, len: usize) -> isize {
+    let fd = Fd::new(fd as u32);
+
+    crate::proc::ProcessTable::with_current(|process| {
+        let fd_table = process.fd_table.lock();
+        let Some(file) = fd_table.get(fd) else {
+            return -crate::syscall::EBADF;
+        };
+
+        if !file.flags.contains(OpenFlags::WRITE) {
+            return -crate::syscall::EBADF;
+        }
+
+        let inode = file.inode.clone();
+        drop(fd_table);
+
+        match crate::fs::poll_immediate(inode.truncate(len)) {
+            Ok(()) => 0,
+            Err(e) => -e.to_errno(),
+        }
+    })
+}
+
+/// `sys_vnode_fstatat` — stat a file relative to a directory fd.
+///
+/// `dirfd` is `AT_FDCWD` (0xFFFF_FF9C) for CWD or an open directory fd.
+/// `path_ptr`/`path_len` is the relative or absolute path.
+/// `buf` receives a [`StatInfo`]. `flags` is a bitmask of `AT_SYMLINK_NOFOLLOW`.
+pub(super) fn sys_vnode_fstatat(
+    dirfd: usize,
+    path_ptr: usize,
+    path_len: usize,
+    buf: usize,
+    _flags: usize,
+) -> isize {
+    use crate::fs::vfs;
+    use crate::syscall::{EINVAL, StatInfo};
+    use hadron_syscall::AT_FDCWD;
+
+    let stat_size = core::mem::size_of::<StatInfo>();
+
+    // Read path from user memory.
+    let path_slice = match UserSlice::new(path_ptr, path_len) {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    let path_bytes =
+        unsafe { core::slice::from_raw_parts(path_slice.addr() as *const u8, path_len) };
+    let path = match core::str::from_utf8(path_bytes) {
+        Ok(p) => p,
+        Err(_) => return -EINVAL,
+    };
+
+    // Resolve the path to an inode.
+    let resolved_path = if path.starts_with('/') {
+        alloc::string::String::from(path)
+    } else if dirfd == AT_FDCWD {
+        let cwd = crate::proc::ProcessTable::with_current(|p| p.cwd.lock().clone());
+        if cwd.ends_with('/') {
+            alloc::format!("{cwd}{path}")
+        } else {
+            alloc::format!("{cwd}/{path}")
+        }
+    } else {
+        // TODO: resolve relative to dirfd.
+        return -crate::syscall::ENOSYS;
+    };
+
+    let inode = match vfs::with_vfs(|vfs| vfs.resolve(&resolved_path)) {
+        Ok(i) => i,
+        Err(e) => return -e.to_errno(),
+    };
+
+    let Ok(user_slice) = UserSlice::new(buf, stat_size) else {
+        return -EFAULT;
+    };
+
+    let inode_type = match inode.inode_type() {
+        crate::fs::InodeType::File => crate::syscall::INODE_TYPE_FILE,
+        crate::fs::InodeType::Directory => crate::syscall::INODE_TYPE_DIR,
+        crate::fs::InodeType::CharDevice => crate::syscall::INODE_TYPE_CHARDEV,
+        crate::fs::InodeType::Symlink => crate::syscall::INODE_TYPE_SYMLINK,
+    };
+
+    let perms = inode.permissions();
+    let permissions: u32 =
+        u32::from(perms.read) | (u32::from(perms.write) << 1) | (u32::from(perms.execute) << 2);
+
+    let info = StatInfo {
+        inode_type,
+        _pad: [0; 3],
+        size: inode.size() as u64,
+        permissions,
+    };
+
+    let out = unsafe { user_slice.as_mut_slice() };
+    let info_bytes =
+        unsafe { core::slice::from_raw_parts(core::ptr::addr_of!(info).cast::<u8>(), stat_size) };
+    out[..stat_size].copy_from_slice(info_bytes);
+    0
 }
 
 /// `sys_handle_tcsetpgrp` — set the foreground process group of a TTY.

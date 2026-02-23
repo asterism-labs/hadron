@@ -225,6 +225,13 @@ impl LineDiscipline {
 
         if n > 0 { Some(n) } else { None }
     }
+
+    /// Check if data is available for reading without consuming it.
+    ///
+    /// Returns `true` if the ready buffer has bytes or EOF is pending.
+    pub fn has_data(&self) -> bool {
+        self.eof_pending || !self.ready_buf.is_empty()
+    }
 }
 
 // ── Scancode decoding ──────────────────────────────────────────────

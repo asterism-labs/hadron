@@ -89,4 +89,62 @@ impl Inode for DevConsole {
     ) -> Pin<Box<dyn Future<Output = Result<(), FsError>> + Send + 'a>> {
         Box::pin(async { Err(FsError::NotADirectory) })
     }
+
+    fn ioctl(&self, cmd: u32, arg: usize) -> Result<usize, FsError> {
+        use hadron_syscall::{
+            TCGETS, TCSETS, TCSETSF, TCSETSW, TIOCGPGRP, TIOCGWINSZ, TIOCSPGRP, TIOCSWINSZ,
+            Termios, Winsize,
+        };
+
+        let tty = crate::tty::active_tty();
+        match cmd {
+            TCGETS => {
+                let t = tty.get_termios();
+                // SAFETY: arg is a user pointer validated by sys_handle_ioctl.
+                unsafe { core::ptr::write_volatile(arg as *mut Termios, t) };
+                Ok(0)
+            }
+            TCSETS | TCSETSW | TCSETSF => {
+                // SAFETY: arg is a user pointer validated by sys_handle_ioctl.
+                let t = unsafe { core::ptr::read(arg as *const Termios) };
+                tty.set_termios(&t);
+                Ok(0)
+            }
+            TIOCGPGRP => {
+                let pgid = tty.foreground_pgid().unwrap_or(0);
+                // SAFETY: arg is a user pointer validated by sys_handle_ioctl.
+                unsafe { core::ptr::write_volatile(arg as *mut u32, pgid) };
+                Ok(0)
+            }
+            TIOCSPGRP => {
+                // SAFETY: arg is a user pointer validated by sys_handle_ioctl.
+                let pgid = unsafe { core::ptr::read(arg as *const u32) };
+                tty.set_foreground_pgid(pgid);
+                Ok(0)
+            }
+            TIOCGWINSZ => {
+                let ws = tty.get_winsize();
+                // SAFETY: arg is a user pointer validated by sys_handle_ioctl.
+                unsafe { core::ptr::write_volatile(arg as *mut Winsize, ws) };
+                Ok(0)
+            }
+            TIOCSWINSZ => Ok(0),
+            _ => Err(FsError::NotSupported),
+        }
+    }
+
+    fn poll_readiness(&self, waker: Option<&core::task::Waker>) -> u16 {
+        use hadron_syscall::{POLLIN, POLLOUT};
+
+        let tty = crate::tty::active_tty();
+        if let Some(w) = waker {
+            tty.subscribe(w);
+        }
+        tty.poll_hardware();
+        let mut events = POLLOUT;
+        if tty.has_input() {
+            events |= POLLIN;
+        }
+        events
+    }
 }

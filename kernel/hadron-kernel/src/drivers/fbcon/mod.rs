@@ -116,6 +116,12 @@ impl FbCon {
         self.active.load(Ordering::Acquire)
     }
 
+    /// Returns `(cols, rows)` — the character grid dimensions.
+    pub fn dimensions(&self) -> (u32, u32) {
+        let state = self.state.lock();
+        (state.cols, state.rows)
+    }
+
     /// Set whether this fbcon renders to the physical framebuffer.
     ///
     /// When deactivated, pending dirty bits are discarded on the next flush.

@@ -7,9 +7,9 @@
 //! Signal delivery is checked at kernel re-entry points (after preemption, after
 //! blocking I/O, after waitpid).
 
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-use crate::syscall::{SIG_DFL, SIG_IGN};
+use crate::syscall::{SA_RESETHAND, SA_RESTART, SIG_DFL, SIG_IGN};
 use crate::syscall::{SIGCHLD, SIGINT, SIGKILL, SIGPIPE, SIGQUIT, SIGSEGV, SIGSTOP, SIGTERM};
 
 /// Maximum signal number supported (bits 1..63).
@@ -68,16 +68,23 @@ pub enum SignalDisposition {
 pub struct SignalState {
     /// Pending signal bitmask. Bit N = signal N is pending.
     pending: AtomicU64,
+    /// Blocked signal bitmask. Bit N = signal N is blocked (masked).
+    /// SIGKILL and SIGSTOP cannot be blocked.
+    blocked: AtomicU64,
     /// Per-signal handler table. `SIG_DFL` = 0, `SIG_IGN` = 1, else = handler addr.
     handlers: [AtomicU64; HANDLER_TABLE_SIZE],
+    /// Per-signal action flags (SA_RESTART, SA_RESETHAND, etc.).
+    flags: [AtomicU32; HANDLER_TABLE_SIZE],
 }
 
 impl SignalState {
-    /// Creates a new signal state with no pending signals and all handlers set to `SIG_DFL`.
+    /// Creates a new signal state with no pending signals, no mask, and all handlers `SIG_DFL`.
     pub const fn new() -> Self {
         Self {
             pending: AtomicU64::new(0),
+            blocked: AtomicU64::new(0),
             handlers: [const { AtomicU64::new(SIG_DFL as u64) }; HANDLER_TABLE_SIZE],
+            flags: [const { AtomicU32::new(0) }; HANDLER_TABLE_SIZE],
         }
     }
 
@@ -90,31 +97,37 @@ impl SignalState {
         }
     }
 
-    /// Dequeue the highest-priority pending signal.
+    /// Dequeue the highest-priority deliverable signal.
     ///
     /// Returns `Some(Signal)` and clears its pending bit, or `None` if
-    /// no signals are pending. SIGKILL is always dequeued first.
+    /// no unblocked signals are pending. SIGKILL is always deliverable
+    /// (cannot be blocked) and has highest priority.
     pub fn dequeue(&self) -> Option<Signal> {
         loop {
-            let bits = self.pending.load(Ordering::Acquire);
-            if bits == 0 {
+            let pending = self.pending.load(Ordering::Acquire);
+            let blocked = self.blocked.load(Ordering::Acquire);
+            // SIGKILL/SIGSTOP can never be blocked.
+            let unblockable = (1u64 << SIGKILL) | (1u64 << SIGSTOP);
+            let deliverable = pending & (!blocked | unblockable);
+
+            if deliverable == 0 {
                 return None;
             }
 
             // SIGKILL (bit 9) has highest priority.
-            let signum = if bits & (1 << SIGKILL) != 0 {
+            let signum = if deliverable & (1 << SIGKILL) != 0 {
                 SIGKILL
             } else {
                 // Find lowest set bit (lowest signal number).
-                bits.trailing_zeros() as usize
+                deliverable.trailing_zeros() as usize
             };
 
             let mask = 1u64 << signum;
             // Atomically clear the bit. If another thread modified pending
             // between load and CAS, retry.
             match self.pending.compare_exchange_weak(
-                bits,
-                bits & !mask,
+                pending,
+                pending & !mask,
                 Ordering::AcqRel,
                 Ordering::Acquire,
             ) {
@@ -124,19 +137,57 @@ impl SignalState {
         }
     }
 
-    /// Returns `true` if any signal is pending.
+    /// Returns `true` if any deliverable (unblocked) signal is pending.
     pub fn has_pending(&self) -> bool {
-        self.pending.load(Ordering::Acquire) != 0
+        let pending = self.pending.load(Ordering::Acquire);
+        let blocked = self.blocked.load(Ordering::Acquire);
+        let unblockable = (1u64 << SIGKILL) | (1u64 << SIGSTOP);
+        (pending & (!blocked | unblockable)) != 0
     }
 
-    /// Set the handler for a signal number. Returns the previous handler value.
+    /// Get the current signal mask (blocked signals bitmask).
+    pub fn get_mask(&self) -> u64 {
+        self.blocked.load(Ordering::Acquire)
+    }
+
+    /// Set the signal mask. Returns the previous mask.
+    ///
+    /// `how` controls how `set` is applied:
+    /// - `SIG_BLOCK` (0): block additional signals (`mask |= set`)
+    /// - `SIG_UNBLOCK` (1): unblock signals (`mask &= !set`)
+    /// - `SIG_SETMASK` (2): replace mask entirely
+    ///
+    /// SIGKILL and SIGSTOP bits are always cleared (cannot be blocked).
+    pub fn set_mask(&self, how: usize, set: u64) -> u64 {
+        let unblockable = (1u64 << SIGKILL) | (1u64 << SIGSTOP);
+        loop {
+            let old = self.blocked.load(Ordering::Acquire);
+            let new = match how {
+                0 => old | set,  // SIG_BLOCK
+                1 => old & !set, // SIG_UNBLOCK
+                2 => set,        // SIG_SETMASK
+                _ => return old,
+            } & !unblockable; // SIGKILL/SIGSTOP never blocked
+
+            match self
+                .blocked
+                .compare_exchange_weak(old, new, Ordering::AcqRel, Ordering::Acquire)
+            {
+                Ok(_) => return old,
+                Err(_) => continue,
+            }
+        }
+    }
+
+    /// Set the handler and flags for a signal number. Returns the previous handler value.
     ///
     /// SIGKILL and SIGSTOP cannot be caught or ignored — returns `None` for those.
-    pub fn set_handler(&self, signum: usize, handler: u64) -> Option<u64> {
+    pub fn set_handler(&self, signum: usize, handler: u64, sa_flags: u32) -> Option<u64> {
         if !Signal::is_valid(signum) || signum == SIGKILL || signum == SIGSTOP {
             return None;
         }
         let old = self.handlers[signum].swap(handler, Ordering::AcqRel);
+        self.flags[signum].store(sa_flags, Ordering::Release);
         Some(old)
     }
 
@@ -148,6 +199,27 @@ impl SignalState {
         self.handlers[signum].load(Ordering::Acquire)
     }
 
+    /// Get the flags for a signal number.
+    pub fn get_flags(&self, signum: usize) -> u32 {
+        if !Signal::is_valid(signum) {
+            return 0;
+        }
+        self.flags[signum].load(Ordering::Acquire)
+    }
+
+    /// Returns `true` if `SA_RESTART` is set for the given signal.
+    pub fn has_restart(&self, signum: usize) -> bool {
+        self.get_flags(signum) & SA_RESTART as u32 != 0
+    }
+
+    /// Reset all signal handlers to `SIG_DFL` (used by execve).
+    pub fn reset_handlers(&self) {
+        for i in 1..HANDLER_TABLE_SIZE {
+            self.handlers[i].store(SIG_DFL as u64, Ordering::Release);
+            self.flags[i].store(0, Ordering::Release);
+        }
+    }
+
     /// Resolve how a signal should be handled based on the handler table.
     pub fn disposition(&self, signum: usize) -> SignalDisposition {
         // SIGKILL and SIGSTOP always use default action, regardless of handler table.
@@ -156,6 +228,14 @@ impl SignalState {
         }
 
         let handler = self.get_handler(signum);
+        let sa_flags = self.get_flags(signum);
+
+        // SA_RESETHAND: reset handler to SIG_DFL after querying it.
+        if sa_flags & SA_RESETHAND as u32 != 0 && handler as usize != SIG_DFL {
+            self.handlers[signum].store(SIG_DFL as u64, Ordering::Release);
+            self.flags[signum].store(0, Ordering::Release);
+        }
+
         match handler as usize {
             SIG_DFL => SignalDisposition::Default(default_action(signum)),
             SIG_IGN => SignalDisposition::Ignore,
