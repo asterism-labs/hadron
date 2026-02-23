@@ -209,10 +209,10 @@ The consolidated platform state (`AcpiPlatformState`) is stored in an
 
 **File:** `arch/x86_64/smp.rs`
 
-AP bootstrap uses a two-phase approach to avoid race conditions with
+AP bootstrap uses a two-step approach to avoid race conditions with
 bootloader memory:
 
-### Phase 1: Parking (boot stub)
+### Step 1: Parking (boot stub)
 
 Immediately after the boot stub switches CR3 to kernel page tables, it calls
 `smp::park_aps()`. This writes `ap_early_park` as the entry address to each
@@ -227,7 +227,7 @@ Each AP:
 At this point, APs are safely running on kernel page tables but have no
 per-CPU state.
 
-### Phase 2: Initialization (kernel\_init)
+### Step 2: Initialization (kernel\_init)
 
 After the BSP completes platform init, `smp::boot_aps()` is called. For each AP:
 

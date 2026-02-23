@@ -1,6 +1,6 @@
 # Target File Tree
 
-This is the target file tree after all remaining phases are implemented. Files are annotated with the phase that introduces them. Files without a phase annotation already exist.
+This is the target file tree after all remaining features are implemented. Files are annotated with the feature that introduces them. Files without an annotation already exist.
 
 ```
 hadron/
@@ -83,7 +83,7 @@ hadron/
 │   │       │   ├── executor.rs                    # Priority async executor
 │   │       │   ├── waker.rs                       # Waker encoding
 │   │       │   ├── timer.rs                       # Timer integration
-│   │       │   ├── smp.rs                         # SMP work stealing [Phase 12]
+│   │       │   ├── smp.rs                         # SMP work stealing
 │   │       │   └── block_on.rs                    # Blocking executor bridge
 │   │       │
 │   │       ├── fs/
@@ -127,7 +127,7 @@ hadron/
 │   │       │   ├── caps.rs                        # PCI capabilities
 │   │       │   └── enumerate.rs                   # PCI bus enumeration
 │   │       │
-│   │       └── vdso/                              # [Phase 17]
+│   │       └── vdso/                              # [vDSO & Performance]
 │   │           ├── mod.rs                         # vDSO generation, mapping
 │   │           └── data.rs                        # VVAR page
 │   │

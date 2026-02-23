@@ -1,6 +1,6 @@
-# Phase 16: Networking — TCP/UDP
+# Networking — TCP/UDP
 
-> **Revised** — Originally Phase 14. The smoltcp approach was dropped in favour of a custom network stack. ARP and ICMP over IPv4 are already implemented; this phase adds TCP and UDP on top of that foundation.
+> **Revised** — The smoltcp approach was dropped in favour of a custom network stack. ARP and ICMP over IPv4 are already implemented; this feature adds TCP and UDP on top of that foundation.
 
 ## Current State
 
@@ -12,11 +12,11 @@ The kernel already has a custom network stack with:
 - **VirtIO-net** and **e1000e** drivers for Ethernet frame TX/RX
 - **Async RX loop** — IRQ-driven packet reception
 
-These live in `hadron-kernel/src/net/` and were implemented during Phase 10/11 development.
+These live in `hadron-kernel/src/net/` and were implemented during earlier development.
 
 ## Goal
 
-Build TCP and UDP transport protocols on the existing custom ARP/ICMP/IPv4 stack. Add socket syscalls so userspace programs can create network connections. After this phase, a userspace TCP echo server and UDP DNS client are possible.
+Build TCP and UDP transport protocols on the existing custom ARP/ICMP/IPv4 stack. Add socket syscalls so userspace programs can create network connections. After this feature, a userspace TCP echo server and UDP DNS client are possible.
 
 ## Key Design
 
@@ -100,7 +100,7 @@ All blocking operations are async — they await WaitQueues and yield to the exe
 ┌─────────────────────────────┐
 │  Userspace (socket syscalls) │
 ├─────────────────────────────┤
-│  Socket layer (TCP/UDP)      │  ← This phase
+│  Socket layer (TCP/UDP)      │  ← This feature
 ├─────────────────────────────┤
 │  IPv4 + ICMP + ARP           │  ← Already implemented
 ├─────────────────────────────┤
@@ -132,12 +132,12 @@ Outgoing packets flow: socket send → TCP/UDP → IPv4 → ARP resolve → driv
 | IPv4 dispatch (update) | Service | Routing table lookup, packet forwarding |
 | Port allocation table | Service | Data structure management |
 
-The entire phase is safe service code building on the existing network stack.
+The entire feature is safe service code building on the existing network stack.
 
 ## Dependencies
 
-- **Phase 8**: VFS (sockets exposed as file descriptors).
-- **Phase 10**: Network drivers (VirtIO-net, e1000e — already complete).
+- **Async VFS & Ramfs**: VFS (sockets exposed as file descriptors).
+- **Device Drivers**: Network drivers (VirtIO-net, e1000e — already complete).
 - Existing `hadron-kernel/src/net/` ARP/ICMP/IPv4 implementation.
 
 ## Milestone

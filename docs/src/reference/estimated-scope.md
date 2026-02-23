@@ -1,27 +1,32 @@
 # Estimated Scope
 
-This chapter provides rough estimates for lines of code, unsafe percentages, and key learning areas for the remaining phases. These are approximations to help with planning --- actual numbers will vary.
+This chapter provides rough estimates for lines of code, unsafe percentages, and key learning areas for the remaining features. These are approximations to help with planning --- actual numbers will vary.
 
-## Completed Phases
+## Completed Features
 
-| Phase | Name | Status |
-|-------|------|--------|
-| 8 | Async VFS & Ramfs | Complete (+ FAT, ISO9660) |
-| 9 | Userspace & ELF Loading | Complete (+ lepton-init, lsh, coreutils) |
-| 10 | Device Drivers | Complete (+ AHCI, e1000e, Bochs VGA, PS/2 mouse) |
-| 11 | IPC & Minimal Signals | Complete (+ signal trampoline, process groups) |
-| 12 | SMP & Per-CPU Executors | Complete (two-phase AP boot, work stealing) |
+| Feature | Status |
+|---------|--------|
+| Async VFS & Ramfs | Complete (+ FAT, ISO9660) |
+| Userspace & ELF Loading | Complete (+ lepton-init, lsh, coreutils) |
+| Device Drivers | Complete (+ AHCI, e1000e, Bochs VGA, PS/2 mouse) |
+| Display Infrastructure | Complete (+ `/dev/fb0` mmap and ioctl) |
+| Input Handling | Complete (+ `/dev/kbd` and `/dev/mouse` raw events) |
+| IPC Channels & Shared Memory | Complete (+ channels, eventfd, memfd) |
+| TTY & Terminal System | Complete (+ multiple VTs, line discipline, signal dispatch) |
+| IPC & Signal Handling | Complete (+ signal trampoline, process groups) |
+| Threading & task_clone | Complete (+ TLS support, Arc<> sharing) |
+| SMP & Per-CPU Executors | Complete (+ two-step AP boot, work stealing) |
+| Network Stack - Phase 1 (ARP & ICMP) | Complete (+ async RX, zero-copy) |
+| Userspace Compositor | Complete (+ window manager, protocol) |
 
-## Remaining Phases
+## Remaining Features
 
-| Phase | Name | Approx LOC | Unsafe % | Key Learning |
-|-------|------|-----------|----------|--------------|
-| 13 | Input & Display Infrastructure | ~800 | ~10% | devfs device nodes, sys_mmap for device memory, sys_ioctl |
-| 14 | VirtIO GPU 2D Driver | ~1,000 | ~5% | VirtIO GPU protocol, resource management, hardware cursor |
-| 15 | Compositor & 2D Graphics | ~2,000 | ~0% | Software rendering, window management, input dispatch |
-| 16 | Networking — TCP/UDP | ~1,500 | ~5% | TCP state machine, UDP, socket syscalls |
-| 17 | vDSO & Performance | ~700 | ~15% | vDSO, seqlock, TSC, futex |
-| **Total remaining** | | **~6,000** | **~6%** | |
+| Feature | Approx LOC | Unsafe % | Key Learning |
+|---------|-----------|----------|--------------|
+| VirtIO GPU 2D Driver | ~1,000 | ~5% | VirtIO GPU protocol, resource management, hardware cursor |
+| Network Stack - Phase 2 (TCP/UDP) | ~1,500 | ~5% | TCP state machine, UDP, socket syscalls |
+| vDSO & Performance | ~700 | ~15% | vDSO, seqlock, TSC, futex |
+| **Total remaining** | | **~3,200** | **~8%** | |
 
 ## Deferred
 

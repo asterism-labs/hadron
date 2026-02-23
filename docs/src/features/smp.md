@@ -1,16 +1,16 @@
-# Phase 12: SMP & Per-CPU Executors
+# SMP & Per-CPU Executors
 
-> **Status: Complete** — Implemented as of Phase 12. See below for deviations from the original plan.
+> **Status: Complete** — See below for deviations from the original plan.
 
-Previously Phase 14, moved earlier because the executor already assumes per-CPU operation. Getting SMP online at this stage catches concurrency bugs in all subsequent phases.
+Previously planned later in the roadmap, moved earlier because the executor already assumes per-CPU operation. Getting SMP online at this stage catches concurrency bugs in all subsequent features.
 
 ## Goal
 
-Boot Application Processors (APs), give each CPU its own executor instance with a local run queue, implement work stealing between CPUs, and route cross-CPU wakeups via IPI. After this phase, kernel async tasks run in parallel across all available cores.
+Boot Application Processors (APs), give each CPU its own executor instance with a local run queue, implement work stealing between CPUs, and route cross-CPU wakeups via IPI. After this feature, kernel async tasks run in parallel across all available cores.
 
 ## Why Moved Earlier
 
-The Phase 6 executor already provides `CpuLocal<T>` and a per-CPU design with `MAX_CPUS` set to 1. SMP does not change the executor architecture -- it scales it horizontally. Bringing SMP online before filesystems and networking means those subsystems are developed and tested under true concurrency from the start, rather than retrofitting SMP correctness later.
+The Executor already provides `CpuLocal<T>` and a per-CPU design with `MAX_CPUS` set to 1. SMP does not change the executor architecture -- it scales it horizontally. Bringing SMP online before filesystems and networking means those subsystems are developed and tested under true concurrency from the start, rather than retrofitting SMP correctness later.
 
 ## Files to Create/Modify
 
@@ -115,13 +115,13 @@ impl PerCpu {
 
 ### Per-CPU Executor
 
-The Phase 6 executor changes from a single global instance to one per CPU. The `BTreeMap` task storage is replaced with a per-CPU slab allocator for O(1) insert/remove and zero cross-CPU lock contention during polls. See [Preemption & Scaling](../design/preemption-and-scaling.md#slab-task-storage-replaces-btreemap-in-phase-12) for the slab design.
+The Executor changes from a single global instance to one per CPU. The `BTreeMap` task storage is replaced with a per-CPU slab allocator for O(1) insert/remove and zero cross-CPU lock contention during polls. See [Preemption & Scaling](../design/preemption-and-scaling.md#slab-task-storage-replaces-btreemap) for the slab design.
 
 ```rust
-// Before (Phase 6):
+// Before (Executor):
 static EXECUTOR: LazyLock<Executor> = LazyLock::new(Executor::new);
 
-// After (Phase 12):
+// After (SMP):
 // Each CPU has its own Executor, accessed via CpuLocal<Executor>.
 // BSP initializes its executor during boot.
 // Each AP initializes its own executor in ap_entry().
@@ -154,11 +154,11 @@ fn try_steal(&self) -> Option<Task> {
 
 The `try_lock` call is critical: a CPU must never hold its own queue lock while attempting to lock another CPU's queue, as this creates ABBA deadlock potential. By using `try_lock` and accepting failure, the algorithm remains lock-free in the contention case.
 
-Note: cross-CPU wakeups use a lock-free MPSC queue rather than contending on the ready queue lock. Each CPU drains its wake queue into the local ready queue at the start of each `poll_ready_tasks` iteration. See [Preemption & Scaling](../design/preemption-and-scaling.md#phase-12-per-cpu-executors) for the full architecture.
+Note: cross-CPU wakeups use a lock-free MPSC queue rather than contending on the ready queue lock. Each CPU drains its wake queue into the local ready queue at the start of each `poll_ready_tasks` iteration. See [Preemption & Scaling](../design/preemption-and-scaling.md#per-cpu-executors) for the full architecture.
 
 ### Cross-CPU Wakeup
 
-The waker encoding already reserves 6 bits (61-56) for CPU ID since Phase 6. When a waker targets a different CPU, it reads the target CPU index from the encoded data and pushes to a lock-free MPSC wake queue on the target CPU. See [Preemption & Scaling](../design/preemption-and-scaling.md#waker-encoding-forward-compatible-from-phase-6) for the encoding layout.
+The waker encoding already reserves 6 bits (61-56) for CPU ID since the Executor was designed. When a waker targets a different CPU, it reads the target CPU index from the encoded data and pushes to a lock-free MPSC wake queue on the target CPU. See [Preemption & Scaling](../design/preemption-and-scaling.md#waker-encoding-forward-compatible) for the encoding layout.
 
 ```rust
 fn wake(data: *const ()) {
@@ -212,11 +212,11 @@ pub fn init_ap(tss: &'static mut TaskStateSegment) {
 
 SMP was implemented as designed with the following implementation details:
 
-- **Two-phase AP bootstrap**: APs boot in two phases — Phase 1 initializes core CPU state (GDT, IDT, APIC, GS base) and signals readiness. Phase 2 (after the BSP confirms all APs are in Phase 1) enables interrupts and enters the executor loop. This prevents APs from taking interrupts before all CPUs have consistent state.
+- **Two-step AP bootstrap**: APs boot in two steps — Step 1 initializes core CPU state (GDT, IDT, APIC, GS base) and signals readiness. Step 2 (after the BSP confirms all APs are in Step 1) enables interrupts and enters the executor loop. This prevents APs from taking interrupts before all CPUs have consistent state.
 - **Per-CPU executors** replaced the single global executor, with each CPU running its own run loop.
 - **Work stealing** was implemented using the `try_lock` approach described in the plan, stealing from the LIFO end of victim queues.
 - **IPI wakeups** are sent via the APIC when a cross-CPU wakeup targets a halted CPU.
-- The waker encoding's CPU ID bits (designed in Phase 6) were activated for cross-CPU task routing.
+- The waker encoding's CPU ID bits (designed with the Executor) were activated for cross-CPU task routing.
 
 ## Milestone
 
@@ -236,6 +236,6 @@ Multiple CPUs online, each running its own executor loop. Tasks are distributed 
 
 ## Dependencies
 
-- **Phase 5**: APIC (for IPI delivery and per-CPU timer configuration)
-- **Phase 6**: Executor (per-CPU design scaled from 1 to N CPUs)
-- **Phase 7**: Syscall interface (per-CPU kernel stack pointer via GS base)
+- **Interrupts & APIC**: APIC (for IPI delivery and per-CPU timer configuration)
+- **Executor**: Executor (per-CPU design scaled from 1 to N CPUs)
+- **Syscall Interface**: Syscall interface (per-CPU kernel stack pointer via GS base)

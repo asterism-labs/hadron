@@ -1,10 +1,10 @@
-# Phase 10: Device Drivers
+# Device Drivers
 
-> **Status: Complete** — Implemented as of Phase 10. See below for deviations from the original plan.
+> **Status: Complete** — See below for deviations from the original plan.
 
 ## Goal
 
-Enumerate PCI devices, implement an async block device abstraction, and add VirtIO drivers for QEMU virtual hardware. After this phase, the kernel can discover hardware and perform async block device I/O, with IRQ-to-async bridging using the same WaitQueue pattern established by existing serial and keyboard drivers.
+Enumerate PCI devices, implement an async block device abstraction, and add VirtIO drivers for QEMU virtual hardware. After this feature, the kernel can discover hardware and perform async block device I/O, with IRQ-to-async bridging using the same WaitQueue pattern established by existing serial and keyboard drivers.
 
 ## PCI Enumeration
 
@@ -128,9 +128,9 @@ A ram-backed block device (`RamDisk`) backed by a `Vec<u8>` is provided for test
 
 ## Dependencies
 
-- **Phase 4**: Virtual memory (for MMIO mappings of device BARs).
-- **Phase 5**: Interrupt handling (for device IRQs, WaitQueue wakeups).
-- **Phase 8**: VFS (for `/dev` integration of block devices).
+- **VMM & Heap**: Virtual memory (for MMIO mappings of device BARs).
+- **Interrupts & APIC**: Interrupt handling (for device IRQs, WaitQueue wakeups).
+- **Async VFS & Ramfs**: VFS (for `/dev` integration of block devices).
 
 ## What Actually Happened
 

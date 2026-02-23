@@ -1,8 +1,8 @@
 # Deferred: ext2 Filesystem
 
-> **Status: Deferred** — Originally Phase 13. The ext2 implementation is deferred in favour of the input/display/compositor direction. The design remains valid and can be picked up when persistent on-disk storage is needed.
+> **Status: Deferred** — The ext2 implementation is deferred in favour of the input/display/compositor direction. The design remains valid and can be picked up when persistent on-disk storage is needed.
 
-Previously Phase 12. The design is conceptually unchanged but all block I/O uses the async VFS trait introduced in Phase 8, enabling concurrent block reads within a single file operation.
+The design is conceptually unchanged but all block I/O uses the async VFS trait introduced with Async VFS & Ramfs, enabling concurrent block reads within a single file operation.
 
 ## Goal
 
@@ -29,7 +29,7 @@ Each block group contains: a block bitmap, an inode bitmap, an inode table, and 
 
 ### Async VFS Integration
 
-The ext2 driver implements the async `Inode` trait from Phase 8. All block reads go through `AsyncBlockDevice::read_sector()`, which returns a future. This means:
+The ext2 driver implements the async `Inode` trait from Async VFS & Ramfs. All block reads go through `AsyncBlockDevice::read_sector()`, which returns a future. This means:
 
 - Reading a file's data blocks can issue multiple concurrent reads via `join()`.
 - Resolving indirect block chains awaits each level sequentially (inherent data dependency) but individual block reads within a level can be parallelized.
@@ -255,5 +255,5 @@ umount mnt
 
 ## Dependencies
 
-- **Phase 8**: VFS integration (mount point, `Inode` and `FileSystem` traits)
-- **Phase 10**: VirtIO-blk block device driver (`AsyncBlockDevice` implementation)
+- **Async VFS & Ramfs**: VFS integration (mount point, `Inode` and `FileSystem` traits)
+- **Device Drivers**: VirtIO-blk block device driver (`AsyncBlockDevice` implementation)

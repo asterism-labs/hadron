@@ -34,8 +34,8 @@ The project is in its early stages. What exists today:
 
 This book provides **architectural documentation** and a **development roadmap** for Hadron. It is organized into:
 
-- **Architecture**: How the framekernel design works, crate layout, safety boundaries
-- **Kernel Internals**: Subsystem documentation covering memory management, the async executor, VFS, syscalls, driver model, and more
-- **Development Phases**: Remaining phases from async VFS to vDSO, each with goals, files, and milestones
-- **Design Decisions**: Rationale behind syscall strategy, POSIX approach, memory layout, and architecture choice
-- **Reference**: Target file tree, phase dependency graph, scope estimates
+- **Architecture & Concepts**: How the framekernel design works, crate layout, safety boundaries
+- **Architecture & Implementation**: Deep dives into kernel subsystems (task execution, memory management, I/O and filesystem, synchronization and IPC), architecture specifics, driver model
+- **Features**: Completed and remaining features from async VFS to vDSO, each with status, design decisions, and implementation references
+- **Design Decisions**: Rationale behind syscall strategy, POSIX approach, memory layout, preemption, and executor architecture
+- **Reference**: Target file tree, feature dependency graph, scope estimates, and known issues

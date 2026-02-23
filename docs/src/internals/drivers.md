@@ -168,7 +168,7 @@ prog-if `0x01`).
 allocates a DMA page, programs a READ DMA EXT command via the FIS and PRDT, and
 awaits completion through `issue_command_async`, which loops on `irq.wait().await`
 until the port's interrupt status indicates completion. Write support is
-stubbed for a future phase.
+stubbed for a future feature.
 
 ### Ramdisk
 

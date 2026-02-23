@@ -1,8 +1,6 @@
-# Phase 17: vDSO & Performance
+# vDSO & Performance
 
-> **Renumbered** — Originally Phase 15. Content unchanged.
-
-Minor updates from the original plan. Adds a futex syscall for efficient userspace synchronization primitives.
+> Minor updates from the original plan. Adds a futex syscall for efficient userspace synchronization primitives.
 
 ## Goal
 
@@ -106,7 +104,7 @@ The TSC (Time Stamp Counter) increments at a fixed rate on modern CPUs. The VVAR
 nsec_since_last_update = (rdtsc() - vvar.tsc_timestamp) * vvar.tsc_mult >> vvar.tsc_shift
 ```
 
-This avoids division entirely. The kernel calibrates `tsc_mult` and `tsc_shift` against the APIC timer or HPET during Phase 5 boot.
+This avoids division entirely. The kernel calibrates `tsc_mult` and `tsc_shift` against the APIC timer or HPET during the boot process.
 
 ### vDSO Mapping
 
@@ -272,6 +270,6 @@ futex_test: PASS
 
 ## Dependencies
 
-- **Phase 7**: Syscall interface (`sys_futex` is a new syscall; vDSO is an optimization over existing syscalls)
-- **Phase 9**: Userspace (vDSO is mapped into user process address spaces)
-- **Phase 5**: Timer subsystem (TSC calibration, timer interrupt drives VVAR updates)
+- **Syscall Interface**: Syscall interface (`sys_futex` is a new syscall; vDSO is an optimization over existing syscalls)
+- **Userspace & ELF Loading**: Userspace (vDSO is mapped into user process address spaces)
+- **Interrupts & APIC**: Timer subsystem (TSC calibration, timer interrupt drives VVAR updates)

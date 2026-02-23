@@ -15,7 +15,7 @@ Hadron uses a three-layer syscall strategy designed to give the kernel maximum f
 │    (hadron-libc / libhadron, separate project)   │
 │    Translates stable API → current kernel ABI    │
 ├─────────────────────────────────────────────────┤
-│              vDSO (Phase 17)                     │
+│              vDSO                         │
 │    Fast-path read-only ops without syscall       │
 │    (clock_gettime, gettimeofday, getcpu)         │
 ├─────────────────────────────────────────────────┤
@@ -93,7 +93,7 @@ The `syscall` instruction saves RIP in `rcx` and RFLAGS in `r11`, which is why a
 
 ## Initial Syscall Set
 
-Phase 7 implements these first, using Linux numbering:
+The Syscall Interface implements these first, using Linux numbering:
 
 | Number | Name | Category | Description |
 |--------|------|----------|-------------|
@@ -110,18 +110,18 @@ Phase 7 implements these first, using Linux numbering:
 
 ## Growth Path
 
-The syscall set grows incrementally with each phase:
+The syscall set grows incrementally with each feature:
 
-| Phase | New Syscalls |
-|-------|-------------|
-| 7 | `read`, `write`, `open`, `close`, `mmap`, `munmap`, `brk`, `exit`, `getpid` |
-| 8 | `stat`, `fstat`, `lseek`, `readdir`, `mkdir`, `unlink` |
-| 9 | (no new syscalls — uses existing ones) |
-| 11 | `pipe`, `fork`, `execve`, `waitpid`, `kill`, `sigaction`, `dup2` |
-| 13 | `socket`, `bind`, `listen`, `accept`, `connect`, `send`, `recv` |
-| 15 | `clock_gettime` via vDSO (replaces syscall path) |
+| Feature | New Syscalls |
+|---------|-------------|
+| Syscall Interface | `read`, `write`, `open`, `close`, `mmap`, `munmap`, `brk`, `exit`, `getpid` |
+| Async VFS & Ramfs | `stat`, `fstat`, `lseek`, `readdir`, `mkdir`, `unlink` |
+| Userspace & ELF Loading | (no new syscalls — uses existing ones) |
+| IPC & Minimal Signals | `pipe`, `fork`, `execve`, `waitpid`, `kill`, `sigaction`, `dup2` |
+| Networking — TCP/UDP | `socket`, `bind`, `listen`, `accept`, `connect`, `send`, `recv` |
+| vDSO & Performance | `clock_gettime` via vDSO (replaces syscall path) |
 
-Target: ~50 syscalls by Phase 11, growing to ~200 as features are added.
+Target: ~50 syscalls by IPC & Minimal Signals, growing to ~200 as features are added.
 
 ## Why Not Stable From Day One?
 

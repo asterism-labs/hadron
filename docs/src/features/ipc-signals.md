@@ -1,10 +1,10 @@
-# Phase 11: IPC & Minimal Signals
+# IPC & Minimal Signals
 
-> **Status: Complete** — Implemented as of Phase 11. See below for deviations from the original plan.
+> **Status: Complete** — See below for deviations from the original plan.
 
 ## Goal
 
-Implement async IPC primitives (pipes, channels), minimal POSIX signal handling, `sys_spawn` for process creation, and `sys_waitpid` for process reaping. This phase replaces the traditional fork/exec/CoW model with async-native primitives that integrate directly with the executor.
+Implement async IPC primitives (pipes, channels), minimal POSIX signal handling, `sys_spawn` for process creation, and `sys_waitpid` for process reaping. This feature replaces the traditional fork/exec/CoW model with async-native primitives that integrate directly with the executor.
 
 ## No fork(), No Copy-on-Write
 
@@ -206,12 +206,12 @@ pub async fn sys_waitpid(pid: i32, status: &mut i32) -> Result<i32, SyscallError
 | `sys_spawn` | Service | Uses safe exec() and executor spawn |
 | `sys_waitpid` | Service | Awaits WaitQueue |
 
-All code in this phase is service-layer. No new unsafe frame code is needed.
+All code in this feature is service-layer. No new unsafe frame code is needed.
 
 ## Dependencies
 
-- **Phase 9**: Userspace processes (process_task, Process struct, exec).
-- **Phase 8**: VFS (pipes as file descriptors, reading ELF binaries for spawn).
+- **Userspace & ELF Loading**: Userspace processes (process_task, Process struct, exec).
+- **Async VFS & Ramfs**: VFS (pipes as file descriptors, reading ELF binaries for spawn).
 
 ## What Actually Happened
 

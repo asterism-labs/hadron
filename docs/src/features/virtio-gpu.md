@@ -1,18 +1,18 @@
-# Phase 14: VirtIO GPU 2D Driver
+# VirtIO GPU 2D Driver
 
 ## Goal
 
-Implement the VirtIO GPU 2D protocol over virtqueues, providing structured resource management for display output. Replace or supplement the Bochs VGA dumb framebuffer with a proper display protocol that supports resource creation, host-side transfer, scanout configuration, and hardware cursor. After this phase, the kernel has a modern display path that works with QEMU's `virtio-gpu` device.
+Implement the VirtIO GPU 2D protocol over virtqueues, providing structured resource management for display output. Replace or supplement the Bochs VGA dumb framebuffer with a proper display protocol that supports resource creation, host-side transfer, scanout configuration, and hardware cursor. After this feature, the kernel has a modern display path that works with QEMU's `virtio-gpu` device.
 
 ## Background
 
-The Bochs VGA driver from Phase 10 provides a simple linear framebuffer where the CPU does all rendering via direct memory writes. VirtIO GPU 2D adds a structured command protocol over virtqueues:
+The Bochs VGA driver from the Device Drivers feature provides a simple linear framebuffer where the CPU does all rendering via direct memory writes. VirtIO GPU 2D adds a structured command protocol over virtqueues:
 
 - **Resources** are GPU-side memory objects (2D images) with defined formats and dimensions.
 - The guest creates resources, attaches backing memory, renders into them on the CPU side, then **transfers** the updated regions to the host.
 - The host **scans out** a resource to the display, handling the actual screen update.
 
-This is still software-rendered on the guest side, but the display protocol is proper and efficient. The existing virtqueue infrastructure from Phase 10 (VirtIO block/net) makes this straightforward.
+This is still software-rendered on the guest side, but the display protocol is proper and efficient. The existing virtqueue infrastructure from the Device Drivers feature (VirtIO block/net) makes this straightforward.
 
 ## Key Design
 
@@ -165,7 +165,7 @@ For simple use cases, the driver can expose a framebuffer-compatible interface w
 
 ### Hardware Cursor
 
-VirtIO GPU supports a hardware cursor via the cursor virtqueue. This offloads cursor rendering from the CPU and provides tear-free, low-latency cursor movement — essential for the compositor in Phase 15.
+VirtIO GPU supports a hardware cursor via the cursor virtqueue. This offloads cursor rendering from the CPU and provides tear-free, low-latency cursor movement — essential for the Compositor & 2D Graphics feature.
 
 ```rust
 // Create a 64x64 RGBA cursor resource
@@ -177,7 +177,7 @@ gpu.transfer_to_host_2d(cursor_id, Rect::new(0, 0, 64, 64)).await?;
 gpu.update_cursor(cursor_id, mouse_x, mouse_y, 0, 0).await?;
 ```
 
-### Integration with Phase 13
+### Integration with Input & Display Infrastructure
 
 The VirtIO GPU driver can serve as an alternative backend for `/dev/fb0`. When available, the devfs framebuffer node uses VirtIO GPU resources instead of raw Bochs VGA BAR memory. The `sys_mmap` interface remains the same — userspace maps the resource's backing memory and draws as before.
 
@@ -195,15 +195,15 @@ The VirtIO GPU driver can serve as an alternative backend for `/dev/fb0`. When a
 | Component | Layer | Reason |
 |-----------|-------|--------|
 | VirtIO GPU command encoding | Service | Byte-level protocol over safe virtqueue API |
-| Virtqueue send/recv | Service | Uses existing VirtIO transport from Phase 10 |
+| Virtqueue send/recv | Service | Uses existing VirtIO transport from Device Drivers |
 | Resource management | Service | Bookkeeping of resource IDs and backing memory |
 | Hardware cursor | Service | Commands over cursor virtqueue |
 | Physical page allocation for backing | Frame | Physical memory allocation |
 
 ## Dependencies
 
-- **Phase 10**: VirtIO transport (virtqueue infrastructure, device discovery).
-- **Phase 13**: Input & display infrastructure (devfs framebuffer node, sys_mmap).
+- **Device Drivers**: VirtIO transport (virtqueue infrastructure, device discovery).
+- **Input & Display Infrastructure**: Input & display infrastructure (devfs framebuffer node, sys_mmap).
 
 ## Milestone
 

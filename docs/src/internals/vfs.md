@@ -175,7 +175,7 @@ During `kernel_init` (in `boot.rs`), the kernel:
 ## Path resolution
 
 Path resolution is implemented by `Vfs::resolve()` in `fs/vfs.rs`. It works in
-two phases:
+two steps:
 
 1. **Mount matching.** The path utilities in `fs/path.rs` find the
    longest mount-point prefix. For example, given mounts at `/` and `/dev`,
@@ -332,7 +332,7 @@ PS/2 hardware (ports 0x60, 0x64)
   manages the per-VT foreground PGID, and handles IRQ-to-waker routing.
 
 - **`DevTty`** (`tty/device.rs`): VFS `Inode` implementation for `/dev/ttyN`,
-  using `TtyReadFuture` with a two-phase waker strategy.
+   using `TtyReadFuture` with a two-step waker strategy.
 
 - **`tty::init()`**: Registers the IRQ1 handler via the interrupt dispatch
   table and unmasks IRQ1 in the I/O APIC.

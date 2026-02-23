@@ -4,7 +4,7 @@ This document defines Hadron's high-level design goals and the task-centric arch
 
 ## Design Philosophy
 
-Hadron is not a Linux clone. It is a general-purpose operating system that takes a fundamentally different approach to processes, security, and IPC — one that aligns with the strengths of the async executor architecture (Phase 6) and the framekernel's safety guarantees.
+Hadron is not a Linux clone. It is a general-purpose operating system that takes a fundamentally different approach to processes, security, and IPC — one that aligns with the strengths of the async executor architecture and the framekernel's safety guarantees.
 
 Three principles guide the design:
 
@@ -46,7 +46,7 @@ Task = async Future + HandleTable + optional AddressSpace
 ```
 
 Every task has:
-- A **TaskId** — unique identifier, packed with priority and CPU affinity into the waker encoding (already implemented in Phase 6)
+- A **TaskId** — unique identifier, packed with priority and CPU affinity into the waker encoding (already implemented in the Executor)
 - A **HandleTable** — the set of kernel object handles this task holds (its capabilities)
 - An optional **AddressSpace** — if present, the task runs in ring 3 (userspace); if absent, it runs in kernel context
 
@@ -429,21 +429,21 @@ init
 
 This is more secure than POSIX by default. The `cat` program cannot access any file other than the one it was given. It cannot access the network, spawn other tasks (it has no binary vnodes), or read arbitrary files. A compromised `cat` is contained to its explicitly granted capabilities.
 
-## Impact on Existing Phases
+## Impact on Existing Features
 
-The task-centric model affects phases 7-15. Infrastructure phases 0-6 are unchanged.
+The task-centric model affects features from the Syscall Interface onward. Core infrastructure (Boot, PMM, VMM & Heap, Interrupts & APIC, Executor) is unchanged.
 
-| Phase | Original Plan | Revised Direction |
-|-------|--------------|-------------------|
-| **7: Syscall Interface** | Linux syscall numbers, POSIX stubs | Keep SYSCALL/SYSRET mechanism. Implement native Hadron syscall table. Linux-compat numbers can coexist for early testing. |
-| **8: VFS & Ramfs** | Async VFS with file descriptor table | Async VFS with **handle table**. `vnode_open` takes a directory handle. Path resolution is relative to a capability, not absolute. |
-| **9: Userspace** | Process struct with fd table, `exec()` | TaskContext with handle table and address space. `task_spawn` with explicit capability passing. |
-| **10: Device Drivers** | PCI, VirtIO, async BlockDevice | Mostly unchanged. Device handles exposed to driver tasks. |
-| **11: IPC & Signals** | Pipes, minimal signals, `sys_spawn`, `sys_waitpid` | **Channels and Events.** No signals. Channel-based IPC with handle transfer. Structured concurrency with `task_wait`/`task_kill`/`task_detach`. |
-| **12: SMP** | Per-CPU executors, work stealing | Unchanged — executor scaling is independent of the task model. |
-| **13: ext2** | Read-only ext2 | Unchanged (VFS backend). |
-| **14: Networking** | VirtIO-net + smoltcp, socket syscalls | Socket handles instead of socket fds. Otherwise similar. |
-| **15: vDSO** | vDSO + futex | vDSO for clock_gettime (unchanged). Events replace futex for userspace synchronization. |
+| Feature | Original Plan | Revised Direction |
+|---------|--------------|-------------------|
+| **Syscall Interface** | Linux syscall numbers, POSIX stubs | Keep SYSCALL/SYSRET mechanism. Implement native Hadron syscall table. Linux-compat numbers can coexist for early testing. |
+| **Async VFS & Ramfs** | Async VFS with file descriptor table | Async VFS with **handle table**. `vnode_open` takes a directory handle. Path resolution is relative to a capability, not absolute. |
+| **Userspace & ELF Loading** | Process struct with fd table, `exec()` | TaskContext with handle table and address space. `task_spawn` with explicit capability passing. |
+| **Device Drivers** | PCI, VirtIO, async BlockDevice | Mostly unchanged. Device handles exposed to driver tasks. |
+| **IPC & Minimal Signals** | Pipes, minimal signals, `sys_spawn`, `sys_waitpid` | **Channels and Events.** No signals. Channel-based IPC with handle transfer. Structured concurrency with `task_wait`/`task_kill`/`task_detach`. |
+| **SMP & Per-CPU Executors** | Per-CPU executors, work stealing | Unchanged — executor scaling is independent of the task model. |
+| **ext2 Filesystem** | Read-only ext2 | Unchanged (VFS backend). |
+| **Networking — TCP/UDP** | VirtIO-net + smoltcp, socket syscalls | Socket handles instead of socket fds. Otherwise similar. |
+| **vDSO & Performance** | vDSO + futex | vDSO for clock_gettime (unchanged). Events replace futex for userspace synchronization. |
 
 ## Comparison With Other Capability Systems
 

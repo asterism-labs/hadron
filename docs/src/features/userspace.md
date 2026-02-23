@@ -1,10 +1,10 @@
-# Phase 9: Userspace & ELF Loading
+# Userspace & ELF Loading
 
-> **Status: Complete** — Implemented as of Phase 9. See below for deviations from the original plan.
+> **Status: Complete** — See below for deviations from the original plan.
 
 ## Goal
 
-Load and execute ELF64 binaries in ring 3. Each user process is backed by a kernel async task on the executor -- there are no per-process kernel threads and no preemptive thread scheduler. After this phase, the kernel runs its first userspace program: a minimal static ELF that prints a message via the write syscall and exits.
+Load and execute ELF64 binaries in ring 3. Each user process is backed by a kernel async task on the executor -- there are no per-process kernel threads and no preemptive thread scheduler. After this feature, the kernel runs its first userspace program: a minimal static ELF that prints a message via the write syscall and exits.
 
 ## Process Model: Async Tasks
 
@@ -56,7 +56,7 @@ Key properties of this model:
 
 When a timer interrupt fires while user code runs in ring 3, the CPU traps to the kernel. The timer handler sets a `PerCpu::preempt_current` flag. The interrupt return path checks this flag; if set, it returns to the executor loop instead of back to userspace. The `process_task` then sees `UserspaceReturn::Preempted` and calls `yield_now().await` to re-queue itself.
 
-This gives the kernel timer-driven preemption of userspace code without any ability to "interrupt" a Rust Future mid-poll. See [Preemption & Scaling](../design/preemption-and-scaling.md#userspace-preemption-timer-driven-phase-9) for the full design.
+This gives the kernel timer-driven preemption of userspace code without any ability to "interrupt" a Rust Future mid-poll. See [Preemption & Scaling](../design/preemption-and-scaling.md#userspace-preemption-timer-driven) for the full design.
 
 ## Process Creation via exec()
 
@@ -187,7 +187,7 @@ pub struct Process {
 }
 ```
 
-The `exit_notify` WaitQueue is signaled when the process exits, allowing `sys_waitpid` (Phase 11) to await process termination.
+The `exit_notify` WaitQueue is signaled when the process exits, allowing `sys_waitpid` (IPC & Minimal Signals) to await process termination.
 
 ## Frame vs Service
 
@@ -202,9 +202,9 @@ The `exit_notify` WaitQueue is signaled when the process exits, allowing `sys_wa
 
 ## Dependencies
 
-- **Phase 7**: Syscall interface (for write and exit syscalls).
-- **Phase 8**: VFS (for loading `/init` from initramfs, stdio file descriptors).
-- **Phase 4**: Virtual memory (for user address space creation).
+- **Syscall Interface**: Syscall interface (for write and exit syscalls).
+- **Async VFS & Ramfs**: VFS (for loading `/init` from initramfs, stdio file descriptors).
+- **VMM & Heap**: Virtual memory (for user address space creation).
 
 ## What Actually Happened
 

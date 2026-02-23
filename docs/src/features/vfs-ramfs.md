@@ -1,10 +1,10 @@
-# Phase 8: Async VFS & Ramfs
+# Async VFS & Ramfs
 
-> **Status: Complete** — Implemented as of Phase 8. See below for deviations from the original plan.
+> **Status: Complete** — See below for deviations from the original plan.
 
 ## Goal
 
-Create a Virtual Filesystem layer with async inode operations, an in-memory ramfs, an initramfs CPIO unpacker, and a device filesystem (devfs). After this phase, the kernel has a unified async file abstraction where heap-backed operations resolve immediately and block-backed operations can await I/O completion through the same interface.
+Create a Virtual Filesystem layer with async inode operations, an in-memory ramfs, an initramfs CPIO unpacker, and a device filesystem (devfs). After this feature, the kernel has a unified async file abstraction where heap-backed operations resolve immediately and block-backed operations can await I/O completion through the same interface.
 
 > **Note:** Kernel state queries (memory stats, uptime, version) are exposed via the typed `sys_query` syscall (`SYS_QUERY`) rather than a virtual procfs. This avoids text serialization overhead and fits the kernel's capability-based, handle-centric design.
 
@@ -177,12 +177,12 @@ Each device node implements the `Inode` trait with async read/write.
 | devfs | Service | Virtual filesystem, safe code |
 | File descriptor table | Service | Per-process bookkeeping |
 
-This phase is **entirely** service code -- no new unsafe frame code is needed.
+This feature is **entirely** service code -- no new unsafe frame code is needed.
 
 ## Dependencies
 
-- **Phase 4**: Kernel heap (for `Vec`, `BTreeMap`, `Arc`, `Box::pin`).
-- **Phase 7**: Syscall interface (for file descriptor operations: `sys_read`, `sys_write`, `sys_open`, `sys_close`).
+- **VMM & Heap**: Kernel heap (for `Vec`, `BTreeMap`, `Arc`, `Box::pin`).
+- **Syscall Interface**: Syscall interface (for file descriptor operations: `sys_read`, `sys_write`, `sys_open`, `sys_close`).
 
 ## What Actually Happened
 
@@ -192,7 +192,7 @@ The core VFS, ramfs, initramfs, and devfs were implemented as planned. Additiona
 - **ISO 9660** (CD-ROM) filesystem support was added for reading ISO images.
 - The VFS grew richer than originally scoped, with a more complete mount table and path resolution supporting symlinks.
 
-The original plan mentioned only ramfs and devfs; the FAT and ISO9660 drivers were added during Phase 10 alongside device drivers, since block device support enabled on-disk filesystem mounting.
+The original plan mentioned only ramfs and devfs; the FAT and ISO9660 drivers were added alongside the Device Drivers feature, since block device support enabled on-disk filesystem mounting.
 
 ## Milestone
 

@@ -10,9 +10,9 @@ exposes a single submodule:
 - `ipc/mod.rs` -- module root
 - `ipc/pipe.rs` -- pipe implementation
 
-Future phases will add typed async channels (`mpsc`, `oneshot`) for
+Future work will add typed async channels (`mpsc`, `oneshot`) for
 kernel-internal IPC between async tasks. See the
-[Phase 11](../phases/11-ipc-signals.md) plan for details.
+[IPC & Minimal Signals](../features/ipc-signals.md) plan for details.
 
 ## Pipe Architecture
 
@@ -206,7 +206,7 @@ yielding.
 - **Single buffer size**: All pipes use the same 64 KiB buffer. There is no
   mechanism to configure per-pipe buffer sizes.
 - **No typed channels yet**: The `mpsc` and `oneshot` async channels planned in
-  Phase 11 are not yet implemented. Only byte-oriented pipes are available.
+  IPC & Minimal Signals are not yet implemented. Only byte-oriented pipes are available.
 - **No SIGPIPE delivery**: When a write encounters a broken pipe, it returns
   `FsError::IoError` but does not deliver a `SIGPIPE` signal to the writing
   process (signals are not yet implemented).

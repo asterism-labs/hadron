@@ -26,15 +26,15 @@ MLFQ detects CPU-bound vs I/O-bound tasks via time slice exhaustion. Hadron's ex
 
 Priority is packed into the `RawWaker` data pointer alongside `TaskId`:
 
-```
-Bit 63    62    61                                            0
-┌────┬────┬────────────────────────────────────────────────────┐
-│ P1 │ P0 │                   TaskId (62 bits)                 │
-└────┴────┴────────────────────────────────────────────────────┘
+```mermaid
+graph LR
+    A["Waker Data Pointer<br/>(64-bit u64)"]
+    A --> B["Bits 63-62<br/>Priority P1 P0<br/>4 levels, 3 used"]
+    A --> C["Bits 61-0<br/>TaskId<br/>62 bits<br/>practically unlimited"]
 ```
 
-- **Bits 63-62**: Priority (2 bits → 4 levels, 3 used)
-- **Bits 61-0**: TaskId (62 bits → practically unlimited)
+- **Bits 63-62**: Priority (2 bits → 4 levels, 3 used: Critical=0, Normal=1, Background=2)
+- **Bits 61-0**: TaskId (62 bits → practically unlimited task IDs)
 
 When a waker fires, it extracts the priority from the data pointer and pushes the task into the correct priority queue without any lock-based metadata lookup.
 
@@ -46,7 +46,7 @@ Single `LazyLock<Executor>` global — BSP only.
 
 ### SMP-Ready Abstraction
 
-The `CpuLocal<T>` wrapper indexes a static array by CPU ID. For now, `MAX_CPUS = 1`. When SMP arrives (Phase 12):
+The `CpuLocal<T>` wrapper indexes a static array by CPU ID. For now, `MAX_CPUS = 1`. When SMP arrives:
 
 1. Increase `MAX_CPUS`
 2. Replace `LazyLock<Executor>` with `CpuLocal<Executor>`
@@ -57,15 +57,15 @@ The `CpuLocal<T>` type is defined in `hadron_kernel::percpu` and is available to
 
 ### Waker Encoding Expansion
 
-The waker data pointer has been expanded to reserve 6 bits (61-56) for CPU ID, reducing TaskId from 62 to 56 bits. This prevents a breaking encoding change when SMP arrives. See [Preemption & Scaling](preemption-and-scaling.md#waker-encoding-forward-compatible-from-phase-6) for the full encoding layout.
+The waker data pointer has been expanded to reserve 6 bits (61-56) for CPU ID, reducing TaskId from 62 to 56 bits. This prevents a breaking encoding change when SMP arrives. See [Preemption & Scaling](preemption-and-scaling.md#waker-encoding-forward-compatible) for the full encoding layout.
 
 ### Per-CPU Slab Storage
 
-Phase 12 will replace the `BTreeMap` task storage with a per-CPU slab allocator for O(1) insert/remove and zero cross-CPU lock contention during polls. See [Preemption & Scaling](preemption-and-scaling.md#slab-task-storage-replaces-btreemap-in-phase-12) for design details.
+SMP will replace the `BTreeMap` task storage with a per-CPU slab allocator for O(1) insert/remove and zero cross-CPU lock contention during polls. See [Preemption & Scaling](preemption-and-scaling.md#slab-task-storage-replaces-btreemap) for design details.
 
 ## Syscall Bridge Analysis
 
-Three models were analyzed for how userspace threads (POSIX threads) interact with the kernel async executor. Model C (Hybrid) is recommended and extended with a `UserspaceReturn::Preempted` variant for timer-driven preemption of userspace code — see [Preemption & Scaling](preemption-and-scaling.md#userspace-preemption-timer-driven-phase-9) for the full design.
+Three models were analyzed for how userspace threads (POSIX threads) interact with the kernel async executor. Model C (Hybrid) is recommended and extended with a `UserspaceReturn::Preempted` variant for timer-driven preemption of userspace code — see [Preemption & Scaling](preemption-and-scaling.md#userspace-preemption-timer-driven) for the full design.
 
 ### Model A — Async Bridge
 
@@ -100,7 +100,7 @@ Fast syscalls (`getpid`, `clock_gettime`, `brk`) run synchronously and return im
 
 **Pros:**
 - Best of both worlds
-- Incremental: start fully sync in Phase 7, add async I/O later
+- Incremental: start fully sync with the Syscall Interface, add async I/O later
 - Leverages existing executor
 
 **Cons:**
@@ -110,7 +110,7 @@ Fast syscalls (`getpid`, `clock_gettime`, `brk`) run synchronously and return im
 
 **Model C** is recommended because:
 - Aligns with framekernel's safe-services constraint (Rust `Future` is safe, manual thread blocking is not)
-- Incremental: Phase 7 can be fully synchronous, async bridge added later
+- Incremental: the Syscall Interface can be fully synchronous initially, async bridge added later
 - Per-CPU executors naturally handle the per-CPU syscall conversion path
 
 ## Driver Integration

@@ -2,44 +2,46 @@
 
 [Introduction](introduction.md)
 
-# Architecture
+# Architecture & Concepts
 
 - [Overview](architecture/overview.md)
 - [Crate Structure](architecture/crate-structure.md)
 - [Frame vs Services](architecture/frame-vs-services.md)
 
-# Kernel Internals
+# Architecture & Implementation
 
-- [Memory Management](internals/memory-management.md)
-- [Async Executor](internals/executor.md)
-- [Virtual Filesystem](internals/vfs.md)
-- [Process Management](internals/process-management.md)
-- [Syscall Interface](internals/syscalls.md)
-- [Driver Model](internals/driver-model.md)
-- [Synchronization Primitives](internals/synchronization.md)
+- [Task Execution & Scheduling](architecture/task-execution.md)
+- [Memory & Allocation](architecture/memory.md)
+- [I/O & Filesystem](architecture/io-filesystem.md)
+- [Synchronization & IPC](architecture/sync-ipc.md)
 - [Architecture & Boot](internals/arch-and-boot.md)
+- [Driver Architecture](internals/driver-model.md)
 - [Hardware Drivers](internals/drivers.md)
-- [Inter-Process Communication](internals/ipc.md)
 
-# Completed Phases
+# Completed Features
 
-- [Phase 8: Async VFS & Ramfs](phases/08-vfs-ramfs.md)
-- [Phase 9: Userspace & ELF Loading](phases/09-userspace.md)
-- [Phase 10: Device Drivers](phases/10-device-drivers.md)
-- [Phase 11: IPC & Minimal Signals](phases/11-ipc-signals.md)
-- [Phase 12: SMP & Per-CPU Executors](phases/12-smp.md)
+- [Async VFS & Ramfs](features/vfs-ramfs.md)
+- [Userspace & ELF Loading](features/userspace.md)
+- [Device Drivers](features/device-drivers.md)
+- [IPC Channels & Shared Memory](features/ipc-channels.md)
+- [TTY & Terminal System](features/tty-system.md)
+- [Display Infrastructure](features/display-infrastructure.md)
+- [Input Handling](features/input-handling.md)
+- [IPC & Signal Handling](features/ipc-signals.md)
+- [Threading & task_clone](features/threading.md)
+- [SMP & Per-CPU Executors](features/smp.md)
+- [Network Stack - Phase 1 (ARP & ICMP)](features/network-phase1.md)
+- [Userspace Compositor](features/compositor.md)
 
-# Remaining Phases
+# Remaining Features
 
-- [Phase 13: Input & Display Infrastructure](phases/13-input-display.md)
-- [Phase 14: VirtIO GPU 2D Driver](phases/14-virtio-gpu.md)
-- [Phase 15: Compositor & 2D Graphics](phases/15-compositor.md)
-- [Phase 16: Networking — TCP/UDP](phases/16-networking.md)
-- [Phase 17: vDSO & Performance](phases/17-vdso.md)
+- [Network Stack - Phase 2 (TCP/UDP)](features/networking.md)
+- [vDSO & Performance](features/vdso.md)
+- [VirtIO GPU 2D Driver](features/virtio-gpu.md)
 
 # Deferred
 
-- [ext2 Filesystem](phases/deferred-ext2.md)
+- [ext2 Filesystem](features/deferred-ext2.md)
 
 # Design Decisions
 
@@ -56,6 +58,6 @@
 
 - [Build System](reference/build-system.md)
 - [Target File Tree](reference/file-tree.md)
-- [Phase Dependencies](reference/phase-dependencies.md)
+- [Feature Dependencies](reference/feature-dependencies.md)
 - [Estimated Scope](reference/estimated-scope.md)
 - [Known Issues](reference/known-issues.md)

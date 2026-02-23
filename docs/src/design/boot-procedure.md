@@ -171,7 +171,7 @@ Build a new PML4 from scratch using physical frames found in the Limine-provided
 
 **Source**: `kernel/boot/uefi/` (planned)
 
-> The kernel loading mechanism (two-binary ELF loader vs single-binary UEFI PE/COFF app) is **TBD for Phase 2 implementation**.
+> The kernel loading mechanism (two-binary ELF loader vs single-binary UEFI PE/COFF app) is **TBD**.
 
 ### Starting State
 
@@ -230,7 +230,7 @@ Use UEFI Boot Services to allocate page table frames and gather system info **be
 
 12. **Call `kernel_init(&boot_info)`** — Never returns.
 
-### Open Questions (Phase 2)
+### Open Questions
 
 - **Kernel loading mechanism**: Does the UEFI stub load a separate kernel ELF from the filesystem, or is the kernel compiled as a UEFI PE/COFF application?
 - **Kernel placement**: Should the UEFI stub copy the kernel to a known physical address, or map it in place at whatever physical address UEFI chose?

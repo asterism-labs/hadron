@@ -4,22 +4,6 @@ Tracked bugs and limitations discovered during development that have not yet
 been addressed. Each entry includes the affected subsystem, a description,
 and pointers to the relevant code.
 
-## Process Management
-
-### ~~`waitpid(0)` always reaps the first child~~ — **Fixed**
-
-`handle_wait` with `pid = 0` now scans all children for the first zombie
-using a `poll_fn` with double-check wakeup registration on every child's
-`exit_notify`. Init correctly reaps whichever shell exits first.
-
-## Syscall / VFS
-
-### ~~`trap_io` leaks `Arc<dyn Inode>` references~~ — **Fixed**
-
-`sys_vnode_read` and `sys_vnode_write` now explicitly `drop(inode)` before
-calling `trap_io()`. The TRAP_IO handler in `process_task` re-fetches the
-inode from the fd table, so it does not depend on the caller's Arc.
-
 ## Shell / Job Control
 
 ### No `WNOHANG` for `waitpid`

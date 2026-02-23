@@ -1,12 +1,12 @@
 # Preemption & Scaling Architecture
 
-This document describes the architectural decisions for preemption and executor scaling in Hadron. It establishes the design contracts that future phases must follow.
+This document describes the architectural decisions for preemption and executor scaling in Hadron. It establishes the design contracts that subsequent features must follow.
 
 ## Preemption Model
 
 Hadron uses two layers of preemption with fundamentally different mechanisms.
 
-### Userspace Preemption (Timer-Driven, Phase 9)
+### Userspace Preemption (Timer-Driven)
 
 When a user process runs in ring 3, it can be preempted by the timer interrupt:
 
@@ -66,32 +66,42 @@ Instead, the kernel uses cooperative preemption:
 
 ### Current State (BSP-Only)
 
-Single `LazyLock<Executor>` global with `BTreeMap` task storage. Sufficient for single-CPU development through Phase 11.
+Single `LazyLock<Executor>` global with `BTreeMap` task storage. Sufficient for single-CPU development through IPC & Minimal Signals.
 
-### Phase 12: Per-CPU Executors
+### Per-CPU Executors
 
 Each CPU gets its own executor instance with local task storage:
 
+```mermaid
+graph TD
+    subgraph cpu0["CPU 0 Executor"]
+        TS0["TaskSlab<br/>Local"]
+        RQ0["ReadyQueues<br/>Per-CPU"]
+        WQ0["WakeQueue<br/>MPSC"]
+    end
+    
+    subgraph cpu1["CPU 1 Executor"]
+        TS1["TaskSlab<br/>Local"]
+        RQ1["ReadyQueues<br/>Per-CPU"]
+        WQ1["WakeQueue<br/>MPSC"]
+    end
+    
+    IPI["IPI Signal<br/>Wake CPU"]
+    
+    WQ0 -->|cross-CPU<br/>wakeup| WQ1
+    WQ0 --> IPI
+    WQ1 -->|remote waker<br/>push| WQ0
+    WQ1 --> IPI
 ```
-Per-CPU Executor:
-  +-------------------+
-  | TaskSlab (local)  | <- O(1) insert/remove, no cross-CPU lock
-  | ReadyQueues       | <- per-CPU, drained locally
-  | WakeQueue (MPSC)  | <- lock-free push from remote CPUs/IRQs
-  +-------------------+
 
-Cross-CPU wakeup:
-  Waker encodes target CPU-id -> push to target's WakeQueue -> send IPI
-```
+**Key properties:**
+- **O(1) insert/remove**: TaskSlab eliminates BTreeMap lock contention
+- **Per-CPU storage**: No cross-CPU locks during poll
+- **Lock-free MPSC WakeQueue**: Remote CPUs push task IDs without waiting
+- **IPI on wake**: Target CPU gets interrupted from HLT to process woken tasks
+- **Generational TaskId**: Upper bits = generation, lower bits = slab index (prevents ABA)
 
-### Slab Task Storage (Replaces BTreeMap in Phase 12)
-
-- Dense array indexed by slab key; O(1) insert/remove.
-- Generational `TaskId` (upper bits = generation, lower bits = slab index) prevents ABA problems.
-- Free list for O(1) allocation.
-- Per-CPU slab eliminates cross-CPU lock contention during poll.
-
-### Waker Encoding (Forward-Compatible from Phase 6)
+### Waker Encoding (Forward-Compatible)
 
 The waker data pointer packs priority, CPU ID, and task ID into 64 bits:
 
@@ -104,10 +114,21 @@ Bit 63    62    61          56    55                             0
 ```
 
 - **Bits 63-62**: Priority (2 bits, 3 levels used)
-- **Bits 61-56**: CPU ID (6 bits, supports up to 64 CPUs; hardcoded to 0 until Phase 12)
+- **Bits 61-56**: CPU ID (6 bits, supports up to 64 CPUs; hardcoded to 0 until SMP)
 - **Bits 55-0**: TaskId (56 bits, practically unlimited)
 
 The CPU ID field is reserved now to avoid a breaking encoding change when SMP arrives. When a waker fires on a remote CPU, it reads the target CPU ID from the waker data and pushes the task to that CPU's wake queue, then sends an IPI.
+
+```mermaid
+graph LR
+    A["Waker Data Pointer<br/>(64-bit u64)"] --> B["Bits 63-62<br/>Priority<br/>2 bits<br/>3 levels"]
+    A --> C["Bits 61-56<br/>CPU ID<br/>6 bits<br/>up to 64 CPUs"]
+    A --> D["Bits 55-0<br/>TaskId<br/>56 bits<br/>~unlimited"]
+    
+    B --> B1["Critical = 0<br/>Normal = 1<br/>Background = 2"]
+    C --> C1["Reserved for SMP<br/>Currently 0"]
+    D --> D1["Generational ID<br/>prevents ABA"]
+```
 
 ## WaitQueue Architecture
 
@@ -118,7 +139,7 @@ Two tiers of wait queues serve different parts of the kernel:
 | Frame | `WaitQueue` (ArrayVec) | 32 wakers | IRQ bottom-halves, low-level sync |
 | Service | `HeapWaitQueue` (VecDeque) | Unbounded | Pipes, futexes, sockets, VFS |
 
-### Condvar Pattern for Service-Layer Waiters (Phase 8+)
+### Condvar Pattern for Service-Layer Waiters
 
 To prevent thundering-herd problems, service-layer waiters should use the condvar pattern:
 

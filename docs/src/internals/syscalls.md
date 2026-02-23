@@ -148,8 +148,8 @@ pointer access.
 | `task_spawn` | `0x01` | Spawn a new process from an ELF path. Validates path via `UserSlice`, reads `SpawnArg` descriptors from the parent's address space (up to 32 args, 4096 bytes total), validates UTF-8, calls `spawn_process`. Returns child PID. |
 | `task_wait` | `0x02` | Block until a child exits. Sets `TRAP_WAIT` reason, longjmps to `process_task` which handles the async wait. Never returns to the caller directly. |
 | `task_info` | `0x05` | Returns the current process PID. |
-| `task_kill` | `0x03` | Reserved (Phase 11). |
-| `task_detach` | `0x04` | Reserved (Phase 11). |
+| `task_kill` | `0x03` | Reserved (IPC & Minimal Signals). |
+| `task_detach` | `0x04` | Reserved (IPC & Minimal Signals). |
 
 ### Handle (`syscall/vfs.rs`)
 
@@ -158,7 +158,7 @@ pointer access.
 | `handle_close` | `0x10` | Close a file descriptor via the process fd table. |
 | `handle_dup` | `0x11` | Duplicate a file descriptor with dup2 semantics (close target if open). |
 | `handle_pipe` | `0x13` | Create a pipe. Writes `[read_fd, write_fd]` to the user buffer. |
-| `handle_info` | `0x12` | Reserved (Phase 11). |
+| `handle_info` | `0x12` | Reserved (IPC & Minimal Signals). |
 
 ### VFS / Vnodes (`syscall/vfs.rs`)
 
@@ -169,7 +169,7 @@ pointer access.
 | `vnode_write` | `0x32` | Write to an fd. Same async trap logic as read. |
 | `vnode_stat` | `0x33` | Write a `StatInfo` struct to the user buffer (inode type, size, permissions). |
 | `vnode_readdir` | `0x34` | Read directory entries as a `DirEntryInfo` array. Returns entry count. |
-| `vnode_unlink` | `0x35` | Reserved (Phase 10). |
+| `vnode_unlink` | `0x35` | Reserved (Device Drivers). |
 
 ### Memory (`syscall/memory.rs`)
 
@@ -177,20 +177,20 @@ pointer access.
 |---|---|---|
 | `mem_map` | `0x40` | Stub, returns `-ENOSYS`. |
 | `mem_unmap` | `0x41` | Stub, returns `-ENOSYS`. |
-| `mem_protect` | `0x42` | Reserved (Phase 9). |
-| `mem_create_shared` | `0x43` | Reserved (Phase 11). |
-| `mem_map_shared` | `0x44` | Reserved (Phase 11). |
+| `mem_protect` | `0x42` | Reserved (Userspace & ELF Loading). |
+| `mem_create_shared` | `0x43` | Reserved (IPC & Minimal Signals). |
+| `mem_map_shared` | `0x44` | Reserved (IPC & Minimal Signals). |
 
 ### Events and time (`syscall/time.rs`)
 
 | Syscall | Number | Description |
 |---|---|---|
 | `clock_gettime` | `0x54` | Returns boot-relative monotonic time as a `Timespec` (u64 seconds + u64 nanoseconds). Only `CLOCK_MONOTONIC` (0) is supported. Backed by the HPET `boot_nanos()` clock source. |
-| `event_create` | `0x50` | Reserved (Phase 11). |
-| `event_signal` | `0x51` | Reserved (Phase 11). |
-| `event_wait` | `0x52` | Reserved (Phase 11). |
-| `event_wait_many` | `0x53` | Reserved (Phase 11). |
-| `timer_create` | `0x55` | Reserved (Phase 11). |
+| `event_create` | `0x50` | Reserved (IPC & Minimal Signals). |
+| `event_signal` | `0x51` | Reserved (IPC & Minimal Signals). |
+| `event_wait` | `0x52` | Reserved (IPC & Minimal Signals). |
+| `event_wait_many` | `0x53` | Reserved (IPC & Minimal Signals). |
+| `timer_create` | `0x55` | Reserved (IPC & Minimal Signals). |
 
 ### System services (`syscall/query.rs`, `syscall/io.rs`)
 
@@ -284,7 +284,7 @@ before userspace exists, the addresses have bit 63 set, and handlers use
 
 ## Reserved syscalls
 
-Syscalls annotated with `#[reserved(phase = N)]` in the DSL are placeholders
-for future phases. They get `SYS_*` constants and `Syscall` enum variants now,
+Syscalls annotated with `#[reserved]` in the DSL are placeholders
+for future features. They get `SYS_*` constants and `Syscall` enum variants now,
 but their `SyscallHandler` trait methods have default implementations returning
 `-ENOSYS`. No userspace wrappers are generated for reserved syscalls.

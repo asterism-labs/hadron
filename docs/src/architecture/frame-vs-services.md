@@ -190,7 +190,7 @@ impl RoundRobinScheduler {
 
 ## Unsafe Budget
 
-The framekernel approach aims for roughly **84% safe code**. The `unsafe` percentage varies by phase:
+The framekernel approach aims for roughly **84% safe code**. The `unsafe` percentage varies by component:
 
 | Component | Approximate `unsafe` % |
 |-----------|----------------------|
