@@ -15,7 +15,7 @@ Hadron uses a three-layer syscall strategy designed to give the kernel maximum f
 │    (hadron-libc / libhadron, separate project)   │
 │    Translates stable API → current kernel ABI    │
 ├─────────────────────────────────────────────────┤
-│              vDSO (Phase 15)                     │
+│              vDSO (Phase 17)                     │
 │    Fast-path read-only ops without syscall       │
 │    (clock_gettime, gettimeofday, getcpu)         │
 ├─────────────────────────────────────────────────┤

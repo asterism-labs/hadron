@@ -134,6 +134,6 @@ The userspace compatibility library will bridge these gaps where needed, transla
 |-----------|---------------|----------------------|
 | Phase 9 (first userspace) | ~15 | Custom test binaries |
 | Phase 11 (fork/exec/pipe) | ~50 | Simple shell, busybox |
-| Phase 13 (networking) | ~80 | Network utilities |
-| Phase 15 (mature) | ~120 | Most command-line applications |
+| Phase 16 (networking) | ~80 | Network utilities |
+| Phase 17 (mature) | ~120 | Most command-line applications |
 | Long-term | ~200 | General-purpose Unix environment |

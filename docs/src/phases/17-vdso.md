@@ -1,4 +1,6 @@
-# Phase 15: vDSO & Performance
+# Phase 17: vDSO & Performance
+
+> **Renumbered** — Originally Phase 15. Content unchanged.
 
 Minor updates from the original plan. Adds a futex syscall for efficient userspace synchronization primitives.
 

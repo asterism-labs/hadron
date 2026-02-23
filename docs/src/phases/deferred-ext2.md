@@ -1,4 +1,6 @@
-# Phase 13: ext2 Filesystem
+# Deferred: ext2 Filesystem
+
+> **Status: Deferred** — Originally Phase 13. The ext2 implementation is deferred in favour of the input/display/compositor direction. The design remains valid and can be picked up when persistent on-disk storage is needed.
 
 Previously Phase 12. The design is conceptually unchanged but all block I/O uses the async VFS trait introduced in Phase 8, enabling concurrent block reads within a single file operation.
 

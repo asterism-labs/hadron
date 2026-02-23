@@ -1,5 +1,7 @@
 # Phase 8: Async VFS & Ramfs
 
+> **Status: Complete** — Implemented as of Phase 8. See below for deviations from the original plan.
+
 ## Goal
 
 Create a Virtual Filesystem layer with async inode operations, an in-memory ramfs, an initramfs CPIO unpacker, and a device filesystem (devfs). After this phase, the kernel has a unified async file abstraction where heap-backed operations resolve immediately and block-backed operations can await I/O completion through the same interface.
@@ -39,7 +41,7 @@ pub trait Inode: Send + Sync {
 }
 ```
 
-For ramfs (heap-backed), the returned futures resolve immediately -- the `async` wrapper contains no `.await` points. For a block-backed filesystem such as ext2 (Phase 12), the futures await I/O completion from the block device. This provides a unified interface without penalizing in-memory operations.
+For ramfs (heap-backed), the returned futures resolve immediately -- the `async` wrapper contains no `.await` points. For a block-backed filesystem such as ext2, the futures would await I/O completion from the block device. This provides a unified interface without penalizing in-memory operations.
 
 ## Files to Create/Modify
 
@@ -181,6 +183,16 @@ This phase is **entirely** service code -- no new unsafe frame code is needed.
 
 - **Phase 4**: Kernel heap (for `Vec`, `BTreeMap`, `Arc`, `Box::pin`).
 - **Phase 7**: Syscall interface (for file descriptor operations: `sys_read`, `sys_write`, `sys_open`, `sys_close`).
+
+## What Actually Happened
+
+The core VFS, ramfs, initramfs, and devfs were implemented as planned. Additionally:
+
+- **FAT filesystem** was implemented, providing read support for FAT12/FAT16/FAT32 volumes.
+- **ISO 9660** (CD-ROM) filesystem support was added for reading ISO images.
+- The VFS grew richer than originally scoped, with a more complete mount table and path resolution supporting symlinks.
+
+The original plan mentioned only ramfs and devfs; the FAT and ISO9660 drivers were added during Phase 10 alongside device drivers, since block device support enabled on-disk filesystem mounting.
 
 ## Milestone
 

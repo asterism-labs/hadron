@@ -1,5 +1,7 @@
 # Phase 12: SMP & Per-CPU Executors
 
+> **Status: Complete** — Implemented as of Phase 12. See below for deviations from the original plan.
+
 Previously Phase 14, moved earlier because the executor already assumes per-CPU operation. Getting SMP online at this stage catches concurrency bugs in all subsequent phases.
 
 ## Goal
@@ -205,6 +207,16 @@ pub fn init_ap(tss: &'static mut TaskStateSegment) {
 | Work stealing | Service | Lock-based queue operations, no unsafe |
 | Cross-CPU wakeup routing | Service | Waker logic using safe executor APIs |
 | Load observation | Service | Pure computation over queue lengths |
+
+## What Actually Happened
+
+SMP was implemented as designed with the following implementation details:
+
+- **Two-phase AP bootstrap**: APs boot in two phases — Phase 1 initializes core CPU state (GDT, IDT, APIC, GS base) and signals readiness. Phase 2 (after the BSP confirms all APs are in Phase 1) enables interrupts and enters the executor loop. This prevents APs from taking interrupts before all CPUs have consistent state.
+- **Per-CPU executors** replaced the single global executor, with each CPU running its own run loop.
+- **Work stealing** was implemented using the `try_lock` approach described in the plan, stealing from the LIFO end of victim queues.
+- **IPI wakeups** are sent via the APIC when a cross-CPU wakeup targets a halted CPU.
+- The waker encoding's CPU ID bits (designed in Phase 6) were activated for cross-CPU task routing.
 
 ## Milestone
 

@@ -1,5 +1,7 @@
 # Phase 11: IPC & Minimal Signals
 
+> **Status: Complete** — Implemented as of Phase 11. See below for deviations from the original plan.
+
 ## Goal
 
 Implement async IPC primitives (pipes, channels), minimal POSIX signal handling, `sys_spawn` for process creation, and `sys_waitpid` for process reaping. This phase replaces the traditional fork/exec/CoW model with async-native primitives that integrate directly with the executor.
@@ -210,6 +212,20 @@ All code in this phase is service-layer. No new unsafe frame code is needed.
 
 - **Phase 9**: Userspace processes (process_task, Process struct, exec).
 - **Phase 8**: VFS (pipes as file descriptors, reading ELF binaries for spawn).
+
+## What Actually Happened
+
+IPC and signals were implemented with several additions beyond the original plan:
+
+- **Pipes** were implemented as described, with `PipeReader`/`PipeWriter` implementing the `Inode` trait.
+- **Signal delivery** went beyond "minimal" — a full **signal trampoline** was implemented for user-installable signal handlers via `sys_sigaction`. The trampoline pushes a `SignalFrame` onto the user stack and returns via `sys_sigreturn`.
+- **Process groups** were implemented, enabling `SIGINT` delivery to foreground process groups (essential for Ctrl+C in the shell).
+- **SIGPIPE** is delivered on the syscall return path when writing to a broken pipe, as planned.
+- **`sys_waitpid`** was implemented as an async operation awaiting `exit_notify`.
+
+### Gaps
+
+- `WNOHANG` flag for `sys_waitpid` is not yet implemented (tracked in known-issues.md).
 
 ## Milestone
 

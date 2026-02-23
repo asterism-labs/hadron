@@ -1,5 +1,7 @@
 # Phase 9: Userspace & ELF Loading
 
+> **Status: Complete** — Implemented as of Phase 9. See below for deviations from the original plan.
+
 ## Goal
 
 Load and execute ELF64 binaries in ring 3. Each user process is backed by a kernel async task on the executor -- there are no per-process kernel threads and no preemptive thread scheduler. After this phase, the kernel runs its first userspace program: a minimal static ELF that prints a message via the write syscall and exits.
@@ -203,6 +205,15 @@ The `exit_notify` WaitQueue is signaled when the process exits, allowing `sys_wa
 - **Phase 7**: Syscall interface (for write and exit syscalls).
 - **Phase 8**: VFS (for loading `/init` from initramfs, stdio file descriptors).
 - **Phase 4**: Virtual memory (for user address space creation).
+
+## What Actually Happened
+
+Userspace and ELF loading were implemented as planned. The process model follows the async task design described above. Key additions beyond the original plan:
+
+- **`sys_spawn`** was implemented alongside exec, enabling process creation from userspace.
+- **`lepton-init`** (the init process), **`lsh`** (shell), and **`lepton-coreutils`** were developed as userspace programs.
+- **`lepton-syslib`** provides the userspace syscall library, wrapping raw `syscall` instructions in safe Rust APIs.
+- The user stack layout matches the documented design with argc/argv/envp/auxv.
 
 ## Milestone
 

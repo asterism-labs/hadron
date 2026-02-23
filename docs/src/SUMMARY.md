@@ -21,16 +21,25 @@
 - [Hardware Drivers](internals/drivers.md)
 - [Inter-Process Communication](internals/ipc.md)
 
-# Development Phases
+# Completed Phases
 
 - [Phase 8: Async VFS & Ramfs](phases/08-vfs-ramfs.md)
 - [Phase 9: Userspace & ELF Loading](phases/09-userspace.md)
 - [Phase 10: Device Drivers](phases/10-device-drivers.md)
 - [Phase 11: IPC & Minimal Signals](phases/11-ipc-signals.md)
 - [Phase 12: SMP & Per-CPU Executors](phases/12-smp.md)
-- [Phase 13: ext2 Filesystem](phases/13-ext2.md)
-- [Phase 14: Networking](phases/14-networking.md)
-- [Phase 15: vDSO & Performance](phases/15-vdso.md)
+
+# Remaining Phases
+
+- [Phase 13: Input & Display Infrastructure](phases/13-input-display.md)
+- [Phase 14: VirtIO GPU 2D Driver](phases/14-virtio-gpu.md)
+- [Phase 15: Compositor & 2D Graphics](phases/15-compositor.md)
+- [Phase 16: Networking — TCP/UDP](phases/16-networking.md)
+- [Phase 17: vDSO & Performance](phases/17-vdso.md)
+
+# Deferred
+
+- [ext2 Filesystem](phases/deferred-ext2.md)
 
 # Design Decisions
 

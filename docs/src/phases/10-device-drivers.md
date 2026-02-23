@@ -1,5 +1,7 @@
 # Phase 10: Device Drivers
 
+> **Status: Complete** — Implemented as of Phase 10. See below for deviations from the original plan.
+
 ## Goal
 
 Enumerate PCI devices, implement an async block device abstraction, and add VirtIO drivers for QEMU virtual hardware. After this phase, the kernel can discover hardware and perform async block device I/O, with IRQ-to-async bridging using the same WaitQueue pattern established by existing serial and keyboard drivers.
@@ -129,6 +131,27 @@ A ram-backed block device (`RamDisk`) backed by a `Vec<u8>` is provided for test
 - **Phase 4**: Virtual memory (for MMIO mappings of device BARs).
 - **Phase 5**: Interrupt handling (for device IRQs, WaitQueue wakeups).
 - **Phase 8**: VFS (for `/dev` integration of block devices).
+
+## What Actually Happened
+
+The scope expanded significantly beyond the original plan of PCI + VirtIO-blk:
+
+- **PCI enumeration** was implemented as planned, with full BAR decoding and MSI/MSI-X support.
+- **VirtIO block** driver was implemented using the async BlockDevice trait.
+- **VirtIO network** (virtio-net) driver was added, providing Ethernet frame TX/RX over virtqueues.
+- **AHCI** (SATA) driver was implemented for real hardware disk access.
+- **e1000e** Intel Ethernet driver was added as an alternative to virtio-net.
+- **Bochs VGA** display driver provides a 1280x720x32bpp linear framebuffer via PCI BAR0.
+- **PS/2 keyboard and mouse** drivers were implemented with IRQ-driven async interfaces (`AsyncKeyboard`, `AsyncMouse`).
+- A **device registry** was created for runtime device discovery and driver binding.
+
+The `hadron-drivers` crate was established to host all hardware drivers separately from the kernel core, registered via linker sections.
+
+### Gaps
+
+- Mouse driver works (PS/2 IRQ 12, dx/dy/buttons) but is not yet exposed to userspace via devfs.
+- Keyboard events are only available through the TTY line discipline, not as raw events.
+- Input devices are not registered in the device registry (platform-specific).
 
 ## Milestone
 

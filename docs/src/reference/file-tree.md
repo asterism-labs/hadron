@@ -127,7 +127,7 @@ hadron/
 │   │       │   ├── caps.rs                        # PCI capabilities
 │   │       │   └── enumerate.rs                   # PCI bus enumeration
 │   │       │
-│   │       └── vdso/                              # [Phase 15]
+│   │       └── vdso/                              # [Phase 17]
 │   │           ├── mod.rs                         # vDSO generation, mapping
 │   │           └── data.rs                        # VVAR page
 │   │

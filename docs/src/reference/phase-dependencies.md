@@ -1,74 +1,84 @@
 # Phase Dependencies
 
-This chapter shows how the remaining development phases (8-15) depend on each other. Phases 0-7 are complete.
+This chapter shows how the remaining development phases (13-17) depend on each other. Phases 0-12 are complete.
 
 ## Dependency Graph
 
 ```
-Completed (Phases 0-7)
+Completed (Phases 0-12)
     |
-    +---> Phase 8: Async VFS ---> Phase 9: Userspace ---> Phase 11: IPC & Signals
-    |         |                                                |
-    |         +---> Phase 13: ext2 <--- Phase 10: Drivers -----+
+    +---> Phase 13: Input & Display ---> Phase 14: VirtIO GPU ---> Phase 15: Compositor
+    |                                         |
+    |                                         +--- (Phase 15 also needs Phase 11: IPC)
     |
-    +---> Phase 12: SMP (parallel with 8-10, no dependency on userspace)
+    +---> Phase 16: Networking (builds on existing ARP/ICMP/IPv4)
     |
-    +---> Phase 14: Networking (needs 8 + 10)
-    |
-    +---> Phase 15: vDSO (needs 9)
+    +---> Phase 17: vDSO (needs Phase 9: userspace)
 ```
 
 ## Dependency Table
 
 | Phase | Name | Depends On | Blocks |
 |-------|------|------------|--------|
-| 8 | Async VFS & Ramfs | Completed (0-7) | 9, 13, 14 |
-| 9 | Userspace & ELF Loading | 8 | 11, 15 |
-| 10 | Device Drivers | Completed (0-7) | 13, 14 |
-| 11 | IPC & Minimal Signals | 8, 9 | --- |
-| 12 | SMP & Per-CPU Executors | Completed (0-7) | --- |
-| 13 | ext2 Filesystem | 8, 10 | --- |
-| 14 | Networking | 8, 10 | --- |
-| 15 | vDSO & Performance | 9 | --- |
+| 13 | Input & Display Infrastructure | 8, 9, 10 (all complete) | 14, 15 |
+| 14 | VirtIO GPU 2D Driver | 10, 13 | 15 |
+| 15 | Compositor & 2D Graphics | 11, 13, 14 | --- |
+| 16 | Networking — TCP/UDP | 8, 10 (all complete) | --- |
+| 17 | vDSO & Performance | 9 (complete) | --- |
+
+## Completed Phases
+
+| Phase | Name | Status |
+|-------|------|--------|
+| 0-7 | Boot through syscalls | Complete |
+| 8 | Async VFS & Ramfs | Complete |
+| 9 | Userspace & ELF Loading | Complete |
+| 10 | Device Drivers | Complete |
+| 11 | IPC & Minimal Signals | Complete |
+| 12 | SMP & Per-CPU Executors | Complete |
+
+## Deferred
+
+| Item | Original Phase | Reason |
+|------|---------------|--------|
+| ext2 Filesystem | 13 | No immediate need for persistent on-disk FS |
+| OpenGL/Vulkan | --- | Requires Mesa port, long-term aspiration |
+| USB HID | --- | Deferred until USB host controller work |
 
 ## Critical Path
 
-The critical path to the first userspace program:
+The critical path to the graphical compositor:
 
 ```
-Phase 8 (VFS) --> Phase 9 (Userspace)
+Phase 13 (Input & Display) --> Phase 14 (VirtIO GPU) --> Phase 15 (Compositor)
 ```
 
 ## Parallelization Opportunities
 
 ### Immediately Available
 
-These can proceed independently now that Phases 0-7 are complete:
-- **Phase 8** (VFS) --- continue toward userspace
-- **Phase 10** (Drivers) --- PCI, VirtIO
-- **Phase 12** (SMP) --- can start immediately
+All prerequisites for these phases are already complete:
 
-### After Phase 9 (Userspace)
+- **Phase 13** (Input & Display) — all dependencies satisfied
+- **Phase 16** (Networking) — builds on existing ARP/ICMP/IPv4 stack
+- **Phase 17** (vDSO) — all dependencies satisfied
 
-These are independent of each other:
-- **Phase 11** (IPC) --- pipes, signals, sys_spawn
-- **Phase 15** (vDSO) --- performance optimization
+Phases 13, 16, and 17 can proceed in parallel.
 
-### Key Insight
+### After Phase 13
 
-Phase 12 (SMP) has no dependency on userspace and can be developed in parallel with Phases 8-10. Getting SMP online early catches concurrency bugs in all subsequent phases.
+- **Phase 14** (VirtIO GPU) — needs Phase 13 for devfs framebuffer integration
 
-Phase 13 (ext2) depends on both Phase 8 (VFS trait) and Phase 10 (block device drivers). Phase 14 (Networking) similarly needs VFS (for socket FDs) and drivers (VirtIO-net).
+### After Phase 14
+
+- **Phase 15** (Compositor) — needs Phase 14 for VirtIO GPU (though can start with Bochs VGA)
 
 ## Recommended Order
 
 For a single developer, the recommended sequential order:
 
-1. **Phase 8** --- async VFS and ramfs
-2. **Phase 9** --- userspace and ELF loading (critical path to first user program)
-3. **Phase 10** --- device drivers (PCI, VirtIO-blk)
-4. **Phase 11** --- IPC and signals (enables multi-process userspace)
-5. **Phase 12** --- SMP (can also be done earlier)
-6. **Phase 13** --- ext2 filesystem
-7. **Phase 14** --- networking
-8. **Phase 15** --- vDSO and performance (lowest priority)
+1. **Phase 13** — input & display infrastructure (enables graphical userspace)
+2. **Phase 14** — VirtIO GPU 2D (proper display protocol)
+3. **Phase 15** — compositor & 2D graphics (graphical desktop)
+4. **Phase 16** — networking TCP/UDP (extends existing stack)
+5. **Phase 17** — vDSO & performance (optimization, lowest priority)
