@@ -1052,7 +1052,7 @@ pub fn fetch_crates_io(name: &str, version: &str, vendor_dir: &Path) -> Result<s
 
     // Download the .crate tarball.
     let output = std::process::Command::new("curl")
-        .args(["-sSfL", &url])
+        .args(["-sSfL", "-H", "User-Agent: gluon-build-system", &url])
         .output()
         .context("failed to run curl")?;
 
