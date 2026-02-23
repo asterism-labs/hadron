@@ -72,6 +72,17 @@ pub trait Framebuffer: Send + Sync {
         }
     }
 
+    /// Writes a horizontal span of pixels starting at (`x`, `y`).
+    ///
+    /// The default implementation falls back to [`put_pixel`](Self::put_pixel)
+    /// in a loop. Drivers should override this with a bulk memory copy for
+    /// better throughput on write-combine or uncacheable framebuffer memory.
+    fn write_scanline(&self, x: u32, y: u32, pixels: &[u32]) {
+        for (i, &color) in pixels.iter().enumerate() {
+            self.put_pixel(x + i as u32, y, color);
+        }
+    }
+
     /// Copies `count` bytes within the framebuffer from `src_offset` to `dst_offset`.
     ///
     /// # Safety

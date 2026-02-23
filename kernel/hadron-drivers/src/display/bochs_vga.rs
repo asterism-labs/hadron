@@ -238,18 +238,53 @@ impl Framebuffer for BochsVga {
         }
     }
 
+    fn write_scanline(&self, x: u32, y: u32, pixels: &[u32]) {
+        let count = pixels.len() as u32;
+        if count == 0 || x >= self.info.width || y >= self.info.height {
+            return;
+        }
+        let clamped = count.min(self.info.width - x) as usize;
+        let offset = (y as u64) * (self.info.pitch as u64) + (x as u64) * (BYTES_PER_PIXEL as u64);
+        let base = self.fb_region.virt_base().as_u64();
+        let dst = (base + offset) as *mut u32;
+        // SAFETY: `clamped` pixels stay within the row (x + clamped <= width) and
+        // within the framebuffer (y < height). The source slice is WB stack memory;
+        // the destination is the WC framebuffer. Non-overlapping is guaranteed.
+        unsafe { ptr::copy_nonoverlapping(pixels.as_ptr(), dst, clamped) };
+    }
+
     fn fill_rect(&self, x: u32, y: u32, width: u32, height: u32, color: u32) {
         let x_end = (x + width).min(self.info.width);
         let y_end = (y + height).min(self.info.height);
+        let span = (x_end - x) as usize;
+        if span == 0 || y >= y_end {
+            return;
+        }
+
+        // Build one scanline of the fill color in a stack buffer (WB memory),
+        // then bulk-copy to each framebuffer row (WC memory).
+        const MAX_SPAN: usize = 256;
+        let mut row_buf = [0u32; MAX_SPAN];
+        let clamped = span.min(MAX_SPAN);
+        for px in &mut row_buf[..clamped] {
+            *px = color;
+        }
+
         let base = self.fb_region.virt_base().as_u64();
         let pitch = self.info.pitch as u64;
 
         for row in y..y_end {
             let row_offset = (row as u64) * pitch + (x as u64) * (BYTES_PER_PIXEL as u64);
-            let row_ptr = (base + row_offset) as *mut u32;
-            for col in 0..(x_end - x) {
-                // SAFETY: Bounds clamped above, writing within the mapped FB.
-                unsafe { ptr::write_volatile(row_ptr.add(col as usize), color) };
+            let dst = (base + row_offset) as *mut u32;
+            // Handle fills wider than MAX_SPAN in chunks.
+            let mut written = 0;
+            while written < span {
+                let chunk = (span - written).min(clamped);
+                // SAFETY: Bounds clamped to framebuffer dimensions above. The
+                // source is a WB stack buffer; the destination is the WC
+                // framebuffer. Non-overlapping is guaranteed.
+                unsafe { ptr::copy_nonoverlapping(row_buf.as_ptr(), dst.add(written), chunk) };
+                written += chunk;
             }
         }
     }
