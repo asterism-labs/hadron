@@ -94,25 +94,34 @@ pub fn with<R>(f: impl FnOnce(&mut KernelVmm) -> R) -> R {
     f(vmm.as_mut().expect("VMM not initialized"))
 }
 
-/// Maps an MMIO physical region into kernel virtual space.
+/// Maps an MMIO physical region into kernel virtual space (uncacheable).
 ///
 /// Convenience wrapper that acquires both VMM and PMM locks internally.
 /// Returns an [`MmioMapping`] RAII guard that unmaps the region on drop.
 /// For permanent hardware mappings, call [`core::mem::forget`] on the guard.
 pub fn map_mmio_region(phys: PhysAddr, size: u64) -> MmioMapping {
+    map_mmio_region_with_cache(phys, size, CacheMode::Uncacheable)
+}
+
+/// Maps an MMIO physical region with an explicit cache mode.
+///
+/// Use [`CacheMode::WriteCombine`] for framebuffer BARs and other
+/// bulk-write regions where sequential write coalescing is beneficial.
+pub fn map_mmio_region_with_cache(phys: PhysAddr, size: u64, cache: CacheMode) -> MmioMapping {
     let mapping = with(|vmm| {
         super::pmm::with(|pmm| {
             let mut alloc = BitmapFrameAllocRef(pmm);
-            vmm.map_mmio(phys, size, &mut alloc, Some(default_mmio_cleanup))
+            vmm.map_mmio_with_cache(phys, size, cache, &mut alloc, Some(default_mmio_cleanup))
                 .expect("failed to map MMIO region")
         })
     });
     // Log after releasing PMM + VMM locks to avoid ordering violations.
     crate::ktrace_subsys!(
         mm,
-        "VMM: mapped MMIO phys={:#x} size={:#x} -> virt={:#x}",
+        "VMM: mapped MMIO phys={:#x} size={:#x} cache={:?} -> virt={:#x}",
         phys.as_u64(),
         size,
+        cache,
         mapping.virt_base().as_u64()
     );
     mapping

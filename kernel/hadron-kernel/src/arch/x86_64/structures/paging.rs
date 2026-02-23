@@ -21,6 +21,9 @@ bitflags::bitflags! {
         const WRITE_THROUGH = 1 << 3;
         /// Cache disabled.
         const CACHE_DISABLE = 1 << 4;
+        /// PAT bit for 4 KiB PTEs (bit 7). Selects PAT index bits [2:0] =
+        /// {PAT_4K, PCD, PWT}. At the PD level this same bit is `HUGE_PAGE`.
+        const PAT_4K        = 1 << 7;
         /// PS bit -- 2 MiB page in PD, 1 GiB page in PDPT.
         const HUGE_PAGE     = 1 << 7;
         /// Global page (not flushed on CR3 switch when CR4.PGE is set).

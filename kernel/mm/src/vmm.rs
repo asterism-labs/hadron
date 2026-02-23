@@ -19,6 +19,17 @@ const KERNEL_STACK_SIZE: u64 = 64 * 1024;
 /// Guard page size: one page, unmapped.
 const GUARD_PAGE_SIZE: u64 = PAGE_SIZE as u64;
 
+/// Cache mode for MMIO mappings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CacheMode {
+    /// Uncacheable — every access goes to the device. Suitable for device
+    /// registers with side effects.
+    Uncacheable,
+    /// Write-combining — sequential writes are coalesced into burst
+    /// transactions. Suitable for framebuffers and other bulk-write regions.
+    WriteCombine,
+}
+
 /// Callback for kernel stack cleanup on drop.
 pub type StackCleanupFn = fn(guard: VirtAddr, bottom: VirtAddr, top: VirtAddr);
 
@@ -259,12 +270,30 @@ impl<M: PageMapper<Size4KiB> + PageTranslator> Vmm<M> {
 
     /// Maps a physical MMIO region into kernel virtual address space.
     ///
+    /// Uses [`CacheMode::Uncacheable`] by default. For framebuffer-style
+    /// regions, use [`map_mmio_with_cache`] with [`CacheMode::WriteCombine`].
+    ///
     /// `cleanup` is called when the `MmioMapping` is dropped. Pass `None`
     /// for permanent mappings.
     pub fn map_mmio(
         &mut self,
         phys: PhysAddr,
         size: u64,
+        alloc: &mut impl FrameAllocator<Size4KiB>,
+        cleanup: Option<MmioCleanupFn>,
+    ) -> Result<MmioMapping, VmmError> {
+        self.map_mmio_with_cache(phys, size, CacheMode::Uncacheable, alloc, cleanup)
+    }
+
+    /// Maps a physical MMIO region with an explicit cache mode.
+    ///
+    /// `cleanup` is called when the `MmioMapping` is dropped. Pass `None`
+    /// for permanent mappings.
+    pub fn map_mmio_with_cache(
+        &mut self,
+        phys: PhysAddr,
+        size: u64,
+        cache: CacheMode,
         alloc: &mut impl FrameAllocator<Size4KiB>,
         cleanup: Option<MmioCleanupFn>,
     ) -> Result<MmioMapping, VmmError> {
@@ -277,15 +306,19 @@ impl<M: PageMapper<Size4KiB> + PageTranslator> Vmm<M> {
             .allocate(actual_size)
             .ok_or(VmmError::RegionExhausted)?;
 
-        let flags = MapFlags::WRITABLE | MapFlags::GLOBAL | MapFlags::CACHE_DISABLE;
+        let cache_flag = match cache {
+            CacheMode::Uncacheable => MapFlags::CACHE_DISABLE,
+            CacheMode::WriteCombine => MapFlags::WRITE_COMBINE,
+        };
+        let flags = MapFlags::WRITABLE | MapFlags::GLOBAL | cache_flag;
 
         for i in 0..page_count {
             let virt = virt_base + i * page_size;
             let page = Page::containing_address(virt);
             let phys_page = PhysFrame::containing_address(phys + i * page_size);
-            // SAFETY: The MMIO physical address is provided by firmware (ACPI).
-            // Mapping it into the MMIO region with cache-disable flags is correct
-            // for device register access.
+            // SAFETY: The MMIO physical address is provided by firmware (ACPI)
+            // or PCI BAR enumeration. Mapping it into the MMIO region with the
+            // requested cache mode is correct for device memory access.
             let flush = unsafe {
                 self.mapper
                     .map(self.root_phys, page, phys_page, flags, &mut || {

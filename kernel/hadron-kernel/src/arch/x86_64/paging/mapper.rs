@@ -605,6 +605,15 @@ impl PageTableMapper {
         if flags.contains(MapFlags::CACHE_DISABLE) {
             native |= PageTableFlags::CACHE_DISABLE;
         }
+        if flags.contains(MapFlags::WRITE_COMBINE) {
+            // PAT entry 4 = WC (programmed at boot). PAT index 4 = {PAT=1, PCD=0, PWT=0}.
+            // For 4 KiB pages: set PAT_4K (bit 7), clear PCD and PWT.
+            // For 2 MiB pages: set PAT_HUGE (bit 12), clear PCD and PWT.
+            // We set both PAT bits here; the mapper uses PAT_4K for 4 KiB PTEs
+            // and PAT_HUGE for 2 MiB PD entries (they never appear in the same entry).
+            native |= PageTableFlags::PAT_4K | PageTableFlags::PAT_HUGE;
+            native &= !(PageTableFlags::CACHE_DISABLE | PageTableFlags::WRITE_THROUGH);
+        }
         native
     }
 }

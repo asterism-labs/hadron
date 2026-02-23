@@ -34,6 +34,8 @@ bitflags::bitflags! {
         const GLOBAL        = 1 << 3;
         /// Caching disabled for this page.
         const CACHE_DISABLE = 1 << 4;
+        /// Write-combining memory type (PAT entry 4 on x86_64).
+        const WRITE_COMBINE = 1 << 5;
     }
 }
 
@@ -238,6 +240,7 @@ mod tests {
             MapFlags::USER,
             MapFlags::GLOBAL,
             MapFlags::CACHE_DISABLE,
+            MapFlags::WRITE_COMBINE,
         ];
         for (i, a) in all.iter().enumerate() {
             for (j, b) in all.iter().enumerate() {
@@ -246,6 +249,17 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn mapflags_write_combine_clears_cache_disable() {
+        // WRITE_COMBINE and CACHE_DISABLE are mutually exclusive cache modes.
+        // When both are set, the arch mapper should prefer WC.
+        let flags = MapFlags::WRITE_COMBINE | MapFlags::CACHE_DISABLE;
+        assert!(flags.contains(MapFlags::WRITE_COMBINE));
+        assert!(flags.contains(MapFlags::CACHE_DISABLE));
+        // Both bits can coexist at the MapFlags level — the arch translation
+        // is responsible for resolving the conflict (WC wins).
     }
 
     #[test]

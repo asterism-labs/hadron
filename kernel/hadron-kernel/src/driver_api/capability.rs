@@ -155,6 +155,32 @@ impl MmioCapability {
         }
     }
 
+    /// Maps a physical MMIO region with write-combining cache mode.
+    ///
+    /// Use this for framebuffer BARs and other bulk-write regions where
+    /// sequential writes should be coalesced into burst transactions.
+    pub fn map_mmio_wc(&self, phys_base: u64, size: u64) -> Result<MmioRegion, DriverError> {
+        #[cfg(target_os = "none")]
+        {
+            let phys = crate::addr::PhysAddr::new(phys_base);
+            let mapping = crate::mm::vmm::map_mmio_region_with_cache(
+                phys,
+                size,
+                crate::mm::vmm::CacheMode::WriteCombine,
+            );
+            let virt = mapping.virt_base();
+            core::mem::forget(mapping); // driver mappings are permanent
+            // SAFETY: The VMM just mapped this region; phys and virt refer to the
+            // same physical memory and the mapping is valid for the kernel's lifetime.
+            Ok(unsafe { MmioRegion::new(phys, virt, size) })
+        }
+        #[cfg(not(target_os = "none"))]
+        {
+            let _ = (phys_base, size);
+            Err(DriverError::Unsupported)
+        }
+    }
+
     /// Converts a physical address to its kernel virtual address via the HHDM.
     pub fn phys_to_virt(&self, phys: u64) -> u64 {
         #[cfg(target_os = "none")]
