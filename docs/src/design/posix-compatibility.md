@@ -1,139 +1,166 @@
 # POSIX Compatibility
 
-> **Note:** This document describes an earlier design direction. Hadron has since adopted a **task-centric, capability-based** architecture that does not target POSIX compatibility. See [Task-Centric OS Design](task-centric-design.md) for the current design goals. This document is retained for historical reference.
+Hadron uses a **native handle-based syscall interface** with a planned
+**userspace POSIX shim library** (hadron-libc) to translate standard POSIX
+calls to native Hadron syscalls. The kernel implements only what cannot be
+reasonably shimmed in userspace.
 
-Hadron takes an **incremental approach** to POSIX compatibility — implementing the most critical interfaces first, then expanding based on what applications actually need.
-
-## Strategy
-
-Rather than attempting full POSIX compliance upfront (which would require hundreds of syscalls and extensive infrastructure), Hadron:
-
-1. **Starts with core syscalls** (~50) that cover basic program execution
-2. **Adds syscalls on demand** as new features are implemented
-3. **Uses Linux syscall numbers** for easy testing with existing tools
-4. **Provides a userspace compatibility library** (future) that can paper over gaps
-
-## Priority Syscall List
-
-### Tier 1: Minimum Viable (Phase 7-9)
-
-These syscalls are needed for any userspace program to run:
-
-| Syscall | Purpose | Why Essential |
-|---------|---------|---------------|
-| `read` | Read from fd | Basic I/O |
-| `write` | Write to fd | Basic I/O, console output |
-| `open` | Open file | File access |
-| `close` | Close fd | Resource cleanup |
-| `exit` | Terminate process | Process lifecycle |
-| `brk` | Adjust heap | Memory allocation (malloc) |
-| `mmap` | Map memory | Memory allocation, ELF loading |
-| `munmap` | Unmap memory | Memory cleanup |
-| `getpid` | Get PID | Process identity |
-
-### Tier 2: Filesystem (Phase 8)
-
-| Syscall | Purpose |
-|---------|---------|
-| `stat` / `fstat` | File metadata |
-| `lseek` | Seek in file |
-| `readdir` / `getdents` | List directory |
-| `mkdir` | Create directory |
-| `unlink` | Delete file |
-| `rename` | Rename file |
-| `dup` / `dup2` | Duplicate fd |
-| `fcntl` | File control |
-| `ioctl` | Device control |
-| `access` | Check permissions |
-| `chdir` / `getcwd` | Working directory |
-
-### Tier 3: Process Management (Phase 11)
-
-| Syscall | Purpose |
-|---------|---------|
-| `fork` | Create child process |
-| `execve` | Replace process image |
-| `waitpid` / `wait4` | Wait for child |
-| `kill` | Send signal |
-| `sigaction` | Set signal handler |
-| `sigprocmask` | Block/unblock signals |
-| `pipe` / `pipe2` | Create pipe |
-| `getppid` | Get parent PID |
-| `getuid` / `getgid` | Get user/group ID |
-| `setuid` / `setgid` | Set user/group ID |
-
-### Tier 4: Advanced (Phase 12-15)
-
-| Syscall | Purpose | Phase |
-|---------|---------|-------|
-| `socket` / `bind` / `listen` / `accept` | Networking | 13 |
-| `connect` / `send` / `recv` | Networking | 13 |
-| `select` / `poll` / `epoll` | I/O multiplexing | 13 |
-| `clone` | Thread creation | 14 |
-| `futex` | Fast userspace mutex | 14 |
-| `clock_gettime` (vDSO) | High-perf time | 15 |
-| `mprotect` | Change page permissions | — |
-| `mremap` | Resize mapping | — |
-| `shmget` / `shmat` | Shared memory | — |
-
-## What We Won't Implement (Initially)
-
-Some POSIX features are deprioritized because they're rarely needed or have better alternatives:
-
-| Feature | Status | Reason |
-|---------|--------|--------|
-| `System V IPC` (msgget, semget) | Deferred | Modern code uses futex, pipes, or sockets |
-| `aio_*` (POSIX AIO) | Deferred | io_uring is the modern replacement |
-| `pthread_*` (POSIX threads) | Userspace only | Implemented in libc using `clone`/`futex` |
-| `terminal/pty` | Deferred | Complex; basic serial console suffices initially |
-| `POSIX realtime signals` | Deferred | Regular signals cover most needs |
-| `setitimer` / `timer_create` | Deferred | `clock_gettime` + `nanosleep` suffice |
-
-## Compatibility Testing
-
-The practical test for POSIX compatibility is: **can we run real programs?**
-
-### Target Applications (Ordered by Complexity)
-
-1. **Custom init** — minimal `write()` + `exit()` (Phase 9)
-2. **busybox** — statically linked, ~100 common Unix utilities (Phase 11)
-3. **dash** — lightweight POSIX shell (Phase 11)
-4. **lua** — embeddable scripting language (Phase 11)
-5. **gcc/tcc** — self-hosting compiler (long-term goal)
-
-### Testing Approach
-
-```bash
-# Cross-compile a static binary for Hadron
-# (Initially using x86_64-unknown-linux-musl until we have our own target)
-musl-gcc -static -o init test.c
-
-# Package into initramfs
-echo init | cpio -o -H newc > initramfs.cpio
-
-# Boot and test
-cargo xtask run -- -initrd initramfs.cpio
+```
+┌──────────────────────────────────┐
+│        POSIX Application         │  ← calls fork(), open(), read(), etc.
+├──────────────────────────────────┤
+│    hadron-libc (POSIX shim)      │  ← translates to native Hadron syscalls
+├──────────────────────────────────┤
+│    Native Hadron Syscall ABI     │  ← SYSCALL instruction, handle-based
+├──────────────────────────────────┤
+│        Hadron Kernel             │
+└──────────────────────────────────┘
 ```
 
-## POSIX Deviations
+## Current Status
 
-Where POSIX doesn't serve us well, Hadron will deviate:
+The kernel now has **46 implemented syscalls** covering process management,
+file I/O, memory mapping, signals, IPC, terminals, and threading. The
+following table shows what has been implemented, grouped by priority tier.
 
-| Area | POSIX Way | Hadron Way | Rationale |
-|------|-----------|------------|-----------|
-| Error codes | `errno` global | Return value encoding | Thread-safe, no TLS needed initially |
-| Signal handling | Complex semantics | Simplified subset | Full POSIX signals are a huge implementation burden |
-| File permissions | uid/gid/mode | Same (initially) | Standard model works well enough |
-| Process groups | Full job control | Basic support first | Shell job control is complex |
+### Implemented (P0 — Core)
 
-The userspace compatibility library will bridge these gaps where needed, translating Hadron's native interface to standard POSIX behavior.
+| Kernel Syscall | POSIX Equivalent | Notes |
+|----------------|-----------------|-------|
+| `vnode_open` | `open()` | Supports O_APPEND, O_CLOEXEC, O_NONBLOCK, O_DIRECTORY, O_EXCL |
+| `vnode_read` / `vnode_write` | `read()` / `write()` | Async via trap mechanism |
+| `vnode_seek` | `lseek()` | SEEK_SET, SEEK_CUR, SEEK_END |
+| `vnode_stat` | `fstat()` | Returns InodeStat |
+| `vnode_fstatat` | `fstatat()` | AT_SYMLINK_NOFOLLOW support |
+| `vnode_mkdir` | `mkdir()` | — |
+| `vnode_unlink` | `unlink()` | — |
+| `vnode_readdir` | `getdents()` | — |
+| `handle_close` | `close()` | — |
+| `handle_dup` | `dup2()` | — |
+| `handle_dup_lowest` | `dup()` | Allocate lowest free fd |
+| `task_exit` | `_exit()` | — |
+| `task_spawn` | `posix_spawn()` | With fd_map, cwd, flags |
+| `task_wait` | `waitpid()` | WNOHANG, WUNTRACED |
+| `task_info` | `getpid()` | — |
+| `task_getppid` | `getppid()` | — |
+| `task_getcwd` / `task_chdir` | `getcwd()` / `chdir()` | Per-process CWD |
+| `mem_map` / `mem_unmap` | `mmap()` / `munmap()` | Anonymous + device-backed |
+| `mem_brk` | `brk()` | Program break management |
+| `clock_gettime` | `clock_gettime()` | CLOCK_MONOTONIC |
+| `clock_nanosleep` | `clock_nanosleep()` | Via trap mechanism |
 
-## Growth Summary
+### Implemented (P1 — Shell & Signals)
 
-| Milestone | ~Syscall Count | Applications Supported |
-|-----------|---------------|----------------------|
-| Phase 9 (first userspace) | ~15 | Custom test binaries |
-| Phase 11 (fork/exec/pipe) | ~50 | Simple shell, busybox |
-| Phase 16 (networking) | ~80 | Network utilities |
-| Phase 17 (mature) | ~120 | Most command-line applications |
-| Long-term | ~200 | General-purpose Unix environment |
+| Kernel Syscall | POSIX Equivalent | Notes |
+|----------------|-----------------|-------|
+| `task_execve` | `execve()` | In-place replacement via trap |
+| `task_kill` | `kill()` | — |
+| `task_sigaction` | `sigaction()` | SA_RESTART, SA_RESETHAND |
+| `task_sigreturn` | `sigreturn()` | — |
+| `task_sigprocmask` | `sigprocmask()` | SIG_BLOCK, SIG_UNBLOCK, SIG_SETMASK |
+| `task_setpgid` / `task_getpgid` | `setpgid()` / `getpgid()` | — |
+| `task_setsid` | `setsid()` | — |
+| `handle_pipe` / `handle_pipe2` | `pipe()` / `pipe2()` | O_CLOEXEC support |
+| `handle_fcntl` | `fcntl()` | F_DUPFD, F_GETFD/SETFD, F_GETFL/SETFL |
+| `handle_ioctl` | `ioctl()` | TCGETS, TCSETS, TIOCGWINSZ, TIOCGPGRP |
+| `handle_tcsetpgrp` / `handle_tcgetpgrp` | `tcsetpgrp()` / `tcgetpgrp()` | — |
+| `vnode_rename` | `rename()` | — |
+| `vnode_symlink` / `vnode_link` / `vnode_readlink` | `symlink()` / `link()` / `readlink()` | — |
+| `vnode_truncate` | `ftruncate()` | — |
+
+### Implemented (P2 — I/O Multiplexing & Terminals)
+
+| Kernel Syscall | POSIX Equivalent | Notes |
+|----------------|-----------------|-------|
+| `event_wait_many` | `poll()` | Non-blocking poll; blocking deferred |
+| termios ioctls | `tcgetattr()` / `tcsetattr()` | TCGETS/TCSETS/TCSETSW/TCSETSF |
+| winsize ioctls | `TIOCGWINSZ` / `TIOCSWINSZ` | — |
+
+### Implemented (P3 — Threads, Futex, PTY)
+
+| Kernel Syscall | POSIX Equivalent | Notes |
+|----------------|-----------------|-------|
+| `task_clone` | `clone()` | CLONE_VM, CLONE_FILES, CLONE_SETTLS |
+| `futex` | `futex()` | FUTEX_WAIT (async), FUTEX_WAKE |
+| `/dev/ptmx` + `/dev/pts/N` | Pseudoterminals | Bidirectional buffers, termios |
+| `Inode::on_open()` | — | Open-time inode substitution for ptmx |
+
+## Future Work
+
+The following features are needed for full POSIX application support but are
+not yet implemented.
+
+### High Priority — Needed for dash/busybox
+
+| Feature | Description | Effort |
+|---------|-------------|--------|
+| `fork()` shim | Emulate fork+exec via `task_spawn` with fd_map in hadron-libc | Medium |
+| `CLOCK_REALTIME` | RTC driver for wall-clock time; needed by `date`, `ls -l` | Medium |
+| Blocking `event_wait_many` | Trap-based blocking poll with timeout | Medium |
+| `SA_SIGINFO` / `siginfo_t` | Extended signal information | Medium |
+| `wait4` with `WUNTRACED` | Stopped-child reporting for job control | Easy |
+| `O_NOFOLLOW` for symlinks | Don't follow symlinks in open | Easy |
+| `isatty()` support | Inode type check for terminal detection | Easy |
+| `access()` | File permission check (shimmed via stat) | Easy |
+| hadron-libc | POSIX shim library: errno, signal(), getuid/gid stubs, etc. | Large |
+
+### Medium Priority — Needed for interactive programs
+
+| Feature | Description | Effort |
+|---------|-------------|--------|
+| TTY raw mode | Line discipline honors `~ICANON` for byte-at-a-time input | Medium |
+| `timer_create` / `setitimer` | Periodic timers (can be shimmed with nanosleep) | Medium |
+| `mprotect` | Change page permissions on existing mappings | Medium |
+| File locking (`F_SETLK`) | Advisory locking via fcntl | Medium |
+| `CLOCK_REALTIME` in nanosleep | Absolute-time sleep for condition variable timeouts | Easy |
+
+### Low Priority — Deferred
+
+| Feature | Description | Effort |
+|---------|-------------|--------|
+| Socket subsystem | `socket`/`bind`/`listen`/`accept`/`connect`/`send`/`recv` | Very Large |
+| `select()` / `epoll` | Can be shimmed on top of `event_wait_many` | Medium |
+| Shared memory (`shmget`) | SysV shared memory segments | Medium |
+| Real-time signals | Queued signals with `SA_SIGINFO` | Medium |
+| `mremap` | Resize existing mappings | Medium |
+| Multi-user permissions | Real uid/gid/mode enforcement | Large |
+
+## Design Decisions
+
+### No `fork()` in the kernel
+
+Hadron uses `task_spawn` (like Fuchsia's `zx_process_create`) instead of
+`fork()`. Fork requires CoW page table cloning — a major implementation
+burden for a feature that modern programs avoid. The userspace shim can
+emulate `fork()+exec()` patterns via `task_spawn` with fd remapping, but
+programs that `fork()` without `exec()` (parallel computation in a copy
+of the address space) are not supported.
+
+### Thread model via `task_clone`
+
+Threads are created with `task_clone(CLONE_VM | CLONE_FILES | ...)`, which
+shares the parent's address space and file descriptor table via `Arc`.
+The `Process` struct wraps shareable fields in `Arc<SpinLock<T>>` so that
+threads and standalone processes use the same type. `execve` in a
+multithreaded process is currently undefined — the address space is
+replaced without killing sibling threads.
+
+### Native poll, not POSIX poll
+
+The native I/O multiplexing primitive is `event_wait_many`, which operates
+on Hadron's fd/handle model. POSIX `poll()`, `select()`, and `epoll` will
+be shimmed in hadron-libc by translating to `event_wait_many`.
+
+## Verification Milestones
+
+| Milestone | Test | Status |
+|-----------|------|--------|
+| M1: Static hello world | `write()` + `exit()` | Done |
+| M2: File operations | open/read/write/seek/stat | Done |
+| M3: Process management | Spawn child with piped stdin/stdout | Done |
+| M4: dash shell boots | Builtins: cd, pwd, echo | Blocked on hadron-libc |
+| M5: Shell pipelines | `ls \| grep foo \| wc -l` | Blocked on hadron-libc |
+| M6: busybox coreutils | ls, cat, mkdir, rm, cp, mv, grep, find | Blocked on hadron-libc |
+| M7: Interactive editing | vi/nano in terminal | Needs raw mode |
+| M8: Multithreaded programs | pthreads, mutex, condvar | Needs hadron-libc pthreads |
+| M9: Network utilities | curl, wget, DNS | Needs socket subsystem |
