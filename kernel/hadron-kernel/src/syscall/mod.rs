@@ -4,6 +4,7 @@
 //! generated [`SyscallHandler`] trait from `hadron-syscall`.
 
 mod io;
+mod ioctl;
 mod memory;
 mod process;
 mod query;
@@ -39,12 +40,7 @@ impl SyscallHandler for HadronDispatch {
         process::sys_task_info()
     }
 
-    fn sys_task_sigaction(
-        &self,
-        signum: usize,
-        handler: usize,
-        old_handler_out: usize,
-    ) -> isize {
+    fn sys_task_sigaction(&self, signum: usize, handler: usize, old_handler_out: usize) -> isize {
         process::sys_task_sigaction(signum, handler, old_handler_out)
     }
 
@@ -80,6 +76,10 @@ impl SyscallHandler for HadronDispatch {
         vfs::sys_handle_tcgetpgrp(fd)
     }
 
+    fn sys_handle_ioctl(&self, fd: usize, cmd: usize, arg_ptr: usize) -> isize {
+        ioctl::sys_handle_ioctl(fd, cmd, arg_ptr)
+    }
+
     fn sys_vnode_open(&self, path_ptr: usize, path_len: usize, flags: usize) -> isize {
         vfs::sys_vnode_open(path_ptr, path_len, flags)
     }
@@ -100,8 +100,15 @@ impl SyscallHandler for HadronDispatch {
         vfs::sys_vnode_readdir(fd, buf_ptr, buf_len)
     }
 
-    fn sys_mem_map(&self, addr_hint: usize, length: usize, prot: usize, flags: usize) -> isize {
-        memory::sys_mem_map(addr_hint, length, prot, flags)
+    fn sys_mem_map(
+        &self,
+        addr_hint: usize,
+        length: usize,
+        prot: usize,
+        flags: usize,
+        fd: usize,
+    ) -> isize {
+        memory::sys_mem_map(addr_hint, length, prot, flags, fd)
     }
 
     fn sys_mem_unmap(&self, addr: usize, length: usize) -> isize {
@@ -150,8 +157,7 @@ extern "C" fn syscall_dispatch(
 
     // If the current process has pending signals, longjmp back to
     // process_task for delivery instead of returning via sysretq.
-    let has_signal =
-        crate::proc::ProcessTable::try_current(|p| p.signals.has_pending());
+    let has_signal = crate::proc::ProcessTable::try_current(|p| p.signals.has_pending());
     if has_signal == Some(true) {
         trap_signal_pending(result);
     }

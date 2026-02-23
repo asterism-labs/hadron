@@ -2,8 +2,8 @@
 
 use hadron_syscall::raw::{syscall1, syscall3};
 use hadron_syscall::{
-    DirEntryInfo, SYS_HANDLE_CLOSE, SYS_VNODE_OPEN, SYS_VNODE_READ, SYS_VNODE_READDIR,
-    SYS_VNODE_STAT, SYS_VNODE_WRITE, StatInfo,
+    DirEntryInfo, SYS_HANDLE_CLOSE, SYS_HANDLE_IOCTL, SYS_VNODE_OPEN, SYS_VNODE_READ,
+    SYS_VNODE_READDIR, SYS_VNODE_STAT, SYS_VNODE_WRITE, StatInfo,
 };
 
 // ── File descriptor constants ─────────────────────────────────────────
@@ -35,6 +35,13 @@ pub fn open(path: &str, flags: usize) -> isize {
 /// Close a file descriptor. Returns 0 on success or negative errno.
 pub fn close(fd: usize) -> isize {
     syscall1(SYS_HANDLE_CLOSE, fd)
+}
+
+/// Perform a device-specific ioctl on a file descriptor.
+///
+/// Returns 0 on success, or a negative errno on failure.
+pub fn ioctl(fd: usize, cmd: usize, arg: usize) -> isize {
+    syscall3(SYS_HANDLE_IOCTL, fd, cmd, arg)
 }
 
 /// Stat a file descriptor. Returns `Some(StatInfo)` on success, or `None`.

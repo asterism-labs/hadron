@@ -377,6 +377,15 @@ const MMAP_FREE_LIST_CAPACITY: usize = 64;
 
 // ── Process struct ──────────────────────────────────────────────────
 
+/// Describes how a memory mapping was created, for correct cleanup on unmap.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum MappingKind {
+    /// Anonymous mapping: pages were allocated from PMM and must be freed.
+    Anonymous { page_count: usize },
+    /// Device-backed mapping: physical pages belong to hardware and must NOT be freed.
+    Device { page_count: usize },
+}
+
 /// A user-mode process.
 ///
 /// Owns an [`AddressSpace`] which is freed automatically on drop via
@@ -400,6 +409,8 @@ pub struct Process {
     pub fd_table: SpinLock<FileDescriptorTable>,
     /// Virtual address region allocator for `sys_mem_map` mappings.
     pub(crate) mmap_alloc: SpinLock<FreeRegionAllocator<MMAP_FREE_LIST_CAPACITY>>,
+    /// Tracks mapping kind (anonymous vs device) for each mmap virtual address.
+    pub(crate) mmap_mappings: SpinLock<BTreeMap<u64, MappingKind>>,
     /// Pending signals for this process.
     pub signals: signal::SignalState,
     /// Exit status, set when the process terminates.
@@ -438,6 +449,7 @@ impl Process {
             address_space,
             fd_table: SpinLock::leveled("fd_table", 4, FileDescriptorTable::new()),
             mmap_alloc: SpinLock::leveled("mmap_alloc", 4, FreeRegionAllocator::new(mmap_region)),
+            mmap_mappings: SpinLock::leveled("mmap_mappings", 4, BTreeMap::new()),
             signals: signal::SignalState::new(),
             exit_status: SpinLock::leveled("exit_status", 4, None),
             exit_notify: HeapWaitQueue::new(),
@@ -1004,7 +1016,6 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
 
                 // Clear foreground PID.
                 WaitState::set_foreground(Pid::new(0));
-
 
                 // Write exit status to user memory under user CR3.
                 if status_ptr != 0 && result >= 0 {

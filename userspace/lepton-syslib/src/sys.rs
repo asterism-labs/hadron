@@ -1,17 +1,17 @@
 //! System calls: exit, getpid, spawn, waitpid, kill, pipe, query, clock.
 
-use hadron_syscall::raw::{syscall0, syscall1, syscall2, syscall3, syscall4};
+use hadron_syscall::raw::{syscall0, syscall1, syscall2, syscall3, syscall4, syscall5};
 use hadron_syscall::{
-    CLOCK_MONOTONIC, KernelVersionInfo, MAP_ANONYMOUS, MemoryInfo, PROT_READ, PROT_WRITE,
-    QUERY_KERNEL_VERSION, QUERY_MEMORY, QUERY_UPTIME, SYS_CLOCK_GETTIME, SYS_HANDLE_DUP,
-    SYS_HANDLE_PIPE, SYS_HANDLE_TCGETPGRP, SYS_HANDLE_TCSETPGRP, SYS_MEM_MAP, SYS_MEM_UNMAP,
-    SYS_QUERY, SYS_TASK_EXIT, SYS_TASK_INFO, SYS_TASK_GETPGID, SYS_TASK_KILL,
+    CLOCK_MONOTONIC, KernelVersionInfo, MAP_ANONYMOUS, MAP_SHARED, MemoryInfo, PROT_READ,
+    PROT_WRITE, QUERY_KERNEL_VERSION, QUERY_MEMORY, QUERY_UPTIME, SYS_CLOCK_GETTIME,
+    SYS_HANDLE_DUP, SYS_HANDLE_PIPE, SYS_HANDLE_TCGETPGRP, SYS_HANDLE_TCSETPGRP, SYS_MEM_MAP,
+    SYS_MEM_UNMAP, SYS_QUERY, SYS_TASK_EXIT, SYS_TASK_GETPGID, SYS_TASK_INFO, SYS_TASK_KILL,
     SYS_TASK_SETPGID, SYS_TASK_SIGACTION, SYS_TASK_SPAWN, SYS_TASK_WAIT, SpawnArg, Timespec,
     UptimeInfo,
 };
 
 pub use hadron_syscall::{
-    SIGCHLD, SIGINT, SIGKILL, SIGPIPE, SIGQUIT, SIGSEGV, SIGSTOP, SIGTERM, SIG_DFL, SIG_IGN,
+    SIG_DFL, SIG_IGN, SIGCHLD, SIGINT, SIGKILL, SIGPIPE, SIGQUIT, SIGSEGV, SIGSTOP, SIGTERM,
 };
 
 // ── Functions ─────────────────────────────────────────────────────────
@@ -131,11 +131,7 @@ pub fn signal(signum: usize, handler: usize) -> isize {
         handler,
         &mut old_handler as *mut u64 as usize,
     );
-    if ret < 0 {
-        ret
-    } else {
-        old_handler as isize
-    }
+    if ret < 0 { ret } else { old_handler as isize }
 }
 
 /// Set process group ID.
@@ -258,20 +254,37 @@ pub fn clock_gettime() -> Option<Timespec> {
 /// Returns a pointer to the mapped region, or `None` if the mapping failed.
 /// The returned pointer is page-aligned. `length` is rounded up to page size.
 pub fn mem_map(length: usize) -> Option<*mut u8> {
-    let ret = syscall4(
+    let ret = syscall5(
         SYS_MEM_MAP,
         0, // addr_hint (kernel chooses)
         length,
         PROT_READ | PROT_WRITE,
         MAP_ANONYMOUS,
+        usize::MAX, // fd ignored for anonymous
+    );
+    if ret > 0 { Some(ret as *mut u8) } else { None }
+}
+
+/// Map a device file descriptor into the process address space.
+///
+/// The device inode must support `mmap_phys()`. Returns a pointer to the
+/// mapped region, or `None` if the mapping failed.
+pub fn mem_map_device(fd: usize, length: usize) -> Option<*mut u8> {
+    let ret = syscall5(
+        SYS_MEM_MAP,
+        0, // addr_hint
+        length,
+        PROT_READ | PROT_WRITE,
+        MAP_SHARED,
+        fd,
     );
     if ret > 0 { Some(ret as *mut u8) } else { None }
 }
 
 /// Unmap a previously mapped memory region.
 ///
-/// `addr` must be the exact pointer returned by [`mem_map`]. `length` must
-/// match the original request.
+/// `addr` must be the exact pointer returned by [`mem_map`] or
+/// [`mem_map_device`]. `length` must match the original request.
 ///
 /// Returns `true` on success.
 pub fn mem_unmap(addr: *mut u8, length: usize) -> bool {

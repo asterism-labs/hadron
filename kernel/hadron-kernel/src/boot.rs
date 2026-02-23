@@ -338,7 +338,9 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
     }
 
     // 2c. Initialize backtrace support from embedded HKIF data.
-    crate::backtrace::Backtrace::init_from_embedded(boot_info.kernel_address().virtual_base.as_u64());
+    crate::backtrace::Backtrace::init_from_embedded(
+        boot_info.kernel_address().virtual_base.as_u64(),
+    );
 
     // 3. Initialize PMM (bitmap from memory map).
     crate::mm::pmm::init(boot_info);
@@ -456,9 +458,7 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
         }
 
         // Register a VT-aware console sink that routes to the active VT.
-        let vt_sink = Box::new(crate::tty::VtConsoleSink::new(
-            crate::log::LogLevel::Info,
-        ));
+        let vt_sink = Box::new(crate::tty::VtConsoleSink::new(crate::log::LogLevel::Info));
         if crate::log::Log::replace_sink_by_name("framebuffer", vt_sink) {
             crate::kinfo!("Switched display to per-VT fbcon (6 virtual terminals)");
         }
@@ -562,6 +562,17 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
                 ));
             }
         }
+        // Register /dev/fb0 if a framebuffer device is available.
+        if let Some(fb) = crate::drivers::device_registry::DeviceRegistry::with(|dr| {
+            dr.take_framebuffer("bochs-vga-0")
+        }) {
+            dev_devices.push((
+                "fb0",
+                Arc::new(crate::drivers::dev_fb::DevFramebuffer::new(fb)) as Arc<dyn fs::Inode>,
+            ));
+            crate::kinfo!("DevFs: Registered /dev/fb0");
+        }
+
         let devfs = Arc::new(fs::devfs::DevFs::with_extra_devices(dev_devices));
         let devfs_name = devfs.name();
         fs::vfs::with_vfs_mut(|vfs| vfs.mount("/dev", devfs));
@@ -601,7 +612,8 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
         unsafe {
             let percpu_mut = percpu as *const crate::percpu::PerCpu as *mut crate::percpu::PerCpu;
             (*percpu_mut).user_context_ptr = crate::proc::TrapContext::user_context_ptr() as u64;
-            (*percpu_mut).saved_kernel_rsp_ptr = crate::proc::TrapContext::saved_kernel_rsp_ptr() as u64;
+            (*percpu_mut).saved_kernel_rsp_ptr =
+                crate::proc::TrapContext::saved_kernel_rsp_ptr() as u64;
             (*percpu_mut).trap_reason_ptr = crate::proc::TrapContext::trap_reason_ptr() as u64;
             (*percpu_mut).saved_regs_ptr =
                 crate::arch::x86_64::syscall::SYSCALL_SAVED_REGS.get().get() as u64;

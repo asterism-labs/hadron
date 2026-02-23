@@ -1,6 +1,6 @@
 //! Framebuffer interface trait and associated types.
 
-use crate::addr::VirtAddr;
+use crate::addr::{PhysAddr, VirtAddr};
 
 /// Pixel format of a framebuffer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,6 +52,11 @@ pub trait Framebuffer: Send + Sync {
 
     /// Returns the virtual base address of the framebuffer memory.
     fn base_address(&self) -> VirtAddr;
+
+    /// Returns the physical base address of the framebuffer memory.
+    ///
+    /// Required for userspace mmap via `/dev/fb0`.
+    fn physical_base(&self) -> PhysAddr;
 
     /// Writes a pixel at the given coordinates.
     fn put_pixel(&self, x: u32, y: u32, color: u32);

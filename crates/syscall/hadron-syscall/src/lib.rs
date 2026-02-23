@@ -100,6 +100,21 @@ hadron_syscall_macros::define_syscalls! {
             permissions: u32,
         }
 
+        /// Framebuffer information returned by `FBIOGET_INFO` ioctl.
+        #[derive(Debug, Clone, Copy)]
+        struct FbInfo {
+            /// Width in pixels.
+            width: u32,
+            /// Height in pixels.
+            height: u32,
+            /// Bytes per scanline.
+            pitch: u32,
+            /// Bits per pixel (widened from u8 for alignment).
+            bpp: u32,
+            /// Pixel format: 0=RGB32, 1=BGR32.
+            pixel_format: u32,
+        }
+
         /// Argument descriptor for [`task_spawn`]: pointer + length of one arg string.
         #[derive(Debug, Clone, Copy)]
         struct SpawnArg {
@@ -170,6 +185,10 @@ hadron_syscall_macros::define_syscalls! {
         PROT_EXEC: usize = 0x4;
         /// Memory mapping flag: anonymous (not file-backed).
         MAP_ANONYMOUS: usize = 0x1;
+        /// Memory mapping flag: shared/device-backed mapping.
+        MAP_SHARED: usize = 0x2;
+        /// Framebuffer ioctl: get framebuffer info.
+        FBIOGET_INFO: u32 = 0x4600;
         /// Signal: interrupt (Ctrl+C).
         SIGINT: usize = 2;
         /// Signal: quit (Ctrl+\).
@@ -273,6 +292,13 @@ hadron_syscall_macros::define_syscalls! {
         ///
         /// Returns the PGID on success, or a negated errno on failure.
         fn handle_tcgetpgrp(fd: usize) = 0x05;
+
+        /// Perform a device-specific ioctl on a file descriptor.
+        ///
+        /// `cmd` is the ioctl command number. `arg_ptr` is a pointer to the
+        /// command-specific argument (typically a `#[repr(C)]` struct).
+        /// Returns 0 on success, or a negated errno on failure.
+        fn handle_ioctl(fd: usize, cmd: usize, arg_ptr: usize) = 0x06;
     }
 
     /// Channel IPC.
@@ -318,15 +344,16 @@ hadron_syscall_macros::define_syscalls! {
 
     /// Memory management.
     group memory(0x40..0x50) {
-        /// Map anonymous memory into the address space.
+        /// Map memory into the address space.
         ///
         /// `addr_hint` is ignored (kernel chooses address). `length` is the
         /// requested size in bytes (rounded up to page alignment). `prot` is
         /// a bitmask of `PROT_READ`/`PROT_WRITE`/`PROT_EXEC`. `flags` must
-        /// include `MAP_ANONYMOUS`.
+        /// include `MAP_ANONYMOUS` or `MAP_SHARED`. `fd` is the file
+        /// descriptor for device-backed mappings (ignored for anonymous).
         ///
         /// Returns the mapped virtual address on success, or negated errno.
-        fn mem_map(addr_hint: usize, length: usize, prot: usize, flags: usize) = 0x00;
+        fn mem_map(addr_hint: usize, length: usize, prot: usize, flags: usize, fd: usize) = 0x00;
 
         /// Unmap memory from the address space.
         ///

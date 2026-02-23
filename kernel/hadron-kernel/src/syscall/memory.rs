@@ -1,44 +1,69 @@
 //! Memory syscall handlers: mem_map, mem_unmap.
 //!
-//! Implements anonymous memory mapping for userspace processes. Each process
-//! owns a [`FreeRegionAllocator`](crate::mm::region::FreeRegionAllocator)
-//! that tracks the mmap virtual address region. Physical frames are allocated
-//! from the PMM and mapped into the process's address space.
+//! Implements anonymous and device-backed memory mapping for userspace
+//! processes. Each process owns a
+//! [`FreeRegionAllocator`](crate::mm::region::FreeRegionAllocator) that tracks
+//! the mmap virtual address region. Physical frames are allocated from the PMM
+//! (anonymous) or come from device MMIO regions (device-backed).
 
-use crate::addr::VirtAddr;
+use crate::addr::{PhysAddr, VirtAddr};
+use crate::id::Fd;
 use crate::mm::PAGE_SIZE;
 use crate::mm::mapper::MapFlags;
 use crate::mm::pmm::{self, BitmapFrameAllocRef};
-use crate::paging::{Page, Size4KiB};
-use crate::proc::ProcessTable;
-use crate::syscall::{EINVAL, ENOSYS};
+use crate::paging::{Page, PhysFrame, Size4KiB};
+use crate::proc::{MappingKind, ProcessTable};
+use crate::syscall::{EBADF, EINVAL, ENOSYS};
 
 /// Page-align `size` upward (round to next 4 KiB boundary).
 const fn page_align_up(size: usize) -> usize {
     (size + PAGE_SIZE - 1) & !(PAGE_SIZE - 1)
 }
 
-/// `sys_mem_map` — map anonymous memory into the calling process's address space.
+/// `sys_mem_map` — map memory into the calling process's address space.
 ///
 /// `addr_hint` is currently ignored (kernel always chooses the address).
 /// `length` is rounded up to page alignment. `prot` is a bitmask of
-/// `PROT_READ`/`PROT_WRITE`/`PROT_EXEC`. `flags` must include `MAP_ANONYMOUS`.
+/// `PROT_READ`/`PROT_WRITE`/`PROT_EXEC`. `flags` must include
+/// `MAP_ANONYMOUS` or `MAP_SHARED`. `fd` is the file descriptor for
+/// device-backed mappings (ignored for anonymous).
 ///
 /// Returns the mapped virtual address on success, or negated errno on failure.
 #[expect(
     clippy::cast_possible_wrap,
     reason = "returning virtual address as isize; upper bit is never set for user addresses"
 )]
-pub(super) fn sys_mem_map(_addr_hint: usize, length: usize, prot: usize, flags: usize) -> isize {
-    use hadron_syscall::{MAP_ANONYMOUS, PROT_EXEC, PROT_READ, PROT_WRITE};
+pub(super) fn sys_mem_map(
+    _addr_hint: usize,
+    length: usize,
+    prot: usize,
+    flags: usize,
+    fd: usize,
+) -> isize {
+    use hadron_syscall::{MAP_ANONYMOUS, MAP_SHARED};
 
-    // Validate flags.
-    if flags & MAP_ANONYMOUS == 0 {
-        return -ENOSYS; // Only anonymous mappings supported.
-    }
     if length == 0 {
         return -EINVAL;
     }
+
+    if flags & MAP_SHARED != 0 {
+        return sys_mem_map_device(length, prot, fd);
+    }
+
+    if flags & MAP_ANONYMOUS != 0 {
+        return sys_mem_map_anonymous(length, prot);
+    }
+
+    -ENOSYS // Neither MAP_ANONYMOUS nor MAP_SHARED.
+}
+
+/// Anonymous mapping: allocate physical frames from PMM.
+#[expect(
+    clippy::cast_possible_wrap,
+    reason = "returning virtual address as isize; upper bit is never set for user addresses"
+)]
+fn sys_mem_map_anonymous(length: usize, prot: usize) -> isize {
+    use hadron_syscall::{PROT_EXEC, PROT_READ, PROT_WRITE};
 
     let aligned_length = page_align_up(length);
     let page_count = aligned_length / PAGE_SIZE;
@@ -101,6 +126,102 @@ pub(super) fn sys_mem_map(_addr_hint: usize, length: usize, prot: usize, flags: 
         return -EINVAL;
     }
 
+    // Track this as an anonymous mapping.
+    ProcessTable::with_current(|process| {
+        let mut mappings = process.mmap_mappings.lock();
+        mappings.insert(base_vaddr.as_u64(), MappingKind::Anonymous { page_count });
+    });
+
+    base_vaddr.as_u64() as isize
+}
+
+/// Device-backed mapping: map physical device memory into user space.
+#[expect(
+    clippy::cast_possible_wrap,
+    reason = "returning virtual address as isize; upper bit is never set for user addresses"
+)]
+fn sys_mem_map_device(length: usize, prot: usize, fd: usize) -> isize {
+    use hadron_syscall::{PROT_EXEC, PROT_READ, PROT_WRITE};
+
+    let fd = Fd::new(fd as u32);
+
+    // Look up the inode from the fd table.
+    let inode = ProcessTable::with_current(|process| {
+        let fd_table = process.fd_table.lock();
+        fd_table.get(fd).map(|f| f.inode.clone())
+    });
+
+    let Some(inode) = inode else {
+        return -EBADF;
+    };
+
+    // Query physical base and device size from the inode.
+    let (phys_base, device_size) = match inode.mmap_phys() {
+        Ok(v) => v,
+        Err(e) => return -e.to_errno(),
+    };
+
+    let aligned_length = page_align_up(length);
+    let page_count = aligned_length / PAGE_SIZE;
+
+    if aligned_length > device_size {
+        return -EINVAL;
+    }
+
+    // Build page table flags from prot, with cache disabled for device memory.
+    let mut map_flags = MapFlags::USER | MapFlags::CACHE_DISABLE;
+    if prot & PROT_WRITE != 0 {
+        map_flags |= MapFlags::WRITABLE;
+    }
+    if prot & PROT_EXEC != 0 {
+        map_flags |= MapFlags::EXECUTABLE;
+    }
+    let _ = prot & PROT_READ;
+
+    // Allocate virtual region from the process's mmap allocator.
+    let vaddr = ProcessTable::with_current(|process| {
+        let mut mmap = process.mmap_alloc.lock();
+        mmap.allocate(aligned_length as u64)
+    });
+
+    let base_vaddr = match vaddr {
+        Some(v) => v,
+        None => return -EINVAL,
+    };
+
+    // Map device physical pages into user address space.
+    let map_result = ProcessTable::with_current(|process| {
+        pmm::with(|pmm| {
+            let mut alloc = BitmapFrameAllocRef(pmm);
+            for i in 0..page_count {
+                let page_vaddr = base_vaddr.as_u64() + (i as u64) * PAGE_SIZE as u64;
+                let phys_addr = phys_base + (i as u64) * PAGE_SIZE as u64;
+
+                let page = Page::<Size4KiB>::containing_address(VirtAddr::new(page_vaddr));
+                let frame = PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(phys_addr));
+
+                if let Err(_e) = process
+                    .address_space()
+                    .map_user_page(page, frame, map_flags, &mut alloc)
+                {
+                    return Err(i);
+                }
+            }
+            Ok(())
+        })
+    });
+
+    if let Err(_partial_count) = map_result {
+        // TODO: Unmap partially-mapped pages. For now, leak them.
+        return -EINVAL;
+    }
+
+    // Track this as a device mapping (physical frames must NOT be freed).
+    ProcessTable::with_current(|process| {
+        let mut mappings = process.mmap_mappings.lock();
+        mappings.insert(base_vaddr.as_u64(), MappingKind::Device { page_count });
+    });
+
     base_vaddr.as_u64() as isize
 }
 
@@ -115,22 +236,41 @@ pub(super) fn sys_mem_unmap(addr: usize, length: usize) -> isize {
     }
 
     let aligned_length = page_align_up(length);
-    let page_count = aligned_length / PAGE_SIZE;
     let base = VirtAddr::new(addr as u64);
 
     ProcessTable::with_current(|process| {
-        // Unmap pages and free physical frames.
-        pmm::with(|pmm| {
-            for i in 0..page_count {
-                let page_vaddr = base.as_u64() + (i as u64) * PAGE_SIZE as u64;
-                let page = Page::<Size4KiB>::containing_address(VirtAddr::new(page_vaddr));
-                if let Ok(frame) = process.address_space().unmap_user_page(page) {
-                    // SAFETY: The frame was allocated by the PMM during mem_map
-                    // and is no longer referenced by any page table entry.
-                    let _ = unsafe { pmm.deallocate_frame(frame) };
+        // Look up the mapping kind to decide whether to free frames.
+        let mapping_kind = {
+            let mut mappings = process.mmap_mappings.lock();
+            mappings.remove(&base.as_u64())
+        };
+
+        let page_count = aligned_length / PAGE_SIZE;
+
+        match mapping_kind {
+            Some(MappingKind::Device { .. }) => {
+                // Device mapping: unmap PTEs but do NOT free physical frames.
+                for i in 0..page_count {
+                    let page_vaddr = base.as_u64() + (i as u64) * PAGE_SIZE as u64;
+                    let page = Page::<Size4KiB>::containing_address(VirtAddr::new(page_vaddr));
+                    let _ = process.address_space().unmap_user_page(page);
                 }
             }
-        });
+            _ => {
+                // Anonymous (or legacy untracked): unmap and free frames.
+                pmm::with(|pmm| {
+                    for i in 0..page_count {
+                        let page_vaddr = base.as_u64() + (i as u64) * PAGE_SIZE as u64;
+                        let page = Page::<Size4KiB>::containing_address(VirtAddr::new(page_vaddr));
+                        if let Ok(frame) = process.address_space().unmap_user_page(page) {
+                            // SAFETY: The frame was allocated by the PMM during mem_map
+                            // and is no longer referenced by any page table entry.
+                            let _ = unsafe { pmm.deallocate_frame(frame) };
+                        }
+                    }
+                });
+            }
+        }
 
         // Return the virtual region to the mmap allocator.
         let mut mmap = process.mmap_alloc.lock();

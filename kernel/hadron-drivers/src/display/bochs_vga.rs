@@ -8,7 +8,7 @@ extern crate alloc;
 
 use core::ptr;
 
-use hadron_kernel::addr::VirtAddr;
+use hadron_kernel::addr::{PhysAddr, VirtAddr};
 use hadron_kernel::arch::x86_64::Port;
 use hadron_kernel::driver_api::capability::MmioCapability;
 use hadron_kernel::driver_api::error::DriverError;
@@ -221,6 +221,10 @@ impl Framebuffer for BochsVga {
 
     fn base_address(&self) -> VirtAddr {
         self.fb_region.virt_base()
+    }
+
+    fn physical_base(&self) -> PhysAddr {
+        self.fb_region.phys_base()
     }
 
     fn put_pixel(&self, x: u32, y: u32, color: u32) {

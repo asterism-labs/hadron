@@ -224,6 +224,22 @@ pub trait Inode: Send + Sync {
         name: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), FsError>> + Send + 'a>>;
 
+    /// Perform a device-specific ioctl.
+    ///
+    /// `cmd` is the ioctl command number. `arg` is the command-specific
+    /// argument (typically a user pointer). Default returns [`FsError::NotSupported`].
+    fn ioctl(&self, _cmd: u32, _arg: usize) -> Result<usize, FsError> {
+        Err(FsError::NotSupported)
+    }
+
+    /// Returns the physical base address and size for device mmap.
+    ///
+    /// Only meaningful for device inodes that support memory mapping
+    /// (e.g. framebuffer devices). Default returns [`FsError::NotSupported`].
+    fn mmap_phys(&self) -> Result<(u64, usize), FsError> {
+        Err(FsError::NotSupported)
+    }
+
     /// Read the target path of a symlink.
     ///
     /// Default implementation returns [`FsError::NotSupported`].
