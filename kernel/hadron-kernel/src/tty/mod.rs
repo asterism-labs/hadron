@@ -27,7 +27,7 @@ use core::task::Waker;
 
 use crate::drivers::fbcon::FbCon;
 use crate::sync::{IrqSpinLock, SpinLock};
-use hadron_syscall::Termios;
+use hadron_syscall::{ECHO, ICANON, ISIG, Termios};
 use ldisc::{LdiscAction, LineDiscipline};
 use planck_noalloc::ringbuf::RingBuf;
 
@@ -242,6 +242,12 @@ impl Tty {
             &raw[..count]
         );
 
+        // Snapshot termios flags before taking the ldisc lock.
+        let termios = *self.termios.lock();
+        let icanon = termios.lflag & ICANON != 0;
+        let isig = termios.lflag & ISIG != 0;
+        let echo = termios.lflag & ECHO != 0;
+
         // Phase 2: process under ldisc lock, collect actions.
         let mut actions: [Option<LdiscAction>; SCANCODE_BUF_SIZE] =
             [const { None }; SCANCODE_BUF_SIZE];
@@ -249,7 +255,7 @@ impl Tty {
         {
             let mut ldisc = self.ldisc.lock();
             for &scancode in &raw[..count] {
-                if let Some(action) = ldisc.process_scancode(scancode) {
+                if let Some(action) = ldisc.process_scancode(scancode, icanon, isig) {
                     actions[action_count] = Some(action);
                     action_count += 1;
                 }
@@ -258,11 +264,25 @@ impl Tty {
         // ldisc released — interrupts re-enabled.
 
         // Phase 3: echo and signal delivery with no locks held.
+        // Echo output is gated on the ECHO termios flag, except for ^C
+        // which is always echoed (matches Linux behavior).
         for action in &actions[..action_count] {
             match action {
-                Some(LdiscAction::Backspace) => crate::kprint!("\x08 \x08"),
-                Some(LdiscAction::Newline) => crate::kprint!("\n"),
-                Some(LdiscAction::Char(ch)) => crate::kprint!("{}", *ch as char),
+                Some(LdiscAction::Backspace) => {
+                    if echo {
+                        crate::kprint!("\x08 \x08");
+                    }
+                }
+                Some(LdiscAction::Newline) => {
+                    if echo {
+                        crate::kprint!("\n");
+                    }
+                }
+                Some(LdiscAction::Char(ch)) => {
+                    if echo {
+                        crate::kprint!("{}", *ch as char);
+                    }
+                }
                 Some(LdiscAction::Interrupt) => {
                     crate::kprint!("^C\n");
                     // Send SIGINT to the foreground process group.

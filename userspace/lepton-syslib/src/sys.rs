@@ -2,8 +2,9 @@
 
 use hadron_syscall::wrappers;
 use hadron_syscall::{
-    CLOCK_MONOTONIC, KernelVersionInfo, MAP_ANONYMOUS, MAP_SHARED, MemoryInfo, PROT_READ,
-    PROT_WRITE, QUERY_KERNEL_VERSION, QUERY_MEMORY, QUERY_UPTIME, SpawnArg, Timespec, UptimeInfo,
+    CLOCK_MONOTONIC, KernelVersionInfo, MAP_ANONYMOUS, MAP_SHARED, MemoryInfo, POLLIN, PROT_READ,
+    PROT_WRITE, PollFd, ProcessInfo, QUERY_KERNEL_VERSION, QUERY_MEMORY, QUERY_PROCESSES,
+    QUERY_UPTIME, SpawnArg, Timespec, UptimeInfo,
 };
 
 pub use hadron_syscall::{
@@ -231,6 +232,50 @@ pub fn query_kernel_version() -> Option<KernelVersionInfo> {
     } else {
         None
     }
+}
+
+/// Query process table statistics.
+pub fn query_processes() -> Option<ProcessInfo> {
+    let mut info = core::mem::MaybeUninit::<ProcessInfo>::uninit();
+    let ret = wrappers::sys_query(
+        QUERY_PROCESSES as usize,
+        0, // sub_id (reserved)
+        info.as_mut_ptr() as usize,
+        core::mem::size_of::<ProcessInfo>(),
+    );
+    if ret >= 0 {
+        // SAFETY: The kernel wrote a valid ProcessInfo into the buffer on success.
+        Some(unsafe { info.assume_init() })
+    } else {
+        None
+    }
+}
+
+/// Sleep for the given number of seconds.
+pub fn sleep_secs(secs: u64) {
+    let req = Timespec {
+        tv_sec: secs,
+        tv_nsec: 0,
+    };
+    wrappers::sys_clock_nanosleep(
+        CLOCK_MONOTONIC,
+        0, // flags (reserved)
+        &req as *const Timespec as usize,
+        0, // rem_ptr (unused)
+    );
+}
+
+/// Non-blocking poll of stdin (fd 0) for available input.
+///
+/// Returns `true` if data is available to read.
+pub fn poll_stdin() -> bool {
+    let mut fds = [PollFd {
+        fd: 0,
+        events: POLLIN,
+        revents: 0,
+    }];
+    let ret = wrappers::sys_event_wait_many(fds.as_mut_ptr() as usize, 1, 0);
+    ret > 0 && fds[0].revents & POLLIN != 0
 }
 
 /// Get the current monotonic time.

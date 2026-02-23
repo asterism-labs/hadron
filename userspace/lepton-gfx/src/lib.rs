@@ -7,6 +7,8 @@
 
 #![no_std]
 
+pub mod font;
+
 /// A drawable surface wrapping a mutable pixel buffer.
 pub struct Surface<'a> {
     data: &'a mut [u32],
@@ -122,6 +124,35 @@ impl<'a> Surface<'a> {
                     self.data[dst_idx] = src.data[src_idx];
                 }
             }
+        }
+    }
+
+    /// Draws a single 8×16 character at pixel position `(x, y)`.
+    ///
+    /// Uses the embedded VGA bitmap font. Characters outside the ASCII range
+    /// are silently skipped.
+    pub fn draw_char(&mut self, x: u32, y: u32, ch: char, fg: u32, bg: u32) {
+        let Some(offset) = font::glyph_offset(ch) else {
+            return;
+        };
+        for row in 0..font::HEIGHT {
+            let byte = font::DATA[offset + row as usize];
+            for col in 0..font::WIDTH {
+                let color = if byte & (0x80 >> col) != 0 { fg } else { bg };
+                self.put_pixel(x + col, y + row, color);
+            }
+        }
+    }
+
+    /// Draws a string at pixel position `(x, y)`, advancing horizontally.
+    ///
+    /// Each character occupies [`font::WIDTH`] pixels. Characters are clipped
+    /// individually by [`put_pixel`](Self::put_pixel).
+    pub fn draw_str(&mut self, x: u32, y: u32, s: &str, fg: u32, bg: u32) {
+        let mut cx = x;
+        for ch in s.chars() {
+            self.draw_char(cx, y, ch, fg, bg);
+            cx += font::WIDTH;
         }
     }
 }

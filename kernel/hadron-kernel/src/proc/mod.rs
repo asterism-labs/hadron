@@ -389,6 +389,11 @@ impl ProcessTable {
         let guard = CURRENT_PROCESS.get().lock();
         guard.as_ref().map(f)
     }
+
+    /// Returns the number of processes in the global table.
+    pub fn count() -> usize {
+        PROCESS_TABLE.lock().len()
+    }
 }
 
 // ── User mmap region ────────────────────────────────────────────────

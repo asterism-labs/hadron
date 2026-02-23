@@ -78,9 +78,16 @@ impl LineDiscipline {
     /// Process a single raw scancode.
     ///
     /// Decodes the scancode, updates modifier state, and buffers the resulting
-    /// character in cooked mode. Returns a [`LdiscAction`] describing what the
-    /// caller should do (echo, signal, etc.).
-    pub fn process_scancode(&mut self, scancode: u8) -> Option<LdiscAction> {
+    /// character. When `icanon` is true, performs cooked-mode line editing;
+    /// when false, pushes bytes directly to the ready buffer (raw mode).
+    /// When `isig` is false, Ctrl+C is delivered as a literal `0x03` byte
+    /// instead of generating an [`LdiscAction::Interrupt`].
+    pub fn process_scancode(
+        &mut self,
+        scancode: u8,
+        icanon: bool,
+        isig: bool,
+    ) -> Option<LdiscAction> {
         // Handle 0xE0 extended prefix.
         if scancode == 0xE0 {
             self.extended_prefix = true;
@@ -128,7 +135,7 @@ impl LineDiscipline {
             return None;
         }
 
-        // Alt+F1..F6: VT switching.
+        // Alt+F1..F6: VT switching (always active regardless of mode).
         if self.alt_held {
             match key {
                 KeyCode::F1 => return Some(LdiscAction::SwitchVt(0)),
@@ -141,60 +148,77 @@ impl LineDiscipline {
             }
         }
 
-        // Ctrl+C: interrupt.
+        // Ctrl+C handling.
         if self.ctrl_held && key == KeyCode::C {
-            self.line_len = 0;
-            return Some(LdiscAction::Interrupt);
+            if isig {
+                self.line_len = 0;
+                return Some(LdiscAction::Interrupt);
+            }
+            // Raw signal mode: deliver as literal byte.
+            let _ = self.ready_buf.try_push(0x03);
+            return Some(LdiscAction::Char(0x03));
         }
 
-        // Ctrl+D: EOF on empty line, flush on non-empty line.
+        // Ctrl+D handling.
         if self.ctrl_held && key == KeyCode::D {
-            if self.line_len == 0 {
-                self.eof_pending = true;
-                return Some(LdiscAction::Eof);
+            if icanon {
+                if self.line_len == 0 {
+                    self.eof_pending = true;
+                    return Some(LdiscAction::Eof);
+                }
+                // Flush current line without trailing newline.
+                let len = self.line_len;
+                for i in 0..len {
+                    let byte = self.line_buf[i];
+                    let _ = self.ready_buf.try_push(byte);
+                }
+                self.line_len = 0;
+                return Some(LdiscAction::FlushLine);
             }
-            // Flush current line without trailing newline.
-            let len = self.line_len;
-            for i in 0..len {
-                let byte = self.line_buf[i];
-                let _ = self.ready_buf.try_push(byte);
-            }
-            self.line_len = 0;
-            return Some(LdiscAction::FlushLine);
+            // Raw mode: deliver as literal byte.
+            let _ = self.ready_buf.try_push(0x04);
+            return Some(LdiscAction::Char(0x04));
         }
 
         let shifted = self.shift_held;
         let caps = self.caps_lock;
 
         if let Some(ch) = keycode_to_ascii(key, shifted, caps) {
-            match ch {
-                b'\x08' => {
-                    // Backspace: erase one character.
-                    if self.line_len > 0 {
-                        self.line_len -= 1;
-                        return Some(LdiscAction::Backspace);
+            if icanon {
+                // Cooked mode: line editing.
+                match ch {
+                    b'\x08' => {
+                        // Backspace: erase one character.
+                        if self.line_len > 0 {
+                            self.line_len -= 1;
+                            return Some(LdiscAction::Backspace);
+                        }
+                    }
+                    b'\n' => {
+                        // Enter: copy line + newline into ready buffer.
+                        let len = self.line_len;
+                        for i in 0..len {
+                            let byte = self.line_buf[i];
+                            let _ = self.ready_buf.try_push(byte);
+                        }
+                        let _ = self.ready_buf.try_push(b'\n');
+                        self.line_len = 0;
+                        return Some(LdiscAction::Newline);
+                    }
+                    _ => {
+                        // Printable character: append to line buffer if there's room.
+                        let len = self.line_len;
+                        if len < LINE_BUF_SIZE {
+                            self.line_buf[len] = ch;
+                            self.line_len += 1;
+                            return Some(LdiscAction::Char(ch));
+                        }
                     }
                 }
-                b'\n' => {
-                    // Enter: copy line + newline into ready buffer.
-                    let len = self.line_len;
-                    for i in 0..len {
-                        let byte = self.line_buf[i];
-                        let _ = self.ready_buf.try_push(byte);
-                    }
-                    let _ = self.ready_buf.try_push(b'\n');
-                    self.line_len = 0;
-                    return Some(LdiscAction::Newline);
-                }
-                _ => {
-                    // Printable character: append to line buffer if there's room.
-                    let len = self.line_len;
-                    if len < LINE_BUF_SIZE {
-                        self.line_buf[len] = ch;
-                        self.line_len += 1;
-                        return Some(LdiscAction::Char(ch));
-                    }
-                }
+            } else {
+                // Raw mode: push directly to ready buffer.
+                let _ = self.ready_buf.try_push(ch);
+                return Some(LdiscAction::Char(ch));
             }
         }
         None

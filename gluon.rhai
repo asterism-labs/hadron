@@ -328,6 +328,10 @@ userspace.add("lepton-fbdemo", "userspace/fbdemo")
     .crate_type(BIN).root("src/main.rs")
     .deps(#{ lepton_syslib: "lepton-syslib", lepton_gfx: "lepton-gfx" });
 
+userspace.add("lepton-sysmon", "userspace/lepton-sysmon")
+    .crate_type(BIN).root("src/main.rs")
+    .deps(#{ lepton_syslib: "lepton-syslib", lepton_gfx: "lepton-gfx" });
+
 // ===========================================================================
 // Rules (custom artifact generation)
 // ===========================================================================
@@ -338,7 +342,7 @@ rule("hkif")
     .handler("hkif");
 
 rule("initrd")
-    .inputs(["lepton-init", "lsh", "lepton-coreutils", "lepton-fbdemo"])
+    .inputs(["lepton-init", "lsh", "lepton-coreutils", "lepton-fbdemo", "lepton-sysmon"])
     .output("build/initrd.cpio")
     .handler("initrd");
 

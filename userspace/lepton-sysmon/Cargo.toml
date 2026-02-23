@@ -1,0 +1,13 @@
+[package]
+name = "lepton-sysmon"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "sysmon"
+path = "src/main.rs"
+
+[dependencies]
+lepton-syslib = { path = "../lepton-syslib" }
+lepton-gfx = { path = "../lepton-gfx" }

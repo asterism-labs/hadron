@@ -97,6 +97,15 @@ hadron_syscall_macros::define_syscalls! {
             name: [u8; 32],
         }
 
+        /// Response for [`QUERY_PROCESSES`]: process table statistics.
+        #[derive(Debug, Clone, Copy)]
+        struct ProcessInfo {
+            /// Number of active processes.
+            count: u32,
+            /// Padding for alignment.
+            _pad: u32,
+        }
+
         /// Stat information for a vnode.
         #[derive(Debug, Clone, Copy)]
         struct StatInfo {
@@ -243,6 +252,8 @@ hadron_syscall_macros::define_syscalls! {
         QUERY_UPTIME: u64 = 1;
         /// Query topic: kernel version information.
         QUERY_KERNEL_VERSION: u64 = 2;
+        /// Query topic: process table statistics.
+        QUERY_PROCESSES: u64 = 3;
         /// Monotonic clock: nanoseconds since boot, never adjusted.
         CLOCK_MONOTONIC: usize = 0;
         /// Real-time clock: Unix epoch seconds (wall-clock time).

@@ -8,8 +8,8 @@ use core::mem::size_of;
 use crate::mm::PAGE_SIZE;
 use crate::syscall::userptr::is_kernel_caller;
 use crate::syscall::{
-    EFAULT, EINVAL, KernelVersionInfo, MemoryInfo, QUERY_KERNEL_VERSION, QUERY_MEMORY,
-    QUERY_UPTIME, UptimeInfo,
+    EFAULT, EINVAL, KernelVersionInfo, MemoryInfo, ProcessInfo, QUERY_KERNEL_VERSION, QUERY_MEMORY,
+    QUERY_PROCESSES, QUERY_UPTIME, UptimeInfo,
 };
 
 /// Kernel version: major.
@@ -40,6 +40,7 @@ pub(super) fn sys_query(topic: usize, _sub_id: usize, out_buf: usize, out_len: u
         QUERY_MEMORY => query_memory(out_buf, out_len),
         QUERY_UPTIME => query_uptime(out_buf, out_len),
         QUERY_KERNEL_VERSION => query_kernel_version(out_buf, out_len),
+        QUERY_PROCESSES => query_processes(out_buf, out_len),
         _ => -EINVAL,
     }
 }
@@ -115,6 +116,17 @@ fn query_kernel_version(out_buf: usize, out_len: usize) -> isize {
         patch: VERSION_PATCH,
         _pad: 0,
         name,
+    };
+
+    write_response(out_buf, out_len, &info)
+}
+
+/// Handle `QUERY_PROCESSES`: return process table statistics.
+#[expect(clippy::cast_possible_truncation, reason = "process count fits in u32")]
+fn query_processes(out_buf: usize, out_len: usize) -> isize {
+    let info = ProcessInfo {
+        count: crate::proc::ProcessTable::count() as u32,
+        _pad: 0,
     };
 
     write_response(out_buf, out_len, &info)
