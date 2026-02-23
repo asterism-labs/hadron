@@ -115,6 +115,12 @@ impl PageTableMapper {
             let new_frame = alloc().start_address();
             // SAFETY: The frame was just allocated and is accessible through the HHDM.
             // Zeroing ensures no stale PTEs are misinterpreted as present entries.
+            // Uses kernel_memzero when alt-fn patching is enabled (ERMS/SSE2).
+            #[cfg(hadron_alt_instructions)]
+            unsafe {
+                crate::arch::x86_64::mem::kernel_memzero(self.phys_to_virt(new_frame), PAGE_SIZE);
+            }
+            #[cfg(not(hadron_alt_instructions))]
             unsafe {
                 core::ptr::write_bytes(self.phys_to_virt(new_frame), 0, PAGE_SIZE);
             }
