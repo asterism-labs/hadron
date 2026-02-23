@@ -509,16 +509,29 @@ pub fn spawn_process(
     use crate::fs::{poll_immediate, vfs};
     use crate::id::Fd;
 
-    let inode = vfs::with_vfs(|vfs| vfs.resolve(path))
-        .map_err(|_| BinaryError::ParseError("path not found"))?;
+    let inode = vfs::with_vfs(|vfs| vfs.resolve(path)).map_err(|e| {
+        crate::kwarn!("spawn_process: VFS resolve '{}' failed: {:?}", path, e);
+        BinaryError::ParseError("path not found")
+    })?;
 
     let file_size = inode.size();
     let mut buf = alloc::vec![0u8; file_size];
-    let bytes_read = poll_immediate(inode.read(0, &mut buf))
-        .map_err(|_| BinaryError::ParseError("failed to read binary"))?;
+    let bytes_read = poll_immediate(inode.read(0, &mut buf)).map_err(|e| {
+        crate::kwarn!(
+            "spawn_process: failed to read '{}' ({} bytes): {:?}",
+            path,
+            file_size,
+            e
+        );
+        BinaryError::ParseError("failed to read binary")
+    })?;
     assert_eq!(bytes_read, file_size, "short read of binary");
 
-    let (process, entry, _stack_top) = create_process_from_binary(&buf, Some(parent_pid))?;
+    let (process, entry, _stack_top) =
+        create_process_from_binary(&buf, Some(parent_pid)).map_err(|e| {
+            crate::kwarn!("spawn_process: binary load '{}' failed: {:?}", path, e);
+            e
+        })?;
 
     // Write argv and envp onto the child's user stack.
     let hhdm_offset = crate::mm::hhdm::offset();

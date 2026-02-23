@@ -31,6 +31,7 @@ const TTY_PATHS: [&str; NUM_TTYS] = [
 fn spawn_shell_on_vt(vt: usize) -> Option<u32> {
     let tty_fd = io::open(TTY_PATHS[vt], 3); // READ | WRITE
     if tty_fd < 0 {
+        println!("init: failed to open {}: errno {}", TTY_PATHS[vt], -tty_fd);
         return None;
     }
     let tty_fd = tty_fd as usize;
@@ -49,6 +50,10 @@ fn spawn_shell_on_vt(vt: usize) -> Option<u32> {
     restore_init_fds();
 
     if ret < 0 {
+        println!(
+            "init: failed to spawn /bin/sh on {}: errno {}",
+            TTY_PATHS[vt], -ret
+        );
         return None;
     }
     Some(ret as u32)

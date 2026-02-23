@@ -152,7 +152,7 @@ pub(super) fn sys_task_spawn(info_ptr: usize, info_len: usize) -> isize {
     // SAFETY: UserSlice validated the pointer; SpawnInfo is repr(C) with only
     // usize fields so any bit pattern is valid.
     let info: hadron_syscall::SpawnInfo =
-        unsafe { core::ptr::read_unaligned(info_slice.addr() as *const hadron_syscall::SpawnInfo) };
+        unsafe { core::ptr::read(info_slice.addr() as *const hadron_syscall::SpawnInfo) };
 
     // Read path.
     let path_uslice = match UserSlice::new(info.path_ptr, info.path_len) {
@@ -259,7 +259,10 @@ pub(super) fn sys_task_spawn(info_ptr: usize, info_len: usize) -> isize {
 
     match crate::proc::exec::spawn_process(path, parent_pid, args, envs, Some(opts)) {
         Ok(child) => child.pid.as_u32() as isize,
-        Err(_) => -(crate::syscall::ENOENT),
+        Err(e) => {
+            crate::kwarn!("sys_task_spawn: failed to spawn '{}': {:?}", path, e);
+            -(crate::syscall::ENOENT)
+        }
     }
 }
 
