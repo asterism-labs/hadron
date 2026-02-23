@@ -21,7 +21,11 @@ fn test_signal_post_and_dequeue() {
 #[kernel_test(stage = "before_executor", timeout = 5)]
 fn test_signal_dequeue_empty() {
     let state = SignalState::new();
-    assert_eq!(state.dequeue(), None, "fresh SignalState should dequeue None");
+    assert_eq!(
+        state.dequeue(),
+        None,
+        "fresh SignalState should dequeue None"
+    );
 }
 
 #[kernel_test(stage = "before_executor", timeout = 5)]
@@ -36,7 +40,11 @@ fn test_signal_sigkill_priority() {
         "SIGKILL should be dequeued before SIGTERM"
     );
     let second = state.dequeue();
-    assert_eq!(second, Some(Signal(SIGTERM)), "SIGTERM should follow SIGKILL");
+    assert_eq!(
+        second,
+        Some(Signal(SIGTERM)),
+        "SIGTERM should follow SIGKILL"
+    );
 }
 
 #[kernel_test(stage = "before_executor", timeout = 5)]
@@ -75,14 +83,26 @@ fn test_pid_allocation_sequential() {
         let mut alloc = crate::mm::pmm::BitmapFrameAllocRef(pmm);
 
         let as1 = unsafe {
-            AddressSpace::new_user(kernel_cr3, KernelMapper::new(hhdm), hhdm, &mut alloc, dealloc_frame)
-                .expect("create address space 1")
+            AddressSpace::new_user(
+                kernel_cr3,
+                KernelMapper::new(hhdm),
+                hhdm,
+                &mut alloc,
+                dealloc_frame,
+            )
+            .expect("create address space 1")
         };
         let p1 = crate::proc::Process::new(as1, None);
 
         let as2 = unsafe {
-            AddressSpace::new_user(kernel_cr3, KernelMapper::new(hhdm), hhdm, &mut alloc, dealloc_frame)
-                .expect("create address space 2")
+            AddressSpace::new_user(
+                kernel_cr3,
+                KernelMapper::new(hhdm),
+                hhdm,
+                &mut alloc,
+                dealloc_frame,
+            )
+            .expect("create address space 2")
         };
         let p2 = crate::proc::Process::new(as2, None);
 
@@ -121,8 +141,14 @@ async fn test_process_table_register_lookup() {
     let process = crate::mm::pmm::with(|pmm| {
         let mut alloc = crate::mm::pmm::BitmapFrameAllocRef(pmm);
         let addr_space = unsafe {
-            AddressSpace::new_user(kernel_cr3, KernelMapper::new(hhdm), hhdm, &mut alloc, dealloc_frame)
-                .expect("create address space")
+            AddressSpace::new_user(
+                kernel_cr3,
+                KernelMapper::new(hhdm),
+                hhdm,
+                &mut alloc,
+                dealloc_frame,
+            )
+            .expect("create address space")
         };
         Arc::new(crate::proc::Process::new(addr_space, None))
     });
@@ -150,8 +176,8 @@ async fn test_process_table_register_lookup() {
 async fn test_fd_table_open_close() {
     use crate::fs::file::{FileDescriptorTable, OpenFlags};
 
-    let inode = crate::fs::vfs::with_vfs(|vfs| vfs.resolve("/dev/null"))
-        .expect("resolve /dev/null");
+    let inode =
+        crate::fs::vfs::with_vfs(|vfs| vfs.resolve("/dev/null")).expect("resolve /dev/null");
 
     let mut fdt = FileDescriptorTable::new();
     let fd = fdt.open(inode, OpenFlags::READ);

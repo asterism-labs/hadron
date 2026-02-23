@@ -187,27 +187,51 @@ macro_rules! alt_instr {
     ) => {
         concat!(
             // Default code in .text
-            ".Lalt_orig_", stringify!($label), ":\n",
-            $default, "\n",
-            ".Lalt_orig_end_", stringify!($label), ":\n",
+            ".Lalt_orig_",
+            stringify!($label),
+            ":\n",
+            $default,
+            "\n",
+            ".Lalt_orig_end_",
+            stringify!($label),
+            ":\n",
             // Replacement bytes in .hadron_alt_instr_replacement
             ".pushsection .hadron_alt_instr_replacement, \"a\"\n",
-            ".Lalt_repl_", stringify!($label), ":\n",
-            $alt, "\n",
-            ".Lalt_repl_end_", stringify!($label), ":\n",
+            ".Lalt_repl_",
+            stringify!($label),
+            ":\n",
+            $alt,
+            "\n",
+            ".Lalt_repl_end_",
+            stringify!($label),
+            ":\n",
             ".popsection\n",
             // Metadata entry in .hadron_alt_instr (must match AltInstrEntry layout)
             ".pushsection .hadron_alt_instr, \"a\"\n",
             ".balign 8\n",
-            ".quad .Lalt_orig_", stringify!($label), "\n",                // instr_site
-            ".quad .Lalt_repl_", stringify!($label), "\n",                // replacement
-            ".quad ", $feature_bits, "\n",                                 // feature (u64)
-            ".byte .Lalt_orig_end_", stringify!($label),
-                " - .Lalt_orig_", stringify!($label), "\n",               // orig_len
-            ".byte .Lalt_repl_end_", stringify!($label),
-                " - .Lalt_repl_", stringify!($label), "\n",               // repl_len
-            ".byte ", stringify!($priority), "\n",                         // priority
-            ".zero 5\n",                                                   // _pad
+            ".quad .Lalt_orig_",
+            stringify!($label),
+            "\n", // instr_site
+            ".quad .Lalt_repl_",
+            stringify!($label),
+            "\n", // replacement
+            ".quad ",
+            $feature_bits,
+            "\n", // feature (u64)
+            ".byte .Lalt_orig_end_",
+            stringify!($label),
+            " - .Lalt_orig_",
+            stringify!($label),
+            "\n", // orig_len
+            ".byte .Lalt_repl_end_",
+            stringify!($label),
+            " - .Lalt_repl_",
+            stringify!($label),
+            "\n", // repl_len
+            ".byte ",
+            stringify!($priority),
+            "\n",        // priority
+            ".zero 5\n", // _pad
             ".popsection\n",
         )
     };
@@ -221,13 +245,31 @@ macro_rules! alt_instr {
 /// in GAS directives (which cannot evaluate Rust expressions).
 #[macro_export]
 macro_rules! alt_instr_feature_bits {
-    (SSE2)   => { "256" };       // 1 << 8
-    (SSE3)   => { "1" };         // 1 << 0
-    (SSSE3)  => { "2" };         // 1 << 1
-    (SSE4_1) => { "4" };         // 1 << 2
-    (SSE4_2) => { "8" };         // 1 << 3
-    (POPCNT) => { "16" };        // 1 << 4
-    (ERMS)   => { "524288" };    // 1 << 19
-    (AVX)    => { "64" };        // 1 << 6
-    (AVX2)   => { "65536" };     // 1 << 16
+    (SSE2) => {
+        "256"
+    }; // 1 << 8
+    (SSE3) => {
+        "1"
+    }; // 1 << 0
+    (SSSE3) => {
+        "2"
+    }; // 1 << 1
+    (SSE4_1) => {
+        "4"
+    }; // 1 << 2
+    (SSE4_2) => {
+        "8"
+    }; // 1 << 3
+    (POPCNT) => {
+        "16"
+    }; // 1 << 4
+    (ERMS) => {
+        "524288"
+    }; // 1 << 19
+    (AVX) => {
+        "64"
+    }; // 1 << 6
+    (AVX2) => {
+        "65536"
+    }; // 1 << 16
 }

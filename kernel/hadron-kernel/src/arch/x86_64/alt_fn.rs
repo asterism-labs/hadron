@@ -244,4 +244,3 @@ impl<F> AltFnDispatch<F> {
         unsafe { core::mem::transmute_copy::<*mut (), F>(&raw) }
     }
 }
-

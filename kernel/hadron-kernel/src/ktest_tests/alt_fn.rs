@@ -133,11 +133,7 @@ fn test_kernel_memcpy_small() {
     let src = [0xABu8; 32];
     let mut dst = [0u8; 32];
     unsafe {
-        crate::arch::x86_64::mem::kernel_memcpy(
-            dst.as_mut_ptr(),
-            src.as_ptr(),
-            src.len(),
-        );
+        crate::arch::x86_64::mem::kernel_memcpy(dst.as_mut_ptr(), src.as_ptr(), src.len());
     }
     assert_eq!(dst, src, "small memcpy should copy correctly");
 }
@@ -150,11 +146,7 @@ fn test_kernel_memcpy_large() {
     let src: alloc::vec::Vec<u8> = (0..256).map(|i| i as u8).collect();
     let mut dst = alloc::vec![0u8; 256];
     unsafe {
-        crate::arch::x86_64::mem::kernel_memcpy(
-            dst.as_mut_ptr(),
-            src.as_ptr(),
-            src.len(),
-        );
+        crate::arch::x86_64::mem::kernel_memcpy(dst.as_mut_ptr(), src.as_ptr(), src.len());
     }
     assert_eq!(dst, src, "large memcpy should copy correctly");
 }
@@ -165,11 +157,7 @@ fn test_kernel_memcpy_zero_length() {
     let src = [0xFFu8; 8];
     let mut dst = [0u8; 8];
     unsafe {
-        crate::arch::x86_64::mem::kernel_memcpy(
-            dst.as_mut_ptr(),
-            src.as_ptr(),
-            0,
-        );
+        crate::arch::x86_64::mem::kernel_memcpy(dst.as_mut_ptr(), src.as_ptr(), 0);
     }
     assert_eq!(dst, [0u8; 8], "zero-length memcpy should not modify dst");
 }
@@ -215,7 +203,10 @@ fn test_kernel_memzero_large() {
     extern crate alloc;
     let mut buf = alloc::vec![0xFFu8; 256];
     unsafe { crate::arch::x86_64::mem::kernel_memzero(buf.as_mut_ptr(), buf.len()) };
-    assert!(buf.iter().all(|&b| b == 0), "large memzero should zero all bytes");
+    assert!(
+        buf.iter().all(|&b| b == 0),
+        "large memzero should zero all bytes"
+    );
 }
 
 #[cfg(hadron_alt_instructions)]
@@ -223,7 +214,10 @@ fn test_kernel_memzero_large() {
 fn test_kernel_memzero_zero_length() {
     let mut buf = [0xFFu8; 8];
     unsafe { crate::arch::x86_64::mem::kernel_memzero(buf.as_mut_ptr(), 0) };
-    assert_eq!(buf, [0xFFu8; 8], "zero-length memzero should not modify buffer");
+    assert_eq!(
+        buf, [0xFFu8; 8],
+        "zero-length memzero should not modify buffer"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -236,11 +230,7 @@ fn test_kernel_memmove_non_overlapping() {
     let src = [0xABu8; 64];
     let mut dst = [0u8; 64];
     unsafe {
-        crate::arch::x86_64::mem::kernel_memmove(
-            dst.as_mut_ptr(),
-            src.as_ptr(),
-            src.len(),
-        );
+        crate::arch::x86_64::mem::kernel_memmove(dst.as_mut_ptr(), src.as_ptr(), src.len());
     }
     assert_eq!(dst, src, "non-overlapping memmove should copy correctly");
 }
@@ -256,13 +246,13 @@ fn test_kernel_memmove_overlapping_forward() {
     }
     let expected: alloc::vec::Vec<u8> = (0..64).map(|i| i as u8).collect();
     unsafe {
-        crate::arch::x86_64::mem::kernel_memmove(
-            buf.as_mut_ptr().add(16),
-            buf.as_ptr(),
-            64,
-        );
+        crate::arch::x86_64::mem::kernel_memmove(buf.as_mut_ptr().add(16), buf.as_ptr(), 64);
     }
-    assert_eq!(&buf[16..80], expected.as_slice(), "forward overlap memmove failed");
+    assert_eq!(
+        &buf[16..80],
+        expected.as_slice(),
+        "forward overlap memmove failed"
+    );
 }
 
 #[cfg(hadron_alt_instructions)]
@@ -276,13 +266,13 @@ fn test_kernel_memmove_overlapping_backward() {
     }
     let expected: alloc::vec::Vec<u8> = (0..64).map(|i| i as u8).collect();
     unsafe {
-        crate::arch::x86_64::mem::kernel_memmove(
-            buf.as_mut_ptr(),
-            buf.as_ptr().add(16),
-            64,
-        );
+        crate::arch::x86_64::mem::kernel_memmove(buf.as_mut_ptr(), buf.as_ptr().add(16), 64);
     }
-    assert_eq!(&buf[0..64], expected.as_slice(), "backward overlap memmove failed");
+    assert_eq!(
+        &buf[0..64],
+        expected.as_slice(),
+        "backward overlap memmove failed"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -294,9 +284,8 @@ fn test_kernel_memmove_overlapping_backward() {
 fn test_kernel_memcmp_equal() {
     let a = [0xABu8; 64];
     let b = [0xABu8; 64];
-    let result = unsafe {
-        crate::arch::x86_64::mem::kernel_memcmp(a.as_ptr(), b.as_ptr(), a.len())
-    };
+    let result =
+        unsafe { crate::arch::x86_64::mem::kernel_memcmp(a.as_ptr(), b.as_ptr(), a.len()) };
     assert_eq!(result, 0, "equal buffers should return 0");
 }
 
@@ -305,9 +294,8 @@ fn test_kernel_memcmp_equal() {
 fn test_kernel_memcmp_less() {
     let a = [0x10u8; 64];
     let b = [0x20u8; 64];
-    let result = unsafe {
-        crate::arch::x86_64::mem::kernel_memcmp(a.as_ptr(), b.as_ptr(), a.len())
-    };
+    let result =
+        unsafe { crate::arch::x86_64::mem::kernel_memcmp(a.as_ptr(), b.as_ptr(), a.len()) };
     assert!(result < 0, "a < b should return negative, got {}", result);
 }
 
@@ -316,9 +304,8 @@ fn test_kernel_memcmp_less() {
 fn test_kernel_memcmp_greater() {
     let a = [0x30u8; 64];
     let b = [0x20u8; 64];
-    let result = unsafe {
-        crate::arch::x86_64::mem::kernel_memcmp(a.as_ptr(), b.as_ptr(), a.len())
-    };
+    let result =
+        unsafe { crate::arch::x86_64::mem::kernel_memcmp(a.as_ptr(), b.as_ptr(), a.len()) };
     assert!(result > 0, "a > b should return positive, got {}", result);
 }
 
@@ -327,9 +314,7 @@ fn test_kernel_memcmp_greater() {
 fn test_kernel_memcmp_zero_length() {
     let a = [0xFFu8; 8];
     let b = [0x00u8; 8];
-    let result = unsafe {
-        crate::arch::x86_64::mem::kernel_memcmp(a.as_ptr(), b.as_ptr(), 0)
-    };
+    let result = unsafe { crate::arch::x86_64::mem::kernel_memcmp(a.as_ptr(), b.as_ptr(), 0) };
     assert_eq!(result, 0, "zero-length memcmp should return 0");
 }
 
@@ -379,8 +364,8 @@ fn test_fxsave_fxrstor_round_trip() {
 
     // Load a known pattern into xmm0.
     let pattern: [u8; 16] = [
-        0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE,
-        0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF,
+        0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE, 0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD,
+        0xEF,
     ];
     unsafe {
         core::arch::asm!(

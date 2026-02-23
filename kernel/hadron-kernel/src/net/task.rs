@@ -10,11 +10,11 @@ use alloc::boxed::Box;
 use crate::driver_api::dyn_dispatch::DynNetDevice;
 use crate::driver_api::net::NetworkDevice;
 
+use super::NetConfig;
 use super::arp::ArpTable;
-use super::ethernet::{EthernetHeader, ETHERTYPE_ARP, ETHERTYPE_IPV4};
+use super::ethernet::{ETHERTYPE_ARP, ETHERTYPE_IPV4, EthernetHeader};
 use super::icmp;
 use super::ipv4::{Ipv4Header, PROTO_ICMP};
-use super::NetConfig;
 
 /// Maximum Ethernet frame size (MTU 1500 + 14 byte header + 4 byte FCS margin).
 const MAX_FRAME: usize = 1518;
@@ -56,8 +56,7 @@ pub async fn net_rx_loop(nic: Box<dyn DynNetDevice>, config: NetConfig) {
 
         match eth.ethertype {
             ETHERTYPE_ARP => {
-                if let Some(reply_len) =
-                    arp_table.handle_arp(our_ip, our_mac, payload, &mut tx_buf)
+                if let Some(reply_len) = arp_table.handle_arp(our_ip, our_mac, payload, &mut tx_buf)
                 {
                     if let Err(e) = nic.send(&tx_buf[..reply_len]).await {
                         crate::kwarn!("net: ARP send error: {}", e);
@@ -77,7 +76,12 @@ pub async fn net_rx_loop(nic: Box<dyn DynNetDevice>, config: NetConfig) {
 
                 if ip_hdr.protocol == PROTO_ICMP {
                     if let Some(reply_len) = icmp::handle_icmp(
-                        eth.src, ip_hdr.src, our_mac, our_ip, ip_payload, &mut tx_buf,
+                        eth.src,
+                        ip_hdr.src,
+                        our_mac,
+                        our_ip,
+                        ip_payload,
+                        &mut tx_buf,
                     ) {
                         if let Err(e) = nic.send(&tx_buf[..reply_len]).await {
                             crate::kwarn!("net: ICMP send error: {}", e);

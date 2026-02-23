@@ -112,7 +112,10 @@ pub extern "C" fn main(_args: &[&str]) -> i32 {
         for entry in &mut children[..count] {
             if entry.0 == exited_pid {
                 let vt = entry.1;
-                println!("init: shell on tty{} exited (status {}), respawning...", vt, status);
+                println!(
+                    "init: shell on tty{} exited (status {}), respawning...",
+                    vt, status
+                );
                 if let Some(new_pid) = spawn_shell_on_vt(vt) {
                     entry.0 = new_pid;
                 } else {

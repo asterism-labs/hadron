@@ -9,8 +9,8 @@
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use crate::syscall::{SIGCHLD, SIGINT, SIGKILL, SIGPIPE, SIGQUIT, SIGSEGV, SIGSTOP, SIGTERM};
 use crate::syscall::{SIG_DFL, SIG_IGN};
+use crate::syscall::{SIGCHLD, SIGINT, SIGKILL, SIGPIPE, SIGQUIT, SIGSEGV, SIGSTOP, SIGTERM};
 
 /// Maximum signal number supported (bits 1..63).
 const MAX_SIGNAL: usize = 63;

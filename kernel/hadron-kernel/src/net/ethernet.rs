@@ -36,7 +36,14 @@ impl EthernetHeader {
         let src = <[u8; 6]>::try_from(&buf[6..12]).ok()?;
         let ethertype = <[u8; 2]>::try_from(&buf[12..14]).ok()?;
 
-        Some((Self { dst, src, ethertype }, &buf[ETHERNET_HEADER_LEN..]))
+        Some((
+            Self {
+                dst,
+                src,
+                ethertype,
+            },
+            &buf[ETHERNET_HEADER_LEN..],
+        ))
     }
 
     /// Writes an Ethernet header into `buf` and returns the offset after the

@@ -2,8 +2,8 @@
 
 extern crate alloc;
 
-use hadron_ktest::kernel_test;
 use crate::driver_api::pci::PciBar;
+use hadron_ktest::kernel_test;
 
 // ── Before executor stage ───────────────────────────────────────────────
 

@@ -7,7 +7,10 @@ use crate::id::{HwIrqVector, IrqVector};
 pub struct InterruptError;
 
 /// Register an interrupt handler for the given vector.
-pub fn register_handler(_vector: HwIrqVector, _handler: fn(IrqVector)) -> Result<(), InterruptError> {
+pub fn register_handler(
+    _vector: HwIrqVector,
+    _handler: fn(IrqVector),
+) -> Result<(), InterruptError> {
     todo!("aarch64 register_handler")
 }
 

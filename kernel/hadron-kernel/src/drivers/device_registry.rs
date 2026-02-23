@@ -238,4 +238,3 @@ impl DeviceRegistry {
 /// Global device registry instance.
 static DEVICE_REGISTRY: SpinLock<Option<DeviceRegistry>> =
     SpinLock::leveled("DEVICE_REGISTRY", 4, None);
-

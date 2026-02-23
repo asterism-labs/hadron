@@ -156,10 +156,7 @@ impl IdtEntry {
     /// The stub must follow the hardware interrupt stub calling convention:
     /// save/restore scratch registers, handle `swapgs` for ring transitions,
     /// and return via `iretq`.
-    pub unsafe fn set_naked_stub(
-        &mut self,
-        stub: unsafe extern "C" fn(),
-    ) -> &mut EntryOptions {
+    pub unsafe fn set_naked_stub(&mut self, stub: unsafe extern "C" fn()) -> &mut EntryOptions {
         self.set_raw_handler_addr(stub as *const () as u64)
     }
 

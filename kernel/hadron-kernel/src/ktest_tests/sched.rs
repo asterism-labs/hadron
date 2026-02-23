@@ -163,7 +163,10 @@ async fn test_yield_fairness(ctx: &hadron_ktest::TestContext) {
             crate::sched::primitives::yield_now().await;
         }
         let total = COUNTER.load(Ordering::Acquire);
-        assert_eq!(total, 100, "expected 100 increments from 2 instances, got {total}");
+        assert_eq!(
+            total, 100,
+            "expected 100 increments from 2 instances, got {total}"
+        );
     }
 }
 
@@ -171,7 +174,7 @@ async fn test_yield_fairness(ctx: &hadron_ktest::TestContext) {
 
 #[kernel_test(stage = "with_executor", timeout = 10)]
 async fn test_steal_from_executor() {
-    use crate::sched::{Executor, TaskMeta, Priority};
+    use crate::sched::{Executor, Priority, TaskMeta};
 
     let victim = Executor::new();
     // Spawn 2 tasks so steal_one doesn't trigger the one-task rule.
@@ -187,27 +190,33 @@ async fn test_steal_from_executor() {
 
 #[kernel_test(stage = "with_executor", timeout = 10)]
 async fn test_steal_respects_critical() {
-    use crate::sched::{Executor, TaskMeta, Priority};
+    use crate::sched::{Executor, Priority, TaskMeta};
 
     let victim = Executor::new();
     // Spawn only Critical tasks — none should be stealable.
-    victim.spawn_with_meta(async {}, TaskMeta::new("crit1").with_priority(Priority::Critical));
-    victim.spawn_with_meta(async {}, TaskMeta::new("crit2").with_priority(Priority::Critical));
+    victim.spawn_with_meta(
+        async {},
+        TaskMeta::new("crit1").with_priority(Priority::Critical),
+    );
+    victim.spawn_with_meta(
+        async {},
+        TaskMeta::new("crit2").with_priority(Priority::Critical),
+    );
 
     let stolen = victim.steal_task();
-    assert!(
-        stolen.is_none(),
-        "Critical tasks should not be stealable"
-    );
+    assert!(stolen.is_none(), "Critical tasks should not be stealable");
 }
 
 #[kernel_test(stage = "with_executor", timeout = 10)]
 async fn test_steal_one_task_rule() {
-    use crate::sched::{Executor, TaskMeta, Priority};
+    use crate::sched::{Executor, Priority, TaskMeta};
 
     let victim = Executor::new();
     // Spawn exactly 1 Normal task — one-task rule prevents stealing.
-    victim.spawn_with_meta(async {}, TaskMeta::new("only").with_priority(Priority::Normal));
+    victim.spawn_with_meta(
+        async {},
+        TaskMeta::new("only").with_priority(Priority::Normal),
+    );
 
     let stolen = victim.steal_task();
     assert!(
@@ -218,11 +227,17 @@ async fn test_steal_one_task_rule() {
 
 #[kernel_test(stage = "with_executor", timeout = 10)]
 async fn test_steal_allowed_with_two() {
-    use crate::sched::{Executor, TaskMeta, Priority};
+    use crate::sched::{Executor, Priority, TaskMeta};
 
     let victim = Executor::new();
-    victim.spawn_with_meta(async {}, TaskMeta::new("t1").with_priority(Priority::Normal));
-    victim.spawn_with_meta(async {}, TaskMeta::new("t2").with_priority(Priority::Normal));
+    victim.spawn_with_meta(
+        async {},
+        TaskMeta::new("t1").with_priority(Priority::Normal),
+    );
+    victim.spawn_with_meta(
+        async {},
+        TaskMeta::new("t2").with_priority(Priority::Normal),
+    );
 
     let stolen = victim.steal_task();
     assert!(

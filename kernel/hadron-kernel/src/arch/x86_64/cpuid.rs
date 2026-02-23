@@ -242,9 +242,5 @@ pub fn verify_ap() {
     let bsp = cpu_features();
     let ap = detect();
     let missing = bsp.difference(ap);
-    assert!(
-        missing.is_empty(),
-        "AP missing BSP features: {:?}",
-        missing,
-    );
+    assert!(missing.is_empty(), "AP missing BSP features: {:?}", missing,);
 }

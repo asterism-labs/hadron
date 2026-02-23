@@ -87,11 +87,7 @@ pub unsafe extern "sysv64" fn prefetch_t0(addr: *const u8) {
 /// - `src` must be valid for `len`-byte reads.
 /// - Memory regions must not overlap.
 /// - CPU must support SSE2 and caller must hold a `KernelFpuGuard`.
-pub unsafe extern "sysv64" fn memcpy_sse2_inner(
-    dst: *mut u8,
-    src: *const u8,
-    len: usize,
-) {
+pub unsafe extern "sysv64" fn memcpy_sse2_inner(dst: *mut u8, src: *const u8, len: usize) {
     // sysv64 ABI: dst in rdi, src in rsi, len in rdx
     unsafe {
         asm!(
@@ -179,11 +175,7 @@ pub unsafe extern "sysv64" fn memzero_sse2_inner(dst: *mut u8, len: usize) {
 /// - `dst` must be valid for `len`-byte writes.
 /// - `src` must be valid for `len`-byte reads.
 /// - CPU must support SSE2 and caller must hold a `KernelFpuGuard`.
-pub unsafe extern "sysv64" fn memmove_sse2_inner(
-    dst: *mut u8,
-    src: *const u8,
-    len: usize,
-) {
+pub unsafe extern "sysv64" fn memmove_sse2_inner(dst: *mut u8, src: *const u8, len: usize) {
     // sysv64 ABI: dst in rdi, src in rsi, len in rdx
     unsafe {
         asm!(
@@ -280,11 +272,7 @@ pub unsafe extern "sysv64" fn memmove_sse2_inner(
 /// - `a` must be valid for `len`-byte reads.
 /// - `b` must be valid for `len`-byte reads.
 /// - CPU must support SSE2 and caller must hold a `KernelFpuGuard`.
-pub unsafe extern "sysv64" fn memcmp_sse2_inner(
-    a: *const u8,
-    b: *const u8,
-    len: usize,
-) -> i32 {
+pub unsafe extern "sysv64" fn memcmp_sse2_inner(a: *const u8, b: *const u8, len: usize) -> i32 {
     // sysv64 ABI: a in rdi, b in rsi, len in rdx; return in eax
     let result: i32;
     unsafe {

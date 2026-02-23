@@ -332,11 +332,7 @@ pub(super) fn sys_task_getpgid(pid: usize) -> isize {
 /// If `old_handler_out` is non-zero, the previous handler address is written there.
 ///
 /// Returns 0 on success, or a negated errno on failure.
-pub(super) fn sys_task_sigaction(
-    signum: usize,
-    handler: usize,
-    old_handler_out: usize,
-) -> isize {
+pub(super) fn sys_task_sigaction(signum: usize, handler: usize, old_handler_out: usize) -> isize {
     crate::proc::ProcessTable::with_current(|process| {
         let old = match process.signals.set_handler(signum, handler as u64) {
             Some(old) => old,

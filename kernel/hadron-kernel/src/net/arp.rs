@@ -77,7 +77,14 @@ impl ArpPacket {
     /// Writes an ARP reply packet into `buf` starting at `offset`.
     ///
     /// Returns the number of bytes written (always 28).
-    fn write_reply(buf: &mut [u8], offset: usize, our_mac: [u8; 6], our_ip: [u8; 4], target_mac: [u8; 6], target_ip: [u8; 4]) -> Option<usize> {
+    fn write_reply(
+        buf: &mut [u8],
+        offset: usize,
+        our_mac: [u8; 6],
+        our_ip: [u8; 4],
+        target_mac: [u8; 6],
+        target_ip: [u8; 4],
+    ) -> Option<usize> {
         if buf.len() < offset + ARP_PACKET_LEN {
             return None;
         }
@@ -169,7 +176,8 @@ impl ArpTable {
         let eth_off = ethernet::EthernetHeader::write(reply_buf, pkt.sha, our_mac, ETHERTYPE_ARP)?;
 
         // Build ARP Reply payload.
-        let arp_len = ArpPacket::write_reply(reply_buf, eth_off, our_mac, our_ip, pkt.sha, pkt.spa)?;
+        let arp_len =
+            ArpPacket::write_reply(reply_buf, eth_off, our_mac, our_ip, pkt.sha, pkt.spa)?;
 
         Some(eth_off + arp_len)
     }

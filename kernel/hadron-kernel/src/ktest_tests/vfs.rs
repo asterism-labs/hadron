@@ -33,8 +33,8 @@ fn test_vfs_resolve_dev() {
 
 #[kernel_test(stage = "before_executor", timeout = 5)]
 fn test_vfs_dev_null_exists() {
-    let inode = crate::fs::vfs::with_vfs(|vfs| vfs.resolve("/dev/null"))
-        .expect("resolve /dev/null");
+    let inode =
+        crate::fs::vfs::with_vfs(|vfs| vfs.resolve("/dev/null")).expect("resolve /dev/null");
     assert_eq!(
         inode.inode_type(),
         InodeType::CharDevice,
@@ -44,8 +44,8 @@ fn test_vfs_dev_null_exists() {
 
 #[kernel_test(stage = "before_executor", timeout = 5)]
 fn test_vfs_dev_zero_exists() {
-    let inode = crate::fs::vfs::with_vfs(|vfs| vfs.resolve("/dev/zero"))
-        .expect("resolve /dev/zero");
+    let inode =
+        crate::fs::vfs::with_vfs(|vfs| vfs.resolve("/dev/zero")).expect("resolve /dev/zero");
     assert_eq!(
         inode.inode_type(),
         InodeType::CharDevice,
@@ -55,8 +55,8 @@ fn test_vfs_dev_zero_exists() {
 
 #[kernel_test(stage = "before_executor", timeout = 5)]
 fn test_vfs_dev_null_read() {
-    let inode = crate::fs::vfs::with_vfs(|vfs| vfs.resolve("/dev/null"))
-        .expect("resolve /dev/null");
+    let inode =
+        crate::fs::vfs::with_vfs(|vfs| vfs.resolve("/dev/null")).expect("resolve /dev/null");
     let mut buf = [0u8; 64];
     let n = poll_immediate(inode.read(0, &mut buf)).expect("read /dev/null");
     assert_eq!(n, 0, "reading /dev/null should return 0 bytes");
@@ -64,8 +64,8 @@ fn test_vfs_dev_null_read() {
 
 #[kernel_test(stage = "before_executor", timeout = 5)]
 fn test_vfs_dev_zero_read() {
-    let inode = crate::fs::vfs::with_vfs(|vfs| vfs.resolve("/dev/zero"))
-        .expect("resolve /dev/zero");
+    let inode =
+        crate::fs::vfs::with_vfs(|vfs| vfs.resolve("/dev/zero")).expect("resolve /dev/zero");
     let mut buf = [0xFFu8; 64];
     let n = poll_immediate(inode.read(0, &mut buf)).expect("read /dev/zero");
     assert_eq!(n, 64, "/dev/zero should fill the buffer");

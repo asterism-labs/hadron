@@ -429,9 +429,7 @@ pub(super) fn sys_handle_tcsetpgrp(_fd: usize, pgid: usize) -> isize {
     reason = "PGIDs are small positive integers, wrap is impossible"
 )]
 pub(super) fn sys_handle_tcgetpgrp(_fd: usize) -> isize {
-    crate::tty::active_tty()
-        .foreground_pgid()
-        .unwrap_or(0) as isize
+    crate::tty::active_tty().foreground_pgid().unwrap_or(0) as isize
 }
 
 /// Trigger a TRAP_IO longjmp back to `process_task` for async I/O.

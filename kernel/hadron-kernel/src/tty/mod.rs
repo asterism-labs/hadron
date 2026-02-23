@@ -358,7 +358,10 @@ pub fn init() {
 
     crate::arch::x86_64::acpi::Acpi::with_io_apic(|ioapic| ioapic.unmask(1));
 
-    crate::kinfo!("TTY: keyboard IRQ1 enabled (vector {}), tty0 active", vector);
+    crate::kinfo!(
+        "TTY: keyboard IRQ1 enabled (vector {}), tty0 active",
+        vector
+    );
 }
 
 // ── VtConsoleSink — LogSink for active VT ────────────────────────────

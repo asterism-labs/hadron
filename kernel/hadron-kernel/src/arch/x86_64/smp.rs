@@ -310,7 +310,8 @@ fn ap_entry(_mp_info: u64, percpu_addr: u64) -> ! {
 fn init_ap_lapic(cpu_id: CpuId) {
     use crate::arch::x86_64::interrupts::dispatch::vectors;
 
-    let lapic_virt = super::acpi::Acpi::lapic_virt().expect("AP bootstrap: LAPIC not initialized by BSP");
+    let lapic_virt =
+        super::acpi::Acpi::lapic_virt().expect("AP bootstrap: LAPIC not initialized by BSP");
 
     // SAFETY: lapic_virt was mapped by BSP and is valid for this CPU's LAPIC.
     let lapic = unsafe { LocalApic::new(lapic_virt) };

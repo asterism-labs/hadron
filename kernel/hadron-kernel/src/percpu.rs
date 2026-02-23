@@ -216,9 +216,8 @@ pub unsafe fn init_gs_base() {
         // the timer preemption stub (GS:[64]) can fxsave64 user FPU
         // state without dereferencing a null pointer. Same rationale
         // as saved_regs_ptr above — needed before kernel_init runs.
-        (*percpu_ptr).user_fpu_context_ptr = crate::proc::USER_FPU_CONTEXT
-            .get_for(CpuId::new(0))
-            .get() as *const _ as u64;
+        (*percpu_ptr).user_fpu_context_ptr =
+            crate::proc::USER_FPU_CONTEXT.get_for(CpuId::new(0)).get() as *const _ as u64;
 
         IA32_GS_BASE.write(percpu_addr);
         IA32_KERNEL_GS_BASE.write(percpu_addr);

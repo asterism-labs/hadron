@@ -288,17 +288,20 @@ fn map_sigreturn_trampoline<
         // Write: syscall
         //   0f 05                   syscall
         let stub: [u8; 9] = [
-            0x48, 0xc7, 0xc0,
-            SYS_TASK_SIGRETURN_NR as u8, 0x00, 0x00, 0x00,
-            0x0f, 0x05,
+            0x48,
+            0xc7,
+            0xc0,
+            SYS_TASK_SIGRETURN_NR as u8,
+            0x00,
+            0x00,
+            0x00,
+            0x0f,
+            0x05,
         ];
         core::ptr::copy_nonoverlapping(stub.as_ptr(), frame_ptr, stub.len());
     }
 
-    kdebug!(
-        "  Mapped sigreturn trampoline at {:#x}",
-        trampoline_addr
-    );
+    kdebug!("  Mapped sigreturn trampoline at {:#x}", trampoline_addr);
 }
 
 /// Writes argv and envp data onto the child's user stack via HHDM translation.
@@ -516,7 +519,8 @@ pub fn spawn_process(
             vfs.resolve("/dev/console")
                 .expect("spawn_process: /dev/console not found")
         });
-        let parent = super::ProcessTable::lookup(parent_pid).expect("spawn_process: parent not found");
+        let parent =
+            super::ProcessTable::lookup(parent_pid).expect("spawn_process: parent not found");
         let parent_fds = parent.fd_table.lock();
         let mut fd_table = process.fd_table.lock();
         for &fd in &[
