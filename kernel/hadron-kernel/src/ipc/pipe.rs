@@ -262,7 +262,7 @@ impl Inode for PipeWriter {
                 let mut buffer = self.0.buffer.lock();
                 // Check if readers are gone.
                 if self.0.readers.load(Ordering::Acquire) == 0 {
-                    return Err(FsError::IoError); // EPIPE
+                    return Err(FsError::BrokenPipe);
                 }
                 if !buffer.is_full() {
                     let n = buffer.write(buf);

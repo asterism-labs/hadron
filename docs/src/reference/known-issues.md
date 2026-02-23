@@ -6,40 +6,28 @@ and pointers to the relevant code.
 
 ## Process Management
 
-### `waitpid(0)` always reaps the first child
+### ~~`waitpid(0)` always reaps the first child~~ — **Fixed**
 
-`handle_wait` in `kernel/hadron-kernel/src/proc/mod.rs` with `pid = 0` ("wait
-for any child") always picks `children_of(parent_pid)[0]` — the first child in
-the list — rather than checking for any child that has already exited.
-
-**Impact:** Init's wait loop only ever reaps the first-spawned shell. If a
-later-spawned shell exits first, init will not notice until the first child
-also exits.
-
-**Fix:** Iterate `children_of(parent_pid)` and return the first zombie, or
-subscribe a waker that fires when *any* child exits.
+`handle_wait` with `pid = 0` now scans all children for the first zombie
+using a `poll_fn` with double-check wakeup registration on every child's
+`exit_notify`. Init correctly reaps whichever shell exits first.
 
 ## Syscall / VFS
 
-### `trap_io` leaks `Arc<dyn Inode>` references
+### ~~`trap_io` leaks `Arc<dyn Inode>` references~~ — **Fixed**
 
-In `kernel/hadron-kernel/src/syscall/vfs.rs`, `sys_vnode_read` and
-`sys_vnode_write` resolve the inode into a local `Arc<dyn Inode>`. When the
-fast path (`try_poll_immediate`) returns `Pending`, `trap_io()` is called,
-which is `-> !` (longjmp via `restore_kernel_context`). The local `Arc` is
-never dropped, so its reference count is never decremented.
+`sys_vnode_read` and `sys_vnode_write` now explicitly `drop(inode)` before
+calling `trap_io()`. The TRAP_IO handler in `process_task` re-fetches the
+inode from the fd table, so it does not depend on the caller's Arc.
 
-**Impact:** Each blocking read/write syscall leaks one `Arc` strong count.
-Over many syscalls the inode will never be freed even after all file
-descriptors are closed. In practice the leak is slow (one per blocking I/O)
-and the inodes are long-lived devfs entries, so it is not immediately
-critical.
+## Shell / Job Control
 
-**Fix:** Either:
-- Stash the `Arc` in a per-CPU slot that `process_task`'s TRAP_IO handler
-  drops after the `.await` completes, or
-- Restructure the syscall path so the `Arc` is moved into the future rather
-  than held as a local across the longjmp boundary.
+### No `WNOHANG` for `waitpid`
+
+Background job reaping in the shell requires non-blocking `waitpid`, which
+is not yet implemented. The shell can track background jobs but cannot poll
+for their completion without blocking. A `WNOHANG` flag for `task_wait`
+would allow the shell to reap finished background jobs at prompt time.
 
 ## Locking Discipline
 

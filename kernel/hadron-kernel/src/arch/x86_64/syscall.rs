@@ -197,8 +197,20 @@ unsafe extern "C" fn syscall_entry() {
         "mov r9, r8",               // C arg5 = a4 (save R8 before overwrite)
         "mov r8, r10",              // C arg4 = a3
 
+        // Re-enable interrupts before entering the Rust handler.
+        // All user state has been saved; the IrqSpinLock save/restore
+        // pattern now works correctly (saves IF=1, clears, restores IF=1).
+        // Timer IRQ from ring 0 just counts ticks (no preemption).
+        // Keyboard IRQ buffers scancodes and wakes the TTY task.
+        "sti",
+
         // Call the Rust dispatch function (return value in RAX)
         "call {dispatch}",
+
+        // Disable interrupts before restoring registers and sysretq.
+        // Blocking syscalls (TRAP_WAIT/TRAP_IO) longjmp via
+        // restore_kernel_context and never reach this point.
+        "cli",
 
         // Restore callee-saved registers and caller return state
         "pop r15",

@@ -21,7 +21,7 @@ pub mod device;
 pub mod ldisc;
 
 use alloc::sync::Arc;
-use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use core::task::Waker;
 
 use crate::drivers::fbcon::FbCon;
@@ -37,6 +37,12 @@ const SCANCODE_BUF_SIZE: usize = 64;
 
 /// Index of the currently active virtual terminal in [`TTY_TABLE`].
 static ACTIVE_VT: AtomicUsize = AtomicUsize::new(0);
+
+/// Set by the keyboard IRQ handler when scancodes are buffered.
+/// Checked by the syscall return path to process input during tight
+/// syscall loops (e.g. `yes` writing in a loop) where the normal
+/// TTY read path never runs.
+static SCANCODES_PENDING: AtomicBool = AtomicBool::new(false);
 
 /// Scancode ring buffer filled by the keyboard IRQ handler.
 ///
@@ -286,12 +292,26 @@ fn keyboard_irq_handler(_vector: crate::id::IrqVector) {
             let _ = buf.try_push(scancode);
         }
     }
+    // Signal that scancodes are available for processing.
+    SCANCODES_PENDING.store(true, Ordering::Release);
     // Wake the active TTY's reader.
     let vt = ACTIVE_VT.load(Ordering::Acquire);
     TTY_TABLE[vt].wake();
 }
 
 // ── Public API ───────────────────────────────────────────────────────
+
+/// Process any pending keyboard input on the active TTY.
+///
+/// Called from the syscall return path so that Ctrl+C / Alt+Fn are
+/// recognised even when no process is reading from the terminal (e.g.
+/// during a tight `yes` write loop). The fast path is a single atomic
+/// load when no scancodes are pending.
+pub fn process_pending_input() {
+    if SCANCODES_PENDING.swap(false, Ordering::AcqRel) {
+        active_tty().poll_hardware();
+    }
+}
 
 /// Returns a reference to the active TTY.
 pub fn active_tty() -> &'static Tty {

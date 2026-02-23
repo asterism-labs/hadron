@@ -70,6 +70,11 @@ fn restore_init_fds() {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn main(_args: &[&str]) -> i32 {
+    // Init must not be killed by signals — ignore fatal signals.
+    sys::signal(sys::SIGINT, sys::SIG_IGN);
+    sys::signal(sys::SIGTERM, sys::SIG_IGN);
+    sys::signal(sys::SIGQUIT, sys::SIG_IGN);
+
     // Set default environment variables.
     env::setenv("PATH", "/bin");
     env::setenv("PWD", "/");

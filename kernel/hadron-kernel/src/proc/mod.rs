@@ -1081,7 +1081,12 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
                                         n as isize
                                     }
                                 }
-                                Err(e) => -e.to_errno(),
+                                Err(e) => {
+                                    if matches!(e, crate::fs::FsError::BrokenPipe) {
+                                        process.signals.post(crate::syscall::SIGPIPE);
+                                    }
+                                    -e.to_errno()
+                                }
                             }
                         }
                     } else {
@@ -1188,55 +1193,92 @@ pub(crate) async fn process_task(process: Arc<Process>, entry: u64, stack_top: u
     reason = "returning negated errno as isize"
 )]
 async fn handle_wait(parent_pid: Pid, target_pid: Pid) -> (isize, u64) {
-    // Find the child process.
-    let child = if target_pid.as_u32() == 0 {
-        // Wait for any child — pick the first one.
+    if target_pid.as_u32() == 0 {
+        // Wait for any child — scan for the first zombie.
         let children = ProcessTable::children_of(parent_pid);
         if children.is_empty() {
             return (-(crate::syscall::EINVAL), 0);
         }
-        ProcessTable::lookup(children[0])
+
+        let (zombie_pid, exit_code) = core::future::poll_fn(|cx| {
+            // Check all children for an already-exited zombie.
+            let children = ProcessTable::children_of(parent_pid);
+            for &child_pid in &children {
+                if let Some(child) = ProcessTable::lookup(child_pid) {
+                    let status = child.exit_status.lock();
+                    if let Some(exit_code) = *status {
+                        return core::task::Poll::Ready((child_pid, exit_code));
+                    }
+                }
+            }
+
+            // No zombie found — register waker on every child's exit_notify.
+            for &child_pid in &children {
+                if let Some(child) = ProcessTable::lookup(child_pid) {
+                    child.exit_notify.register_waker(cx.waker());
+                }
+            }
+
+            // Double-check: a child may have exited between scan and registration.
+            for &child_pid in &children {
+                if let Some(child) = ProcessTable::lookup(child_pid) {
+                    let status = child.exit_status.lock();
+                    if let Some(exit_code) = *status {
+                        return core::task::Poll::Ready((child_pid, exit_code));
+                    }
+                }
+            }
+
+            core::task::Poll::Pending
+        })
+        .await;
+
+        // Reap the zombie.
+        ProcessTable::unregister(zombie_pid);
+        #[expect(clippy::cast_possible_wrap, reason = "PID fits in isize")]
+        {
+            (zombie_pid.as_u32() as isize, exit_code)
+        }
     } else {
-        ProcessTable::lookup(target_pid)
-    };
+        // Wait for a specific child.
+        let child = match ProcessTable::lookup(target_pid) {
+            Some(c) => c,
+            None => return (-(crate::syscall::EINVAL), 0),
+        };
 
-    let child = match child {
-        Some(c) => c,
-        None => return (-(crate::syscall::EINVAL), 0),
-    };
+        // Verify it's actually our child.
+        if child.parent_pid != Some(parent_pid) {
+            return (-(crate::syscall::EINVAL), 0);
+        }
 
-    // Verify it's actually our child.
-    if child.parent_pid != Some(parent_pid) {
-        return (-(crate::syscall::EINVAL), 0);
+        // Wait for the child to exit using the double-check pattern to
+        // avoid a lost wakeup race: register the waker *before* re-checking
+        // exit_status so a concurrent wake_all() is never missed.
+        let (pid, exit_code) = core::future::poll_fn(|cx| {
+            // Fast path: child already exited.
+            let status = child.exit_status.lock();
+            if let Some(exit_code) = *status {
+                return core::task::Poll::Ready((child.pid.as_u32() as isize, exit_code));
+            }
+            drop(status);
+
+            // Register waker BEFORE re-checking — eliminates the race window.
+            child.exit_notify.register_waker(cx.waker());
+
+            // Re-check: child may have exited between our check and registration.
+            let status = child.exit_status.lock();
+            if let Some(exit_code) = *status {
+                return core::task::Poll::Ready((child.pid.as_u32() as isize, exit_code));
+            }
+            drop(status);
+
+            core::task::Poll::Pending
+        })
+        .await;
+
+        // Reap: remove child from the process table now that the parent
+        // has collected the exit status.
+        ProcessTable::unregister(child.pid);
+        (pid, exit_code)
     }
-
-    // Wait for the child to exit using the double-check pattern to
-    // avoid a lost wakeup race: register the waker *before* re-checking
-    // exit_status so a concurrent wake_all() is never missed.
-    let (pid, exit_code) = core::future::poll_fn(|cx| {
-        // Fast path: child already exited.
-        let status = child.exit_status.lock();
-        if let Some(exit_code) = *status {
-            return core::task::Poll::Ready((child.pid.as_u32() as isize, exit_code));
-        }
-        drop(status);
-
-        // Register waker BEFORE re-checking — eliminates the race window.
-        child.exit_notify.register_waker(cx.waker());
-
-        // Re-check: child may have exited between our check and registration.
-        let status = child.exit_status.lock();
-        if let Some(exit_code) = *status {
-            return core::task::Poll::Ready((child.pid.as_u32() as isize, exit_code));
-        }
-        drop(status);
-
-        core::task::Poll::Pending
-    })
-    .await;
-
-    // Reap: remove child from the process table now that the parent
-    // has collected the exit status.
-    ProcessTable::unregister(child.pid);
-    (pid, exit_code)
 }

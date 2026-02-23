@@ -111,6 +111,8 @@ pub enum FsError {
     SymlinkLoop,
     /// Operation interrupted by a signal.
     Interrupted,
+    /// Broken pipe (write to a pipe with no readers).
+    BrokenPipe,
 }
 
 impl FsError {
@@ -129,6 +131,7 @@ impl FsError {
             FsError::NotSupported => hadron_syscall::ENOSYS,
             FsError::SymlinkLoop => hadron_syscall::ELOOP,
             FsError::Interrupted => hadron_syscall::EINTR,
+            FsError::BrokenPipe => hadron_syscall::EPIPE,
         }
     }
 }

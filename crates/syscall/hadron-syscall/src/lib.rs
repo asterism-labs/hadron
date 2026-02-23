@@ -35,6 +35,8 @@ hadron_syscall_macros::define_syscalls! {
         EINTR = 4;
         /// `ENOSYS` — function not implemented.
         ENOSYS = 38;
+        /// `EPIPE` — broken pipe.
+        EPIPE = 32;
         /// `ELOOP` — too many levels of symbolic links.
         ELOOP = 40;
     }

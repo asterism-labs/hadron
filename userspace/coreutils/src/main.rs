@@ -83,7 +83,9 @@ fn cmd_cat(args: &[&str]) -> i32 {
             if n <= 0 {
                 break;
             }
-            io::write(STDOUT, &buf[..n as usize]);
+            if io::write(STDOUT, &buf[..n as usize]) < 0 {
+                break;
+            }
         }
         return 0;
     }
@@ -104,7 +106,9 @@ fn cmd_cat(args: &[&str]) -> i32 {
             if n <= 0 {
                 break;
             }
-            io::write(STDOUT, &buf[..n as usize]);
+            if io::write(STDOUT, &buf[..n as usize]) < 0 {
+                break;
+            }
         }
 
         io::close(fd);
@@ -199,7 +203,12 @@ fn cmd_clear() -> i32 {
 fn cmd_yes(args: &[&str]) -> i32 {
     let text = args.first().copied().unwrap_or("y");
     loop {
-        println!("{}", text);
+        if io::write(STDOUT, text.as_bytes()) < 0 {
+            return 1;
+        }
+        if io::write(STDOUT, b"\n") < 0 {
+            return 1;
+        }
     }
 }
 

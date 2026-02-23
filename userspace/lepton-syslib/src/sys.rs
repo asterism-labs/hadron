@@ -10,7 +10,9 @@ use hadron_syscall::{
     UptimeInfo,
 };
 
-pub use hadron_syscall::{SIGINT, SIGQUIT, SIGTERM, SIG_DFL, SIG_IGN};
+pub use hadron_syscall::{
+    SIGCHLD, SIGINT, SIGKILL, SIGPIPE, SIGQUIT, SIGSEGV, SIGSTOP, SIGTERM, SIG_DFL, SIG_IGN,
+};
 
 // ── Functions ─────────────────────────────────────────────────────────
 

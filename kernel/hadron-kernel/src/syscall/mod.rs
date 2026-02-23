@@ -128,6 +128,10 @@ static DISPATCH: HadronDispatch = HadronDispatch;
 ///
 /// Matches the syscall number and forwards to the appropriate handler.
 /// Unknown syscall numbers return `-ENOSYS`.
+///
+/// After the handler returns, processes any pending keyboard input and
+/// checks for pending signals. This ensures Ctrl+C is recognised even
+/// during tight syscall loops where the normal TTY read path never runs.
 #[unsafe(no_mangle)]
 extern "C" fn syscall_dispatch(
     nr: usize,
@@ -138,5 +142,75 @@ extern "C" fn syscall_dispatch(
     a4: usize,
 ) -> isize {
     crate::ktrace_subsys!(syscall, "syscall nr={} a0={:#x} a1={:#x}", nr, a0, a1);
-    dispatch(&DISPATCH, nr, a0, a1, a2, a3, a4)
+    let result = dispatch(&DISPATCH, nr, a0, a1, a2, a3, a4);
+
+    // Process any keyboard input that arrived during this syscall
+    // (the keyboard IRQ can now fire thanks to STI in the entry stub).
+    crate::tty::process_pending_input();
+
+    // If the current process has pending signals, longjmp back to
+    // process_task for delivery instead of returning via sysretq.
+    let has_signal =
+        crate::proc::ProcessTable::try_current(|p| p.signals.has_pending());
+    if has_signal == Some(true) {
+        trap_signal_pending(result);
+    }
+
+    result
+}
+
+/// Longjmp back to `process_task` for signal delivery.
+///
+/// Populates `USER_CONTEXT` from `SYSCALL_SAVED_REGS` + the syscall
+/// return value, restores kernel CR3 and GS, sets `TrapReason::Preempted`,
+/// and calls `restore_kernel_context`. process_task will then check
+/// signals and either terminate or deliver a handler.
+fn trap_signal_pending(result: isize) -> ! {
+    use crate::arch::x86_64::registers::control::Cr3;
+    use crate::arch::x86_64::registers::model_specific::{IA32_GS_BASE, IA32_KERNEL_GS_BASE};
+    use crate::arch::x86_64::userspace::restore_kernel_context;
+
+    // Populate USER_CONTEXT from saved syscall registers + result.
+    // SAFETY: USER_CONTEXT and SYSCALL_SAVED_REGS are per-CPU, only
+    // accessed from this task and the preemption stub (mutually exclusive).
+    unsafe {
+        let saved = &*crate::arch::x86_64::syscall::SYSCALL_SAVED_REGS.get().get();
+        let ctx = &mut *crate::proc::USER_CONTEXT.get().get();
+        ctx.rip = saved.user_rip;
+        ctx.rflags = saved.user_rflags;
+        ctx.rsp = crate::percpu::PerCpuState::current().user_rsp;
+        ctx.rbx = saved.rbx;
+        ctx.rbp = saved.rbp;
+        ctx.r12 = saved.r12;
+        ctx.r13 = saved.r13;
+        ctx.r14 = saved.r14;
+        ctx.r15 = saved.r15;
+        ctx.rax = result as u64;
+        // Caller-saved registers are clobbered by the syscall ABI.
+        ctx.rcx = 0;
+        ctx.rdx = 0;
+        ctx.rsi = 0;
+        ctx.rdi = 0;
+        ctx.r8 = 0;
+        ctx.r9 = 0;
+        ctx.r10 = 0;
+        ctx.r11 = 0;
+    }
+
+    let kernel_cr3 = crate::proc::TrapContext::kernel_cr3();
+
+    // SAFETY: Standard kernel context restore pattern (same as trap_io / sys_task_sigreturn).
+    unsafe {
+        Cr3::write(kernel_cr3);
+        let percpu = IA32_GS_BASE.read();
+        IA32_KERNEL_GS_BASE.write(percpu);
+    }
+
+    crate::proc::TrapContext::set_trap_reason(crate::proc::TrapReason::Preempted);
+
+    let saved_rsp = crate::proc::TrapContext::saved_kernel_rsp();
+    // SAFETY: saved_rsp is the kernel RSP saved by enter_userspace_save.
+    unsafe {
+        restore_kernel_context(saved_rsp);
+    }
 }

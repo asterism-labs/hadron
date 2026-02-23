@@ -102,6 +102,9 @@ pub(super) fn sys_vnode_read(fd: usize, buf_ptr: usize, buf_len: usize) -> isize
         }
         Some(Err(e)) => -e.to_errno(),
         None => {
+            // Drop the Arc before the longjmp to avoid leaking the reference count.
+            // The TRAP_IO handler re-fetches the inode from the fd table.
+            drop(inode);
             // I/O would block — trap to process_task for async handling.
             // This is outside with_current_process, so the longjmp is safe.
             trap_io(fd, buf_ptr, buf_len, false)
@@ -162,8 +165,18 @@ pub(super) fn sys_vnode_write(fd: usize, buf_ptr: usize, buf_len: usize) -> isiz
             });
             n as isize
         }
-        Some(Err(e)) => -e.to_errno(),
+        Some(Err(e)) => {
+            if matches!(e, crate::fs::FsError::BrokenPipe) {
+                crate::proc::ProcessTable::with_current(|p| {
+                    p.signals.post(crate::syscall::SIGPIPE);
+                });
+            }
+            -e.to_errno()
+        }
         None => {
+            // Drop the Arc before the longjmp to avoid leaking the reference count.
+            // The TRAP_IO handler re-fetches the inode from the fd table.
+            drop(inode);
             // I/O would block — trap to process_task for async handling.
             // This is outside with_current_process, so the longjmp is safe.
             trap_io(fd, buf_ptr, buf_len, true)

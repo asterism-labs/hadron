@@ -660,6 +660,10 @@ fn execute_builtin(cmd: &str, args: &[&str], jobs: &mut JobTable) -> bool {
             builtin_export(args);
             true
         }
+        "kill" => {
+            builtin_kill(args);
+            true
+        }
         _ => false,
     }
 }
@@ -683,6 +687,7 @@ fn builtin_help() {
     println!("  sysinfo          — kernel version, memory, uptime");
     println!("  cd <dir>         — change working directory");
     println!("  export [VAR=val] — set/show environment variables");
+    println!("  kill <pid> [sig] — send signal to a process");
     println!();
     println!("External commands (via PATH):");
     println!("  echo, cat, ls, uname, uptime, clear, true, false, yes, env, pwd");
@@ -841,6 +846,26 @@ fn builtin_export(args: &[&str]) {
     }
 }
 
+fn builtin_kill(args: &[&str]) {
+    if args.len() < 2 {
+        println!("usage: kill <pid> [signal]");
+        return;
+    }
+    let Some(pid) = parse_usize(args[1]) else {
+        println!("kill: invalid pid: {}", args[1]);
+        return;
+    };
+    let signum = if args.len() > 2 {
+        parse_usize(args[2]).unwrap_or(sys::SIGTERM)
+    } else {
+        sys::SIGTERM
+    };
+    let ret = sys::kill(pid as u32, signum);
+    if ret < 0 {
+        println!("kill: failed to send signal {} to {}", signum, pid);
+    }
+}
+
 fn builtin_sysinfo() {
     if let Some(ver) = sys::query_kernel_version() {
         let name_len = ver
@@ -930,8 +955,10 @@ fn read_line(buf: &mut [u8]) -> Option<usize> {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn main(_args: &[&str]) -> i32 {
-    // Ignore SIGINT so Ctrl+C kills foreground children, not the shell itself.
+    // Ignore SIGINT and SIGQUIT so Ctrl+C / Ctrl+\ kill foreground children,
+    // not the shell itself.
     sys::signal(sys::SIGINT, sys::SIG_IGN);
+    sys::signal(sys::SIGQUIT, sys::SIG_IGN);
 
     println!("hsh — Hadron SHell");
     println!("Type 'help' for available commands.\n");
