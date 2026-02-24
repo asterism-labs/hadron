@@ -231,6 +231,22 @@ hadron_syscall_macros::define_syscalls! {
             ypixel: u16,
         }
 
+        /// A mouse event packet read from `/dev/mouse`.
+        ///
+        /// Each packet is 8 bytes: relative X/Y deltas, button state,
+        /// and 3 bytes of padding for alignment.
+        #[derive(Debug, Clone, Copy)]
+        struct MouseEventPacket {
+            /// Relative X movement (positive = right).
+            dx: i16,
+            /// Relative Y movement (positive = down in PS/2, negated by userspace).
+            dy: i16,
+            /// Button state bitmask: bit 0 = left, bit 1 = right, bit 2 = middle.
+            buttons: u8,
+            /// Padding for 8-byte alignment.
+            _pad: [u8; 3],
+        }
+
         /// A single directory entry returned by `vnode_readdir`.
         #[derive(Debug, Clone, Copy)]
         struct DirEntryInfo {

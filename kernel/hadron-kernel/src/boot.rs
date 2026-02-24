@@ -579,6 +579,13 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
             Arc::new(crate::tty::pty::DevPtsDir) as Arc<dyn fs::Inode>,
         ));
 
+        // Register /dev/mouse for PS/2 mouse input.
+        crate::drivers::dev_mouse::init();
+        dev_devices.push((
+            "mouse",
+            Arc::new(crate::drivers::dev_mouse::DevMouse::global()) as Arc<dyn fs::Inode>,
+        ));
+
         // Register /dev/fb0 if a framebuffer device is available.
         if let Some(fb) = crate::drivers::device_registry::DeviceRegistry::with(|dr| {
             dr.take_framebuffer("bochs-vga-0")
