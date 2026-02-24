@@ -108,7 +108,7 @@ impl<T> SpinLock<T> {
 
             // TTAS: spin on a read (shared cache line) until it looks free.
             while self.locked.load(Ordering::Relaxed) {
-                core::hint::spin_loop();
+                super::spin_wait_hint();
             }
         }
     }
@@ -156,7 +156,7 @@ impl<T> SpinLock<T> {
             }
 
             while self.locked.load(Ordering::Relaxed) {
-                core::hint::spin_loop();
+                super::spin_wait_hint();
             }
         }
     }
@@ -314,5 +314,67 @@ mod tests {
         let lock = SpinLock::named("test_lock", 42);
         let guard = lock.lock();
         assert_eq!(*guard, 42);
+    }
+}
+
+#[cfg(loom)]
+mod loom_tests {
+    use loom::sync::Arc;
+    use loom::thread;
+
+    use super::SpinLock;
+
+    #[test]
+    fn loom_mutual_exclusion() {
+        loom::model(|| {
+            let lock = Arc::new(SpinLock::new(0usize));
+
+            let threads: Vec<_> = (0..2)
+                .map(|_| {
+                    let lock = lock.clone();
+                    thread::spawn(move || {
+                        for _ in 0..2 {
+                            let mut guard = lock.lock();
+                            *guard += 1;
+                        }
+                    })
+                })
+                .collect();
+
+            for t in threads {
+                t.join().unwrap();
+            }
+
+            assert_eq!(*lock.lock(), 4);
+        });
+    }
+
+    #[test]
+    fn loom_try_lock_contention() {
+        loom::model(|| {
+            let lock = Arc::new(SpinLock::new(0usize));
+
+            let l1 = lock.clone();
+            let t1 = thread::spawn(move || {
+                let mut guard = l1.lock();
+                *guard += 1;
+                // guard dropped here
+            });
+
+            let l2 = lock.clone();
+            let t2 = thread::spawn(move || {
+                // try_lock may or may not succeed depending on interleaving
+                if let Some(mut guard) = l2.try_lock() {
+                    *guard += 10;
+                }
+            });
+
+            t1.join().unwrap();
+            t2.join().unwrap();
+
+            let val = *lock.lock();
+            // t1 always adds 1; t2 adds 10 only if it got the lock
+            assert!(val == 1 || val == 11);
+        });
     }
 }

@@ -2,9 +2,16 @@
 //!
 //! Provides [`noop_waker`] and [`counting_waker`] for polling futures
 //! in host-side tests without a real executor.
+//!
+//! Under `cfg(loom)`, uses `loom::sync::Arc` so loom tracks reference
+//! counts and detects leaks.
 
+#[cfg(loom)]
+use loom::sync::Arc;
+#[cfg(not(loom))]
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+
+use super::atomic::{AtomicUsize, Ordering};
 use std::task::{RawWaker, RawWakerVTable, Waker};
 
 /// Creates a [`Waker`] that does nothing when woken.
@@ -20,6 +27,7 @@ pub fn noop_waker() -> Waker {
 /// Creates a [`Waker`] that increments a counter each time it is woken.
 ///
 /// Returns the waker and an `Arc<AtomicUsize>` counter that tracks wake calls.
+/// Under `cfg(loom)`, uses `loom::sync::Arc` for proper leak tracking.
 pub fn counting_waker() -> (Waker, Arc<AtomicUsize>) {
     let counter = Arc::new(AtomicUsize::new(0));
     let data = Arc::into_raw(counter.clone()) as *const ();

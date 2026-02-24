@@ -136,7 +136,7 @@ impl<T> Mutex<T> {
             if let Some(guard) = self.try_lock() {
                 return guard;
             }
-            core::hint::spin_loop();
+            super::spin_wait_hint();
         }
     }
 
@@ -348,5 +348,77 @@ mod tests {
             count.load(Ordering::SeqCst) > 0,
             "waker should have been called"
         );
+    }
+}
+
+#[cfg(loom)]
+mod loom_tests {
+    use loom::sync::Arc;
+    use loom::thread;
+
+    use super::Mutex;
+
+    /// Verify sync lock path provides mutual exclusion under all interleavings.
+    #[test]
+    fn loom_mutex_mutual_exclusion() {
+        loom::model(|| {
+            let mutex = Arc::new(Mutex::new(0usize));
+
+            let handles: Vec<_> = (0..2)
+                .map(|_| {
+                    let m = mutex.clone();
+                    thread::spawn(move || {
+                        let mut guard = m.lock_sync();
+                        *guard += 1;
+                    })
+                })
+                .collect();
+
+            for h in handles {
+                h.join().unwrap();
+            }
+
+            assert_eq!(*mutex.lock_sync(), 2);
+        });
+    }
+
+    /// Verify async lock path (Future::poll) handles contention without
+    /// lost wakeups. If a wakeup is lost, the poll loop deadlocks and
+    /// loom reports it.
+    #[test]
+    fn loom_mutex_async_contention() {
+        use core::future::Future;
+        use core::pin::Pin;
+        use core::task::Context;
+
+        loom::model(|| {
+            let mutex = Arc::new(Mutex::new(0usize));
+
+            let handles: Vec<_> = (0..2)
+                .map(|_| {
+                    let m = mutex.clone();
+                    thread::spawn(move || {
+                        let waker = super::super::test_waker::noop_waker();
+                        let mut cx = Context::from_waker(&waker);
+                        let mut fut = m.lock();
+                        loop {
+                            match Pin::new(&mut fut).poll(&mut cx) {
+                                core::task::Poll::Ready(mut guard) => {
+                                    *guard += 1;
+                                    break;
+                                }
+                                core::task::Poll::Pending => loom::thread::yield_now(),
+                            }
+                        }
+                    })
+                })
+                .collect();
+
+            for h in handles {
+                h.join().unwrap();
+            }
+
+            assert_eq!(*mutex.lock_sync(), 2);
+        });
     }
 }

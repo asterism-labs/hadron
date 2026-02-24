@@ -198,3 +198,73 @@ mod tests {
         assert!(matches!(result, Poll::Ready(())));
     }
 }
+
+#[cfg(loom)]
+mod loom_tests {
+    use loom::sync::Arc;
+    use loom::thread;
+
+    use super::super::atomic::Ordering;
+    use super::super::test_waker::counting_waker;
+    use super::WaitQueue;
+
+    #[test]
+    fn loom_register_then_wake() {
+        loom::model(|| {
+            let wq = Arc::new(WaitQueue::new());
+            let (waker, count) = counting_waker();
+
+            let wq2 = wq.clone();
+            let t = thread::spawn(move || {
+                wq2.wake_one();
+            });
+
+            wq.register_waker(&waker);
+            t.join().unwrap();
+
+            // Waker may or may not have been woken depending on ordering:
+            // - If register happens before wake_one: count == 1
+            // - If wake_one happens before register: count == 0 (wake_one found empty queue)
+            let c = count.load(Ordering::SeqCst);
+            assert!(c == 0 || c == 1);
+        });
+    }
+
+    #[test]
+    fn loom_wake_all() {
+        loom::model(|| {
+            let wq = Arc::new(WaitQueue::new());
+            let (waker1, count1) = counting_waker();
+            let (waker2, count2) = counting_waker();
+
+            // Both register before wake_all.
+            wq.register_waker(&waker1);
+            wq.register_waker(&waker2);
+
+            let wq2 = wq.clone();
+            let t = thread::spawn(move || {
+                wq2.wake_all();
+            });
+            t.join().unwrap();
+
+            assert_eq!(count1.load(Ordering::SeqCst), 1);
+            assert_eq!(count2.load(Ordering::SeqCst), 1);
+        });
+    }
+
+    #[test]
+    fn loom_wake_before_register() {
+        loom::model(|| {
+            let wq = Arc::new(WaitQueue::new());
+
+            // wake_one on empty queue — should be a no-op.
+            wq.wake_one();
+
+            let (waker, count) = counting_waker();
+            wq.register_waker(&waker);
+
+            // The earlier wake_one should NOT have woken this later-registered waker.
+            assert_eq!(count.load(Ordering::SeqCst), 0);
+        });
+    }
+}

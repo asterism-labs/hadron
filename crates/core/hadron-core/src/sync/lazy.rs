@@ -125,7 +125,7 @@ impl<T, F: FnOnce() -> T> LazyLock<T, F> {
             match self.state.load(Ordering::Acquire) {
                 READY => break,
                 POISONED => panic!("LazyLock poisoned: init closure panicked"),
-                _ => core::hint::spin_loop(),
+                _ => super::spin_wait_hint(),
             }
         }
         // SAFETY: State is READY.
@@ -169,5 +169,66 @@ mod tests {
     fn deref_returns_value() {
         let lazy = LazyLock::new(|| String::from("hello"));
         assert_eq!(&*lazy, "hello");
+    }
+}
+
+#[cfg(loom)]
+mod loom_tests {
+    use loom::sync::Arc;
+    use loom::thread;
+
+    use super::super::atomic::{AtomicUsize, Ordering};
+    use super::LazyLock;
+
+    /// Verify that when multiple threads race to initialize a LazyLock,
+    /// the init closure runs exactly once and all threads see the same value.
+    #[test]
+    fn loom_lazy_init_race() {
+        loom::model(|| {
+            let init_count = Arc::new(AtomicUsize::new(0));
+            let count_ref = init_count.clone();
+            let lazy = Arc::new(LazyLock::new(move || {
+                count_ref.fetch_add(1, Ordering::SeqCst);
+                42usize
+            }));
+
+            let handles: Vec<_> = (0..2)
+                .map(|_| {
+                    let lazy = lazy.clone();
+                    thread::spawn(move || **lazy)
+                })
+                .collect();
+
+            let mut results = Vec::new();
+            for h in handles {
+                results.push(h.join().unwrap());
+            }
+
+            // Init ran exactly once.
+            assert_eq!(init_count.load(Ordering::SeqCst), 1);
+            // All threads saw the same value.
+            for &r in &results {
+                assert_eq!(r, 42);
+            }
+        });
+    }
+
+    /// Verify Release/Acquire ordering: reader thread sees the initialized
+    /// value after the writer thread completes initialization.
+    #[test]
+    fn loom_lazy_deref_after_init() {
+        loom::model(|| {
+            let lazy = Arc::new(LazyLock::new(|| 99usize));
+
+            let l1 = lazy.clone();
+            let t = thread::spawn(move || {
+                // Force initialization.
+                let _val: usize = **l1;
+            });
+            t.join().unwrap();
+
+            // Reader sees the initialized value.
+            assert_eq!(**lazy, 99);
+        });
     }
 }

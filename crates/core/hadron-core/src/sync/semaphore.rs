@@ -195,3 +195,120 @@ mod tests {
         assert!(matches!(result, Poll::Pending));
     }
 }
+
+#[cfg(loom)]
+mod loom_tests {
+    use loom::sync::Arc;
+    use loom::thread;
+
+    use super::super::atomic::Ordering;
+    use super::Semaphore;
+
+    /// Verify CAS loop handles contention: with 1 permit and 2 threads,
+    /// at most one thread holds the permit at any given time.
+    #[test]
+    fn loom_semaphore_permit_exhaustion() {
+        loom::model(|| {
+            let sem = Arc::new(Semaphore::new(1));
+            let in_critical = Arc::new(super::super::atomic::AtomicUsize::new(0));
+
+            let handles: Vec<_> = (0..2)
+                .map(|_| {
+                    let sem = sem.clone();
+                    let crit = in_critical.clone();
+                    thread::spawn(move || {
+                        // Spin until permit acquired.
+                        let _permit = loop {
+                            if let Some(p) = sem.try_acquire() {
+                                break p;
+                            }
+                            loom::thread::yield_now();
+                        };
+
+                        // Verify mutual exclusion: only one thread in critical section.
+                        let prev = crit.fetch_add(1, Ordering::SeqCst);
+                        assert_eq!(prev, 0, "two threads in critical section");
+                        crit.fetch_sub(1, Ordering::SeqCst);
+                    })
+                })
+                .collect();
+
+            for h in handles {
+                h.join().unwrap();
+            }
+        });
+    }
+
+    /// Verify async acquire path: thread 1 acquires, thread 2 polls
+    /// acquire (Pending then eventually Ready). No lost wakeup.
+    #[test]
+    fn loom_semaphore_release_wakes_waiter() {
+        use core::future::Future;
+        use core::pin::Pin;
+        use core::task::Context;
+
+        loom::model(|| {
+            let sem = Arc::new(Semaphore::new(1));
+
+            let s1 = sem.clone();
+            let s2 = sem.clone();
+
+            let t1 = thread::spawn(move || {
+                // Acquire and hold briefly, then release via drop.
+                let _p = loop {
+                    if let Some(p) = s1.try_acquire() {
+                        break p;
+                    }
+                    loom::thread::yield_now();
+                };
+            });
+
+            let t2 = thread::spawn(move || {
+                let waker = super::super::test_waker::noop_waker();
+                let mut cx = Context::from_waker(&waker);
+                let mut fut = s2.acquire();
+                loop {
+                    match Pin::new(&mut fut).poll(&mut cx) {
+                        core::task::Poll::Ready(_permit) => break,
+                        core::task::Poll::Pending => loom::thread::yield_now(),
+                    }
+                }
+            });
+
+            t1.join().unwrap();
+            t2.join().unwrap();
+
+            // Both acquired and released — permits should be back.
+            assert_eq!(sem.available_permits(), 1);
+        });
+    }
+
+    /// Verify permits are conserved: acquire + release cycles don't leak.
+    #[test]
+    fn loom_semaphore_no_permit_leak() {
+        loom::model(|| {
+            let sem = Arc::new(Semaphore::new(2));
+
+            let handles: Vec<_> = (0..2)
+                .map(|_| {
+                    let sem = sem.clone();
+                    thread::spawn(move || {
+                        let _p = loop {
+                            if let Some(p) = sem.try_acquire() {
+                                break p;
+                            }
+                            loom::thread::yield_now();
+                        };
+                        // Permit released on drop.
+                    })
+                })
+                .collect();
+
+            for h in handles {
+                h.join().unwrap();
+            }
+
+            assert_eq!(sem.available_permits(), 2);
+        });
+    }
+}

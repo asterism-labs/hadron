@@ -53,6 +53,22 @@ pub mod waitqueue;
 #[cfg(test)]
 pub(crate) mod test_waker;
 
+/// Yields execution in a spin-wait loop.
+///
+/// Under normal builds this emits a processor spin-wait hint
+/// (`core::hint::spin_loop()`). Under loom this yields to the
+/// scheduler (`loom::thread::yield_now()`) so other threads can
+/// make progress — loom's model checker cannot make forward progress
+/// through `spin_loop()` hints since they are invisible to its
+/// scheduler.
+#[inline(always)]
+fn spin_wait_hint() {
+    #[cfg(not(loom))]
+    core::hint::spin_loop();
+    #[cfg(loom)]
+    loom::thread::yield_now();
+}
+
 pub use condvar::Condvar;
 pub use heap_waitqueue::{HeapWaitFuture, HeapWaitQueue};
 pub use irq_spinlock::{IrqSpinLock, IrqSpinLockGuard};

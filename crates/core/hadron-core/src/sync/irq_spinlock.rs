@@ -160,7 +160,7 @@ impl<T> IrqSpinLock<T> {
                 };
             }
             while self.locked.load(Ordering::Relaxed) {
-                core::hint::spin_loop();
+                super::spin_wait_hint();
             }
         }
     }
@@ -329,4 +329,58 @@ fn save_flags_and_cli() -> u64 {
 #[inline]
 fn restore_flags(flags: u64) {
     super::loom_mock::mock_restore_flags(flags);
+}
+
+#[cfg(loom)]
+mod loom_tests {
+    use loom::sync::Arc;
+    use loom::thread;
+
+    use super::super::loom_mock;
+    use super::IrqSpinLock;
+
+    #[test]
+    fn loom_irq_spinlock_mutual_exclusion() {
+        loom::model(|| {
+            let lock = Arc::new(IrqSpinLock::new(0usize));
+
+            let threads: Vec<_> = (0..2)
+                .map(|_| {
+                    let lock = lock.clone();
+                    thread::spawn(move || {
+                        for _ in 0..2 {
+                            let mut guard = lock.lock();
+                            *guard += 1;
+                        }
+                    })
+                })
+                .collect();
+
+            for t in threads {
+                t.join().unwrap();
+            }
+
+            assert_eq!(*lock.lock(), 4);
+        });
+    }
+
+    #[test]
+    fn loom_irq_spinlock_interrupt_state() {
+        loom::model(|| {
+            let lock = IrqSpinLock::new(42usize);
+
+            // Interrupts start enabled.
+            assert!(loom_mock::mock_irq_enabled());
+
+            {
+                let guard = lock.lock();
+                // Interrupts should be disabled while lock is held.
+                assert!(!loom_mock::mock_irq_enabled());
+                assert_eq!(*guard, 42);
+            }
+
+            // Interrupts should be restored after guard is dropped.
+            assert!(loom_mock::mock_irq_enabled());
+        });
+    }
 }

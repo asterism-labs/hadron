@@ -103,7 +103,7 @@ impl<T> RwLock<T> {
                     };
                 }
             }
-            core::hint::spin_loop();
+            super::spin_wait_hint();
         }
     }
 
@@ -128,7 +128,7 @@ impl<T> RwLock<T> {
                     class,
                 };
             }
-            core::hint::spin_loop();
+            super::spin_wait_hint();
         }
     }
 

@@ -79,7 +79,7 @@ impl Condvar {
             if let Some(new_guard) = lock.try_lock() {
                 return new_guard;
             }
-            core::hint::spin_loop();
+            super::spin_wait_hint();
         }
     }
 
@@ -190,5 +190,85 @@ mod tests {
         // no contention exists.
         let guard2 = cv.wait(guard);
         assert_eq!(*guard2, 42);
+    }
+}
+
+#[cfg(loom)]
+mod loom_tests {
+    use core::future::Future;
+    use core::pin::Pin;
+    use core::task::Context;
+
+    use loom::sync::Arc;
+    use loom::thread;
+
+    use super::super::atomic::Ordering;
+    use super::super::test_waker::counting_waker;
+    use super::{Condvar, CondvarWaitFuture};
+
+    /// Verify notify_one wakes a registered waiter under all interleavings.
+    #[test]
+    fn loom_condvar_notify_wakes_waiter() {
+        loom::model(|| {
+            let cv = Arc::new(Condvar::new());
+            let (waker, count) = counting_waker();
+
+            // Poll the wait future once to register the waker.
+            let mut fut = CondvarWaitFuture {
+                condvar: &cv,
+                registered: false,
+            };
+            let mut cx = Context::from_waker(&waker);
+            let result = Pin::new(&mut fut).poll(&mut cx);
+            assert!(matches!(result, core::task::Poll::Pending));
+
+            let cv2 = cv.clone();
+            let t = thread::spawn(move || {
+                cv2.notify_one();
+            });
+            t.join().unwrap();
+
+            assert!(count.load(Ordering::SeqCst) > 0);
+        });
+    }
+
+    /// Verify notify_all wakes all registered waiters.
+    #[test]
+    fn loom_condvar_notify_all() {
+        loom::model(|| {
+            let cv = Arc::new(Condvar::new());
+            let (waker1, count1) = counting_waker();
+            let (waker2, count2) = counting_waker();
+
+            // Register two waiters via CondvarWaitFuture.
+            let mut fut1 = CondvarWaitFuture {
+                condvar: &cv,
+                registered: false,
+            };
+            let mut cx1 = Context::from_waker(&waker1);
+            assert!(matches!(
+                Pin::new(&mut fut1).poll(&mut cx1),
+                core::task::Poll::Pending
+            ));
+
+            let mut fut2 = CondvarWaitFuture {
+                condvar: &cv,
+                registered: false,
+            };
+            let mut cx2 = Context::from_waker(&waker2);
+            assert!(matches!(
+                Pin::new(&mut fut2).poll(&mut cx2),
+                core::task::Poll::Pending
+            ));
+
+            let cv2 = cv.clone();
+            let t = thread::spawn(move || {
+                cv2.notify_all();
+            });
+            t.join().unwrap();
+
+            assert_eq!(count1.load(Ordering::SeqCst), 1);
+            assert_eq!(count2.load(Ordering::SeqCst), 1);
+        });
     }
 }
