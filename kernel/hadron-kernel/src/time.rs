@@ -6,7 +6,7 @@
 //! Also stores the HPET driver instance as a [`ClockSource`] trait object
 //! for consumers that want the trait-based interface (e.g. future vDSO).
 
-use core::sync::atomic::{AtomicU64, Ordering};
+use hadron_core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::arch::x86_64::hw::hpet::Hpet;
 use crate::sync::SpinLock;

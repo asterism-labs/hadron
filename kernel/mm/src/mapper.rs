@@ -15,7 +15,7 @@
 //! early boot where no stale TLB entries exist). In host tests, the no-op
 //! default is used.
 
-use core::sync::atomic::{AtomicPtr, Ordering};
+use hadron_core::sync::atomic::{AtomicPtr, Ordering};
 
 use hadron_core::addr::{PhysAddr, VirtAddr};
 use hadron_core::paging::{Page, PageSize, PhysFrame, Size4KiB};

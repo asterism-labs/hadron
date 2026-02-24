@@ -4,7 +4,7 @@
 //! This module provides the kernel-side `apply()` function that
 //! patches dispatch pointers at boot using detected CPU features.
 
-use core::sync::atomic::Ordering;
+use hadron_core::sync::atomic::Ordering;
 
 pub use hadron_core::alt_fn::{AltFnDispatch, AltFnEntry, alt_fn_entries};
 
@@ -73,7 +73,7 @@ pub unsafe fn apply() {
     }
 
     // Ensure all stores are visible before any dispatch call.
-    core::sync::atomic::fence(Ordering::Release);
+    hadron_core::sync::atomic::fence(Ordering::Release);
 
     crate::kinfo!(
         "alt-fn: patched {} dispatch points ({} entries, features={:?})",

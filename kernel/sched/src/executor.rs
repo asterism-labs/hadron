@@ -13,7 +13,7 @@ use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use core::future::Future;
 use core::pin::Pin;
-use core::sync::atomic::{AtomicU64, Ordering};
+use hadron_core::sync::atomic::{AtomicU64, Ordering};
 use core::task::{Context, Poll};
 
 use hadron_core::cpu_local::{CpuLocal, MAX_CPUS};

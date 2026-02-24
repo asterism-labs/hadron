@@ -7,7 +7,7 @@
 //! Signal delivery is checked at kernel re-entry points (after preemption, after
 //! blocking I/O, after waitpid).
 
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use hadron_core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use crate::syscall::{SA_RESETHAND, SA_RESTART, SIG_DFL, SIG_IGN};
 use crate::syscall::{SIGCHLD, SIGINT, SIGKILL, SIGPIPE, SIGQUIT, SIGSEGV, SIGSTOP, SIGTERM};

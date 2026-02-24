@@ -2,7 +2,7 @@
 
 extern crate alloc;
 
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use hadron_core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use hadron_ktest::kernel_test;
 

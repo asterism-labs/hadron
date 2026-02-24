@@ -22,7 +22,7 @@ pub mod ldisc;
 pub mod pty;
 
 use alloc::sync::Arc;
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use hadron_core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use core::task::Waker;
 
 use crate::drivers::fbcon::FbCon;

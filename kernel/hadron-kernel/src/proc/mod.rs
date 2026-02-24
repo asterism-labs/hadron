@@ -18,7 +18,7 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::cell::UnsafeCell;
-use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
+use hadron_core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 
 use crate::addr::{PhysAddr, VirtAddr};
 use crate::arch::x86_64::paging::PageTableMapper;

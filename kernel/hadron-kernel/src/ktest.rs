@@ -11,7 +11,7 @@ use alloc::boxed::Box;
 use alloc::sync::Arc;
 use core::future::Future;
 use core::pin::Pin;
-use core::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
+use hadron_core::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
 
 use hadron_ktest::{
     AsyncBarrier, KernelTestDescriptor, TestContext, TestKind, TestStage, kernel_test_entries,

@@ -5,7 +5,7 @@
 //! convert between physical and virtual addresses without threading the
 //! offset through every call site.
 
-use core::sync::atomic::{AtomicU64, Ordering};
+use hadron_core::sync::atomic::{AtomicU64, Ordering};
 
 use hadron_core::addr::{PhysAddr, VirtAddr};
 use hadron_core::assert_unsafe_precondition;

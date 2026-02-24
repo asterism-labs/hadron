@@ -17,7 +17,7 @@
 
 extern crate alloc;
 
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use hadron_core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use alloc::boxed::Box;
 

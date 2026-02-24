@@ -17,7 +17,7 @@ extern crate alloc;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::fmt::{self, Write as _};
-use core::sync::atomic::{AtomicPtr, Ordering};
+use hadron_core::sync::atomic::{AtomicPtr, Ordering};
 
 use crate::drivers::early_console::{COM1, EarlySerial};
 use crate::drivers::early_fb::EarlyFramebuffer;

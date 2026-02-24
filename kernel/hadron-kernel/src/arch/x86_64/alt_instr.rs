@@ -5,7 +5,7 @@
 //! patches instruction bytes in `.text` at boot using detected CPU
 //! features.
 
-use core::sync::atomic::Ordering;
+use hadron_core::sync::atomic::Ordering;
 
 pub use hadron_core::alt_instr::{AltInstrEntry, alt_instr_entries};
 
@@ -81,7 +81,7 @@ pub unsafe fn apply() {
 
     // Restore write protection.
     unsafe { Cr0::write(cr0) };
-    core::sync::atomic::fence(Ordering::SeqCst);
+    hadron_core::sync::atomic::fence(Ordering::SeqCst);
 
     crate::kinfo!(
         "alt-instr: patched {} sites ({} entries, features={:?})",

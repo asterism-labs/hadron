@@ -3,7 +3,7 @@
 //! Provides [`Virtqueue`] which manages the descriptor table, available ring,
 //! and used ring for VirtIO split-queue I/O.
 
-use core::sync::atomic::{AtomicU16, Ordering};
+use hadron_kernel::sync::atomic::{AtomicU16, Ordering};
 
 use hadron_kernel::driver_api::capability::DmaCapability;
 use hadron_kernel::driver_api::error::DriverError;
@@ -234,7 +234,7 @@ impl Virtqueue {
         }
 
         // Memory barrier: ensure descriptor writes are visible before updating idx.
-        core::sync::atomic::fence(Ordering::Release);
+        hadron_kernel::sync::atomic::fence(Ordering::Release);
 
         // Increment available ring index.
         let new_idx = avail_idx.wrapping_add(1);
@@ -253,7 +253,7 @@ impl Virtqueue {
     /// Notifies the device that new buffers are available on the given queue.
     pub fn notify(&self, transport: &VirtioPciTransport, queue_index: u16) {
         // Memory barrier: ensure all writes are visible to the device.
-        core::sync::atomic::fence(Ordering::SeqCst);
+        hadron_kernel::sync::atomic::fence(Ordering::SeqCst);
         transport.notify_queue(queue_index);
     }
 
@@ -263,7 +263,7 @@ impl Virtqueue {
     /// available, or `None` if the used ring has not advanced.
     pub fn poll_used(&mut self) -> Option<(u16, u32)> {
         // Memory barrier: ensure we see device writes.
-        core::sync::atomic::fence(Ordering::Acquire);
+        hadron_kernel::sync::atomic::fence(Ordering::Acquire);
 
         // SAFETY: Reading the used ring idx field.
         let used_idx = unsafe {

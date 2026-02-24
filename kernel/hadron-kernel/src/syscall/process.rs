@@ -340,7 +340,7 @@ pub(super) fn sys_task_kill(pid: usize, signum: usize) -> isize {
 /// the new PGID. The target must be the caller or a child of the caller.
 #[expect(clippy::cast_possible_truncation, reason = "PID/PGID fits in u32")]
 pub(super) fn sys_task_setpgid(pid: usize, pgid: usize) -> isize {
-    use core::sync::atomic::Ordering;
+    use hadron_core::sync::atomic::Ordering;
 
     let current_pid = crate::proc::ProcessTable::with_current(|p| p.pid);
     let target_pid = if pid == 0 {
@@ -377,7 +377,7 @@ pub(super) fn sys_task_setpgid(pid: usize, pgid: usize) -> isize {
 )]
 #[expect(clippy::cast_possible_truncation, reason = "PID fits in u32")]
 pub(super) fn sys_task_getpgid(pid: usize) -> isize {
-    use core::sync::atomic::Ordering;
+    use hadron_core::sync::atomic::Ordering;
 
     let target_pid = if pid == 0 {
         crate::proc::ProcessTable::with_current(|p| p.pid)
@@ -613,7 +613,7 @@ pub(super) fn sys_task_chdir(path_ptr: usize, path_len: usize) -> isize {
     reason = "session IDs are small u32 values, wrap is impossible"
 )]
 pub(super) fn sys_task_setsid() -> isize {
-    use core::sync::atomic::Ordering;
+    use hadron_core::sync::atomic::Ordering;
 
     crate::proc::ProcessTable::with_current(|process| {
         let pid = process.pid.as_u32();

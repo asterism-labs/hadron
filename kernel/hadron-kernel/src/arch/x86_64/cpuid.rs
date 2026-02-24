@@ -5,7 +5,7 @@
 //! detects once; APs verify they are a superset (homogeneous assumption
 //! required by the alt-instruction patching engine).
 
-use core::sync::atomic::{AtomicU64, Ordering};
+use hadron_core::sync::atomic::{AtomicU64, Ordering};
 
 // Re-export from hadron-core so existing `use super::cpuid::CpuFeatures` works.
 pub use hadron_core::cpu_features::CpuFeatures;

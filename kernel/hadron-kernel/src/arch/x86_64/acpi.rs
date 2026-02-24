@@ -4,7 +4,7 @@
 //! and stores parsed ACPI information (MADT, HPET, MCFG, FADT, SRAT, SLIT,
 //! DMAR, IVRS, BGRT, DSDT/SSDT) for use by kernel subsystems.
 
-use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
+use hadron_core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 
 use hadron_acpi::aml::namespace::NamespaceBuilder;
 use hadron_acpi::aml::{self, AmlValue, Namespace};

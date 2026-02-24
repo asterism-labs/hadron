@@ -12,7 +12,7 @@
 //! frequency and hot function identification.
 
 use core::cell::UnsafeCell;
-use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use hadron_core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use super::format;
 use crate::arch::x86_64::hw::tsc;
@@ -126,7 +126,7 @@ pub fn start() {
 /// Stop function tracing and drain all buffers to serial.
 pub fn stop() {
     FTRACE_ACTIVE.store(false, Ordering::Release);
-    core::sync::atomic::fence(Ordering::SeqCst);
+    hadron_core::sync::atomic::fence(Ordering::SeqCst);
 
     crate::kinfo!("Function tracing stopped, draining buffers...");
 

@@ -3,7 +3,7 @@
 //! Wraps the sync [`I8042`] hardware accessor with an [`IrqLine`] to provide
 //! interrupt-driven async key event reads via the [`KeyboardDevice`] trait.
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use hadron_kernel::sync::atomic::{AtomicBool, Ordering};
 
 use hadron_kernel::driver_api::capability::IrqCapability;
 use hadron_kernel::driver_api::error::DriverError;

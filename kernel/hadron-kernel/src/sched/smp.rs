@@ -9,7 +9,7 @@
 //! metadata) is migrated to the stealer's executor. On the next poll, the
 //! waker will encode the stealer's CPU ID, completing the migration.
 
-use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use hadron_core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use crate::arch::x86_64::hw::local_apic::LocalApic;
 use crate::id::CpuId;

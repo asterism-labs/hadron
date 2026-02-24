@@ -10,7 +10,7 @@ extern crate alloc;
 
 use alloc::boxed::Box;
 use alloc::sync::Arc;
-use core::sync::atomic::{AtomicBool, Ordering};
+use hadron_core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::driver_api::framebuffer::{Framebuffer, FramebufferInfo};
 use crate::drivers::font_console::px16;

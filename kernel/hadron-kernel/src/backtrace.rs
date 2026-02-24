@@ -9,7 +9,7 @@
 //! tables for binary search lookup.
 
 use core::fmt::Write;
-use core::sync::atomic::{AtomicU64, Ordering};
+use hadron_core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::sync::SpinLock;
 

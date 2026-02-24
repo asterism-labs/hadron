@@ -7,7 +7,7 @@
 //! Start/stop is controlled by [`start`] and [`stop`]. Stopping drains
 //! all per-CPU buffers to serial in the HPRF binary format.
 
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use hadron_core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use super::buffer::{MAX_SAMPLE_DEPTH, Sample, SampleBufCell, SampleRingBuf};
 use super::format;
@@ -60,7 +60,7 @@ pub fn stop() {
     SAMPLING_ACTIVE.store(false, Ordering::Release);
 
     // Brief fence to let any in-flight ISRs complete.
-    core::sync::atomic::fence(Ordering::SeqCst);
+    hadron_core::sync::atomic::fence(Ordering::SeqCst);
 
     crate::kinfo!("Sampling profiler stopped, draining buffers...");
 

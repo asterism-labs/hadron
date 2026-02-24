@@ -23,7 +23,7 @@ pub mod waker;
 pub use executor::Executor;
 pub use hadron_core::task::{Priority, TaskMeta};
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use hadron_core::sync::atomic::{AtomicBool, Ordering};
 
 use hadron_core::cpu_local::{CpuLocal, MAX_CPUS};
 use hadron_core::task::TaskId;

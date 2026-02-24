@@ -5,7 +5,7 @@
 //! via `GS:[0]` self-pointer. The BSP uses a static instance; APs allocate
 //! theirs on the heap during bootstrap.
 
-use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
+use hadron_core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 
 use crate::id::CpuId;
 

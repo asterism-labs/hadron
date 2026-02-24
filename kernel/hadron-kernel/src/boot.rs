@@ -163,7 +163,7 @@ impl SmpCpuEntry {
     /// - `extra` is passed in RSI to the entry function.
     /// - The pointed-to bootloader memory must still be valid and mapped.
     pub unsafe fn start(&self, entry: usize, extra: u64) {
-        use core::sync::atomic::{Ordering, fence};
+        use hadron_core::sync::atomic::{Ordering, fence};
         // SAFETY: Caller guarantees the pointers are still valid.
         unsafe {
             core::ptr::write_volatile(self.extra_argument_ptr, extra);

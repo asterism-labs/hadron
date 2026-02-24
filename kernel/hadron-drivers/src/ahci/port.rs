@@ -5,7 +5,7 @@
 //! management, and async I/O submission.
 
 use core::ptr;
-use core::sync::atomic::{AtomicU32, Ordering};
+use hadron_kernel::sync::atomic::{AtomicU32, Ordering};
 
 use hadron_kernel::addr::VirtAddr;
 use hadron_kernel::driver_api::block::IoError;

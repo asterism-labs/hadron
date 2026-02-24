@@ -149,8 +149,8 @@ static FPU_SAVE_AREAS: CpuLocal<UnsafeCell<FpuSaveArea>> =
 
 // Debug-only nesting guard.
 #[cfg(all(hadron_kernel_fpu, debug_assertions))]
-static FPU_DEPTH: CpuLocal<core::sync::atomic::AtomicU32> =
-    CpuLocal::new([const { core::sync::atomic::AtomicU32::new(0) }; MAX_CPUS]);
+static FPU_DEPTH: CpuLocal<hadron_core::sync::atomic::AtomicU32> =
+    CpuLocal::new([const { hadron_core::sync::atomic::AtomicU32::new(0) }; MAX_CPUS]);
 
 // ---------------------------------------------------------------------------
 // KernelFpuGuard
@@ -188,7 +188,7 @@ impl KernelFpuGuard {
         #[cfg(debug_assertions)]
         {
             let depth = FPU_DEPTH.get();
-            let prev = depth.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            let prev = depth.fetch_add(1, hadron_core::sync::atomic::Ordering::Relaxed);
             debug_assert!(prev == 0, "KernelFpuGuard nested (depth={})", prev + 1);
         }
 
@@ -252,7 +252,7 @@ impl Drop for KernelFpuGuard {
         #[cfg(debug_assertions)]
         {
             let depth = FPU_DEPTH.get();
-            depth.fetch_sub(1, core::sync::atomic::Ordering::Relaxed);
+            depth.fetch_sub(1, hadron_core::sync::atomic::Ordering::Relaxed);
         }
 
         if self.irq_was_enabled {
