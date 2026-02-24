@@ -22,8 +22,8 @@ pub mod ldisc;
 pub mod pty;
 
 use alloc::sync::Arc;
-use hadron_core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use core::task::Waker;
+use hadron_core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
 use crate::drivers::fbcon::FbCon;
 use crate::sync::{IrqSpinLock, SpinLock};

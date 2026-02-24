@@ -9,8 +9,8 @@
 //! The dispatcher invokes the registered handler (if any) and then sends
 //! LAPIC EOI.
 
-use hadron_core::sync::atomic::{AtomicPtr, Ordering};
 use hadron_core::static_assert;
+use hadron_core::sync::atomic::{AtomicPtr, Ordering};
 
 use crate::id::{HwIrqVector, IrqVector};
 

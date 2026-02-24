@@ -253,8 +253,11 @@ mod tests {
     #[test]
     fn custom_regions_base() {
         let custom_base = 0xFFFF_D000_0000_0000u64;
-        let layout =
-            MemoryLayout::with_regions_base(VirtAddr::new(0xFFFF_8000_0000_0000), 0x1_0000_0000, custom_base);
+        let layout = MemoryLayout::with_regions_base(
+            VirtAddr::new(0xFFFF_8000_0000_0000),
+            0x1_0000_0000,
+            custom_base,
+        );
         assert_eq!(
             layout.regions_base.as_u64(),
             VirtAddr::new_truncate(custom_base).as_u64()

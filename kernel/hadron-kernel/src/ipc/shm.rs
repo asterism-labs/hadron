@@ -12,11 +12,11 @@ use alloc::vec::Vec;
 use core::future::Future;
 use core::pin::Pin;
 
+use crate::addr::PhysAddr;
 use crate::fs::{DirEntry, FsError, Inode, InodeType, Permissions};
 use crate::mm::PAGE_SIZE;
 use crate::mm::pmm;
 use crate::paging::{PhysFrame, Size4KiB};
-use crate::addr::PhysAddr;
 
 /// A shared memory object backed by physical frames.
 ///
@@ -141,10 +141,6 @@ impl Inode for ShmObject {
     }
 
     fn shared_phys_frames(&self) -> Result<Vec<PhysAddr>, FsError> {
-        Ok(self
-            .frames
-            .iter()
-            .map(|f| f.start_address())
-            .collect())
+        Ok(self.frames.iter().map(|f| f.start_address()).collect())
     }
 }

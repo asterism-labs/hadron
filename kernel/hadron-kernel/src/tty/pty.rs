@@ -15,8 +15,8 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::future::Future;
 use core::pin::Pin;
-use hadron_core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use core::task::Waker;
+use hadron_core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
 use crate::fs::{DirEntry, FsError, Inode, InodeType, Permissions};
 use crate::sync::{HeapWaitQueue, IrqSpinLock, SpinLock};

@@ -9,8 +9,8 @@
 //! - Bits 61-56: CPU ID (6 bits, supports up to 64 CPUs)
 //! - Bits 55-0:  TaskId (56 bits)
 
-use hadron_core::sync::atomic::{AtomicPtr, Ordering};
 use core::task::{RawWaker, RawWakerVTable, Waker};
+use hadron_core::sync::atomic::{AtomicPtr, Ordering};
 
 use hadron_core::cpu_local::current_cpu_id;
 use hadron_core::id::CpuId;

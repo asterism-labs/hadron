@@ -75,7 +75,10 @@ impl BitmapAllocator {
     /// - `hhdm_offset` must be the correct HHDM offset.
     /// - `regions` must accurately describe physical memory.
     /// - This must be called exactly once during boot.
-    pub unsafe fn new(regions: &[PhysMemoryRegion], hhdm_offset: VirtAddr) -> Result<Self, PmmError> {
+    pub unsafe fn new(
+        regions: &[PhysMemoryRegion],
+        hhdm_offset: VirtAddr,
+    ) -> Result<Self, PmmError> {
         // 1. Find highest usable physical address to determine bitmap size.
         // We only need to track frames up to the end of the last usable region,
         // since we never allocate from non-usable regions.
@@ -193,9 +196,7 @@ impl BitmapAllocator {
             // Verify poison pattern is intact (detects use-after-free).
             // NOTE: No logging here — PMM lock is held and logging would
             // acquire LOGGER, creating a PMM → LOGGER lock ordering violation.
-            if cfg!(hadron_debug_pmm_poison)
-                && !self.check_page_poison(PhysAddr::new(phys_addr))
-            {
+            if cfg!(hadron_debug_pmm_poison) && !self.check_page_poison(PhysAddr::new(phys_addr)) {
                 panic!(
                     "PMM: page at {:#x} modified after free (use-after-free)",
                     phys_addr

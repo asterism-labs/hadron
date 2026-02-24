@@ -12,9 +12,9 @@ use alloc::vec::Vec;
 use core::future::Future;
 use core::pin::Pin;
 
+use crate::addr::PhysAddr;
 use crate::driver_api::framebuffer::{Framebuffer, PixelFormat};
 use crate::fs::{DirEntry, FsError, Inode, InodeType, Permissions};
-use crate::addr::PhysAddr;
 
 /// Framebuffer device inode wrapping an `Arc<dyn Framebuffer>`.
 pub struct DevFramebuffer {

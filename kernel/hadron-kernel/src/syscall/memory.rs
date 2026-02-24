@@ -334,7 +334,8 @@ pub(super) fn sys_mem_brk(addr: usize) -> isize {
                     }
 
                     // Zero the page via HHDM.
-                    let frame_ptr = (hhdm_offset + frame.start_address().as_u64()).as_mut_ptr::<u8>();
+                    let frame_ptr =
+                        (hhdm_offset + frame.start_address().as_u64()).as_mut_ptr::<u8>();
                     // SAFETY: Frame was just allocated; zeroing via HHDM is safe.
                     unsafe {
                         core::ptr::write_bytes(frame_ptr, 0, PAGE_SIZE);

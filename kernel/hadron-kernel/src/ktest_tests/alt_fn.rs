@@ -1,8 +1,8 @@
 //! Alt-instruction system tests — CPUID detection, FPU guard, and dispatched
 //! memory operation tests (memcpy, memzero, memmove, memcmp).
 
-use hadron_ktest::kernel_test;
 use hadron_core::mem::dispatch;
+use hadron_ktest::kernel_test;
 
 // ---------------------------------------------------------------------------
 // CPUID detection tests
@@ -168,11 +168,7 @@ fn test_kernel_memcpy_unaligned() {
     // Offset by 3 bytes to force unalignment.
     let len = 150;
     unsafe {
-        dispatch::kernel_memcpy(
-            dst_buf[3..].as_mut_ptr(),
-            src_buf[3..].as_ptr(),
-            len,
-        );
+        dispatch::kernel_memcpy(dst_buf[3..].as_mut_ptr(), src_buf[3..].as_ptr(), len);
     }
     assert_eq!(
         &dst_buf[3..3 + len],
@@ -273,8 +269,7 @@ fn test_kernel_memmove_overlapping_backward() {
 fn test_kernel_memcmp_equal() {
     let a = [0xABu8; 64];
     let b = [0xABu8; 64];
-    let result =
-        unsafe { dispatch::kernel_memcmp(a.as_ptr(), b.as_ptr(), a.len()) };
+    let result = unsafe { dispatch::kernel_memcmp(a.as_ptr(), b.as_ptr(), a.len()) };
     assert_eq!(result, 0, "equal buffers should return 0");
 }
 
@@ -282,8 +277,7 @@ fn test_kernel_memcmp_equal() {
 fn test_kernel_memcmp_less() {
     let a = [0x10u8; 64];
     let b = [0x20u8; 64];
-    let result =
-        unsafe { dispatch::kernel_memcmp(a.as_ptr(), b.as_ptr(), a.len()) };
+    let result = unsafe { dispatch::kernel_memcmp(a.as_ptr(), b.as_ptr(), a.len()) };
     assert!(result < 0, "a < b should return negative, got {}", result);
 }
 
@@ -291,8 +285,7 @@ fn test_kernel_memcmp_less() {
 fn test_kernel_memcmp_greater() {
     let a = [0x30u8; 64];
     let b = [0x20u8; 64];
-    let result =
-        unsafe { dispatch::kernel_memcmp(a.as_ptr(), b.as_ptr(), a.len()) };
+    let result = unsafe { dispatch::kernel_memcmp(a.as_ptr(), b.as_ptr(), a.len()) };
     assert!(result > 0, "a > b should return positive, got {}", result);
 }
 
