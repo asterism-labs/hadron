@@ -31,6 +31,18 @@ const DATA_PORT: u16 = 0x60;
 /// PS/2 i8042 status/command port.
 const STATUS_PORT: u16 = 0x64;
 
+/// i8042 command: route the next data-port write to the auxiliary (mouse) device.
+const CMD_WRITE_MOUSE: u8 = 0xD4;
+
+/// PS/2 device command: enable data reporting (mouse starts sending packets).
+const MOUSE_ENABLE_DATA_REPORTING: u8 = 0xF4;
+
+/// PS/2 acknowledge byte.
+const PS2_ACK: u8 = 0xFA;
+
+/// Spin-loop iteration limit for waiting on i8042 ports.
+const SPIN_TIMEOUT: u32 = 100_000;
+
 /// Ring buffer of parsed mouse event packets, filled by the IRQ handler.
 static EVENT_BUF: IrqSpinLock<RingBuf<hadron_syscall::MouseEventPacket, EVENT_BUF_SIZE>> =
     IrqSpinLock::leveled("MOUSE_EVENT", 10, RingBuf::new());
@@ -123,9 +135,68 @@ fn mouse_irq_handler(_vector: crate::id::IrqVector) {
     }
 }
 
-/// Initialize the PS/2 mouse IRQ handler.
+/// Wait until the i8042 input buffer is empty (ready for a command/data write).
+fn wait_input_ready() {
+    use crate::arch::x86_64::Port;
+    for _ in 0..SPIN_TIMEOUT {
+        // SAFETY: Reading the i8042 status port is a standard operation.
+        let status = unsafe { Port::<u8>::new(STATUS_PORT).read() };
+        // Bit 1: input buffer full — must be clear before writing.
+        if status & 0x02 == 0 {
+            return;
+        }
+        core::hint::spin_loop();
+    }
+}
+
+/// Wait until the i8042 output buffer has data to read.
+fn wait_output_ready() -> bool {
+    use crate::arch::x86_64::Port;
+    for _ in 0..SPIN_TIMEOUT {
+        // SAFETY: Reading the i8042 status port is a standard operation.
+        let status = unsafe { Port::<u8>::new(STATUS_PORT).read() };
+        // Bit 0: output buffer full — data available.
+        if status & 0x01 != 0 {
+            return true;
+        }
+        core::hint::spin_loop();
+    }
+    false
+}
+
+/// Send the "enable data reporting" command (0xF4) to the PS/2 mouse.
 ///
-/// Registers the IRQ 12 handler and unmasks it in the I/O APIC.
+/// Uses the 0xD4 controller command to route the next data-port byte
+/// to the auxiliary (mouse) device, then writes 0xF4 and waits for ACK.
+fn enable_mouse_data_reporting() {
+    use crate::arch::x86_64::Port;
+
+    // Tell the i8042 that the next data write goes to the mouse.
+    wait_input_ready();
+    // SAFETY: Writing the i8042 command port is a standard PS/2 operation.
+    unsafe { Port::<u8>::new(STATUS_PORT).write(CMD_WRITE_MOUSE) };
+
+    // Send the "enable data reporting" command to the mouse.
+    wait_input_ready();
+    // SAFETY: Writing to the i8042 data port is a standard PS/2 operation.
+    unsafe { Port::<u8>::new(DATA_PORT).write(MOUSE_ENABLE_DATA_REPORTING) };
+
+    // Wait for the mouse to ACK (0xFA).
+    if wait_output_ready() {
+        // SAFETY: Reading the i8042 data port after output-ready is standard.
+        let ack = unsafe { Port::<u8>::new(DATA_PORT).read() };
+        if ack != PS2_ACK {
+            crate::kwarn!("DevMouse: expected ACK (0xFA), got 0x{:02X}", ack);
+        }
+    } else {
+        crate::kwarn!("DevMouse: timeout waiting for mouse ACK");
+    }
+}
+
+/// Initialize the PS/2 mouse IRQ handler and enable data reporting.
+///
+/// Registers the IRQ 12 handler, unmasks it in the I/O APIC, and sends
+/// the 0xF4 command to the mouse device so it begins generating packets.
 pub fn init() {
     use crate::arch::x86_64::interrupts::dispatch;
 
@@ -134,6 +205,9 @@ pub fn init() {
         .expect("dev_mouse: failed to register mouse IRQ handler");
 
     crate::arch::x86_64::acpi::Acpi::with_io_apic(|ioapic| ioapic.unmask(12));
+
+    // Enable the mouse device itself — without this, the hardware stays silent.
+    enable_mouse_data_reporting();
 
     crate::kinfo!(
         "DevMouse: IRQ12 enabled (vector {}), /dev/mouse ready",
