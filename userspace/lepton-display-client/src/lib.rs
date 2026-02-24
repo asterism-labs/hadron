@@ -12,6 +12,7 @@ extern crate alloc;
 
 use lepton_display_protocol::{
     self as proto, MESSAGE_SIZE, OP_CONFIGURE, OP_FOCUS_GAINED, OP_FOCUS_LOST, OP_KEYBOARD_INPUT,
+    OP_MOUSE_INPUT,
 };
 use lepton_gfx::Surface;
 use lepton_syslib::sys;
@@ -46,6 +47,17 @@ pub enum Event {
         keycode: u32,
         /// `true` = pressed, `false` = released.
         pressed: bool,
+    },
+    /// A mouse event (position + button state).
+    Mouse {
+        /// Cursor X relative to this surface.
+        x: i32,
+        /// Cursor Y relative to this surface.
+        y: i32,
+        /// Current button bitmask.
+        buttons: u32,
+        /// Previous button bitmask.
+        prev_buttons: u32,
     },
     /// This surface gained keyboard focus.
     FocusGained,
@@ -142,6 +154,16 @@ impl Display {
                     character: msg.character,
                     keycode: msg.keycode,
                     pressed: msg.pressed != 0,
+                })
+            }
+            OP_MOUSE_INPUT => {
+                // SAFETY: Opcode verified.
+                let msg = unsafe { proto::cast_msg::<proto::MouseInput>(&buf) };
+                Some(Event::Mouse {
+                    x: msg.x,
+                    y: msg.y,
+                    buttons: msg.buttons,
+                    prev_buttons: msg.prev_buttons,
                 })
             }
             OP_FOCUS_GAINED => Some(Event::FocusGained),

@@ -15,6 +15,8 @@ pub const MESSAGE_SIZE: usize = 64;
 pub const OP_CONFIGURE: u16 = 0x0101;
 /// Compositor forwards a keyboard event.
 pub const OP_KEYBOARD_INPUT: u16 = 0x0102;
+/// Compositor forwards a mouse input event.
+pub const OP_MOUSE_INPUT: u16 = 0x0105;
 /// Compositor notifies client it gained focus.
 pub const OP_FOCUS_GAINED: u16 = 0x0103;
 /// Compositor notifies client it lost focus.
@@ -90,6 +92,24 @@ pub struct FocusLost {
     pub _reserved: [u8; 56],
 }
 
+/// Mouse input event forwarded by the compositor.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct MouseInput {
+    /// Message header (opcode = `OP_MOUSE_INPUT`).
+    pub header: MsgHeader,
+    /// Cursor X position relative to the client surface.
+    pub x: i32,
+    /// Cursor Y position relative to the client surface.
+    pub y: i32,
+    /// Current button state bitmask (bit 0 = left, 1 = right, 2 = middle).
+    pub buttons: u32,
+    /// Previous button state (for detecting clicks).
+    pub prev_buttons: u32,
+    /// Reserved for future use.
+    pub _reserved: [u8; 40],
+}
+
 // ── Client → Compositor ──────────────────────────────────────────────
 
 /// Client signals that it has finished drawing and the surface is ready.
@@ -106,6 +126,7 @@ pub struct Commit {
 
 const _: () = assert!(size_of::<Configure>() == MESSAGE_SIZE);
 const _: () = assert!(size_of::<KeyboardInput>() == MESSAGE_SIZE);
+const _: () = assert!(size_of::<MouseInput>() == MESSAGE_SIZE);
 const _: () = assert!(size_of::<FocusGained>() == MESSAGE_SIZE);
 const _: () = assert!(size_of::<FocusLost>() == MESSAGE_SIZE);
 const _: () = assert!(size_of::<Commit>() == MESSAGE_SIZE);
@@ -185,6 +206,22 @@ pub fn keyboard_input(
         modifiers: 0,
         character,
         _reserved: [0; 43],
+    }
+}
+
+/// Create a `MouseInput` message.
+pub fn mouse_input(surface_id: u32, x: i32, y: i32, buttons: u32, prev_buttons: u32) -> MouseInput {
+    MouseInput {
+        header: MsgHeader {
+            opcode: OP_MOUSE_INPUT,
+            _pad: 0,
+            surface_id,
+        },
+        x,
+        y,
+        buttons,
+        prev_buttons,
+        _reserved: [0; 40],
     }
 }
 
