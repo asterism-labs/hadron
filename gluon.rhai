@@ -354,6 +354,14 @@ userspace.add("lepton-sysmon", "userspace/lepton-sysmon")
         lepton_display_client: "lepton-display-client"
     });
 
+userspace.add("lepton-terminal", "userspace/lepton-terminal")
+    .crate_type(BIN).root("src/main.rs")
+    .deps(#{
+        lepton_syslib: "lepton-syslib",
+        lepton_gfx: "lepton-gfx",
+        lepton_display_client: "lepton-display-client"
+    });
+
 // ===========================================================================
 // Rules (custom artifact generation)
 // ===========================================================================
@@ -364,7 +372,7 @@ rule("hkif")
     .handler("hkif");
 
 rule("initrd")
-    .inputs(["lepton-init", "lsh", "lepton-coreutils", "lepton-fbdemo", "lepton-sysmon", "lepton-compositor"])
+    .inputs(["lepton-init", "lsh", "lepton-coreutils", "lepton-fbdemo", "lepton-sysmon", "lepton-compositor", "lepton-terminal"])
     .output("build/initrd.cpio")
     .handler("initrd");
 
