@@ -245,22 +245,29 @@ impl Inode for PtyMaster {
             if canonical {
                 // Canonical mode: feed bytes through the line discipline for
                 // line editing (backspace, Enter, Ctrl+C/D handling).
+                // Drain completed data into a local buffer to avoid holding
+                // the ldisc IrqSpinLock while locking the m2s SpinLock.
                 let isig = termios.lflag & hadron_syscall::ISIG != 0;
+                let mut staged = [0u8; 512];
+                let mut staged_len = 0;
                 {
                     let mut ldisc = self.0.ldisc.lock();
                     for &byte in buf {
                         let _ = ldisc.process_ascii_byte(byte, true, isig);
                     }
+                    let mut tmp = [0u8; 256];
+                    while let Some(n) = ldisc.try_read(&mut tmp) {
+                        let end = (staged_len + n).min(staged.len());
+                        let copy = end - staged_len;
+                        staged[staged_len..end].copy_from_slice(&tmp[..copy]);
+                        staged_len = end;
+                    }
                 }
-                // Drain whatever the ldisc committed into the m2s buffer.
-                let mut ldisc = self.0.ldisc.lock();
-                let mut m2s = self.0.m2s_buf.lock();
-                let mut tmp = [0u8; 256];
-                while let Some(n) = ldisc.try_read(&mut tmp) {
-                    m2s.write(&tmp[..n]);
+                // ldisc lock is released — safe to lock m2s now.
+                if staged_len > 0 {
+                    let mut m2s = self.0.m2s_buf.lock();
+                    m2s.write(&staged[..staged_len]);
                 }
-                drop(m2s);
-                drop(ldisc);
                 self.0.slave_wq.wake_all();
                 Ok(buf.len())
             } else {
@@ -420,6 +427,9 @@ impl Inode for PtySlave {
     }
 
     /// Slave writes go to the master (s2m buffer).
+    ///
+    /// When `OPOST` is set in the termios output flags, output processing is
+    /// applied — in particular `ONLCR` converts `\n` to `\r\n`.
     fn write<'a>(
         &'a self,
         _offset: usize,
@@ -429,11 +439,26 @@ impl Inode for PtySlave {
             if self.0.masters.load(Ordering::Acquire) == 0 {
                 return Err(FsError::BrokenPipe);
             }
+            let termios = *self.0.termios.lock();
+            let opost = termios.oflag & hadron_syscall::OPOST != 0;
+            let onlcr = termios.oflag & hadron_syscall::ONLCR != 0;
+
             let mut s2m = self.0.s2m_buf.lock();
-            let n = s2m.write(buf);
+            if opost && onlcr {
+                // Convert \n → \r\n during output.
+                for &byte in buf {
+                    if byte == b'\n' {
+                        s2m.write(&[b'\r', b'\n']);
+                    } else {
+                        s2m.write(&[byte]);
+                    }
+                }
+            } else {
+                s2m.write(buf);
+            }
             drop(s2m);
             self.0.master_wq.wake_all();
-            Ok(n)
+            Ok(buf.len())
         })
     }
 

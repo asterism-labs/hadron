@@ -15,7 +15,7 @@ mod render;
 
 use lepton_display_client::{Display, Event};
 use lepton_gfx::font;
-use lepton_syslib::hadron_syscall::{TCSETS, TIOCGPTN, TIOCSPTLCK, TIOCSWINSZ, Termios, Winsize};
+use lepton_syslib::hadron_syscall::{TIOCGPTN, TIOCSPTLCK, TIOCSWINSZ, Winsize};
 use lepton_syslib::{io, println, sys};
 
 use crate::grid::Grid;
@@ -72,21 +72,7 @@ pub extern "C" fn main(_args: &[&str]) -> i32 {
         &lock_val as *const u32 as usize,
     );
 
-    // 3. Configure the master: raw mode (no ICANON, no ECHO).
-    let raw_termios = Termios {
-        iflag: 0,
-        oflag: 0,
-        cflag: 0,
-        lflag: 0,
-        cc: [0; 32],
-    };
-    io::ioctl(
-        master_fd,
-        TCSETS as usize,
-        &raw_termios as *const Termios as usize,
-    );
-
-    // 4. Set window size.
+    // 3. Set window size.
     let winsize = Winsize {
         rows: rows as u16,
         cols: cols as u16,
