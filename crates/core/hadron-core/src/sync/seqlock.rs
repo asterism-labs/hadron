@@ -4,8 +4,8 @@
 //! writer. Readers retry if they observe a write in progress. Best for
 //! small, frequently-read, infrequently-written data (e.g., clock values).
 
-use core::cell::UnsafeCell;
-use core::sync::atomic::{AtomicU32, Ordering};
+use super::atomic::{AtomicU32, Ordering};
+use super::cell::UnsafeCell;
 
 /// A sequence lock.
 ///
@@ -43,11 +43,13 @@ unsafe impl<T: Copy + Send> Send for SeqLock<T> {}
 unsafe impl<T: Copy + Send + Sync> Sync for SeqLock<T> {}
 
 impl<T: Copy> SeqLock<T> {
-    /// Creates a new `SeqLock` wrapping `value`.
-    pub const fn new(value: T) -> Self {
-        Self {
-            seq: AtomicU32::new(0),
-            data: UnsafeCell::new(value),
+    maybe_const_fn! {
+        /// Creates a new `SeqLock` wrapping `value`.
+        pub fn new(value: T) -> Self {
+            Self {
+                seq: AtomicU32::new(0),
+                data: UnsafeCell::new(value),
+            }
         }
     }
 
@@ -68,7 +70,7 @@ impl<T: Copy> SeqLock<T> {
             // Copy the data.
             // SAFETY: We've verified no write is in progress. Even if a write
             // starts during this copy, the sequence check below will catch it.
-            let value = unsafe { *self.data.get() };
+            let value = self.data.with(|ptr| unsafe { *ptr });
 
             // Re-read sequence number. If it matches s1, the copy is valid.
             let s2 = self.seq.load(Ordering::Acquire);
@@ -116,14 +118,14 @@ impl<T: Copy> core::ops::Deref for SeqLockWriteGuard<'_, T> {
 
     fn deref(&self) -> &T {
         // SAFETY: We hold exclusive write access.
-        unsafe { &*self.lock.data.get() }
+        self.lock.data.with(|ptr| unsafe { &*ptr })
     }
 }
 
 impl<T: Copy> core::ops::DerefMut for SeqLockWriteGuard<'_, T> {
     fn deref_mut(&mut self) -> &mut T {
         // SAFETY: We hold exclusive write access.
-        unsafe { &mut *self.lock.data.get() }
+        self.lock.data.with_mut(|ptr| unsafe { &mut *ptr })
     }
 }
 
@@ -134,7 +136,7 @@ impl<T: Copy> Drop for SeqLockWriteGuard<'_, T> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(loom)))]
 mod tests {
     use super::*;
 

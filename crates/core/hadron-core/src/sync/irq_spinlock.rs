@@ -4,12 +4,12 @@
 //! the previous interrupt state on release. This prevents deadlocks when
 //! a lock is shared between interrupt handlers and normal kernel code.
 
-use core::cell::UnsafeCell;
 use core::ops::{Deref, DerefMut};
-use core::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(hadron_lock_debug)]
-use core::sync::atomic::AtomicU32;
+use super::atomic::AtomicU32;
+use super::atomic::{AtomicBool, Ordering};
+use super::cell::UnsafeCell;
 
 #[cfg(hadron_lockdep)]
 use super::lockdep::LockClassId;
@@ -85,43 +85,49 @@ unsafe impl<T: Send> Send for IrqSpinLock<T> {}
 unsafe impl<T: Send> Sync for IrqSpinLock<T> {}
 
 impl<T> IrqSpinLock<T> {
-    /// Creates a new unlocked `IrqSpinLock`.
-    pub const fn new(value: T) -> Self {
-        Self {
-            locked: AtomicBool::new(false),
-            #[cfg(hadron_lockdep)]
-            name: "<unnamed>",
-            #[cfg(hadron_lockdep)]
-            level: 0,
-            data: UnsafeCell::new(value),
+    maybe_const_fn! {
+        /// Creates a new unlocked `IrqSpinLock`.
+        pub fn new(value: T) -> Self {
+            Self {
+                locked: AtomicBool::new(false),
+                #[cfg(hadron_lockdep)]
+                name: "<unnamed>",
+                #[cfg(hadron_lockdep)]
+                level: 0,
+                data: UnsafeCell::new(value),
+            }
         }
     }
 
-    /// Creates a new unlocked `IrqSpinLock` with a name for lockdep diagnostics.
-    pub const fn named(name: &'static str, value: T) -> Self {
-        Self {
-            locked: AtomicBool::new(false),
-            #[cfg(hadron_lockdep)]
-            name,
-            #[cfg(hadron_lockdep)]
-            level: 0,
-            data: UnsafeCell::new(value),
+    maybe_const_fn! {
+        /// Creates a new unlocked `IrqSpinLock` with a name for lockdep diagnostics.
+        pub fn named(name: &'static str, value: T) -> Self {
+            Self {
+                locked: AtomicBool::new(false),
+                #[cfg(hadron_lockdep)]
+                name,
+                #[cfg(hadron_lockdep)]
+                level: 0,
+                data: UnsafeCell::new(value),
+            }
         }
     }
 
-    /// Creates a new unlocked `IrqSpinLock` with a name and lock ordering level.
-    ///
-    /// `level` is used for lockdep ordering checks: a lock at level N may
-    /// only be acquired while holding locks at levels <= N.
-    /// Level 0 means "unassigned" (no ordering check).
-    pub const fn leveled(name: &'static str, level: u8, value: T) -> Self {
-        Self {
-            locked: AtomicBool::new(false),
-            #[cfg(hadron_lockdep)]
-            name,
-            #[cfg(hadron_lockdep)]
-            level,
-            data: UnsafeCell::new(value),
+    maybe_const_fn! {
+        /// Creates a new unlocked `IrqSpinLock` with a name and lock ordering level.
+        ///
+        /// `level` is used for lockdep ordering checks: a lock at level N may
+        /// only be acquired while holding locks at levels <= N.
+        /// Level 0 means "unassigned" (no ordering check).
+        pub fn leveled(name: &'static str, level: u8, value: T) -> Self {
+            Self {
+                locked: AtomicBool::new(false),
+                #[cfg(hadron_lockdep)]
+                name,
+                #[cfg(hadron_lockdep)]
+                level,
+                data: UnsafeCell::new(value),
+            }
         }
     }
 
@@ -212,14 +218,14 @@ impl<T> Deref for IrqSpinLockGuard<'_, T> {
     type Target = T;
     fn deref(&self) -> &T {
         // SAFETY: The lock is held, so we have exclusive access to the data.
-        unsafe { &*self.lock.data.get() }
+        self.lock.data.with(|ptr| unsafe { &*ptr })
     }
 }
 
 impl<T> DerefMut for IrqSpinLockGuard<'_, T> {
     fn deref_mut(&mut self) -> &mut T {
         // SAFETY: The lock is held, so we have exclusive access to the data.
-        unsafe { &mut *self.lock.data.get() }
+        self.lock.data.with_mut(|ptr| unsafe { &mut *ptr })
     }
 }
 
@@ -303,12 +309,24 @@ fn restore_flags(flags: u64) {
     }
 }
 
-#[cfg(not(target_os = "none"))]
+#[cfg(all(not(target_os = "none"), not(loom)))]
 #[inline]
 fn save_flags_and_cli() -> u64 {
     0
 }
 
-#[cfg(not(target_os = "none"))]
+#[cfg(all(not(target_os = "none"), not(loom)))]
 #[inline]
 fn restore_flags(_flags: u64) {}
+
+#[cfg(loom)]
+#[inline]
+fn save_flags_and_cli() -> u64 {
+    super::loom_mock::mock_save_flags_and_cli()
+}
+
+#[cfg(loom)]
+#[inline]
+fn restore_flags(flags: u64) {
+    super::loom_mock::mock_restore_flags(flags);
+}

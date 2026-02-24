@@ -5,8 +5,9 @@
 
 use core::future::Future;
 use core::pin::Pin;
-use core::sync::atomic::{AtomicU32, Ordering};
 use core::task::{Context, Poll};
+
+use super::atomic::{AtomicU32, Ordering};
 
 use super::HeapWaitQueue;
 
@@ -32,11 +33,13 @@ pub struct Semaphore {
 }
 
 impl Semaphore {
-    /// Creates a new semaphore with the given number of permits.
-    pub const fn new(permits: u32) -> Self {
-        Self {
-            permits: AtomicU32::new(permits),
-            waiters: HeapWaitQueue::new(),
+    maybe_const_fn! {
+        /// Creates a new semaphore with the given number of permits.
+        pub fn new(permits: u32) -> Self {
+            Self {
+                permits: AtomicU32::new(permits),
+                waiters: HeapWaitQueue::new(),
+            }
         }
     }
 
@@ -118,7 +121,7 @@ impl Drop for SemaphorePermit<'_> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(loom)))]
 mod tests {
     use super::*;
 

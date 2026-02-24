@@ -28,10 +28,12 @@ pub struct WaitQueue {
 }
 
 impl WaitQueue {
-    /// Creates an empty wait queue.
-    pub const fn new() -> Self {
-        Self {
-            waiters: IrqSpinLock::new(ArrayVec::new()),
+    maybe_const_fn! {
+        /// Creates an empty wait queue.
+        pub fn new() -> Self {
+            Self {
+                waiters: IrqSpinLock::new(ArrayVec::new()),
+            }
         }
     }
 
@@ -111,7 +113,7 @@ impl Future for WaitFuture<'_> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(loom)))]
 mod tests {
     use super::*;
     use crate::sync::test_waker::{counting_waker, noop_waker};

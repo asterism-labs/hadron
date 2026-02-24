@@ -4,12 +4,13 @@
 //! task via [`WaitQueue`] when contended, allowing the executor to schedule
 //! other work. Const-constructable for use in `static` items.
 
-use core::cell::UnsafeCell;
 use core::future::Future;
 use core::ops::{Deref, DerefMut};
 use core::pin::Pin;
-use core::sync::atomic::{AtomicBool, Ordering};
 use core::task::{Context, Poll};
+
+use super::atomic::{AtomicBool, Ordering};
+use super::cell::UnsafeCell;
 
 use crate::sync::WaitQueue;
 
@@ -46,25 +47,29 @@ unsafe impl<T: Send> Send for Mutex<T> {}
 unsafe impl<T: Send> Sync for Mutex<T> {}
 
 impl<T> Mutex<T> {
-    /// Creates a new unlocked `Mutex` wrapping `value`.
-    pub const fn new(value: T) -> Self {
-        Self {
-            locked: AtomicBool::new(false),
-            waiters: WaitQueue::new(),
-            #[cfg(hadron_lockdep)]
-            name: "<unnamed>",
-            data: UnsafeCell::new(value),
+    maybe_const_fn! {
+        /// Creates a new unlocked `Mutex` wrapping `value`.
+        pub fn new(value: T) -> Self {
+            Self {
+                locked: AtomicBool::new(false),
+                waiters: WaitQueue::new(),
+                #[cfg(hadron_lockdep)]
+                name: "<unnamed>",
+                data: UnsafeCell::new(value),
+            }
         }
     }
 
-    /// Creates a new unlocked `Mutex` with a name for lockdep diagnostics.
-    pub const fn named(name: &'static str, value: T) -> Self {
-        Self {
-            locked: AtomicBool::new(false),
-            waiters: WaitQueue::new(),
-            #[cfg(hadron_lockdep)]
-            name,
-            data: UnsafeCell::new(value),
+    maybe_const_fn! {
+        /// Creates a new unlocked `Mutex` with a name for lockdep diagnostics.
+        pub fn named(name: &'static str, value: T) -> Self {
+            Self {
+                locked: AtomicBool::new(false),
+                waiters: WaitQueue::new(),
+                #[cfg(hadron_lockdep)]
+                name,
+                data: UnsafeCell::new(value),
+            }
         }
     }
 
@@ -239,14 +244,14 @@ impl<T> Deref for MutexGuard<'_, T> {
 
     fn deref(&self) -> &T {
         // SAFETY: The guard guarantees exclusive access while it exists.
-        unsafe { &*self.mutex.data.get() }
+        self.mutex.data.with(|ptr| unsafe { &*ptr })
     }
 }
 
 impl<T> DerefMut for MutexGuard<'_, T> {
     fn deref_mut(&mut self) -> &mut T {
         // SAFETY: The guard guarantees exclusive access while it exists.
-        unsafe { &mut *self.mutex.data.get() }
+        self.mutex.data.with_mut(|ptr| unsafe { &mut *ptr })
     }
 }
 
@@ -263,7 +268,7 @@ impl<T> Drop for MutexGuard<'_, T> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(loom)))]
 mod tests {
     use super::*;
     use crate::sync::test_waker::{counting_waker, noop_waker};

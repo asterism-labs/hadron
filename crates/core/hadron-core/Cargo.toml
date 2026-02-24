@@ -17,6 +17,9 @@ bitflags = { workspace = true }
 hadron-linkset = { workspace = true }
 planck-noalloc = { workspace = true }
 
+[dev-dependencies]
+loom = "0.7"
+
 [lints.rust]
 unsafe_op_in_unsafe_fn = "warn"
 missing_docs = "warn"
@@ -29,6 +32,7 @@ check-cfg = [
     'cfg(hadron_lock_stat)',
     'cfg(hadron_lockdep_warn)',
     'cfg(loom)',
+    'cfg(miri)',
 ]
 
 [lints.clippy]

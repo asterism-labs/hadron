@@ -22,10 +22,12 @@ pub struct HeapWaitQueue {
 }
 
 impl HeapWaitQueue {
-    /// Creates an empty heap-backed wait queue.
-    pub const fn new() -> Self {
-        Self {
-            waiters: IrqSpinLock::new(VecDeque::new()),
+    maybe_const_fn! {
+        /// Creates an empty heap-backed wait queue.
+        pub fn new() -> Self {
+            Self {
+                waiters: IrqSpinLock::new(VecDeque::new()),
+            }
         }
     }
 

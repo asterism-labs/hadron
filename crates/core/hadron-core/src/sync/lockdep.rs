@@ -23,10 +23,10 @@
 //!
 //! Gated behind `cfg(hadron_lockdep)`.
 
-use core::fmt;
-use core::sync::atomic::{
+use super::atomic::const_only::{
     AtomicBool, AtomicPtr, AtomicU8, AtomicU16, AtomicU32, AtomicU64, AtomicUsize, Ordering,
 };
+use core::fmt;
 
 use crate::cpu_local::{CpuLocal, MAX_CPUS};
 
@@ -1082,7 +1082,7 @@ pub fn dump_lock_stats(w: &mut impl core::fmt::Write) -> core::fmt::Result {
 /// Resets all lockdep global state. Only available in test builds.
 ///
 /// Must be called with `--test-threads=1` to avoid races between tests.
-#[cfg(test)]
+#[cfg(all(test, not(loom)))]
 pub fn reset_lockdep_state() {
     // Reset class table.
     CLASS_COUNT.store(0, Ordering::Release);
@@ -1136,7 +1136,7 @@ pub fn reset_lockdep_state() {
 //
 // Single-threaded execution is required because lockdep uses per-CPU globals
 // (CPU 0 on host) that are shared across tests.
-#[cfg(test)]
+#[cfg(all(test, not(loom)))]
 mod tests {
     use super::*;
 

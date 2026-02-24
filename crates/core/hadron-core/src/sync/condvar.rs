@@ -44,10 +44,12 @@ pub struct Condvar {
 }
 
 impl Condvar {
-    /// Creates a new condition variable.
-    pub const fn new() -> Self {
-        Self {
-            waiters: IrqSpinLock::new(ArrayVec::new()),
+    maybe_const_fn! {
+        /// Creates a new condition variable.
+        pub fn new() -> Self {
+            Self {
+                waiters: IrqSpinLock::new(ArrayVec::new()),
+            }
         }
     }
 
@@ -157,7 +159,7 @@ impl Future for CondvarWaitFuture<'_> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(loom)))]
 mod tests {
     use super::*;
     use crate::sync::SpinLock;

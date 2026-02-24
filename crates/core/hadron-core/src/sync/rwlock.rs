@@ -4,9 +4,10 @@
 //! Uses an `AtomicU32` for state: 0 = unlocked, positive = reader count,
 //! `u32::MAX` = write-locked.
 
-use core::cell::UnsafeCell;
 use core::ops::{Deref, DerefMut};
-use core::sync::atomic::{AtomicU32, Ordering};
+
+use super::atomic::{AtomicU32, Ordering};
+use super::cell::UnsafeCell;
 
 #[cfg(hadron_lockdep)]
 use super::lockdep::LockClassId;
@@ -33,43 +34,49 @@ unsafe impl<T: Send> Send for RwLock<T> {}
 unsafe impl<T: Send + Sync> Sync for RwLock<T> {}
 
 impl<T> RwLock<T> {
-    /// Creates a new unlocked `RwLock` wrapping `value`.
-    pub const fn new(value: T) -> Self {
-        Self {
-            state: AtomicU32::new(0),
-            #[cfg(hadron_lockdep)]
-            name: "<unnamed>",
-            #[cfg(hadron_lockdep)]
-            level: 0,
-            data: UnsafeCell::new(value),
+    maybe_const_fn! {
+        /// Creates a new unlocked `RwLock` wrapping `value`.
+        pub fn new(value: T) -> Self {
+            Self {
+                state: AtomicU32::new(0),
+                #[cfg(hadron_lockdep)]
+                name: "<unnamed>",
+                #[cfg(hadron_lockdep)]
+                level: 0,
+                data: UnsafeCell::new(value),
+            }
         }
     }
 
-    /// Creates a new unlocked `RwLock` with a name for lockdep diagnostics.
-    pub const fn named(name: &'static str, value: T) -> Self {
-        Self {
-            state: AtomicU32::new(0),
-            #[cfg(hadron_lockdep)]
-            name,
-            #[cfg(hadron_lockdep)]
-            level: 0,
-            data: UnsafeCell::new(value),
+    maybe_const_fn! {
+        /// Creates a new unlocked `RwLock` with a name for lockdep diagnostics.
+        pub fn named(name: &'static str, value: T) -> Self {
+            Self {
+                state: AtomicU32::new(0),
+                #[cfg(hadron_lockdep)]
+                name,
+                #[cfg(hadron_lockdep)]
+                level: 0,
+                data: UnsafeCell::new(value),
+            }
         }
     }
 
-    /// Creates a new unlocked `RwLock` with a name and lock ordering level.
-    ///
-    /// `level` is used for lockdep ordering checks: a lock at level N may
-    /// only be acquired while holding locks at levels <= N.
-    /// Level 0 means "unassigned" (no ordering check).
-    pub const fn leveled(name: &'static str, level: u8, value: T) -> Self {
-        Self {
-            state: AtomicU32::new(0),
-            #[cfg(hadron_lockdep)]
-            name,
-            #[cfg(hadron_lockdep)]
-            level,
-            data: UnsafeCell::new(value),
+    maybe_const_fn! {
+        /// Creates a new unlocked `RwLock` with a name and lock ordering level.
+        ///
+        /// `level` is used for lockdep ordering checks: a lock at level N may
+        /// only be acquired while holding locks at levels <= N.
+        /// Level 0 means "unassigned" (no ordering check).
+        pub fn leveled(name: &'static str, level: u8, value: T) -> Self {
+            Self {
+                state: AtomicU32::new(0),
+                #[cfg(hadron_lockdep)]
+                name,
+                #[cfg(hadron_lockdep)]
+                level,
+                data: UnsafeCell::new(value),
+            }
         }
     }
 
@@ -197,7 +204,7 @@ impl<T> Deref for RwLockReadGuard<'_, T> {
 
     fn deref(&self) -> &T {
         // SAFETY: Read lock is held — no writer can exist.
-        unsafe { &*self.lock.data.get() }
+        self.lock.data.with(|ptr| unsafe { &*ptr })
     }
 }
 
@@ -231,14 +238,14 @@ impl<T> Deref for RwLockWriteGuard<'_, T> {
 
     fn deref(&self) -> &T {
         // SAFETY: Write lock is held — no other reader or writer can exist.
-        unsafe { &*self.lock.data.get() }
+        self.lock.data.with(|ptr| unsafe { &*ptr })
     }
 }
 
 impl<T> DerefMut for RwLockWriteGuard<'_, T> {
     fn deref_mut(&mut self) -> &mut T {
         // SAFETY: Write lock is held — no other reader or writer can exist.
-        unsafe { &mut *self.lock.data.get() }
+        self.lock.data.with_mut(|ptr| unsafe { &mut *ptr })
     }
 }
 
@@ -256,7 +263,7 @@ impl<T> Drop for RwLockWriteGuard<'_, T> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(loom)))]
 mod tests {
     use super::*;
 

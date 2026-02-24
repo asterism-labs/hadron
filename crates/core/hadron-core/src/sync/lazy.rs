@@ -3,10 +3,11 @@
 //! Provides [`LazyLock`], a `no_std` equivalent of `std::sync::LazyLock`
 //! that initializes a value on first access using a spin-based state machine.
 
-use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
 use core::ops::Deref;
-use core::sync::atomic::{AtomicU8, Ordering};
+
+use super::atomic::{AtomicU8, Ordering};
+use super::cell::UnsafeCell;
 
 const UNINIT: u8 = 0;
 const INITIALIZING: u8 = 1;
@@ -70,12 +71,14 @@ impl Drop for InitGuard<'_> {
 }
 
 impl<T, F: FnOnce() -> T> LazyLock<T, F> {
-    /// Creates a new `LazyLock` with the given initializer.
-    pub const fn new(init: F) -> Self {
-        Self {
-            state: AtomicU8::new(UNINIT),
-            value: UnsafeCell::new(MaybeUninit::uninit()),
-            init: UnsafeCell::new(Some(init)),
+    maybe_const_fn! {
+        /// Creates a new `LazyLock` with the given initializer.
+        pub fn new(init: F) -> Self {
+            Self {
+                state: AtomicU8::new(UNINIT),
+                value: UnsafeCell::new(MaybeUninit::uninit()),
+                init: UnsafeCell::new(Some(init)),
+            }
         }
     }
 
@@ -84,7 +87,7 @@ impl<T, F: FnOnce() -> T> LazyLock<T, F> {
         match self.state.load(Ordering::Acquire) {
             READY => {
                 // SAFETY: State is READY, so the value is fully initialized.
-                return unsafe { (*self.value.get()).assume_init_ref() };
+                return self.value.with(|ptr| unsafe { (*ptr).assume_init_ref() });
             }
             POISONED => panic!("LazyLock poisoned: init closure panicked"),
             UNINIT => {
@@ -97,15 +100,15 @@ impl<T, F: FnOnce() -> T> LazyLock<T, F> {
                     // We won the race — initialize.
                     let guard = InitGuard::new(&self.state);
                     // SAFETY: We are the only thread in INITIALIZING state.
-                    let init = unsafe { (*self.init.get()).take().unwrap() };
+                    let init = self.init.with_mut(|ptr| unsafe { (*ptr).take().unwrap() });
                     let value = init();
-                    unsafe {
-                        (*self.value.get()).write(value);
-                    }
+                    self.value.with_mut(|ptr| unsafe {
+                        (*ptr).write(value);
+                    });
                     self.state.store(READY, Ordering::Release);
                     guard.defuse();
                     // SAFETY: We just wrote the value.
-                    return unsafe { (*self.value.get()).assume_init_ref() };
+                    return self.value.with(|ptr| unsafe { (*ptr).assume_init_ref() });
                 }
                 // Another thread is initializing — fall through to spin.
             }
@@ -126,7 +129,7 @@ impl<T, F: FnOnce() -> T> LazyLock<T, F> {
             }
         }
         // SAFETY: State is READY.
-        unsafe { (*self.value.get()).assume_init_ref() }
+        self.value.with(|ptr| unsafe { (*ptr).assume_init_ref() })
     }
 }
 
@@ -139,7 +142,7 @@ impl<T, F: FnOnce() -> T> Deref for LazyLock<T, F> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(loom)))]
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
