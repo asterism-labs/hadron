@@ -30,7 +30,9 @@ check-cfg = [
     'cfg(hadron_lockdep)',
     'cfg(hadron_lock_debug)',
     'cfg(hadron_lock_stat)',
+    'cfg(hadron_lock_stress)',
     'cfg(hadron_lockdep_warn)',
+    'cfg(hadron_hardened)',
     'cfg(loom)',
     'cfg(miri)',
 ]

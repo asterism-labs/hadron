@@ -144,21 +144,25 @@ macro_rules! define_atomic {
 
     // -- common methods (all atomic types) -----------------------------------
     (@common_methods $ty:ty) => {
+        /// Loads a value from the atomic.
         #[inline]
         pub fn load(&self, order: Ordering) -> $ty {
             self.0.load(order)
         }
 
+        /// Stores a value into the atomic.
         #[inline]
         pub fn store(&self, value: $ty, order: Ordering) {
             self.0.store(value, order);
         }
 
+        /// Stores a value, returning the previous value.
         #[inline]
         pub fn swap(&self, value: $ty, order: Ordering) -> $ty {
             self.0.swap(value, order)
         }
 
+        /// Stores a value if the current value equals `current`.
         #[inline]
         pub fn compare_exchange(
             &self,
@@ -170,6 +174,7 @@ macro_rules! define_atomic {
             self.0.compare_exchange(current, new, success, failure)
         }
 
+        /// Weak version of [`compare_exchange`](Self::compare_exchange).
         #[inline]
         pub fn compare_exchange_weak(
             &self,
@@ -184,26 +189,31 @@ macro_rules! define_atomic {
 
     // -- numeric methods (integer atomics only) ------------------------------
     (@numeric_methods $ty:ty) => {
+        /// Adds to the current value, returning the previous value.
         #[inline]
         pub fn fetch_add(&self, value: $ty, order: Ordering) -> $ty {
             self.0.fetch_add(value, order)
         }
 
+        /// Subtracts from the current value, returning the previous value.
         #[inline]
         pub fn fetch_sub(&self, value: $ty, order: Ordering) -> $ty {
             self.0.fetch_sub(value, order)
         }
 
+        /// Bitwise OR with the current value, returning the previous value.
         #[inline]
         pub fn fetch_or(&self, value: $ty, order: Ordering) -> $ty {
             self.0.fetch_or(value, order)
         }
 
+        /// Bitwise AND with the current value, returning the previous value.
         #[inline]
         pub fn fetch_and(&self, value: $ty, order: Ordering) -> $ty {
             self.0.fetch_and(value, order)
         }
 
+        /// Bitwise XOR with the current value, returning the previous value.
         #[inline]
         pub fn fetch_xor(&self, value: $ty, order: Ordering) -> $ty {
             self.0.fetch_xor(value, order)
@@ -212,16 +222,19 @@ macro_rules! define_atomic {
 
     // -- bool-specific methods (fetch_and/or/xor but NOT add/sub) -----------
     (@bool_methods) => {
+        /// Logical OR with the current value, returning the previous value.
         #[inline]
         pub fn fetch_or(&self, value: bool, order: Ordering) -> bool {
             self.0.fetch_or(value, order)
         }
 
+        /// Logical AND with the current value, returning the previous value.
         #[inline]
         pub fn fetch_and(&self, value: bool, order: Ordering) -> bool {
             self.0.fetch_and(value, order)
         }
 
+        /// Logical XOR with the current value, returning the previous value.
         #[inline]
         pub fn fetch_xor(&self, value: bool, order: Ordering) -> bool {
             self.0.fetch_xor(value, order)
@@ -275,21 +288,25 @@ impl<T> AtomicPtr<T> {
         }
     }
 
+    /// Loads the pointer value.
     #[inline]
     pub fn load(&self, order: Ordering) -> *mut T {
         self.0.load(order)
     }
 
+    /// Stores a pointer value.
     #[inline]
     pub fn store(&self, ptr: *mut T, order: Ordering) {
         self.0.store(ptr, order);
     }
 
+    /// Stores a pointer, returning the previous value.
     #[inline]
     pub fn swap(&self, ptr: *mut T, order: Ordering) -> *mut T {
         self.0.swap(ptr, order)
     }
 
+    /// Stores a pointer if the current value equals `current`.
     #[inline]
     pub fn compare_exchange(
         &self,
@@ -301,6 +318,7 @@ impl<T> AtomicPtr<T> {
         self.0.compare_exchange(current, new, success, failure)
     }
 
+    /// Weak version of [`compare_exchange`](Self::compare_exchange).
     #[inline]
     pub fn compare_exchange_weak(
         &self,
@@ -380,21 +398,25 @@ pub mod const_only {
             Self(core_atomic::AtomicPtr::new(ptr))
         }
 
+        /// Loads the pointer value.
         #[inline]
         pub fn load(&self, order: Ordering) -> *mut T {
             self.0.load(order)
         }
 
+        /// Stores a pointer value.
         #[inline]
         pub fn store(&self, ptr: *mut T, order: Ordering) {
             self.0.store(ptr, order);
         }
 
+        /// Stores a pointer, returning the previous value.
         #[inline]
         pub fn swap(&self, ptr: *mut T, order: Ordering) -> *mut T {
             self.0.swap(ptr, order)
         }
 
+        /// Stores a pointer if the current value equals `current`.
         #[inline]
         pub fn compare_exchange(
             &self,
@@ -406,6 +428,7 @@ pub mod const_only {
             self.0.compare_exchange(current, new, success, failure)
         }
 
+        /// Weak version of [`compare_exchange`](Self::compare_exchange).
         #[inline]
         pub fn compare_exchange_weak(
             &self,

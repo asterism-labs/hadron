@@ -102,6 +102,7 @@ impl<T> IrqSpinLock<T> {
     maybe_const_fn! {
         /// Creates a new unlocked `IrqSpinLock` with a name for lockdep diagnostics.
         pub fn named(name: &'static str, value: T) -> Self {
+            let _ = name;
             Self {
                 locked: AtomicBool::new(false),
                 #[cfg(hadron_lockdep)]
@@ -120,6 +121,7 @@ impl<T> IrqSpinLock<T> {
         /// only be acquired while holding locks at levels <= N.
         /// Level 0 means "unassigned" (no ordering check).
         pub fn leveled(name: &'static str, level: u8, value: T) -> Self {
+            let _ = (name, level);
             Self {
                 locked: AtomicBool::new(false),
                 #[cfg(hadron_lockdep)]

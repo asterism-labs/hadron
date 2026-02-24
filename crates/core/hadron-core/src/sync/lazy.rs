@@ -142,6 +142,16 @@ impl<T, F: FnOnce() -> T> Deref for LazyLock<T, F> {
     }
 }
 
+impl<T, F> Drop for LazyLock<T, F> {
+    fn drop(&mut self) {
+        // Drop has exclusive access (&mut self), so Relaxed is sufficient.
+        if self.state.load(Ordering::Relaxed) == READY {
+            // SAFETY: State is READY, so the value was fully initialized.
+            unsafe { self.value.with_mut(|ptr| (*ptr).assume_init_drop()) };
+        }
+    }
+}
+
 #[cfg(all(test, not(loom)))]
 mod tests {
     use super::*;

@@ -63,6 +63,7 @@ impl<T> Mutex<T> {
     maybe_const_fn! {
         /// Creates a new unlocked `Mutex` with a name for lockdep diagnostics.
         pub fn named(name: &'static str, value: T) -> Self {
+            let _ = name;
             Self {
                 locked: AtomicBool::new(false),
                 waiters: WaitQueue::new(),
@@ -197,11 +198,13 @@ impl<'a, T> Future for MutexLockFuture<'a, T> {
         let registered = self.mutex.waiters.register_waker(cx.waker());
 
         // Retry after registration — the lock may have been released between
-        // our first attempt and the waker registration.
+        // our first attempt and the waker registration.  Must use strong CAS
+        // here: a spurious failure would return Pending with no guarantee of
+        // a future wake, causing a lost wakeup.
         if self
             .mutex
             .locked
-            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
             .is_ok()
         {
             #[cfg(hadron_lockdep)]
