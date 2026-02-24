@@ -1,10 +1,12 @@
 //! Display client library for compositor-managed applications.
 //!
-//! Clients receive a channel endpoint on fd 3 and a shared-memory buffer on
-//! fd 4 from the compositor at spawn time. [`Display::connect`] waits for the
-//! initial [`Configure`](lepton_display_protocol::Configure) message and maps
-//! the shared buffer. The client draws into the [`Surface`] and calls
-//! [`Display::commit`] to signal the compositor.
+//! Supports two connection modes:
+//! 1. **Legacy** (fd-passing at spawn): fd 3 = channel, fd 4 = shm.
+//! 2. **Dynamic**: open `/dev/compositor`, send `CreateWindow`, receive
+//!    `Configure` + shm fd via `channel_recv_fd`.
+//!
+//! [`Display::connect`] tries the legacy path first, then falls back to
+//! the dynamic path.
 
 #![no_std]
 
@@ -15,12 +17,12 @@ use lepton_display_protocol::{
     OP_MOUSE_INPUT,
 };
 use lepton_gfx::Surface;
-use lepton_syslib::sys;
+use lepton_syslib::{io, sys};
 
-/// Channel endpoint fd inherited from the compositor.
-const CHANNEL_FD: usize = 3;
-/// Shared-memory fd inherited from the compositor.
-const SHM_FD: usize = 4;
+/// Channel endpoint fd inherited from the compositor (legacy path).
+const LEGACY_CHANNEL_FD: usize = 3;
+/// Shared-memory fd inherited from the compositor (legacy path).
+const LEGACY_SHM_FD: usize = 4;
 
 /// Bytes per pixel (32-bit BGRA).
 const BPP: usize = 4;
@@ -35,6 +37,10 @@ pub struct Display {
     shm_ptr: *mut u8,
     /// Size of the shared-memory region in bytes.
     shm_size: usize,
+    /// Channel fd to the compositor.
+    channel_fd: usize,
+    /// Shared-memory fd (kept open so the mapping stays valid).
+    shm_fd: usize,
 }
 
 /// An event received from the compositor.
@@ -66,14 +72,25 @@ pub enum Event {
 }
 
 impl Display {
-    /// Connect to the compositor by reading the initial `Configure` message
-    /// on fd 3 and mapping the shared buffer from fd 4.
+    /// Connect to the compositor.
     ///
-    /// Returns `None` if the channel read fails or the first message is not
-    /// a `Configure`.
+    /// Tries the legacy path (fd 3/4 from spawn) first, then falls back to
+    /// the dynamic path (opening `/dev/compositor`).
     pub fn connect() -> Option<Self> {
+        // Try legacy: check if fd 3 has a pending Configure message.
+        if sys::poll_fd_read(LEGACY_CHANNEL_FD) {
+            if let Some(d) = Self::connect_legacy() {
+                return Some(d);
+            }
+        }
+        // Dynamic: open /dev/compositor.
+        Self::connect_dynamic()
+    }
+
+    /// Legacy connection: read Configure from fd 3, map shm from fd 4.
+    fn connect_legacy() -> Option<Self> {
         let mut buf = [0u8; MESSAGE_SIZE];
-        let n = sys::channel_recv(CHANNEL_FD, &mut buf).ok()?;
+        let n = sys::channel_recv(LEGACY_CHANNEL_FD, &mut buf).ok()?;
         if n < MESSAGE_SIZE {
             return None;
         }
@@ -88,13 +105,62 @@ impl Display {
         let height = cfg.height;
 
         let shm_size = width as usize * height as usize * BPP;
-        let shm_ptr = sys::mem_map_shared(SHM_FD, shm_size)?;
+        let shm_ptr = sys::mem_map_shared(LEGACY_SHM_FD, shm_size)?;
 
         Some(Display {
             width,
             height,
             shm_ptr,
             shm_size,
+            channel_fd: LEGACY_CHANNEL_FD,
+            shm_fd: LEGACY_SHM_FD,
+        })
+    }
+
+    /// Dynamic connection: open `/dev/compositor`, send `CreateWindow`,
+    /// receive `Configure` + shm fd.
+    fn connect_dynamic() -> Option<Self> {
+        let fd = io::open("/dev/compositor", 3); // READ | WRITE
+        if fd < 0 {
+            return None;
+        }
+        let channel_fd = fd as usize;
+
+        // Send CreateWindow request (0 = compositor chooses size).
+        let create = proto::create_window(0, 0);
+        let mut buf = [0u8; MESSAGE_SIZE];
+        // SAFETY: CreateWindow is a 64-byte repr(C) message.
+        unsafe { proto::encode_msg(&create, &mut buf) };
+        if sys::channel_send(channel_fd, &buf).is_err() {
+            sys::close(channel_fd);
+            return None;
+        }
+
+        // Receive Configure + shm fd.
+        let mut recv_buf = [0u8; MESSAGE_SIZE];
+        let (n, shm_fd_opt) = sys::channel_recv_fd(channel_fd, &mut recv_buf).ok()?;
+        if n < MESSAGE_SIZE || proto::peek_opcode(&recv_buf) != OP_CONFIGURE {
+            sys::close(channel_fd);
+            return None;
+        }
+
+        let shm_fd = shm_fd_opt?;
+
+        // SAFETY: We verified the opcode matches Configure.
+        let cfg = unsafe { proto::cast_msg::<proto::Configure>(&recv_buf) };
+        let width = cfg.width;
+        let height = cfg.height;
+
+        let shm_size = width as usize * height as usize * BPP;
+        let shm_ptr = sys::mem_map_shared(shm_fd, shm_size)?;
+
+        Some(Display {
+            width,
+            height,
+            shm_ptr,
+            shm_size,
+            channel_fd,
+            shm_fd,
         })
     }
 
@@ -129,19 +195,19 @@ impl Display {
         let mut buf = [0u8; MESSAGE_SIZE];
         // SAFETY: Commit is a 64-byte repr(C) message type.
         unsafe { proto::encode_msg(&msg, &mut buf) };
-        let _ = sys::channel_send(CHANNEL_FD, &buf);
+        let _ = sys::channel_send(self.channel_fd, &buf);
     }
 
     /// Poll for the next event from the compositor (non-blocking).
     ///
     /// Returns `None` if no event is pending.
     pub fn poll_event(&self) -> Option<Event> {
-        if !sys::poll_fd_read(CHANNEL_FD) {
+        if !sys::poll_fd_read(self.channel_fd) {
             return None;
         }
 
         let mut buf = [0u8; MESSAGE_SIZE];
-        let n = sys::channel_recv(CHANNEL_FD, &mut buf).ok()?;
+        let n = sys::channel_recv(self.channel_fd, &mut buf).ok()?;
         if n < MESSAGE_SIZE {
             return None;
         }
@@ -175,7 +241,7 @@ impl Display {
     /// Disconnect from the compositor, unmapping shared memory and closing fds.
     pub fn disconnect(self) {
         sys::mem_unmap(self.shm_ptr, self.shm_size);
-        sys::close(SHM_FD);
-        sys::close(CHANNEL_FD);
+        sys::close(self.shm_fd);
+        sys::close(self.channel_fd);
     }
 }

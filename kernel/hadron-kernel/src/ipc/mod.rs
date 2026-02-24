@@ -6,4 +6,5 @@
 pub mod channel;
 pub mod futex;
 pub mod pipe;
+pub mod service;
 pub mod shm;

@@ -136,6 +136,30 @@ impl SyscallHandler for HadronDispatch {
         channel::sys_channel_recv(handle, buf_ptr, buf_len)
     }
 
+    fn sys_channel_accept(&self, listener_fd: usize) -> isize {
+        channel::sys_channel_accept(listener_fd)
+    }
+
+    fn sys_channel_send_fd(
+        &self,
+        handle: usize,
+        fd_to_send: usize,
+        buf_ptr: usize,
+        buf_len: usize,
+    ) -> isize {
+        channel::sys_channel_send_fd(handle, fd_to_send, buf_ptr, buf_len)
+    }
+
+    fn sys_channel_recv_fd(
+        &self,
+        handle: usize,
+        buf_ptr: usize,
+        buf_len: usize,
+        fd_out_ptr: usize,
+    ) -> isize {
+        channel::sys_channel_recv_fd(handle, buf_ptr, buf_len, fd_out_ptr)
+    }
+
     fn sys_vnode_open(&self, path_ptr: usize, path_len: usize, flags: usize) -> isize {
         vfs::sys_vnode_open(path_ptr, path_len, flags)
     }

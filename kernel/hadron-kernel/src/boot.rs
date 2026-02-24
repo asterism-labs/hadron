@@ -588,6 +588,16 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
             Arc::new(crate::drivers::dev_mouse::DevMouse::global()) as Arc<dyn fs::Inode>,
         ));
 
+        // Register /dev/compositor and /dev/compositor_listen for dynamic
+        // window creation. Clients open /dev/compositor; the compositor
+        // accepts connections via /dev/compositor_listen.
+        let (compositor_listener, compositor_connector) = crate::ipc::service::create_service();
+        dev_devices.push(("compositor", compositor_connector as Arc<dyn fs::Inode>));
+        dev_devices.push((
+            "compositor_listen",
+            compositor_listener as Arc<dyn fs::Inode>,
+        ));
+
         // Register /dev/fb0 if a framebuffer device is available.
         // Prefer virtio-gpu, fall back to bochs-vga.
         if let Some(fb) = crate::drivers::device_registry::DeviceRegistry::with(|dr| {

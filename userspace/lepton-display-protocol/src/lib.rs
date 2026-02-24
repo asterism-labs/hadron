@@ -23,6 +23,8 @@ pub const OP_FOCUS_GAINED: u16 = 0x0103;
 pub const OP_FOCUS_LOST: u16 = 0x0104;
 /// Client tells compositor it finished drawing.
 pub const OP_COMMIT: u16 = 0x0005;
+/// Client requests a new window from the compositor.
+pub const OP_CREATE_WINDOW: u16 = 0x0006;
 
 // ── Common header ────────────────────────────────────────────────────
 
@@ -112,6 +114,20 @@ pub struct MouseInput {
 
 // ── Client → Compositor ──────────────────────────────────────────────
 
+/// Client requests a new window from the compositor.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct CreateWindow {
+    /// Message header (opcode = `OP_CREATE_WINDOW`).
+    pub header: MsgHeader,
+    /// Requested width (0 = compositor chooses).
+    pub width: u32,
+    /// Requested height (0 = compositor chooses).
+    pub height: u32,
+    /// Reserved for future use.
+    pub _reserved: [u8; 48],
+}
+
 /// Client signals that it has finished drawing and the surface is ready.
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -129,6 +145,7 @@ const _: () = assert!(size_of::<KeyboardInput>() == MESSAGE_SIZE);
 const _: () = assert!(size_of::<MouseInput>() == MESSAGE_SIZE);
 const _: () = assert!(size_of::<FocusGained>() == MESSAGE_SIZE);
 const _: () = assert!(size_of::<FocusLost>() == MESSAGE_SIZE);
+const _: () = assert!(size_of::<CreateWindow>() == MESSAGE_SIZE);
 const _: () = assert!(size_of::<Commit>() == MESSAGE_SIZE);
 
 // ── Wire helpers ─────────────────────────────────────────────────────
@@ -246,6 +263,20 @@ pub fn focus_lost(surface_id: u32) -> FocusLost {
             surface_id,
         },
         _reserved: [0; 56],
+    }
+}
+
+/// Create a `CreateWindow` message.
+pub fn create_window(width: u32, height: u32) -> CreateWindow {
+    CreateWindow {
+        header: MsgHeader {
+            opcode: OP_CREATE_WINDOW,
+            _pad: 0,
+            surface_id: 0,
+        },
+        width,
+        height,
+        _reserved: [0; 48],
     }
 }
 

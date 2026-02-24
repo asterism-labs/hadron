@@ -25,6 +25,14 @@ const MAX_MESSAGE_SIZE: usize = 4096;
 /// Maximum number of buffered messages per direction before blocking.
 const MAX_BUFFERED_MESSAGES: usize = 16;
 
+/// A channel message: data bytes plus an optional attached inode (for fd passing).
+pub struct ChannelMessage {
+    /// Message payload.
+    pub data: Vec<u8>,
+    /// Optional inode attached to this message (transferred via `channel_send_fd`).
+    pub attached: Option<Arc<dyn Inode>>,
+}
+
 /// Creates a new channel, returning the two endpoints as `Arc<dyn Inode>`.
 pub fn channel() -> (Arc<dyn Inode>, Arc<dyn Inode>) {
     let inner = Arc::new(ChannelInner {
@@ -48,9 +56,9 @@ pub fn channel() -> (Arc<dyn Inode>, Arc<dyn Inode>) {
 /// Shared channel state between both endpoints.
 struct ChannelInner {
     /// Messages sent by A, received by B.
-    a_to_b: SpinLock<alloc::collections::VecDeque<Vec<u8>>>,
+    a_to_b: SpinLock<alloc::collections::VecDeque<ChannelMessage>>,
     /// Messages sent by B, received by A.
-    b_to_a: SpinLock<alloc::collections::VecDeque<Vec<u8>>>,
+    b_to_a: SpinLock<alloc::collections::VecDeque<ChannelMessage>>,
     /// Woken when A can send (space in `a_to_b`).
     a_send_wq: HeapWaitQueue,
     /// Woken when A can recv (data in `b_to_a`).
@@ -71,7 +79,7 @@ impl ChannelInner {
         &self,
         is_a: bool,
     ) -> (
-        &SpinLock<alloc::collections::VecDeque<Vec<u8>>>,
+        &SpinLock<alloc::collections::VecDeque<ChannelMessage>>,
         &HeapWaitQueue,
         &HeapWaitQueue,
     ) {
@@ -87,7 +95,7 @@ impl ChannelInner {
         &self,
         is_a: bool,
     ) -> (
-        &SpinLock<alloc::collections::VecDeque<Vec<u8>>>,
+        &SpinLock<alloc::collections::VecDeque<ChannelMessage>>,
         &HeapWaitQueue,
         &HeapWaitQueue,
     ) {
@@ -132,6 +140,67 @@ impl Drop for ChannelEndpoint {
         } else {
             self.inner.a_recv_wq.wake_all();
             self.inner.a_send_wq.wake_all();
+        }
+    }
+}
+
+impl ChannelEndpoint {
+    /// Send a message with an attached inode (for fd passing).
+    ///
+    /// Returns `Ok(data_len)` on success, `Err` if the peer is dead or the
+    /// queue is full (caller should retry via TRAP_IO).
+    pub fn send_with_attachment(
+        &self,
+        data: &[u8],
+        attached: Option<Arc<dyn Inode>>,
+    ) -> Option<Result<usize, FsError>> {
+        if data.len() > MAX_MESSAGE_SIZE {
+            return Some(Err(FsError::InvalidArgument));
+        }
+        let (send_q, _, peer_recv_wq) = self.inner.send_queue(self.is_a);
+        let peer_counter = self.inner.peer_counter(self.is_a);
+
+        if peer_counter.load(Ordering::Acquire) == 0 {
+            return Some(Err(FsError::BrokenPipe));
+        }
+
+        let mut queue = send_q.lock();
+        if queue.len() < MAX_BUFFERED_MESSAGES {
+            let len = data.len();
+            queue.push_back(ChannelMessage {
+                data: data.to_vec(),
+                attached,
+            });
+            drop(queue);
+            peer_recv_wq.wake_one();
+            Some(Ok(len))
+        } else {
+            None // Would block
+        }
+    }
+
+    /// Receive a message, returning both data length and any attached inode.
+    ///
+    /// Returns `None` if the queue is empty and the peer is still alive
+    /// (caller should retry via TRAP_IO).
+    pub fn recv_with_attachment(
+        &self,
+        buf: &mut [u8],
+    ) -> Option<Result<(usize, Option<Arc<dyn Inode>>), FsError>> {
+        let (recv_q, _, peer_send_wq) = self.inner.recv_queue(self.is_a);
+        let peer_counter = self.inner.peer_counter(self.is_a);
+
+        let mut queue = recv_q.lock();
+        if let Some(msg) = queue.pop_front() {
+            let copy_len = msg.data.len().min(buf.len());
+            buf[..copy_len].copy_from_slice(&msg.data[..copy_len]);
+            drop(queue);
+            peer_send_wq.wake_one();
+            Some(Ok((msg.data.len(), msg.attached)))
+        } else if peer_counter.load(Ordering::Acquire) == 0 {
+            Some(Ok((0, None))) // EOF
+        } else {
+            None // Would block
         }
     }
 }
@@ -188,9 +257,11 @@ impl Inode for ChannelEndpoint {
 
                 let mut queue = send_q.lock();
                 if queue.len() < MAX_BUFFERED_MESSAGES {
-                    let msg = buf.to_vec();
-                    let len = msg.len();
-                    queue.push_back(msg);
+                    let len = buf.len();
+                    queue.push_back(ChannelMessage {
+                        data: buf.to_vec(),
+                        attached: None,
+                    });
                     drop(queue);
                     // Wake peer's recv side.
                     peer_recv_wq.wake_one();
@@ -229,12 +300,14 @@ impl Inode for ChannelEndpoint {
 
                 let mut queue = recv_q.lock();
                 if let Some(msg) = queue.pop_front() {
-                    let copy_len = msg.len().min(buf.len());
-                    buf[..copy_len].copy_from_slice(&msg[..copy_len]);
+                    let copy_len = msg.data.len().min(buf.len());
+                    buf[..copy_len].copy_from_slice(&msg.data[..copy_len]);
                     drop(queue);
                     // Wake peer's send side (space freed).
                     peer_send_wq.wake_one();
-                    return Ok(msg.len());
+                    // Note: any attached inode is dropped (not relevant for
+                    // plain read — use channel_recv_fd to receive attachments).
+                    return Ok(msg.data.len());
                 }
                 // Queue empty — check if all peers are gone.
                 if peer_counter.load(Ordering::Acquire) == 0 {

@@ -646,9 +646,27 @@ hadron_syscall_macros::define_syscalls! {
         /// if the buffer is smaller). Blocks if the receive queue is empty.
         fn channel_recv(handle: usize, buf_ptr: usize, buf_len: usize) = 0x02;
 
-        /// Synchronous call on a channel.
-        #[reserved]
-        fn channel_call(handle: usize, buf_ptr: usize, buf_len: usize) = 0x03;
+        /// Accept a pending connection from a service listener.
+        ///
+        /// `listener_fd` is an fd to a `ServiceListener` inode. Returns the
+        /// new channel fd for the accepted connection. Blocks if no pending
+        /// connections are available.
+        fn channel_accept(listener_fd: usize) = 0x03;
+
+        /// Send a message with an attached file descriptor.
+        ///
+        /// `handle` is the channel fd, `fd_to_send` is the fd to attach,
+        /// `buf_ptr`/`buf_len` describe the message data. The receiver
+        /// retrieves the attached fd via `channel_recv_fd`.
+        fn channel_send_fd(handle: usize, fd_to_send: usize, buf_ptr: usize, buf_len: usize) = 0x04;
+
+        /// Receive a message with an optional attached file descriptor.
+        ///
+        /// `handle` is the channel fd. `buf_ptr`/`buf_len` is the receive
+        /// buffer. `fd_out_ptr` points to a `usize` where the received fd
+        /// number is written (or `usize::MAX` if no fd was attached).
+        /// Returns the message length.
+        fn channel_recv_fd(handle: usize, buf_ptr: usize, buf_len: usize, fd_out_ptr: usize) = 0x05;
     }
 
     /// Filesystem / vnodes.

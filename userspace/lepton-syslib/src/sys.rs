@@ -372,6 +372,47 @@ pub fn channel_recv(handle: usize, buf: &mut [u8]) -> Result<usize, isize> {
     if ret < 0 { Err(ret) } else { Ok(ret as usize) }
 }
 
+/// Accept a pending connection from a service listener fd.
+///
+/// Returns the new channel fd on success, or a negative errno.
+/// Non-blocking: the caller should `poll_fd_read` the listener first.
+pub fn channel_accept(listener_fd: usize) -> Result<usize, isize> {
+    let ret = wrappers::sys_channel_accept(listener_fd);
+    if ret < 0 { Err(ret) } else { Ok(ret as usize) }
+}
+
+/// Send a message with an attached file descriptor.
+///
+/// `fd` is the fd to attach to the message. Returns bytes sent on success.
+pub fn channel_send_fd(ch_fd: usize, fd: usize, buf: &[u8]) -> Result<usize, isize> {
+    let ret = wrappers::sys_channel_send_fd(ch_fd, fd, buf.as_ptr() as usize, buf.len());
+    if ret < 0 { Err(ret) } else { Ok(ret as usize) }
+}
+
+/// Receive a message with an optional attached file descriptor.
+///
+/// Returns `(bytes_read, received_fd)` where `received_fd` is `None` if
+/// no fd was attached to the message.
+pub fn channel_recv_fd(ch_fd: usize, buf: &mut [u8]) -> Result<(usize, Option<usize>), isize> {
+    let mut received_fd: usize = usize::MAX;
+    let ret = wrappers::sys_channel_recv_fd(
+        ch_fd,
+        buf.as_mut_ptr() as usize,
+        buf.len(),
+        &mut received_fd as *mut usize as usize,
+    );
+    if ret < 0 {
+        Err(ret)
+    } else {
+        let fd_opt = if received_fd == usize::MAX {
+            None
+        } else {
+            Some(received_fd)
+        };
+        Ok((ret as usize, fd_opt))
+    }
+}
+
 // ── Shared memory ────────────────────────────────────────────────────
 
 /// Create a shared memory object of the given size.
