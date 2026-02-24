@@ -12,7 +12,7 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use lepton_display_protocol::{self as proto, MESSAGE_SIZE, OP_COMMIT};
+use lepton_display_protocol::{self as proto, MESSAGE_SIZE, OP_COMMIT, OP_CREATE_WINDOW};
 use lepton_gfx::Surface;
 use lepton_syslib::hadron_syscall::{
     self as hsc, ECHO, FBIOBLANK, FBIODIRTY, FBIOGET_INFO, FbDirtyRect, FbInfo, ICANON, TCGETS,
@@ -89,6 +89,104 @@ struct DragState {
     offset_y: i32,
 }
 
+// ── Dirty rectangle tracking ────────────────────────────────────────
+
+/// Axis-aligned rectangle for dirty region tracking.
+#[derive(Clone, Copy)]
+struct Rect {
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+}
+
+impl Rect {
+    /// Returns true if this rectangle overlaps or touches `other`.
+    fn touches(&self, other: &Rect) -> bool {
+        self.x <= other.x + other.w
+            && other.x <= self.x + self.w
+            && self.y <= other.y + other.h
+            && other.y <= self.y + self.h
+    }
+
+    /// Merge `other` into `self`, producing the bounding box of both.
+    fn merge(&mut self, other: &Rect) {
+        let x1 = self.x.min(other.x);
+        let y1 = self.y.min(other.y);
+        let x2 = (self.x + self.w).max(other.x + other.w);
+        let y2 = (self.y + self.h).max(other.y + other.h);
+        self.x = x1;
+        self.y = y1;
+        self.w = x2 - x1;
+        self.h = y2 - y1;
+    }
+}
+
+/// Maximum number of tracked dirty rectangles before falling back to full redraw.
+const MAX_DIRTY_RECTS: usize = 8;
+
+/// Tracks dirty regions of the screen that need to be flushed to the framebuffer.
+struct DirtyRegion {
+    rects: [Rect; MAX_DIRTY_RECTS],
+    count: usize,
+    full_redraw: bool,
+}
+
+impl DirtyRegion {
+    /// Create a new dirty region in "full redraw" state.
+    fn new() -> Self {
+        DirtyRegion {
+            rects: [Rect {
+                x: 0,
+                y: 0,
+                w: 0,
+                h: 0,
+            }; MAX_DIRTY_RECTS],
+            count: 0,
+            full_redraw: true,
+        }
+    }
+
+    /// Mark a rectangle as dirty.
+    fn add(&mut self, rect: Rect) {
+        if self.full_redraw {
+            return;
+        }
+
+        // Try to merge with an existing rect.
+        for i in 0..self.count {
+            if self.rects[i].touches(&rect) {
+                self.rects[i].merge(&rect);
+                return;
+            }
+        }
+
+        // Append if space remains.
+        if self.count < MAX_DIRTY_RECTS {
+            self.rects[self.count] = rect;
+            self.count += 1;
+        } else {
+            self.full_redraw = true;
+        }
+    }
+
+    /// Mark the entire screen as dirty.
+    fn mark_full(&mut self) {
+        self.full_redraw = true;
+    }
+
+    /// Returns true if any region is dirty.
+    fn is_dirty(&self) -> bool {
+        self.full_redraw || self.count > 0
+    }
+
+    /// Reset after a frame flip.
+    fn clear(&mut self) {
+        self.count = 0;
+        self.full_redraw = false;
+    }
+}
+
 // ── Cursor sprite ───────────────────────────────────────────────────
 
 /// 12x19 arrow cursor bitmap: 0 = transparent, 1 = white outline, 2 = black fill.
@@ -138,8 +236,8 @@ struct Compositor {
     clients: Vec<ClientState>,
     /// Index of the focused client, if any.
     focused: Option<usize>,
-    /// Whether the scene needs re-compositing.
-    needs_composite: bool,
+    /// Dirty region tracker — replaces the old `needs_composite` bool.
+    dirty: DirtyRegion,
     /// File descriptor for `/dev/mouse`, if opened successfully.
     mouse_fd: Option<usize>,
     /// Absolute cursor X position.
@@ -152,6 +250,8 @@ struct Compositor {
     prev_buttons: u8,
     /// Active titlebar drag operation.
     dragging: Option<DragState>,
+    /// Listener fd for dynamic window creation (`/dev/compositor_listen`).
+    listener_fd: Option<usize>,
 }
 
 impl Compositor {
@@ -197,6 +297,12 @@ impl Compositor {
             if fd >= 0 { Some(fd as usize) } else { None }
         };
 
+        // Open the service listener for dynamic window creation.
+        let listener_fd = {
+            let fd = io::open("/dev/compositor_listen", 1); // READ
+            if fd >= 0 { Some(fd as usize) } else { None }
+        };
+
         Some(Compositor {
             fb_ptr,
             fb_width: info.width,
@@ -207,13 +313,14 @@ impl Compositor {
             back_ptr,
             clients: Vec::new(),
             focused: None,
-            needs_composite: true,
+            dirty: DirtyRegion::new(),
             mouse_fd,
             cursor_x: (info.width / 2) as i32,
             cursor_y: (info.height / 2) as i32,
             buttons: 0,
             prev_buttons: 0,
             dragging: None,
+            listener_fd,
         })
     }
 
@@ -306,7 +413,7 @@ impl Compositor {
 
         // Focus the new client.
         self.focused = Some(client_idx);
-        self.needs_composite = true;
+        self.dirty.mark_full();
 
         // Send Configure message.
         let cfg = proto::configure(0, w, h);
@@ -335,8 +442,122 @@ impl Compositor {
             }
         }
 
-        if self.clients.iter().any(|c| c.dirty) {
-            self.needs_composite = true;
+        for client in &self.clients {
+            if client.dirty {
+                // Mark the window's bounding box (including titlebar + 2px border).
+                self.dirty.add(Rect {
+                    x: client.x.saturating_sub(2),
+                    y: client.y.saturating_sub(2),
+                    w: client.width + 4,
+                    h: TITLEBAR_HEIGHT + client.height + 4,
+                });
+            }
+        }
+    }
+
+    /// Accept dynamic client connections from `/dev/compositor_listen`.
+    fn poll_connections(&mut self) {
+        let Some(listener_fd) = self.listener_fd else {
+            return;
+        };
+
+        while sys::poll_fd_read(listener_fd) {
+            let ch_fd = match sys::channel_accept(listener_fd) {
+                Ok(fd) => fd,
+                Err(_) => break,
+            };
+
+            // Read the CreateWindow request from the new client.
+            let mut buf = [0u8; MESSAGE_SIZE];
+            if sys::channel_recv(ch_fd, &mut buf).is_err() {
+                sys::close(ch_fd);
+                continue;
+            }
+
+            if proto::peek_opcode(&buf) != OP_CREATE_WINDOW {
+                sys::close(ch_fd);
+                continue;
+            }
+
+            // SAFETY: Opcode verified as CreateWindow.
+            let req = unsafe { proto::cast_msg::<proto::CreateWindow>(&buf) };
+            let w = if req.width == 0 {
+                self.fb_width.min(640)
+            } else {
+                req.width.min(self.fb_width)
+            };
+            let h = if req.height == 0 {
+                self.fb_height.min(400)
+            } else {
+                req.height.min(self.fb_height)
+            };
+
+            // Create shared memory for the pixel buffer.
+            let shm_size = w as usize * h as usize * BPP;
+            let shm_fd = match sys::mem_create_shared(shm_size) {
+                Ok(fd) => fd,
+                Err(_) => {
+                    sys::close(ch_fd);
+                    continue;
+                }
+            };
+
+            // Map shm so the compositor can read client pixels.
+            let shm_ptr = match sys::mem_map_shared(shm_fd, shm_size) {
+                Some(p) => p,
+                None => {
+                    sys::close(ch_fd);
+                    sys::close(shm_fd);
+                    continue;
+                }
+            };
+
+            // Send Configure + shm fd to the client.
+            let cfg = proto::configure(0, w, h);
+            let mut cfg_buf = [0u8; MESSAGE_SIZE];
+            // SAFETY: Configure is a 64-byte repr(C) message.
+            unsafe { proto::encode_msg(&cfg, &mut cfg_buf) };
+            if sys::channel_send_fd(ch_fd, shm_fd, &cfg_buf).is_err() {
+                sys::close(ch_fd);
+                sys::mem_unmap(shm_ptr, shm_size);
+                sys::close(shm_fd);
+                continue;
+            }
+
+            // Place the new window with a cascading offset.
+            let cascade = (self.clients.len() as u32 % 8) * 30;
+            let x = 60 + cascade;
+            let y = 60 + cascade;
+
+            let mut title = [0u8; 32];
+            let label = b"dynamic";
+            title[..label.len()].copy_from_slice(label);
+
+            let client_idx = self.clients.len();
+            self.clients.push(ClientState {
+                pid: 0, // dynamic clients aren't spawned by us
+                channel_fd: ch_fd,
+                shm_ptr,
+                shm_size,
+                shm_fd,
+                x,
+                y,
+                width: w,
+                height: h,
+                dirty: false,
+                title,
+                title_len: label.len(),
+            });
+
+            // Focus the new client.
+            self.focused = Some(client_idx);
+            self.dirty.mark_full();
+
+            // Send FocusGained.
+            let fg = proto::focus_gained(0);
+            // SAFETY: FocusGained is a 64-byte repr(C) message.
+            unsafe { proto::encode_msg(&fg, &mut cfg_buf) };
+            let _ = sys::channel_send(ch_fd, &cfg_buf);
         }
     }
 
@@ -416,7 +637,7 @@ impl Compositor {
         self.clients.push(client);
         self.focused = Some(self.clients.len() - 1);
 
-        self.needs_composite = true;
+        self.dirty.mark_full();
     }
 
     /// Focus a specific client by index, sending focus lost/gained messages.
@@ -446,7 +667,7 @@ impl Compositor {
         self.clients.push(client);
         self.focused = Some(self.clients.len() - 1);
 
-        self.needs_composite = true;
+        self.dirty.mark_full();
     }
 
     /// Close a client window: kill the process and clean up resources.
@@ -477,7 +698,7 @@ impl Compositor {
             }
         }
 
-        self.needs_composite = true;
+        self.dirty.mark_full();
     }
 
     /// Read all pending mouse events from /dev/mouse and process them.
@@ -496,6 +717,11 @@ impl Compositor {
             let n = n as usize;
             let packet_size = core::mem::size_of::<hsc::MouseEventPacket>();
             let count = n / packet_size;
+
+            // Mark old cursor position dirty before processing movement.
+            let old_cx = self.cursor_x as u32;
+            let old_cy = self.cursor_y as u32;
+
             for i in 0..count {
                 let offset = i * packet_size;
                 let pkt: hsc::MouseEventPacket =
@@ -510,7 +736,20 @@ impl Compositor {
                 self.prev_buttons = self.buttons;
                 self.buttons = pkt.buttons;
             }
-            self.needs_composite = true;
+
+            // Dirty old and new cursor positions.
+            self.dirty.add(Rect {
+                x: old_cx,
+                y: old_cy,
+                w: CURSOR_W,
+                h: CURSOR_H,
+            });
+            self.dirty.add(Rect {
+                x: self.cursor_x as u32,
+                y: self.cursor_y as u32,
+                w: CURSOR_W,
+                h: CURSOR_H,
+            });
         }
 
         self.handle_mouse_buttons();
@@ -577,11 +816,26 @@ impl Compositor {
         if left_pressed {
             if let Some(ref drag) = self.dragging {
                 let idx = drag.client_idx;
+                let c = &self.clients[idx];
+                let total_h = TITLEBAR_HEIGHT + c.height;
+                // Mark old window position dirty.
+                self.dirty.add(Rect {
+                    x: c.x.saturating_sub(2),
+                    y: c.y.saturating_sub(2),
+                    w: c.width + 4,
+                    h: total_h + 4,
+                });
                 let new_x = (self.cursor_x - drag.offset_x).max(0) as u32;
                 let new_y = (self.cursor_y - drag.offset_y).max(0) as u32;
                 self.clients[idx].x = new_x;
                 self.clients[idx].y = new_y;
-                self.needs_composite = true;
+                // Mark new window position dirty.
+                self.dirty.add(Rect {
+                    x: new_x.saturating_sub(2),
+                    y: new_y.saturating_sub(2),
+                    w: self.clients[idx].width + 4,
+                    h: total_h + 4,
+                });
             }
         }
     }
@@ -624,8 +878,12 @@ impl Compositor {
     }
 
     /// Composite all client surfaces into the back buffer, then flip.
+    ///
+    /// Full compositing into the back buffer runs every dirty frame (fast,
+    /// in-memory). The expensive framebuffer MMIO copy is limited to dirty
+    /// row-spans when possible.
     fn composite(&mut self) {
-        if !self.needs_composite {
+        if !self.dirty.is_dirty() {
             return;
         }
 
@@ -710,10 +968,40 @@ impl Compositor {
             self.draw_cursor(&mut back);
         }
 
-        // Flip: copy back buffer to framebuffer.
-        // SAFETY: Both pointers are valid mappings of fb_size bytes.
-        unsafe {
-            core::ptr::copy_nonoverlapping(self.back_ptr, self.fb_ptr, self.fb_size);
+        // Flip: copy only dirty regions from back buffer to framebuffer MMIO.
+        if self.dirty.full_redraw {
+            // SAFETY: Both pointers are valid mappings of fb_size bytes.
+            unsafe {
+                core::ptr::copy_nonoverlapping(self.back_ptr, self.fb_ptr, self.fb_size);
+            }
+        } else {
+            let stride = self.fb_stride as usize;
+            let fb_w = self.fb_width;
+            let fb_h = self.fb_height;
+            for i in 0..self.dirty.count {
+                let r = &self.dirty.rects[i];
+                // Clamp rect to framebuffer bounds.
+                let x_start = (r.x as usize).min(fb_w as usize);
+                let x_end = ((r.x + r.w) as usize).min(fb_w as usize);
+                let y_start = (r.y as usize).min(fb_h as usize);
+                let y_end = ((r.y + r.h) as usize).min(fb_h as usize);
+                let row_bytes = (x_end - x_start) * BPP;
+                if row_bytes == 0 {
+                    continue;
+                }
+                for row in y_start..y_end {
+                    let offset = (row * stride + x_start) * BPP;
+                    // SAFETY: offset + row_bytes is within both mappings
+                    // (clamped to fb bounds, both buffers are fb_size bytes).
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(
+                            self.back_ptr.add(offset),
+                            self.fb_ptr.add(offset),
+                            row_bytes,
+                        );
+                    }
+                }
+            }
         }
 
         // Notify the framebuffer driver that the entire screen is dirty.
@@ -731,7 +1019,7 @@ impl Compositor {
             &dirty as *const FbDirtyRect as usize,
         );
 
-        self.needs_composite = false;
+        self.dirty.clear();
     }
 
     /// Clean up resources.
@@ -799,6 +1087,7 @@ pub extern "C" fn main(_args: &[&str]) -> i32 {
     loop {
         comp.poll_keyboard();
         comp.poll_mouse();
+        comp.poll_connections();
         comp.poll_clients();
         comp.composite();
         sys::sleep_ms(FRAME_MS);
