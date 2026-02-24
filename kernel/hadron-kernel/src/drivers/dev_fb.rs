@@ -111,6 +111,15 @@ impl Inode for DevFramebuffer {
                 }
                 Ok(0)
             }
+            hadron_syscall::FBIOBLANK => {
+                // arg=1: blank (disable fbcon), arg=0: unblank (re-enable).
+                if arg != 0 {
+                    crate::tty::blank_all_fbcon();
+                } else {
+                    crate::tty::unblank_all_fbcon();
+                }
+                Ok(0)
+            }
             _ => Err(FsError::InvalidArgument),
         }
     }

@@ -15,7 +15,7 @@ use alloc::vec::Vec;
 use lepton_display_protocol::{self as proto, MESSAGE_SIZE, OP_COMMIT};
 use lepton_gfx::Surface;
 use lepton_syslib::hadron_syscall::{
-    self as hsc, ECHO, FBIOGET_INFO, FbInfo, ICANON, TCGETS, TCSETS, Termios,
+    self as hsc, ECHO, FBIOBLANK, FBIOGET_INFO, FbInfo, ICANON, TCGETS, TCSETS, Termios,
 };
 use lepton_syslib::{io, println, sys};
 
@@ -181,6 +181,9 @@ impl Compositor {
             return None;
         }
 
+        // Disable kernel fbcon output — the compositor owns the framebuffer now.
+        io::ioctl(fb_fd, FBIOBLANK as usize, 1);
+
         let fb_size = info.pitch as usize * info.height as usize;
         let fb_ptr = sys::mem_map_device(fb_fd, fb_size)?;
 
@@ -189,7 +192,7 @@ impl Compositor {
 
         // Try to open /dev/mouse for cursor input.
         let mouse_fd = {
-            let fd = io::open("/dev/mouse", 0);
+            let fd = io::open("/dev/mouse", 1); // READ
             if fd >= 0 { Some(fd as usize) } else { None }
         };
 

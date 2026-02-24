@@ -20,8 +20,8 @@ use lepton_syslib::{io, println, sys};
 
 use crate::grid::Grid;
 
-/// Target frame interval in milliseconds (~30 fps).
-const FRAME_MS: u64 = 33;
+/// Target frame interval in milliseconds (~60 fps).
+const FRAME_MS: u64 = 16;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn main(_args: &[&str]) -> i32 {
@@ -45,7 +45,7 @@ pub extern "C" fn main(_args: &[&str]) -> i32 {
     }
 
     // 2. Open PTY master (/dev/ptmx).
-    let master_fd = io::open("/dev/ptmx", 0);
+    let master_fd = io::open("/dev/ptmx", 3); // READ | WRITE
     if master_fd < 0 {
         println!("terminal: failed to open /dev/ptmx");
         return 1;
@@ -107,7 +107,7 @@ pub extern "C" fn main(_args: &[&str]) -> i32 {
     let path_len = prefix.len() + num_len;
     let pts_str = core::str::from_utf8(&pts_path[..path_len]).unwrap_or("/dev/pts/0");
 
-    let slave_fd = io::open(pts_str, 0);
+    let slave_fd = io::open(pts_str, 3); // READ | WRITE
     if slave_fd < 0 {
         println!("terminal: failed to open {}", pts_str);
         return 1;

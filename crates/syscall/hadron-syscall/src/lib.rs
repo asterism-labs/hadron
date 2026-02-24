@@ -348,6 +348,9 @@ hadron_syscall_macros::define_syscalls! {
         PIPE_NONBLOCK: usize = 0x0040;
         /// Framebuffer ioctl: get framebuffer info.
         FBIOGET_INFO: u32 = 0x4600;
+        /// Framebuffer ioctl: disable/enable kernel console (fbcon) output.
+        /// arg=1 blanks (disables fbcon), arg=0 unblanks (re-enables).
+        FBIOBLANK: u32 = 0x4611;
         /// Signal: interrupt (Ctrl+C).
         SIGINT: usize = 2;
         /// Signal: quit (Ctrl+\).

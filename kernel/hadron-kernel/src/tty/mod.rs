@@ -148,6 +148,17 @@ impl Tty {
         *self.fbcon.lock() = Some(fbcon);
     }
 
+    /// Enable or disable this TTY's framebuffer console rendering.
+    ///
+    /// Used to blank all VTs when a userspace compositor takes over the
+    /// framebuffer, and to unblank when it exits.
+    pub fn set_fbcon_active(&self, active: bool) {
+        let fbcon = self.fbcon.lock().clone();
+        if let Some(ref fbcon) = fbcon {
+            fbcon.set_active(active);
+        }
+    }
+
     /// Write output to this TTY's framebuffer console.
     ///
     /// If no fbcon is attached, the output is silently discarded.
@@ -425,6 +436,22 @@ pub fn set_vt_fbcon(index: usize, fbcon: Arc<FbCon>) {
 pub fn write_active_vt(s: &str) {
     let vt = ACTIVE_VT.load(Ordering::Acquire);
     TTY_TABLE[vt].write_output(s);
+}
+
+/// Deactivate all VT framebuffer consoles so a userspace compositor can
+/// take over the framebuffer without interference.
+pub fn blank_all_fbcon() {
+    for i in 0..MAX_TTYS {
+        TTY_TABLE[i].set_fbcon_active(false);
+    }
+}
+
+/// Re-activate all VT framebuffer consoles (reverse of [`blank_all_fbcon`]).
+pub fn unblank_all_fbcon() {
+    let active_vt = ACTIVE_VT.load(Ordering::Acquire);
+    for i in 0..MAX_TTYS {
+        TTY_TABLE[i].set_fbcon_active(i == active_vt);
+    }
 }
 
 /// Initialize the TTY subsystem.
