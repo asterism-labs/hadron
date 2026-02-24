@@ -243,16 +243,26 @@ impl Inode for PtyMaster {
             let canonical = termios.lflag & hadron_syscall::ICANON != 0;
 
             if canonical {
-                // Feed bytes through the line discipline as scancodes.
-                // Since master input is typically already ASCII (not raw scancodes),
-                // we push bytes directly into the m2s buffer and let the slave
-                // read from there. The line discipline only applies when the
-                // slave side processes keyboard input.
+                // Canonical mode: feed bytes through the line discipline for
+                // line editing (backspace, Enter, Ctrl+C/D handling).
+                let isig = termios.lflag & hadron_syscall::ISIG != 0;
+                {
+                    let mut ldisc = self.0.ldisc.lock();
+                    for &byte in buf {
+                        let _ = ldisc.process_ascii_byte(byte, true, isig);
+                    }
+                }
+                // Drain whatever the ldisc committed into the m2s buffer.
+                let mut ldisc = self.0.ldisc.lock();
                 let mut m2s = self.0.m2s_buf.lock();
-                let n = m2s.write(buf);
+                let mut tmp = [0u8; 256];
+                while let Some(n) = ldisc.try_read(&mut tmp) {
+                    m2s.write(&tmp[..n]);
+                }
                 drop(m2s);
+                drop(ldisc);
                 self.0.slave_wq.wake_all();
-                Ok(n)
+                Ok(buf.len())
             } else {
                 // Raw mode: bytes go straight into m2s buffer.
                 let mut m2s = self.0.m2s_buf.lock();

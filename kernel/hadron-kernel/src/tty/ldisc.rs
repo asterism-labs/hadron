@@ -224,6 +224,84 @@ impl LineDiscipline {
         None
     }
 
+    /// Process a single already-decoded ASCII byte (for the PTY path).
+    ///
+    /// Unlike [`process_scancode`], this handles pre-decoded ASCII bytes
+    /// that arrive via `PtyMaster::write()`. No modifier tracking or
+    /// scancode decoding is needed since the bytes are already characters.
+    ///
+    /// In canonical mode: performs line editing (backspace, Enter, Ctrl+C/D).
+    /// In raw mode: pushes the byte directly to the ready buffer.
+    pub fn process_ascii_byte(
+        &mut self,
+        byte: u8,
+        icanon: bool,
+        isig: bool,
+    ) -> Option<LdiscAction> {
+        // Ctrl+C (0x03): signal or literal depending on isig.
+        if byte == 0x03 {
+            if isig {
+                self.line_len = 0;
+                return Some(LdiscAction::Interrupt);
+            }
+            let _ = self.ready_buf.try_push(0x03);
+            return Some(LdiscAction::Char(0x03));
+        }
+
+        // Ctrl+D (0x04): EOF/flush or literal depending on icanon.
+        if byte == 0x04 {
+            if icanon {
+                if self.line_len == 0 {
+                    self.eof_pending = true;
+                    return Some(LdiscAction::Eof);
+                }
+                for i in 0..self.line_len {
+                    let _ = self.ready_buf.try_push(self.line_buf[i]);
+                }
+                self.line_len = 0;
+                return Some(LdiscAction::FlushLine);
+            }
+            let _ = self.ready_buf.try_push(0x04);
+            return Some(LdiscAction::Char(0x04));
+        }
+
+        if icanon {
+            match byte {
+                // Backspace (BS or DEL): erase one character.
+                0x08 | 0x7F => {
+                    if self.line_len > 0 {
+                        self.line_len -= 1;
+                        return Some(LdiscAction::Backspace);
+                    }
+                    None
+                }
+                // Carriage return or newline: commit line.
+                b'\n' | b'\r' => {
+                    for i in 0..self.line_len {
+                        let _ = self.ready_buf.try_push(self.line_buf[i]);
+                    }
+                    let _ = self.ready_buf.try_push(b'\n');
+                    self.line_len = 0;
+                    Some(LdiscAction::Newline)
+                }
+                // Printable or other characters: buffer them.
+                ch => {
+                    if self.line_len < LINE_BUF_SIZE {
+                        self.line_buf[self.line_len] = ch;
+                        self.line_len += 1;
+                        Some(LdiscAction::Char(ch))
+                    } else {
+                        None
+                    }
+                }
+            }
+        } else {
+            // Raw mode: push directly to ready buffer.
+            let _ = self.ready_buf.try_push(byte);
+            Some(LdiscAction::Char(byte))
+        }
+    }
+
     /// Non-blocking read from the completed-line buffer.
     ///
     /// Returns `Some(n)` with the number of bytes copied into `buf`, `Some(0)`
