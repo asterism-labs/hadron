@@ -3,6 +3,13 @@
 //! Defines the memory-mapped register layout using [`register_block!`], typed
 //! bitflags for control/status registers, and legacy 16-byte TX/RX descriptor
 //! structures.
+//!
+//! # References
+//!
+//! - Intel 82574L Gigabit Ethernet Controller Datasheet
+//!   <https://www.intel.com/content/dam/www/public/us/en/documents/datasheets/82574l-gbe-controller-datasheet.pdf>
+//! - OSDev Wiki: Intel Ethernet i217
+//!   <https://wiki.osdev.org/Intel_Ethernet_i217>
 
 use bitflags::bitflags;
 use hadron_kernel::addr::VirtAddr;

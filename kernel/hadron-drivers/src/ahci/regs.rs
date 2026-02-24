@@ -2,6 +2,13 @@
 //!
 //! Defines the memory-mapped register layout of an AHCI Host Bus Adapter,
 //! including generic host control registers and per-port register blocks.
+//!
+//! # References
+//!
+//! - Serial ATA AHCI Specification 1.3.1
+//!   <https://www.intel.com/content/dam/www/public/us/en/documents/technical-specifications/serial-ata-ahci-spec-rev1-3-1.pdf>
+//! - OSDev Wiki: AHCI
+//!   <https://wiki.osdev.org/AHCI>
 
 use bitflags::bitflags;
 use hadron_kernel::addr::VirtAddr;

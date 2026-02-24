@@ -3,6 +3,11 @@
 //! The SLIT provides a matrix of relative distances between NUMA nodes
 //! (system localities). Each entry is a `u8` value where 10 represents
 //! the local distance and higher values indicate increasing cost.
+//!
+//! # References
+//!
+//! - ACPI Specification 6.5, §5.2.17: System Locality Distance Information Table (SLIT)
+//!   <https://uefi.org/specs/ACPI/6.5/>
 
 use hadron_binparse::FromBytes;
 

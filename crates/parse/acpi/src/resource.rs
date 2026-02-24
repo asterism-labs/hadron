@@ -3,6 +3,11 @@
 //! Parses the byte-encoded resource descriptors found inside `_CRS`, `_PRS`,
 //! and similar ACPI buffer objects. The parser handles both small (1-byte tag)
 //! and large (3-byte tag) descriptors as defined in ACPI 6.5 §6.4.
+//!
+//! # References
+//!
+//! - ACPI Specification 6.5, §6.4: Resource Data Types for ACPI
+//!   <https://uefi.org/specs/ACPI/6.5/>
 
 /// A decoded ACPI resource descriptor from a `_CRS` buffer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

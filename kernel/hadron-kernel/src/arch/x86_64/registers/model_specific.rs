@@ -1,4 +1,13 @@
 //! Model Specific Registers (MSRs).
+//!
+//! # References
+//!
+//! - Intel SDM Vol. 3A, §2.1: Model-Specific Registers (MSRs)
+//!   <https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html>
+//! - Intel SDM Vol. 4: MSR Reference (IA32_EFER, STAR, LSTAR, SFMASK, FS/GS_BASE)
+//!   <https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html>
+//! - OSDev Wiki: Model Specific Registers
+//!   <https://wiki.osdev.org/Model_Specific_Registers>
 
 /// A Model Specific Register, identified by its address.
 #[derive(Debug, Clone, Copy)]

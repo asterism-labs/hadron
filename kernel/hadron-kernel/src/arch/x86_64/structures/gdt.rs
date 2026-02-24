@@ -1,4 +1,13 @@
 //! Global Descriptor Table (GDT) structures.
+//!
+//! # References
+//!
+//! - Intel SDM Vol. 3A, §3.4–3.5: Segment Descriptors & Descriptor Types
+//!   <https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html>
+//! - Intel SDM Vol. 3A, §7.2.3: TSS Descriptor in 64-bit Mode
+//!   <https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html>
+//! - OSDev Wiki: Global Descriptor Table
+//!   <https://wiki.osdev.org/Global_Descriptor_Table>
 
 use core::mem::size_of;
 

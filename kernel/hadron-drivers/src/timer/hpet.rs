@@ -2,6 +2,13 @@
 //!
 //! Provides MMIO-based access to the HPET for high-resolution timing
 //! and calibration.
+//!
+//! # References
+//!
+//! - IA-PC HPET (High Precision Event Timers) Specification 1.0a
+//!   <https://www.intel.com/content/dam/www/public/us/en/documents/technical-specifications/software-developers-hpet-spec-1-0a.pdf>
+//! - OSDev Wiki: HPET
+//!   <https://wiki.osdev.org/HPET>
 
 use hadron_kernel::addr::VirtAddr;
 use hadron_kernel::driver_api::ClockSource;

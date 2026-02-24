@@ -4,6 +4,11 @@
 //! [`AmlVisitor`] as it encounters namespace objects (devices, scopes,
 //! methods, name objects). The parser does not evaluate control flow or
 //! method bodies — it extracts the static namespace topology.
+//!
+//! # References
+//!
+//! - ACPI Specification 6.5, Ch. 20: ACPI Machine Language (AML) Specification
+//!   <https://uefi.org/specs/ACPI/6.5/>
 
 use hadron_binparse::BinaryReader;
 

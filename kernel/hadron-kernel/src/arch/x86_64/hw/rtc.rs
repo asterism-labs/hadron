@@ -6,6 +6,13 @@
 //!
 //! This module only reads the RTC at boot to establish a Unix epoch
 //! offset. It does not set up periodic RTC interrupts.
+//!
+//! # References
+//!
+//! - Motorola MC146818 RTC Datasheet
+//!   <https://pdf1.alldatasheet.com/datasheet-pdf/view/122156/MOTOROLA/MC146818.html>
+//! - OSDev Wiki: CMOS
+//!   <https://wiki.osdev.org/CMOS>
 
 use crate::arch::x86_64::instructions::port::Port;
 

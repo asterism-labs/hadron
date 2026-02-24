@@ -4,6 +4,11 @@
 //! Q35 chipset's LPC bridge (`0x8086:0x2918`). On expiry the TCO triggers a
 //! system reset — with QEMU's `-no-reboot` flag this causes an immediate exit,
 //! which the ktest harness uses for hang detection.
+//!
+//! # References
+//!
+//! - Intel ICH9 Datasheet, §18.6: TCO Timer Registers
+//!   <https://www.intel.com/content/dam/doc/datasheet/io-controller-hub-9-datasheet.pdf>
 
 extern crate alloc;
 

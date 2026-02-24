@@ -3,6 +3,11 @@
 //! Each AHCI port represents a SATA device connection. This module handles
 //! port initialization (command list, FIS buffer, IDENTIFY), command slot
 //! management, and async I/O submission.
+//!
+//! # References
+//!
+//! - Serial ATA AHCI Specification 1.3.1, §3.3: Port Registers (SIG, SSTS, CMD, TFD)
+//!   <https://www.intel.com/content/dam/www/public/us/en/documents/technical-specifications/serial-ata-ahci-spec-rev1-3-1.pdf>
 
 use core::ptr;
 use hadron_kernel::sync::atomic::{AtomicU32, Ordering};

@@ -2,6 +2,15 @@
 //!
 //! Provides MMIO-based access to the Local APIC for interrupt management,
 //! timer configuration, and inter-processor interrupts.
+//!
+//! # References
+//!
+//! - Intel SDM Vol. 3A, Ch. 10: Advanced Programmable Interrupt Controller (APIC)
+//!   <https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html>
+//! - Intel SDM Vol. 3A, Table 10-1: Local APIC Register Address Map
+//!   <https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html>
+//! - OSDev Wiki: APIC
+//!   <https://wiki.osdev.org/APIC>
 
 use hadron_kernel::addr::VirtAddr;
 use hadron_mmio::register_block;

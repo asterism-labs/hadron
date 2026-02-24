@@ -4,6 +4,13 @@
 //! reserved memory regions (RMRRs) used by Intel's VT-d IOMMU. Entry headers
 //! use `u16` type and `u16` length fields, so we use a hand-written iterator
 //! rather than the `TableEntries` macro.
+//!
+//! # References
+//!
+//! - Intel VT-d Specification, §8: DMA Remapping Reporting Structure
+//!   <https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html>
+//! - OSDev Wiki: Intel VT-d
+//!   <https://wiki.osdev.org/Intel_VT-d>
 
 use hadron_binparse::FromBytes;
 

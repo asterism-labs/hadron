@@ -1,4 +1,13 @@
 //! GDT initialization, static instance, and TSS setup.
+//!
+//! # References
+//!
+//! - Intel SDM Vol. 3A, §7.7: 64-Bit Mode TSS Structure
+//!   <https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html>
+//! - Intel SDM Vol. 3A, §7.2.5: Task-State Segment (IST, RSP0)
+//!   <https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html>
+//! - OSDev Wiki: Task State Segment
+//!   <https://wiki.osdev.org/Task_State_Segment>
 
 use core::cell::UnsafeCell;
 

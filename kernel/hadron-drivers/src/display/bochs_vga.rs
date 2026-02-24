@@ -3,6 +3,13 @@
 //! Drives the Bochs/QEMU VGA adapter (vendor 0x1234, device 0x1111) using the
 //! VBE DISPI interface for mode setting and a PCI BAR0 linear framebuffer.
 //! Implements [`Framebuffer`] for pixel-level access.
+//!
+//! # References
+//!
+//! - Bochs VBE DISPI Interface
+//!   <https://wiki.osdev.org/Bochs_VBE_Extensions>
+//! - OSDev Wiki: BGA (Bochs Graphics Adaptor)
+//!   <https://wiki.osdev.org/BGA>
 
 extern crate alloc;
 

@@ -3,6 +3,13 @@
 //! Uses ports `0xCF8` (CONFIG_ADDRESS) and `0xCFC` (CONFIG_DATA) to access
 //! the 256-byte configuration space of each PCI function. This works on all
 //! x86 systems including QEMU q35.
+//!
+//! # References
+//!
+//! - PCI Local Bus Specification 3.0, §3.7.4.1: Configuration Space Access Mechanism #1
+//!   <https://pcisig.com/specifications>
+//! - OSDev Wiki: PCI — Configuration Space Access Mechanism #1
+//!   <https://wiki.osdev.org/PCI>
 
 use hadron_kernel::arch::x86_64::Port;
 

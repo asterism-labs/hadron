@@ -2,6 +2,11 @@
 //!
 //! Implements [`NetworkDevice`] for VirtIO network devices discovered via PCI.
 //! Supports both MSI-X and legacy INTx interrupt delivery.
+//!
+//! # References
+//!
+//! - Virtual I/O Device (VIRTIO) Specification 1.2, §5.1: Network Device
+//!   <https://docs.oasis-open.org/virtio/virtio/v1.2/virtio-v1.2.html>
 
 extern crate alloc;
 

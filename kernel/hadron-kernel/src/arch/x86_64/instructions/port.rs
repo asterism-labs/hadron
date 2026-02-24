@@ -2,6 +2,13 @@
 //!
 //! Provides [`Port<T>`] as a type-safe wrapper around raw port I/O operations,
 //! replacing ad-hoc `inb`/`outb` calls with a structured API.
+//!
+//! # References
+//!
+//! - Intel SDM Vol. 1, §18.4: I/O Instructions (IN, OUT, INS, OUTS)
+//!   <https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html>
+//! - Intel SDM Vol. 2A/2B: IN/OUT Instruction Reference
+//!   <https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html>
 
 use core::marker::PhantomData;
 

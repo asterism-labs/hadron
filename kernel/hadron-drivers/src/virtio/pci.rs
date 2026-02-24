@@ -2,6 +2,11 @@
 //!
 //! Locates VirtIO configuration structures via PCI capabilities and provides
 //! MMIO-based access to common config, notify, ISR, and device-specific regions.
+//!
+//! # References
+//!
+//! - Virtual I/O Device (VIRTIO) Specification 1.2, §4.1.4: PCI-specific Initialization
+//!   <https://docs.oasis-open.org/virtio/virtio/v1.2/virtio-v1.2.html>
 
 use crate::pci::cam::regs;
 use crate::pci::caps::{self, MsixCapability, RawCapability, VirtioPciCap, VirtioPciCfgType};

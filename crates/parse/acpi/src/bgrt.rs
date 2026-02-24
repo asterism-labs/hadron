@@ -2,6 +2,11 @@
 //!
 //! The BGRT describes the boot-time logo image displayed by firmware,
 //! including its type, physical address, and screen coordinates.
+//!
+//! # References
+//!
+//! - ACPI Specification 6.5, §5.2.22: Boot Graphics Resource Table (BGRT)
+//!   <https://uefi.org/specs/ACPI/6.5/>
 
 use hadron_binparse::FromBytes;
 

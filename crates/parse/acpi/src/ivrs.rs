@@ -3,6 +3,11 @@
 //! The IVRS table describes AMD's IOMMU hardware units (IVHDs) and memory
 //! definitions (IVMDs). Like DMAR, entry headers use `u16` type and `u16`
 //! length fields, so we use a hand-written iterator.
+//!
+//! # References
+//!
+//! - AMD I/O Virtualization Technology (IOMMU) Specification, §5.2: IVRS Table
+//!   <https://www.amd.com/content/dam/amd/en/documents/processor-tech-docs/specifications/48882_IOMMU.pdf>
 
 use hadron_binparse::FromBytes;
 

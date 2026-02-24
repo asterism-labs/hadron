@@ -2,6 +2,13 @@
 //!
 //! Programs the STAR, LSTAR, and SFMASK MSRs and provides the naked
 //! assembly entry point that the CPU jumps to on `syscall`.
+//!
+//! # References
+//!
+//! - Intel SDM Vol. 3A, §5.8.8: Fast System Calls in 64-Bit Mode (SYSCALL/SYSRET)
+//!   <https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html>
+//! - Intel SDM Vol. 4: MSRs — STAR (0xC000_0081), LSTAR (0xC000_0082), SFMASK (0xC000_0084)
+//!   <https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html>
 
 use core::cell::UnsafeCell;
 

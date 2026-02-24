@@ -2,6 +2,13 @@
 //!
 //! Walks the PCI bus hierarchy using legacy CAM (I/O ports 0xCF8/0xCFC),
 //! handling multi-function devices and PCI-to-PCI bridges.
+//!
+//! # References
+//!
+//! - PCI Local Bus Specification 3.0, §6: Configuration Space (BAR decoding, header types)
+//!   <https://pcisig.com/specifications>
+//! - OSDev Wiki: PCI — Enumerating PCI Buses
+//!   <https://wiki.osdev.org/PCI>
 
 use alloc::vec::Vec;
 use hadron_kernel::driver_api::pci::{PciAddress, PciBar, PciDeviceInfo};

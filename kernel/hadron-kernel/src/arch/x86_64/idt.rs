@@ -1,4 +1,13 @@
 //! IDT setup: exception handlers and hardware interrupt stubs.
+//!
+//! # References
+//!
+//! - Intel SDM Vol. 3A, §6.3: Exception and Interrupt Vectors (vectors 0–31)
+//!   <https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html>
+//! - Intel SDM Vol. 3A, §6.15: Exception and Interrupt Reference
+//!   <https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html>
+//! - OSDev Wiki: Exceptions
+//!   <https://wiki.osdev.org/Exceptions>
 
 use crate::arch::x86_64::structures::idt::InterruptDescriptorTable;
 

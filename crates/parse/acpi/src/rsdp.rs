@@ -3,6 +3,11 @@
 //! The RSDP is the entry point into the ACPI table hierarchy. ACPI 1.0
 //! defines a 20-byte structure (`Rsdp`), while ACPI 2.0+ extends it to
 //! 36 bytes (`Rsdp2`) with an XSDT address.
+//!
+//! # References
+//!
+//! - ACPI Specification 6.5, §5.2.5: Root System Description Pointer (RSDP)
+//!   <https://uefi.org/specs/ACPI/6.5/>
 
 use hadron_binparse::FromBytes;
 

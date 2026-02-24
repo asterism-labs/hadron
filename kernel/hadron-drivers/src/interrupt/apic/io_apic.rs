@@ -1,6 +1,13 @@
 //! I/O APIC driver.
 //!
 //! Controls external interrupt routing from hardware devices to Local APICs.
+//!
+//! # References
+//!
+//! - Intel 82093AA I/O APIC Datasheet
+//!   <https://pdos.csail.mit.edu/6.828/2016/readings/ia32/ioapic.pdf>
+//! - OSDev Wiki: I/O APIC
+//!   <https://wiki.osdev.org/IOAPIC>
 
 use hadron_kernel::addr::VirtAddr;
 

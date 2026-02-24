@@ -4,6 +4,15 @@
 //! the instruction-set extensions available on the running CPU. The BSP
 //! detects once; APs verify they are a superset (homogeneous assumption
 //! required by the alt-instruction patching engine).
+//!
+//! # References
+//!
+//! - Intel SDM Vol. 2A, CPUID Instruction Reference
+//!   <https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html>
+//! - Intel SDM Vol. 2A, Table 3-8: CPUID Leaf 1 ECX/EDX Feature Flags
+//!   <https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html>
+//! - OSDev Wiki: CPUID
+//!   <https://wiki.osdev.org/CPUID>
 
 use hadron_core::sync::atomic::{AtomicU64, Ordering};
 

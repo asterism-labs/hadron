@@ -3,6 +3,13 @@
 //! Provides a [`I8042`] type for the i8042 PS/2 keyboard/mouse controller.
 //! Handles controller initialization, scancode-to-keycode translation (Set 1),
 //! and 3-byte mouse packet parsing.
+//!
+//! # References
+//!
+//! - OSDev Wiki: "8042" PS/2 Controller
+//!   <https://wiki.osdev.org/%228042%22_PS/2_Controller>
+//! - OSDev Wiki: PS/2 Keyboard
+//!   <https://wiki.osdev.org/PS/2_Keyboard>
 
 use core::fmt;
 

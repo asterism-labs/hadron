@@ -3,6 +3,11 @@
 //! Implements [`Framebuffer`] for VirtIO GPU devices discovered via PCI.
 //! Pixel writes go to cacheable RAM; explicit `TRANSFER_TO_HOST_2D` +
 //! `RESOURCE_FLUSH` commands update the host display on [`flush_rect`].
+//!
+//! # References
+//!
+//! - Virtual I/O Device (VIRTIO) Specification 1.2, §5.7: GPU Device
+//!   <https://docs.oasis-open.org/virtio/virtio/v1.2/virtio-v1.2.html>
 
 extern crate alloc;
 

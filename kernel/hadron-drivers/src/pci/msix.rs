@@ -3,6 +3,13 @@
 //! Provides [`MsixTable`] which maps and configures MSI-X table entries,
 //! allowing PCI devices to use message-signaled interrupts instead of
 //! legacy INTx lines.
+//!
+//! # References
+//!
+//! - PCI Local Bus Specification 3.0, §6.8.2: MSI-X Capability and Table Structure
+//!   <https://pcisig.com/specifications>
+//! - OSDev Wiki: MSI
+//!   <https://wiki.osdev.org/MSI>
 
 use super::cam::PciCam;
 use super::caps::MsixCapability;

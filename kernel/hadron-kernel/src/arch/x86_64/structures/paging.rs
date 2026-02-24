@@ -1,6 +1,15 @@
 //! x86_64 page table structures.
 //!
 //! Provides types for manipulating 4-level page tables (PML4 -> PDPT -> PD -> PT).
+//!
+//! # References
+//!
+//! - Intel SDM Vol. 3A, §4.5: 4-Level Paging and 5-Level Paging
+//!   <https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html>
+//! - Intel SDM Vol. 3A, Table 4-19: PTE flags (P, RW, US, PWT, PCD, PAT, G, NX)
+//!   <https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html>
+//! - OSDev Wiki: Paging
+//!   <https://wiki.osdev.org/Paging>
 
 use crate::addr::PhysAddr;
 

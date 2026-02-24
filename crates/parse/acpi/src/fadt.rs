@@ -4,6 +4,11 @@
 //! driver. We parse the PM timer I/O port, the century CMOS register index,
 //! boot architecture flags, general ACPI feature flags, and the physical
 //! addresses of the DSDT and FACS tables.
+//!
+//! # References
+//!
+//! - ACPI Specification 6.5, §5.2.9: Fixed ACPI Description Table (FADT)
+//!   <https://uefi.org/specs/ACPI/6.5/>
 
 use hadron_binparse::FromBytes;
 

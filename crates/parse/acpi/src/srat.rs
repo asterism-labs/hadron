@@ -2,6 +2,11 @@
 //!
 //! The SRAT describes NUMA topology by mapping processors and memory regions
 //! to proximity domains (NUMA nodes).
+//!
+//! # References
+//!
+//! - ACPI Specification 6.5, §5.2.16: System Resource Affinity Table (SRAT)
+//!   <https://uefi.org/specs/ACPI/6.5/>
 
 use hadron_binparse::TableEntries;
 

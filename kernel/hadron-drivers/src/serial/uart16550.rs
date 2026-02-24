@@ -3,6 +3,13 @@
 //! Provides a [`Uart16550`] type that implements [`core::fmt::Write`] for
 //! formatted text output over a serial port. Supports configurable baud rates,
 //! loopback self-test during initialization, and both blocking read/write.
+//!
+//! # References
+//!
+//! - TI PC16550D UART Datasheet
+//!   <https://www.ti.com/lit/ds/symlink/pc16550d.pdf>
+//! - OSDev Wiki: Serial Ports
+//!   <https://wiki.osdev.org/Serial_Ports>
 
 extern crate alloc;
 

@@ -2,6 +2,13 @@
 //!
 //! The MCFG table describes the PCI Express Enhanced Configuration Access
 //! Mechanism (ECAM) base addresses for each PCI segment group.
+//!
+//! # References
+//!
+//! - PCI Firmware Specification 3.0, §4.1.2: MCFG Table
+//!   <https://pcisig.com/specifications>
+//! - OSDev Wiki: PCI Express
+//!   <https://wiki.osdev.org/PCI_Express>
 
 use hadron_binparse::{FixedEntryIter, FromBytes};
 

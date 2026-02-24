@@ -3,6 +3,11 @@
 //! The MADT describes the interrupt controller topology of the system,
 //! including local APICs, I/O APICs, interrupt source overrides, and NMI
 //! sources.
+//!
+//! # References
+//!
+//! - ACPI Specification 6.5, §5.2.12: Multiple APIC Description Table (MADT)
+//!   <https://uefi.org/specs/ACPI/6.5/>
 
 use hadron_binparse::{FromBytes, TableEntries};
 

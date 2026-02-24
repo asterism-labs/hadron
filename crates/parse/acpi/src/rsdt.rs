@@ -4,6 +4,13 @@
 //! counterpart (XSDT) contain pointers to all other ACPI tables. This module
 //! provides an iterator over those entries and a helper to locate a table by
 //! its 4-byte signature.
+//!
+//! # References
+//!
+//! - ACPI Specification 6.5, §5.2.7: Root System Description Table (RSDT)
+//!   <https://uefi.org/specs/ACPI/6.5/>
+//! - ACPI Specification 6.5, §5.2.8: Extended System Description Table (XSDT)
+//!   <https://uefi.org/specs/ACPI/6.5/>
 
 use hadron_binparse::FromBytes;
 

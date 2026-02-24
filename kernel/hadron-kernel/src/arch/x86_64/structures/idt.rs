@@ -1,4 +1,13 @@
 //! Interrupt Descriptor Table (IDT) structures.
+//!
+//! # References
+//!
+//! - Intel SDM Vol. 3A, §6.14: 64-Bit Mode IDT (16-byte gate descriptors)
+//!   <https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html>
+//! - Intel SDM Vol. 3A, §6.11: IDT Descriptors (gate types, DPL, present bit)
+//!   <https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html>
+//! - OSDev Wiki: Interrupt Descriptor Table
+//!   <https://wiki.osdev.org/Interrupt_Descriptor_Table>
 
 use core::ops::{Index, IndexMut};
 

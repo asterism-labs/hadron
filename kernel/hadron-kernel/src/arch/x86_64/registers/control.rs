@@ -1,4 +1,11 @@
 //! Control registers (CR0, CR2, CR3, CR4).
+//!
+//! # References
+//!
+//! - Intel SDM Vol. 3A, §2.5: Control Registers (CR0–CR4 flag definitions)
+//!   <https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html>
+//! - OSDev Wiki: Control Register 0 / CR4
+//!   <https://wiki.osdev.org/CPU_Registers_x86#CR0>
 
 use crate::addr::PhysAddr;
 

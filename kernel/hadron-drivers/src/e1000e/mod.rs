@@ -3,6 +3,11 @@
 //! Implements [`NetworkDevice`] for the Intel 82574L NIC discovered via PCI.
 //! Uses legacy 16-byte descriptors with direct MMIO register access. Supports
 //! MSI-X with legacy INTx fallback.
+//!
+//! # References
+//!
+//! - Intel 82574L Gigabit Ethernet Controller Datasheet
+//!   <https://www.intel.com/content/dam/www/public/us/en/documents/datasheets/82574l-gbe-controller-datasheet.pdf>
 
 extern crate alloc;
 

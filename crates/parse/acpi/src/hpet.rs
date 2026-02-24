@@ -3,6 +3,13 @@
 //! The HPET table provides the base address and configuration parameters of
 //! the HPET hardware timer, which offers a higher-resolution alternative to
 //! the legacy 8254 PIT.
+//!
+//! # References
+//!
+//! - ACPI Specification 6.5, §5.2.28: HPET Description Table
+//!   <https://uefi.org/specs/ACPI/6.5/>
+//! - IA-PC HPET Specification 1.0a
+//!   <https://www.intel.com/content/dam/www/public/us/en/documents/technical-specifications/software-developers-hpet-spec-1-0a.pdf>
 
 use hadron_binparse::FromBytes;
 

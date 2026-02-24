@@ -2,6 +2,11 @@
 //!
 //! Provides safe volatile MMIO access to the generic host control registers
 //! and methods to enable AHCI mode and query capabilities.
+//!
+//! # References
+//!
+//! - Serial ATA AHCI Specification 1.3.1, §3.1: Generic Host Control (GHC AE/IE, CAP)
+//!   <https://www.intel.com/content/dam/www/public/us/en/documents/technical-specifications/serial-ata-ahci-spec-rev1-3-1.pdf>
 
 use hadron_kernel::addr::VirtAddr;
 

@@ -1,6 +1,13 @@
 //! 8254 PIT (Programmable Interval Timer) driver.
 //!
 //! Used only for LAPIC timer calibration via channel 2 one-shot mode.
+//!
+//! # References
+//!
+//! - Intel 8254 Programmable Interval Timer Datasheet
+//!   <https://www.scs.stanford.edu/10wi-cs140/pintos/specs/8254.pdf>
+//! - OSDev Wiki: Programmable Interval Timer
+//!   <https://wiki.osdev.org/Programmable_Interval_Timer>
 
 use hadron_kernel::arch::x86_64::Port;
 

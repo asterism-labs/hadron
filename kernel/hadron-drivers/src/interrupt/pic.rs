@@ -2,6 +2,13 @@
 //!
 //! Provides just enough functionality to remap the PIC to vectors 32-47
 //! and then mask all IRQs so the APIC can take over.
+//!
+//! # References
+//!
+//! - Intel 8259A Programmable Interrupt Controller Datasheet
+//!   <https://pdos.csail.mit.edu/6.828/2016/readings/8259A.pdf>
+//! - OSDev Wiki: 8259 PIC
+//!   <https://wiki.osdev.org/8259_PIC>
 
 use hadron_kernel::arch::x86_64::Port;
 

@@ -1,4 +1,9 @@
 //! System Description Table (SDT) header and checksum utilities.
+//!
+//! # References
+//!
+//! - ACPI Specification 6.5, §5.2.6: System Description Table Header
+//!   <https://uefi.org/specs/ACPI/6.5/>
 
 use hadron_binparse::FromBytes;
 

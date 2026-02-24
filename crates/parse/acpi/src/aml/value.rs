@@ -1,4 +1,9 @@
 //! AML data object values and error types.
+//!
+//! # References
+//!
+//! - ACPI Specification 6.5, Ch. 20: AML Data Objects and Package Encoding
+//!   <https://uefi.org/specs/ACPI/6.5/>
 
 use crate::AcpiError;
 

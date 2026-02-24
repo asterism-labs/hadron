@@ -1,6 +1,13 @@
 //! Time Stamp Counter (TSC) reading primitives.
 //!
 //! Provides `rdtsc` and `rdtscp` wrappers for high-resolution timing.
+//!
+//! # References
+//!
+//! - Intel SDM Vol. 2B: RDTSC — Read Time-Stamp Counter
+//!   <https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html>
+//! - Intel SDM Vol. 2B: RDTSCP — Read Time-Stamp Counter and Processor ID
+//!   <https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html>
 
 /// Reads the TSC (Time Stamp Counter) using `RDTSC`.
 ///

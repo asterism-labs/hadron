@@ -2,6 +2,11 @@
 //!
 //! Provides [`Virtqueue`] which manages the descriptor table, available ring,
 //! and used ring for VirtIO split-queue I/O.
+//!
+//! # References
+//!
+//! - Virtual I/O Device (VIRTIO) Specification 1.2, §2.7: Split Virtqueues
+//!   <https://docs.oasis-open.org/virtio/virtio/v1.2/virtio-v1.2.html>
 
 use hadron_kernel::sync::atomic::{AtomicU16, Ordering};
 

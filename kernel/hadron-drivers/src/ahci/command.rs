@@ -2,6 +2,13 @@
 //!
 //! All structures use `#[repr(C, packed)]` to match the hardware-mandated
 //! layout exactly.
+//!
+//! # References
+//!
+//! - Serial ATA AHCI Specification 1.3.1, §4.2.2: Command Header / PRDT
+//!   <https://www.intel.com/content/dam/www/public/us/en/documents/technical-specifications/serial-ata-ahci-spec-rev1-3-1.pdf>
+//! - Serial ATA 1.0a Specification: Register FIS — Host to Device (FIS type 0x27)
+//!   <https://www.t13.org/>
 
 /// FIS Register — Host to Device (20 bytes).
 #[repr(C, packed)]
