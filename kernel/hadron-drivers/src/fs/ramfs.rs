@@ -215,7 +215,9 @@ impl Inode for RamInode {
             return Err(FsError::InvalidArgument);
         }
         let data = self.data.lock();
-        String::from_utf8(data.clone()).map_err(|_| FsError::IoError)
+        core::str::from_utf8(&data)
+            .map(String::from)
+            .map_err(|_| FsError::IoError)
     }
 
     fn create_symlink(

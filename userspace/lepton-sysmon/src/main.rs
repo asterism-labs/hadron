@@ -37,8 +37,7 @@ const BAR_H: u32 = 14;
 fn write_u64(buf: &mut [u8; 20], val: u64) -> &str {
     if val == 0 {
         buf[19] = b'0';
-        // SAFETY: Single ASCII digit is valid UTF-8.
-        return unsafe { core::str::from_utf8_unchecked(&buf[19..]) };
+        return core::str::from_utf8(&buf[19..]).expect("ASCII digit");
     }
     let mut pos = 20;
     let mut v = val;
@@ -47,8 +46,7 @@ fn write_u64(buf: &mut [u8; 20], val: u64) -> &str {
         buf[pos] = b'0' + (v % 10) as u8;
         v /= 10;
     }
-    // SAFETY: All bytes written are ASCII digits, which are valid UTF-8.
-    unsafe { core::str::from_utf8_unchecked(&buf[pos..]) }
+    core::str::from_utf8(&buf[pos..]).expect("ASCII digits")
 }
 
 /// Format a `u64` as zero-padded 2-digit decimal.
@@ -121,8 +119,7 @@ fn render(s: &mut Surface<'_>) {
                 pos += 1;
             }
         }
-        // SAFETY: All bytes are ASCII, which is valid UTF-8.
-        let label_str = unsafe { core::str::from_utf8_unchecked(&label[..pos]) };
+        let label_str = core::str::from_utf8(&label[..pos]).expect("ASCII label");
         s.draw_str(MARGIN_X + 4, y, label_str, WHITE, BAR_BG);
         y += LINE_H + 4;
     }
@@ -145,8 +142,7 @@ fn render(s: &mut Surface<'_>) {
                 pos += 1;
             }
         }
-        // SAFETY: All bytes are ASCII.
-        let label_str = unsafe { core::str::from_utf8_unchecked(&label[..pos]) };
+        let label_str = core::str::from_utf8(&label[..pos]).expect("ASCII label");
         s.draw_str(MARGIN_X, y, label_str, WHITE, BLACK);
         y += LINE_H;
     }
@@ -199,8 +195,7 @@ fn render(s: &mut Surface<'_>) {
                 pos += 1;
             }
         }
-        // SAFETY: All bytes are ASCII.
-        let label_str = unsafe { core::str::from_utf8_unchecked(&label[..pos]) };
+        let label_str = core::str::from_utf8(&label[..pos]).expect("ASCII label");
         s.draw_str(MARGIN_X, y, label_str, WHITE, BLACK);
         y += LINE_H;
     }
@@ -260,8 +255,7 @@ fn render(s: &mut Surface<'_>) {
                 pos += 1;
             }
         }
-        // SAFETY: All bytes are ASCII.
-        let label_str = unsafe { core::str::from_utf8_unchecked(&label[..pos]) };
+        let label_str = core::str::from_utf8(&label[..pos]).expect("ASCII label");
         s.draw_str(MARGIN_X, y, label_str, WHITE, BLACK);
         y += LINE_H;
     }

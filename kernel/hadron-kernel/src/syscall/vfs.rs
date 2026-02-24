@@ -5,8 +5,55 @@ use crate::id::Fd;
 use crate::syscall::EFAULT;
 use crate::syscall::userptr::UserSlice;
 
+use alloc::sync::Arc;
+
 use crate::fs::file::OpenFlags;
-use crate::fs::{poll_immediate, try_poll_immediate};
+use crate::fs::{Inode, poll_immediate, try_poll_immediate};
+
+// ── Shared helpers ──────────────────────────────────────────────────────
+
+/// Look up an fd and clone its inode, returning `-EBADF` on failure.
+fn fd_inode(fd: Fd) -> Result<Arc<dyn Inode>, isize> {
+    crate::proc::ProcessTable::with_current(|process| {
+        let fd_table = process.fd_table.lock();
+        let Some(file) = fd_table.get(fd) else {
+            return Err(-crate::syscall::EBADF);
+        };
+        Ok(file.inode.clone())
+    })
+}
+
+/// Look up an fd, verify `required_flags`, and return (inode, offset).
+///
+/// Returns `-EBADF` if the fd is invalid or the required flags are not set.
+fn fd_inode_checked(fd: Fd, required_flags: OpenFlags) -> Result<(Arc<dyn Inode>, usize), isize> {
+    crate::proc::ProcessTable::with_current(|process| {
+        let fd_table = process.fd_table.lock();
+        let Some(file) = fd_table.get(fd) else {
+            return Err(-crate::syscall::EBADF);
+        };
+        if !file.flags.contains(required_flags) {
+            return Err(-crate::syscall::EBADF);
+        }
+        Ok((file.inode.clone(), file.offset))
+    })
+}
+
+/// Resolve `path` relative to the current working directory.
+///
+/// Absolute paths are returned as-is. Relative paths are joined to the
+/// process CWD.
+pub(super) fn resolve_cwd_path(path: &str) -> alloc::string::String {
+    if path.starts_with('/') {
+        return alloc::string::String::from(path);
+    }
+    let cwd = crate::proc::ProcessTable::with_current(|p| p.cwd.lock().clone());
+    if cwd.ends_with('/') {
+        alloc::format!("{cwd}{path}")
+    } else {
+        alloc::format!("{cwd}/{path}")
+    }
+}
 
 /// `sys_vnode_open` — open a file by path, returning a file descriptor.
 ///
@@ -79,21 +126,9 @@ pub(super) fn sys_vnode_read(fd: usize, buf_ptr: usize, buf_len: usize) -> isize
     // SAFETY: UserSlice validated that [buf_ptr, buf_ptr+buf_len) is in user space.
     let buf = unsafe { user_slice.as_mut_slice() };
 
-    // Extract inode and offset from fd table, then release the process lock
-    // before performing I/O. This is critical: trap_io() does a longjmp and
-    // must never be called while holding the CURRENT_PROCESS spinlock.
-    let (inode, offset) = match crate::proc::ProcessTable::with_current(|process| {
-        let fd_table = process.fd_table.lock();
-        let Some(file) = fd_table.get(fd) else {
-            return Err(-crate::syscall::EBADF);
-        };
-
-        if !file.flags.contains(OpenFlags::READ) {
-            return Err(-crate::syscall::EBADF);
-        }
-
-        Ok((file.inode.clone(), file.offset))
-    }) {
+    // Extract inode and offset, then release the process lock before I/O.
+    // trap_io() does a longjmp and must never run while holding a spinlock.
+    let (inode, offset) = match fd_inode_checked(fd, OpenFlags::READ) {
         Ok(pair) => pair,
         Err(e) => return e,
     };
@@ -144,21 +179,9 @@ pub(super) fn sys_vnode_write(fd: usize, buf_ptr: usize, buf_len: usize) -> isiz
     // SAFETY: UserSlice validated that [buf_ptr, buf_ptr+buf_len) is in user space.
     let buf = unsafe { user_slice.as_slice() };
 
-    // Extract inode and offset from fd table, then release the process lock
-    // before performing I/O. This is critical: trap_io() does a longjmp and
-    // must never be called while holding the CURRENT_PROCESS spinlock.
-    let (inode, offset) = match crate::proc::ProcessTable::with_current(|process| {
-        let fd_table = process.fd_table.lock();
-        let Some(file) = fd_table.get(fd) else {
-            return Err(-crate::syscall::EBADF);
-        };
-
-        if !file.flags.contains(OpenFlags::WRITE) {
-            return Err(-crate::syscall::EBADF);
-        }
-
-        Ok((file.inode.clone(), file.offset))
-    }) {
+    // Extract inode and offset, then release the process lock before I/O.
+    // trap_io() does a longjmp and must never run while holding a spinlock.
+    let (inode, offset) = match fd_inode_checked(fd, OpenFlags::WRITE) {
         Ok(pair) => pair,
         Err(e) => return e,
     };
@@ -261,43 +284,37 @@ pub(super) fn sys_vnode_stat(fd: usize, buf_ptr: usize, buf_len: usize) -> isize
         return -EFAULT;
     };
 
-    crate::proc::ProcessTable::with_current(|process| {
-        let fd_table = process.fd_table.lock();
-        let Some(file) = fd_table.get(fd) else {
-            return -crate::syscall::EBADF;
-        };
+    let inode = match fd_inode(fd) {
+        Ok(i) => i,
+        Err(e) => return e,
+    };
 
-        let inode = file.inode.clone();
-        drop(fd_table);
+    let inode_type = match inode.inode_type() {
+        crate::fs::InodeType::File => crate::syscall::INODE_TYPE_FILE,
+        crate::fs::InodeType::Directory => crate::syscall::INODE_TYPE_DIR,
+        crate::fs::InodeType::CharDevice => crate::syscall::INODE_TYPE_CHARDEV,
+        crate::fs::InodeType::Symlink => crate::syscall::INODE_TYPE_SYMLINK,
+    };
 
-        let inode_type = match inode.inode_type() {
-            crate::fs::InodeType::File => crate::syscall::INODE_TYPE_FILE,
-            crate::fs::InodeType::Directory => crate::syscall::INODE_TYPE_DIR,
-            crate::fs::InodeType::CharDevice => crate::syscall::INODE_TYPE_CHARDEV,
-            crate::fs::InodeType::Symlink => crate::syscall::INODE_TYPE_SYMLINK,
-        };
+    let perms = inode.permissions();
+    let permissions: u32 =
+        u32::from(perms.read) | (u32::from(perms.write) << 1) | (u32::from(perms.execute) << 2);
 
-        let perms = inode.permissions();
-        let permissions: u32 =
-            u32::from(perms.read) | (u32::from(perms.write) << 1) | (u32::from(perms.execute) << 2);
+    let info = StatInfo {
+        inode_type,
+        _pad: [0; 3],
+        size: inode.size() as u64,
+        permissions,
+    };
 
-        let info = StatInfo {
-            inode_type,
-            _pad: [0; 3],
-            size: inode.size() as u64,
-            permissions,
-        };
-
-        // SAFETY: UserSlice validated the pointer range is in user space,
-        // and we write exactly stat_size bytes.
-        let out = unsafe { user_slice.as_mut_slice() };
-        // SAFETY: StatInfo is repr(C) and contains only scalar fields.
-        let info_bytes = unsafe {
-            core::slice::from_raw_parts(core::ptr::addr_of!(info).cast::<u8>(), stat_size)
-        };
-        out[..stat_size].copy_from_slice(info_bytes);
-        0
-    })
+    // SAFETY: UserSlice validated the pointer range is in user space,
+    // and we write exactly stat_size bytes.
+    let out = unsafe { user_slice.as_mut_slice() };
+    // SAFETY: StatInfo is repr(C) and contains only scalar fields.
+    let info_bytes =
+        unsafe { core::slice::from_raw_parts(core::ptr::addr_of!(info).cast::<u8>(), stat_size) };
+    out[..stat_size].copy_from_slice(info_bytes);
+    0
 }
 
 /// `sys_handle_pipe` — create a pipe and return [read_fd, write_fd].
@@ -362,58 +379,53 @@ pub(super) fn sys_vnode_readdir(fd: usize, buf_ptr: usize, buf_len: usize) -> is
         return -EFAULT;
     };
 
-    crate::proc::ProcessTable::with_current(|process| {
-        let fd_table = process.fd_table.lock();
-        let Some(file) = fd_table.get(fd) else {
-            return -crate::syscall::EBADF;
-        };
+    let inode = match fd_inode(fd) {
+        Ok(i) => i,
+        Err(e) => return e,
+    };
 
-        let inode = file.inode.clone();
-        drop(fd_table);
+    let entries = match poll_immediate(inode.readdir()) {
+        Ok(entries) => entries,
+        Err(e) => return -e.to_errno(),
+    };
 
-        let entries = match poll_immediate(inode.readdir()) {
-            Ok(entries) => entries,
-            Err(e) => return -e.to_errno(),
-        };
+    // SAFETY: UserSlice validated the pointer range is in user space.
+    let out = unsafe { user_slice.as_mut_slice() };
+    let mut written = 0;
 
-        // SAFETY: UserSlice validated the pointer range is in user space.
-        let out = unsafe { user_slice.as_mut_slice() };
-        let mut written = 0;
-
-        for entry in &entries {
-            if written >= max_entries {
-                break;
-            }
-
-            let inode_type = match entry.inode_type {
-                crate::fs::InodeType::File => crate::syscall::INODE_TYPE_FILE,
-                crate::fs::InodeType::Directory => crate::syscall::INODE_TYPE_DIR,
-                crate::fs::InodeType::CharDevice => crate::syscall::INODE_TYPE_CHARDEV,
-                crate::fs::InodeType::Symlink => crate::syscall::INODE_TYPE_SYMLINK,
-            };
-
-            let name_bytes = entry.name.as_bytes();
-            let name_len = name_bytes.len().min(60);
-
-            let mut info = DirEntryInfo {
-                inode_type,
-                name_len: name_len as u8,
-                _pad: [0; 2],
-                name: [0; 60],
-            };
-            info.name[..name_len].copy_from_slice(&name_bytes[..name_len]);
-
-            // SAFETY: DirEntryInfo is repr(C) and contains only scalar fields.
-            let info_bytes = unsafe {
-                core::slice::from_raw_parts(core::ptr::addr_of!(info).cast::<u8>(), entry_size)
-            };
-            let offset = written * entry_size;
-            out[offset..offset + entry_size].copy_from_slice(info_bytes);
-            written += 1;
+    for entry in &entries {
+        if written >= max_entries {
+            break;
         }
 
-        written as isize
-    })
+        let inode_type = match entry.inode_type {
+            crate::fs::InodeType::File => crate::syscall::INODE_TYPE_FILE,
+            crate::fs::InodeType::Directory => crate::syscall::INODE_TYPE_DIR,
+            crate::fs::InodeType::CharDevice => crate::syscall::INODE_TYPE_CHARDEV,
+            crate::fs::InodeType::Symlink => crate::syscall::INODE_TYPE_SYMLINK,
+        };
+
+        let name_bytes = entry.name.as_bytes();
+        let name_len = name_bytes.len().min(60);
+
+        let mut info = DirEntryInfo {
+            inode_type,
+            name_len: name_len as u8,
+            _pad: [0; 2],
+            name: [0; 60],
+        };
+        info.name[..name_len].copy_from_slice(&name_bytes[..name_len]);
+
+        // SAFETY: DirEntryInfo is repr(C) and contains only scalar fields.
+        let info_bytes = unsafe {
+            core::slice::from_raw_parts(core::ptr::addr_of!(info).cast::<u8>(), entry_size)
+        };
+        let offset = written * entry_size;
+        out[offset..offset + entry_size].copy_from_slice(info_bytes);
+        written += 1;
+    }
+
+    written as isize
 }
 
 /// `sys_vnode_unlink` — remove a file or empty directory by path.
@@ -946,24 +958,15 @@ pub(super) fn sys_vnode_readlink(
 pub(super) fn sys_vnode_truncate(fd: usize, len: usize) -> isize {
     let fd = Fd::new(fd as u32);
 
-    crate::proc::ProcessTable::with_current(|process| {
-        let fd_table = process.fd_table.lock();
-        let Some(file) = fd_table.get(fd) else {
-            return -crate::syscall::EBADF;
-        };
+    let (inode, _) = match fd_inode_checked(fd, OpenFlags::WRITE) {
+        Ok(pair) => pair,
+        Err(e) => return e,
+    };
 
-        if !file.flags.contains(OpenFlags::WRITE) {
-            return -crate::syscall::EBADF;
-        }
-
-        let inode = file.inode.clone();
-        drop(fd_table);
-
-        match crate::fs::poll_immediate(inode.truncate(len)) {
-            Ok(()) => 0,
-            Err(e) => -e.to_errno(),
-        }
-    })
+    match crate::fs::poll_immediate(inode.truncate(len)) {
+        Ok(()) => 0,
+        Err(e) => -e.to_errno(),
+    }
 }
 
 /// `sys_vnode_fstatat` — stat a file relative to a directory fd.
@@ -997,23 +1000,26 @@ pub(super) fn sys_vnode_fstatat(
     };
 
     // Resolve the path to an inode.
-    let resolved_path = if path.starts_with('/') {
-        alloc::string::String::from(path)
-    } else if dirfd == AT_FDCWD {
-        let cwd = crate::proc::ProcessTable::with_current(|p| p.cwd.lock().clone());
-        if cwd.ends_with('/') {
-            alloc::format!("{cwd}{path}")
-        } else {
-            alloc::format!("{cwd}/{path}")
+    let inode = if path.starts_with('/') || dirfd == AT_FDCWD {
+        let resolved_path = resolve_cwd_path(path);
+        match vfs::resolve(&resolved_path) {
+            Ok(i) => i,
+            Err(e) => return -e.to_errno(),
         }
     } else {
-        // TODO: resolve relative to dirfd.
-        return -crate::syscall::ENOSYS;
-    };
-
-    let inode = match vfs::with_vfs(|vfs| vfs.resolve(&resolved_path)) {
-        Ok(i) => i,
-        Err(e) => return -e.to_errno(),
+        // Resolve relative to the directory fd.
+        let dir_fd = Fd::new(dirfd as u32);
+        let dir_inode = match fd_inode(dir_fd) {
+            Ok(i) => i,
+            Err(e) => return e,
+        };
+        if dir_inode.inode_type() != crate::fs::InodeType::Directory {
+            return -crate::syscall::ENOTDIR;
+        }
+        match vfs::resolve_relative(dir_inode, path) {
+            Ok(i) => i,
+            Err(e) => return -e.to_errno(),
+        }
     };
 
     let Ok(user_slice) = UserSlice::new(buf, stat_size) else {

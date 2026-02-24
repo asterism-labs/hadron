@@ -91,6 +91,7 @@ impl Inode for DevConsole {
     }
 
     fn ioctl(&self, cmd: u32, arg: usize) -> Result<usize, FsError> {
+        use crate::syscall::userptr::UserPtr;
         use hadron_syscall::{
             TCGETS, TCSETS, TCSETSF, TCSETSW, TIOCGPGRP, TIOCGWINSZ, TIOCSPGRP, TIOCSWINSZ,
             Termios, Winsize,
@@ -100,32 +101,37 @@ impl Inode for DevConsole {
         match cmd {
             TCGETS => {
                 let t = tty.get_termios();
-                // SAFETY: arg is a user pointer validated by sys_handle_ioctl.
-                unsafe { core::ptr::write_volatile(arg as *mut Termios, t) };
+                let ptr = UserPtr::<Termios>::new(arg).map_err(|_| FsError::Fault)?;
+                // SAFETY: UserPtr validated address is user-space and aligned.
+                unsafe { ptr.write(t) };
                 Ok(0)
             }
             TCSETS | TCSETSW | TCSETSF => {
-                // SAFETY: arg is a user pointer validated by sys_handle_ioctl.
-                let t = unsafe { core::ptr::read(arg as *const Termios) };
+                let ptr = UserPtr::<Termios>::new(arg).map_err(|_| FsError::Fault)?;
+                // SAFETY: UserPtr validated address; reading a POD struct.
+                let t = unsafe { *ptr.as_ref() };
                 tty.set_termios(&t);
                 Ok(0)
             }
             TIOCGPGRP => {
                 let pgid = tty.foreground_pgid().unwrap_or(0);
-                // SAFETY: arg is a user pointer validated by sys_handle_ioctl.
-                unsafe { core::ptr::write_volatile(arg as *mut u32, pgid) };
+                let ptr = UserPtr::<u32>::new(arg).map_err(|_| FsError::Fault)?;
+                // SAFETY: UserPtr validated address is user-space and aligned.
+                unsafe { ptr.write(pgid) };
                 Ok(0)
             }
             TIOCSPGRP => {
-                // SAFETY: arg is a user pointer validated by sys_handle_ioctl.
-                let pgid = unsafe { core::ptr::read(arg as *const u32) };
+                let ptr = UserPtr::<u32>::new(arg).map_err(|_| FsError::Fault)?;
+                // SAFETY: UserPtr validated address; reading a u32.
+                let pgid = unsafe { *ptr.as_ref() };
                 tty.set_foreground_pgid(pgid);
                 Ok(0)
             }
             TIOCGWINSZ => {
                 let ws = tty.get_winsize();
-                // SAFETY: arg is a user pointer validated by sys_handle_ioctl.
-                unsafe { core::ptr::write_volatile(arg as *mut Winsize, ws) };
+                let ptr = UserPtr::<Winsize>::new(arg).map_err(|_| FsError::Fault)?;
+                // SAFETY: UserPtr validated address is user-space and aligned.
+                unsafe { ptr.write(ws) };
                 Ok(0)
             }
             TIOCSWINSZ => Ok(0),

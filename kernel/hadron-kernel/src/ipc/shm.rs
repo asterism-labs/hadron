@@ -48,7 +48,15 @@ impl ShmObject {
         let frames = pmm::with(|pmm| {
             let mut allocated = Vec::with_capacity(page_count);
             for _ in 0..page_count {
-                let frame = pmm.allocate_frame()?;
+                let Some(frame) = pmm.allocate_frame() else {
+                    // Free all frames allocated so far to avoid leaking them.
+                    for f in &allocated {
+                        // SAFETY: Each frame was allocated by PMM above and has
+                        // not been mapped or handed to any other owner.
+                        let _ = unsafe { pmm.deallocate_frame(*f) };
+                    }
+                    return None;
+                };
 
                 // Zero the frame via HHDM.
                 let ptr = (hhdm_offset + frame.start_address().as_u64()).as_mut_ptr::<u8>();

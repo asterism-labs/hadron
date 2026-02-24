@@ -202,7 +202,9 @@ fn expand_vars<'a>(
             let expanded_len = offset - start_offset;
             let expanded = unsafe {
                 let ptr = expand_buf.as_ptr().add(start_offset);
-                core::str::from_utf8_unchecked(core::slice::from_raw_parts(ptr, expanded_len))
+                // SAFETY: pointer arithmetic is correct; from_raw_parts produces the right slice.
+                core::str::from_utf8(core::slice::from_raw_parts(ptr, expanded_len))
+                    .expect("expanded variable is valid UTF-8")
             };
             tokens[i] = Token::Word(expanded);
         }
@@ -400,8 +402,7 @@ fn resolve_command<'a>(cmd: &str, path_buf: &'a mut [u8; PATH_BUF_SIZE]) -> Opti
         // Absolute path — use as-is.
         let len = cmd.len().min(PATH_BUF_SIZE);
         path_buf[..len].copy_from_slice(&cmd.as_bytes()[..len]);
-        // SAFETY: cmd is valid UTF-8, so the copied bytes are valid UTF-8.
-        return Some(unsafe { core::str::from_utf8_unchecked(&path_buf[..len]) });
+        return Some(core::str::from_utf8(&path_buf[..len]).expect("cmd is valid UTF-8"));
     }
 
     // Search PATH directories.
@@ -424,8 +425,7 @@ fn resolve_command<'a>(cmd: &str, path_buf: &'a mut [u8; PATH_BUF_SIZE]) -> Opti
         // Check existence by trying to open the file.
         // The temporary &str is scoped to avoid borrow conflicts.
         let fd = {
-            // SAFETY: dir and cmd are valid UTF-8, '/' is ASCII.
-            let tmp = unsafe { core::str::from_utf8_unchecked(&path_buf[..total]) };
+            let tmp = core::str::from_utf8(&path_buf[..total]).expect("path is valid UTF-8");
             io::open(tmp, 0)
         };
         if fd >= 0 {
@@ -436,8 +436,7 @@ fn resolve_command<'a>(cmd: &str, path_buf: &'a mut [u8; PATH_BUF_SIZE]) -> Opti
     }
 
     if found_len > 0 {
-        // SAFETY: path_buf contains valid UTF-8 from the last successful iteration.
-        Some(unsafe { core::str::from_utf8_unchecked(&path_buf[..found_len]) })
+        Some(core::str::from_utf8(&path_buf[..found_len]).expect("path is valid UTF-8"))
     } else {
         None
     }
@@ -743,8 +742,7 @@ fn builtin_cd(args: &[&str]) {
             abs_buf[pwd.len() + 1..len].copy_from_slice(target.as_bytes());
             len
         };
-        // SAFETY: pwd and target are valid UTF-8, '/' is ASCII.
-        unsafe { core::str::from_utf8_unchecked(&abs_buf[..total]) }
+        core::str::from_utf8(&abs_buf[..total]).expect("path is valid UTF-8")
     };
 
     // Normalize the path (resolve `.` and `..`).
@@ -798,7 +796,7 @@ fn normalize_path<'a>(path: &str, buf: &'a mut [u8; PATH_BUF_SIZE]) -> &'a str {
 
     if comp_count == 0 {
         buf[0] = b'/';
-        return unsafe { core::str::from_utf8_unchecked(&buf[..1]) };
+        return core::str::from_utf8(&buf[..1]).expect("ASCII slash");
     }
 
     // Rebuild path: /comp1/comp2/...
@@ -821,8 +819,7 @@ fn normalize_path<'a>(path: &str, buf: &'a mut [u8; PATH_BUF_SIZE]) -> &'a str {
         }
     }
 
-    // SAFETY: We only wrote valid UTF-8 bytes (from path components and '/').
-    unsafe { core::str::from_utf8_unchecked(&buf[..out_offset]) }
+    core::str::from_utf8(&buf[..out_offset]).expect("path components are valid UTF-8")
 }
 
 /// `export [VAR=value]` — set or list environment variables.

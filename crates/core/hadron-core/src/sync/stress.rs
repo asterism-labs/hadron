@@ -12,7 +12,7 @@
 //!   no-ops so early boot is unaffected.
 //! - **Delay**: spins for a random duration in `[0, max_us)` microseconds.
 
-use super::atomic::const_only::{AtomicPtr, AtomicU32, AtomicU64, Ordering};
+use super::atomic::const_only::{AtomicU32, AtomicU64, Ordering};
 
 use crate::cpu_local::{CpuLocal, MAX_CPUS};
 
@@ -24,7 +24,7 @@ use crate::cpu_local::{CpuLocal, MAX_CPUS};
 static MAX_US: AtomicU32 = AtomicU32::new(10);
 
 /// Nanosecond clock callback. Null until the kernel registers one.
-static NANOS_FN: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
+static NANOS_FN: super::AtomicFn<fn() -> u64> = super::AtomicFn::null();
 
 /// Per-CPU xorshift64 PRNG state.
 static PRNG_STATE: CpuLocal<AtomicU64> = CpuLocal::new([const { AtomicU64::new(0) }; MAX_CPUS]);
@@ -78,7 +78,7 @@ pub fn init(max_us: u32, seed: u64) {
 /// The provided function must be safe to call from any context (including
 /// interrupt handlers) and must not acquire any lock tracked by lockdep.
 pub unsafe fn set_nanos_fn(f: fn() -> u64) {
-    NANOS_FN.store(f as *mut (), Ordering::Release);
+    NANOS_FN.store(f);
 }
 
 // ---------------------------------------------------------------------------
@@ -116,10 +116,9 @@ fn next_random() -> u64 {
 /// when called from lock acquire/release paths).
 #[inline]
 pub fn stress_delay() {
-    let nanos_ptr = NANOS_FN.load(Ordering::Acquire);
-    if nanos_ptr.is_null() {
+    let Some(nanos_fn) = NANOS_FN.load_optional() else {
         return; // No clock yet — no-op during early boot.
-    }
+    };
 
     let max_us = MAX_US.load(Ordering::Relaxed);
     if max_us == 0 {
@@ -130,9 +129,6 @@ pub fn stress_delay() {
     if target_ns == 0 {
         return;
     }
-
-    // SAFETY: The pointer was set by `set_nanos_fn` from a valid `fn() -> u64`.
-    let nanos_fn: fn() -> u64 = unsafe { core::mem::transmute(nanos_ptr) };
 
     let start = nanos_fn();
     if start == 0 {

@@ -43,7 +43,7 @@ pub type LockdepWriteFn = fn(fmt::Arguments<'_>);
 
 /// Registered reporting callback. `null` means no reporter installed yet
 /// (violations are silently dropped until the kernel sets one).
-static REPORT_FN: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
+static REPORT_FN: super::AtomicFn<LockdepWriteFn> = super::AtomicFn::null();
 
 /// Registers a lockdep violation reporting function.
 ///
@@ -52,17 +52,14 @@ static REPORT_FN: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
 /// The provided function must be safe to call from any context (including
 /// interrupt handlers) and must not acquire any lock tracked by lockdep.
 pub unsafe fn set_report_fn(f: LockdepWriteFn) {
-    REPORT_FN.store(f as *mut (), Ordering::Release);
+    REPORT_FN.store(f);
 }
 
 /// Writes a formatted message to the registered reporting callback.
 ///
 /// If no callback is registered, the message is silently dropped.
 pub(crate) fn report_write(args: fmt::Arguments<'_>) {
-    let ptr = REPORT_FN.load(Ordering::Acquire);
-    if !ptr.is_null() {
-        // SAFETY: The pointer was set by `set_report_fn` from a valid `LockdepWriteFn`.
-        let f: LockdepWriteFn = unsafe { core::mem::transmute(ptr) };
+    if let Some(f) = REPORT_FN.load_optional() {
         f(args);
     }
 }

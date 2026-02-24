@@ -7,7 +7,7 @@
 //! Signal delivery is checked at kernel re-entry points (after preemption, after
 //! blocking I/O, after waitpid).
 
-use hadron_core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use hadron_core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::syscall::{SA_RESETHAND, SA_RESTART, SIG_DFL, SIG_IGN};
 use crate::syscall::{SIGCHLD, SIGINT, SIGKILL, SIGPIPE, SIGQUIT, SIGSEGV, SIGSTOP, SIGTERM};
@@ -58,11 +58,42 @@ pub enum SignalDisposition {
     Handler(u64),
 }
 
+/// Compact flag bits used in the packed handler+flags representation.
+/// External `SA_*` constants are converted to/from these on the API boundary.
+const PACKED_FLAG_RESTART: u64 = 1 << 48;
+const PACKED_FLAG_RESETHAND: u64 = 1 << 49;
+const PACKED_HANDLER_MASK: u64 = (1 << 48) - 1;
+
+/// Convert external `sa_flags` (u32, using `SA_RESTART`/`SA_RESETHAND` bit positions)
+/// into the compact packed representation stored in the upper bits of handler entries.
+fn pack_flags(sa_flags: u32) -> u64 {
+    let mut packed = 0u64;
+    if sa_flags & SA_RESTART as u32 != 0 {
+        packed |= PACKED_FLAG_RESTART;
+    }
+    if sa_flags & SA_RESETHAND as u32 != 0 {
+        packed |= PACKED_FLAG_RESETHAND;
+    }
+    packed
+}
+
+/// Convert packed flags back to external `sa_flags` format.
+fn unpack_flags(packed: u64) -> u32 {
+    let mut flags = 0u32;
+    if packed & PACKED_FLAG_RESTART != 0 {
+        flags |= SA_RESTART as u32;
+    }
+    if packed & PACKED_FLAG_RESETHAND != 0 {
+        flags |= SA_RESETHAND as u32;
+    }
+    flags
+}
+
 /// Per-process signal state using an atomic bitmask and handler table.
 ///
 /// Bit N of `pending` represents signal number N (1-indexed, so bit 0 is unused).
-/// `handlers[N]` stores the disposition for signal N: `SIG_DFL` (0), `SIG_IGN` (1),
-/// or a userspace function pointer address.
+/// Each handler entry packs both the handler address (bits 0..48) and compact flags
+/// (bits 48+) into a single `AtomicU64`, ensuring atomicity for `SA_RESETHAND`.
 ///
 /// Both pending and handlers are atomic for lock-free access from interrupt context.
 pub struct SignalState {
@@ -71,10 +102,10 @@ pub struct SignalState {
     /// Blocked signal bitmask. Bit N = signal N is blocked (masked).
     /// SIGKILL and SIGSTOP cannot be blocked.
     blocked: AtomicU64,
-    /// Per-signal handler table. `SIG_DFL` = 0, `SIG_IGN` = 1, else = handler addr.
+    /// Per-signal packed handler+flags table.
+    /// Bits 0..48: handler address (`SIG_DFL`=0, `SIG_IGN`=1, else user fn pointer).
+    /// Bits 48+: compact flag bits (`PACKED_FLAG_RESTART`, `PACKED_FLAG_RESETHAND`).
     handlers: [AtomicU64; HANDLER_TABLE_SIZE],
-    /// Per-signal action flags (SA_RESTART, SA_RESETHAND, etc.).
-    flags: [AtomicU32; HANDLER_TABLE_SIZE],
 }
 
 impl SignalState {
@@ -84,7 +115,6 @@ impl SignalState {
             pending: AtomicU64::new(0),
             blocked: AtomicU64::new(0),
             handlers: [const { AtomicU64::new(SIG_DFL as u64) }; HANDLER_TABLE_SIZE],
-            flags: [const { AtomicU32::new(0) }; HANDLER_TABLE_SIZE],
         }
     }
 
@@ -186,9 +216,9 @@ impl SignalState {
         if !Signal::is_valid(signum) || signum == SIGKILL || signum == SIGSTOP {
             return None;
         }
-        let old = self.handlers[signum].swap(handler, Ordering::AcqRel);
-        self.flags[signum].store(sa_flags, Ordering::Release);
-        Some(old)
+        let packed = (handler & PACKED_HANDLER_MASK) | pack_flags(sa_flags);
+        let old = self.handlers[signum].swap(packed, Ordering::AcqRel);
+        Some(old & PACKED_HANDLER_MASK)
     }
 
     /// Get the current handler for a signal number.
@@ -196,7 +226,7 @@ impl SignalState {
         if !Signal::is_valid(signum) {
             return SIG_DFL as u64;
         }
-        self.handlers[signum].load(Ordering::Acquire)
+        self.handlers[signum].load(Ordering::Acquire) & PACKED_HANDLER_MASK
     }
 
     /// Get the flags for a signal number.
@@ -204,7 +234,7 @@ impl SignalState {
         if !Signal::is_valid(signum) {
             return 0;
         }
-        self.flags[signum].load(Ordering::Acquire)
+        unpack_flags(self.handlers[signum].load(Ordering::Acquire))
     }
 
     /// Returns `true` if `SA_RESTART` is set for the given signal.
@@ -216,26 +246,45 @@ impl SignalState {
     pub fn reset_handlers(&self) {
         for i in 1..HANDLER_TABLE_SIZE {
             self.handlers[i].store(SIG_DFL as u64, Ordering::Release);
-            self.flags[i].store(0, Ordering::Release);
         }
     }
 
     /// Resolve how a signal should be handled based on the handler table.
+    ///
+    /// When `SA_RESETHAND` is set, the handler is atomically swapped to `SIG_DFL`
+    /// using a CAS loop, preventing TOCTOU races with concurrent `set_handler` calls.
     pub fn disposition(&self, signum: usize) -> SignalDisposition {
         // SIGKILL and SIGSTOP always use default action, regardless of handler table.
         if signum == SIGKILL || signum == SIGSTOP {
             return SignalDisposition::Default(default_action(signum));
         }
 
-        let handler = self.get_handler(signum);
-        let sa_flags = self.get_flags(signum);
+        let packed = if Signal::is_valid(signum) {
+            // Atomically load and, if SA_RESETHAND is set, swap to SIG_DFL.
+            let mut current = self.handlers[signum].load(Ordering::Acquire);
+            loop {
+                let handler = current & PACKED_HANDLER_MASK;
+                let needs_reset =
+                    current & PACKED_FLAG_RESETHAND != 0 && handler as usize != SIG_DFL;
+                if !needs_reset {
+                    break current;
+                }
+                // CAS: atomically replace with SIG_DFL (no flags).
+                match self.handlers[signum].compare_exchange_weak(
+                    current,
+                    SIG_DFL as u64,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => break current,            // We won the race — use the old value.
+                    Err(updated) => current = updated, // Retry with new value.
+                }
+            }
+        } else {
+            SIG_DFL as u64
+        };
 
-        // SA_RESETHAND: reset handler to SIG_DFL after querying it.
-        if sa_flags & SA_RESETHAND as u32 != 0 && handler as usize != SIG_DFL {
-            self.handlers[signum].store(SIG_DFL as u64, Ordering::Release);
-            self.flags[signum].store(0, Ordering::Release);
-        }
-
+        let handler = packed & PACKED_HANDLER_MASK;
         match handler as usize {
             SIG_DFL => SignalDisposition::Default(default_action(signum)),
             SIG_IGN => SignalDisposition::Ignore,

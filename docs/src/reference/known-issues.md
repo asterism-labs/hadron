@@ -4,15 +4,6 @@ Tracked bugs and limitations discovered during development that have not yet
 been addressed. Each entry includes the affected subsystem, a description,
 and pointers to the relevant code.
 
-## Shell / Job Control
-
-### No `WNOHANG` for `waitpid`
-
-Background job reaping in the shell requires non-blocking `waitpid`, which
-is not yet implemented. The shell can track background jobs but cannot poll
-for their completion without blocking. A `WNOHANG` flag for `task_wait`
-would allow the shell to reap finished background jobs at prompt time.
-
 ## POSIX Compatibility Limitations
 
 ### No `fork()` — spawn-only process model
@@ -55,13 +46,6 @@ the line discipline's buffering behavior. Interactive programs like `vi`,
 `nano`, and `less` that require character-at-a-time input will not work
 correctly until raw mode is implemented in the line discipline.
 
-### No `CLOCK_REALTIME`
-
-`clock_gettime` only supports `CLOCK_MONOTONIC`. There is no RTC driver,
-so wall-clock time is unavailable. Programs that call `time()`, `gettimeofday()`,
-or `clock_gettime(CLOCK_REALTIME)` will fail. `ls -l` and similar tools
-that format timestamps are affected.
-
 ### Signal delivery lacks `SA_SIGINFO` / `siginfo_t`
 
 Signal handlers receive only the signal number. The extended `siginfo_t`
@@ -96,7 +80,6 @@ order — acquire higher levels first):
 |     1 | `HEAP`                | SpinLock     | `kernel/mm/src/heap.rs`      |
 |     0 | `LOGGER`              | SpinLock     | `kernel/hadron-kernel/src/log.rs` |
 |     0 | `TTY_WAKER`           | IrqSpinLock  | `kernel/hadron-kernel/src/tty/mod.rs` |
-|     0 | `TTY_FBCON`           | SpinLock     | `kernel/hadron-kernel/src/tty/mod.rs` |
 |     0 | `FBCON`               | SpinLock     | `kernel/hadron-kernel/src/drivers/fbcon/mod.rs` |
 
 **Key rules:**

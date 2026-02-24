@@ -49,6 +49,12 @@ impl Vfs {
     /// the remaining path components via `lookup`. Symlinks are followed
     /// up to [`MAX_SYMLINK_DEPTH`](Self::MAX_SYMLINK_DEPTH) levels deep.
     ///
+    /// # Lock scope
+    ///
+    /// Only the mount-point lookup accesses `self.mounts`. Callers that hold
+    /// the VFS lock should prefer the free-function [`resolve`] instead,
+    /// which releases the lock before the (potentially slow) path walk.
+    ///
     /// # Errors
     ///
     /// Returns [`FsError::InvalidArgument`] if the path is not absolute,
@@ -58,12 +64,11 @@ impl Vfs {
         self.resolve_with_depth(abs_path, 0)
     }
 
-    /// Internal resolve with symlink depth tracking.
-    fn resolve_with_depth(&self, abs_path: &str, depth: usize) -> Result<Arc<dyn Inode>, FsError> {
-        if depth > Self::MAX_SYMLINK_DEPTH {
-            return Err(FsError::SymlinkLoop);
-        }
-
+    /// Find the root inode and remaining path for a given absolute path.
+    ///
+    /// This performs only the mount-point lookup (cheap, no I/O). The caller
+    /// can drop the VFS lock before walking the remaining path components.
+    fn find_mount<'a>(&self, abs_path: &'a str) -> Result<(Arc<dyn Inode>, &'a str), FsError> {
         if !path::is_absolute(abs_path) {
             return Err(FsError::InvalidArgument);
         }
@@ -74,8 +79,18 @@ impl Vfs {
 
         let fs = self.mounts.get(mount_path).ok_or(FsError::NotFound)?;
         let root = fs.root();
-
         let remainder = path::strip_mount_prefix(abs_path, mount_path);
+
+        Ok((root, remainder))
+    }
+
+    /// Internal resolve with symlink depth tracking.
+    fn resolve_with_depth(&self, abs_path: &str, depth: usize) -> Result<Arc<dyn Inode>, FsError> {
+        if depth > Self::MAX_SYMLINK_DEPTH {
+            return Err(FsError::SymlinkLoop);
+        }
+
+        let (root, remainder) = self.find_mount(abs_path)?;
         if remainder.is_empty() {
             return Ok(root);
         }
@@ -104,6 +119,78 @@ pub fn init() {
     let mut vfs = VFS.lock();
     assert!(vfs.is_none(), "VFS already initialized");
     *vfs = Some(Vfs::new());
+}
+
+/// Resolve an absolute path to an inode, holding the VFS lock only for
+/// the mount-point lookup.
+///
+/// Prefer this over `with_vfs(|vfs| vfs.resolve(path))` because it drops
+/// the VFS lock before the (potentially slow) inode lookup walk.
+pub fn resolve(abs_path: &str) -> Result<Arc<dyn Inode>, FsError> {
+    resolve_with_depth(abs_path, 0)
+}
+
+/// Resolve a relative path starting from the given directory inode.
+///
+/// Each component is looked up via [`Inode::lookup`]. Symlinks are followed
+/// up to the global depth limit.
+pub fn resolve_relative(base: Arc<dyn Inode>, rel_path: &str) -> Result<Arc<dyn Inode>, FsError> {
+    resolve_relative_with_depth(base, rel_path, 0)
+}
+
+/// Internal relative resolve with symlink depth tracking.
+fn resolve_relative_with_depth(
+    base: Arc<dyn Inode>,
+    rel_path: &str,
+    depth: usize,
+) -> Result<Arc<dyn Inode>, FsError> {
+    if depth > Vfs::MAX_SYMLINK_DEPTH {
+        return Err(FsError::SymlinkLoop);
+    }
+
+    let mut current = base;
+    for component in path::components(rel_path) {
+        current = poll_immediate(current.lookup(component))?;
+
+        if current.inode_type() == InodeType::Symlink {
+            let target = current.read_link()?;
+            current = resolve_with_depth(&target, depth + 1)?;
+        }
+    }
+
+    Ok(current)
+}
+
+/// Internal resolve with symlink depth tracking (lock-scoped).
+fn resolve_with_depth(abs_path: &str, depth: usize) -> Result<Arc<dyn Inode>, FsError> {
+    if depth > Vfs::MAX_SYMLINK_DEPTH {
+        return Err(FsError::SymlinkLoop);
+    }
+
+    // Hold the VFS lock only for the mount lookup.
+    let (root, remainder) = {
+        let vfs = VFS.lock();
+        let vfs = vfs.as_ref().expect("VFS not initialized");
+        let (root, rem) = vfs.find_mount(abs_path)?;
+        (root, String::from(rem))
+    };
+
+    if remainder.is_empty() {
+        return Ok(root);
+    }
+
+    let mut current = root;
+    for component in path::components(&remainder) {
+        current = poll_immediate(current.lookup(component))?;
+
+        // Follow symlinks.
+        if current.inode_type() == InodeType::Symlink {
+            let target = current.read_link()?;
+            current = resolve_with_depth(&target, depth + 1)?;
+        }
+    }
+
+    Ok(current)
 }
 
 /// Execute a closure with a shared reference to the global VFS.

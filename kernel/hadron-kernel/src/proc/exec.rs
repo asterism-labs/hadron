@@ -360,6 +360,9 @@ fn write_startup_data<M: PageMapper<Size4KiB> + PageTranslator>(
 
     // Maximum combined entries for strings.
     const MAX_STRINGS: usize = 96; // 32 args + 64 envs
+    if args.len() + envs.len() > MAX_STRINGS {
+        return Err(BinaryError::ParseError("too many args + envs"));
+    }
     let mut string_addrs = [(0u64, 0usize); MAX_STRINGS];
 
     // 1. Write env string bytes first (higher addresses).
@@ -540,6 +543,10 @@ pub fn spawn_process(
     let fd_map = opts.as_ref().and_then(|o| o.fd_map);
     let child_cwd = opts.as_ref().and_then(|o| o.cwd.clone());
 
+    // Look up the parent process once for both fd inheritance and CWD.
+    let parent = super::ProcessTable::lookup(parent_pid)
+        .ok_or(BinaryError::ParseError("parent process not found"))?;
+
     // Inherit file descriptors into the child process.
     // Resolve /dev/console BEFORE locking any fd_table to maintain the
     // VFS -> fd_table ordering (same as spawn_init).
@@ -548,8 +555,6 @@ pub fn spawn_process(
             vfs.resolve("/dev/console")
                 .expect("spawn_process: /dev/console not found")
         });
-        let parent =
-            super::ProcessTable::lookup(parent_pid).expect("spawn_process: parent not found");
         let parent_fds = parent.fd_table.lock();
         let mut fd_table = process.fd_table.lock();
 
@@ -583,8 +588,6 @@ pub fn spawn_process(
     if let Some(cwd) = child_cwd {
         *process.cwd.lock() = cwd;
     } else {
-        let parent =
-            super::ProcessTable::lookup(parent_pid).expect("spawn_process: parent not found");
         *process.cwd.lock() = parent.cwd.lock().clone();
     }
 

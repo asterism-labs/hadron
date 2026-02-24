@@ -115,6 +115,8 @@ pub enum FsError {
     Interrupted,
     /// Broken pipe (write to a pipe with no readers).
     BrokenPipe,
+    /// Bad address — user-space pointer is invalid, misaligned, or out of range.
+    Fault,
 }
 
 impl FsError {
@@ -134,6 +136,7 @@ impl FsError {
             FsError::SymlinkLoop => hadron_syscall::ELOOP,
             FsError::Interrupted => hadron_syscall::EINTR,
             FsError::BrokenPipe => hadron_syscall::EPIPE,
+            FsError::Fault => hadron_syscall::EFAULT,
         }
     }
 }

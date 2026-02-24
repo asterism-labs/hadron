@@ -574,16 +574,7 @@ pub(super) fn sys_task_chdir(path_ptr: usize, path_len: usize) -> isize {
     };
 
     // Resolve relative paths against current CWD.
-    let resolved = if path.starts_with('/') {
-        alloc::string::String::from(path)
-    } else {
-        let cwd = crate::proc::ProcessTable::with_current(|p| p.cwd.lock().clone());
-        if cwd == "/" {
-            alloc::format!("/{path}")
-        } else {
-            alloc::format!("{cwd}/{path}")
-        }
-    };
+    let resolved = super::vfs::resolve_cwd_path(path);
 
     // Verify the path exists and is a directory.
     let inode = match crate::fs::vfs::with_vfs(|vfs| vfs.resolve(&resolved)) {

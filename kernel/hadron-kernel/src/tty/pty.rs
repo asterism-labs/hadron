@@ -58,55 +58,7 @@ struct PtyInner {
     slaves: AtomicUsize,
 }
 
-/// Simple fixed-size circular buffer (same design as pipe).
-struct CircularBuffer {
-    data: Box<[u8]>,
-    read_pos: usize,
-    write_pos: usize,
-    count: usize,
-}
-
-impl CircularBuffer {
-    fn new(capacity: usize) -> Self {
-        Self {
-            data: alloc::vec![0u8; capacity].into_boxed_slice(),
-            read_pos: 0,
-            write_pos: 0,
-            count: 0,
-        }
-    }
-
-    fn is_empty(&self) -> bool {
-        self.count == 0
-    }
-
-    fn is_full(&self) -> bool {
-        self.count == self.data.len()
-    }
-
-    fn read(&mut self, buf: &mut [u8]) -> usize {
-        let to_read = buf.len().min(self.count);
-        let cap = self.data.len();
-        for i in 0..to_read {
-            buf[i] = self.data[(self.read_pos + i) % cap];
-        }
-        self.read_pos = (self.read_pos + to_read) % cap;
-        self.count -= to_read;
-        to_read
-    }
-
-    fn write(&mut self, buf: &[u8]) -> usize {
-        let available = self.data.len() - self.count;
-        let to_write = buf.len().min(available);
-        let cap = self.data.len();
-        for i in 0..to_write {
-            self.data[(self.write_pos + i) % cap] = buf[i];
-        }
-        self.write_pos = (self.write_pos + to_write) % cap;
-        self.count += to_write;
-        to_write
-    }
-}
+use crate::ipc::circular_buffer::CircularBuffer;
 
 /// Master side of a PTY pair.
 pub struct PtyMaster(Arc<PtyInner>);
@@ -118,11 +70,15 @@ pub struct PtySlave(Arc<PtyInner>);
 ///
 /// Returns `(master, slave, index)` or `None` if all PTY slots are in use.
 pub fn alloc_pty() -> Option<(Arc<PtyMaster>, Arc<PtySlave>, usize)> {
-    let index = PTY_ALLOC.fetch_add(1, Ordering::Relaxed);
-    if index >= MAX_PTYS {
-        PTY_ALLOC.fetch_sub(1, Ordering::Relaxed);
-        return None;
-    }
+    let index = {
+        let mut bitmap = PTY_BITMAP.lock();
+        let free = (!*bitmap).trailing_zeros() as usize;
+        if free >= MAX_PTYS {
+            return None;
+        }
+        *bitmap |= 1 << free;
+        free
+    };
 
     let inner = Arc::new(PtyInner {
         index,
@@ -167,8 +123,9 @@ pub fn get_slave(index: usize) -> Option<Arc<PtySlave>> {
     table[index].clone()
 }
 
-/// Next PTY index to allocate.
-static PTY_ALLOC: AtomicUsize = AtomicUsize::new(0);
+/// Bitmap of allocated PTY indices (bit set = in use). Supports alloc+free
+/// cycling without exhausting the index space.
+static PTY_BITMAP: SpinLock<u64> = SpinLock::named("pty_bitmap", 0);
 
 /// Global table of slave PTY inodes for /dev/pts/ lookup.
 static PTY_SLAVES: SpinLock<[Option<Arc<PtySlave>>; MAX_PTYS]> =
@@ -178,9 +135,16 @@ static PTY_SLAVES: SpinLock<[Option<Arc<PtySlave>>; MAX_PTYS]> =
 
 impl Drop for PtyMaster {
     fn drop(&mut self) {
-        self.0.masters.fetch_sub(1, Ordering::Release);
+        let prev = self.0.masters.fetch_sub(1, Ordering::Release);
         // Wake slave readers (they'll see master gone → HUP).
         self.0.slave_wq.wake_all();
+
+        // When the last master is dropped, release the PTY index.
+        if prev == 1 {
+            let index = self.0.index;
+            PTY_SLAVES.lock()[index] = None;
+            *PTY_BITMAP.lock() &= !(1 << index);
+        }
     }
 }
 
@@ -309,41 +273,52 @@ impl Inode for PtyMaster {
     }
 
     fn ioctl(&self, cmd: u32, arg: usize) -> Result<usize, FsError> {
+        use crate::syscall::userptr::UserPtr;
         use hadron_syscall::{TIOCGPTN, TIOCSPTLCK};
 
         match cmd {
             TIOCGPTN => {
                 let index = self.0.index as u32;
-                // SAFETY: arg is a user pointer validated by sys_handle_ioctl.
-                unsafe { core::ptr::write_volatile(arg as *mut u32, index) };
+                let ptr = UserPtr::<u32>::new(arg).map_err(|_| FsError::Fault)?;
+                // SAFETY: UserPtr validated address is user-space and aligned.
+                unsafe { ptr.write(index) };
                 Ok(0)
             }
             TIOCSPTLCK => {
-                // SAFETY: arg is a user pointer validated by sys_handle_ioctl.
-                let lock_val = unsafe { core::ptr::read(arg as *const u32) };
+                let ptr = UserPtr::<u32>::new(arg).map_err(|_| FsError::Fault)?;
+                // SAFETY: UserPtr validated address; reading a u32.
+                let lock_val = unsafe { *ptr.as_ref() };
                 self.0.locked.store(lock_val != 0, Ordering::Release);
                 Ok(0)
             }
             // Forward termios ioctls to the slave's settings.
             hadron_syscall::TCGETS => {
                 let t = *self.0.termios.lock();
-                unsafe { core::ptr::write_volatile(arg as *mut Termios, t) };
+                let ptr = UserPtr::<Termios>::new(arg).map_err(|_| FsError::Fault)?;
+                // SAFETY: UserPtr validated address is user-space and aligned.
+                unsafe { ptr.write(t) };
                 Ok(0)
             }
             hadron_syscall::TCSETS | hadron_syscall::TCSETSW | hadron_syscall::TCSETSF => {
-                let t = unsafe { core::ptr::read(arg as *const Termios) };
+                let ptr = UserPtr::<Termios>::new(arg).map_err(|_| FsError::Fault)?;
+                // SAFETY: UserPtr validated address; reading a POD struct.
+                let t = unsafe { *ptr.as_ref() };
                 *self.0.termios.lock() = t;
                 Ok(0)
             }
             hadron_syscall::TIOCGWINSZ => {
                 let ws = *self.0.winsize.lock();
-                unsafe {
-                    core::ptr::write_volatile(arg as *mut hadron_syscall::Winsize, ws);
-                };
+                let ptr =
+                    UserPtr::<hadron_syscall::Winsize>::new(arg).map_err(|_| FsError::Fault)?;
+                // SAFETY: UserPtr validated address is user-space and aligned.
+                unsafe { ptr.write(ws) };
                 Ok(0)
             }
             hadron_syscall::TIOCSWINSZ => {
-                let ws = unsafe { core::ptr::read(arg as *const hadron_syscall::Winsize) };
+                let ptr =
+                    UserPtr::<hadron_syscall::Winsize>::new(arg).map_err(|_| FsError::Fault)?;
+                // SAFETY: UserPtr validated address; reading a POD struct.
+                let ws = unsafe { *ptr.as_ref() };
                 *self.0.winsize.lock() = ws;
                 Ok(0)
             }
@@ -490,6 +465,7 @@ impl Inode for PtySlave {
     }
 
     fn ioctl(&self, cmd: u32, arg: usize) -> Result<usize, FsError> {
+        use crate::syscall::userptr::UserPtr;
         use hadron_syscall::{
             TCGETS, TCSETS, TCSETSF, TCSETSW, TIOCGPGRP, TIOCGWINSZ, TIOCSPGRP, TIOCSWINSZ,
         };
@@ -497,31 +473,45 @@ impl Inode for PtySlave {
         match cmd {
             TCGETS => {
                 let t = *self.0.termios.lock();
-                unsafe { core::ptr::write_volatile(arg as *mut Termios, t) };
+                let ptr = UserPtr::<Termios>::new(arg).map_err(|_| FsError::Fault)?;
+                // SAFETY: UserPtr validated address is user-space and aligned.
+                unsafe { ptr.write(t) };
                 Ok(0)
             }
             TCSETS | TCSETSW | TCSETSF => {
-                let t = unsafe { core::ptr::read(arg as *const Termios) };
+                let ptr = UserPtr::<Termios>::new(arg).map_err(|_| FsError::Fault)?;
+                // SAFETY: UserPtr validated address; reading a POD struct.
+                let t = unsafe { *ptr.as_ref() };
                 *self.0.termios.lock() = t;
                 Ok(0)
             }
             TIOCGPGRP => {
                 let pgid = self.0.foreground_pgid.load(Ordering::Acquire);
-                unsafe { core::ptr::write_volatile(arg as *mut u32, pgid) };
+                let ptr = UserPtr::<u32>::new(arg).map_err(|_| FsError::Fault)?;
+                // SAFETY: UserPtr validated address is user-space and aligned.
+                unsafe { ptr.write(pgid) };
                 Ok(0)
             }
             TIOCSPGRP => {
-                let pgid = unsafe { core::ptr::read(arg as *const u32) };
+                let ptr = UserPtr::<u32>::new(arg).map_err(|_| FsError::Fault)?;
+                // SAFETY: UserPtr validated address; reading a u32.
+                let pgid = unsafe { *ptr.as_ref() };
                 self.0.foreground_pgid.store(pgid, Ordering::Release);
                 Ok(0)
             }
             TIOCGWINSZ => {
                 let ws = *self.0.winsize.lock();
-                unsafe { core::ptr::write_volatile(arg as *mut hadron_syscall::Winsize, ws) };
+                let ptr =
+                    UserPtr::<hadron_syscall::Winsize>::new(arg).map_err(|_| FsError::Fault)?;
+                // SAFETY: UserPtr validated address is user-space and aligned.
+                unsafe { ptr.write(ws) };
                 Ok(0)
             }
             TIOCSWINSZ => {
-                let ws = unsafe { core::ptr::read(arg as *const hadron_syscall::Winsize) };
+                let ptr =
+                    UserPtr::<hadron_syscall::Winsize>::new(arg).map_err(|_| FsError::Fault)?;
+                // SAFETY: UserPtr validated address; reading a POD struct.
+                let ws = unsafe { *ptr.as_ref() };
                 *self.0.winsize.lock() = ws;
                 Ok(0)
             }

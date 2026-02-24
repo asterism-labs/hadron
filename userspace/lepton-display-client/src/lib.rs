@@ -99,8 +99,7 @@ impl Display {
             return None;
         }
 
-        // SAFETY: We verified the opcode matches Configure.
-        let cfg = unsafe { proto::cast_msg::<proto::Configure>(&buf) };
+        let cfg = proto::decode_msg::<proto::Configure>(&buf);
         let width = cfg.width;
         let height = cfg.height;
 
@@ -129,8 +128,7 @@ impl Display {
         // Send CreateWindow request (0 = compositor chooses size).
         let create = proto::create_window(0, 0);
         let mut buf = [0u8; MESSAGE_SIZE];
-        // SAFETY: CreateWindow is a 64-byte repr(C) message.
-        unsafe { proto::encode_msg(&create, &mut buf) };
+        proto::encode_msg(&create, &mut buf);
         if sys::channel_send(channel_fd, &buf).is_err() {
             sys::close(channel_fd);
             return None;
@@ -146,8 +144,7 @@ impl Display {
 
         let shm_fd = shm_fd_opt?;
 
-        // SAFETY: We verified the opcode matches Configure.
-        let cfg = unsafe { proto::cast_msg::<proto::Configure>(&recv_buf) };
+        let cfg = proto::decode_msg::<proto::Configure>(&recv_buf);
         let width = cfg.width;
         let height = cfg.height;
 
@@ -193,8 +190,7 @@ impl Display {
     pub fn commit(&self) {
         let msg = proto::commit(0);
         let mut buf = [0u8; MESSAGE_SIZE];
-        // SAFETY: Commit is a 64-byte repr(C) message type.
-        unsafe { proto::encode_msg(&msg, &mut buf) };
+        proto::encode_msg(&msg, &mut buf);
         let _ = sys::channel_send(self.channel_fd, &buf);
     }
 
@@ -214,8 +210,7 @@ impl Display {
 
         match proto::peek_opcode(&buf) {
             OP_KEYBOARD_INPUT => {
-                // SAFETY: Opcode verified.
-                let msg = unsafe { proto::cast_msg::<proto::KeyboardInput>(&buf) };
+                let msg = proto::decode_msg::<proto::KeyboardInput>(&buf);
                 Some(Event::Key {
                     character: msg.character,
                     keycode: msg.keycode,
@@ -223,8 +218,7 @@ impl Display {
                 })
             }
             OP_MOUSE_INPUT => {
-                // SAFETY: Opcode verified.
-                let msg = unsafe { proto::cast_msg::<proto::MouseInput>(&buf) };
+                let msg = proto::decode_msg::<proto::MouseInput>(&buf);
                 Some(Event::Mouse {
                     x: msg.x,
                     y: msg.y,

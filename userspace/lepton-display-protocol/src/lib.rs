@@ -159,27 +159,32 @@ pub fn peek_opcode(buf: &[u8; MESSAGE_SIZE]) -> u16 {
     u16::from_le_bytes([buf[0], buf[1]])
 }
 
-/// Interpret a raw message buffer as a typed message reference.
+/// Decode a raw message buffer into a typed message by value.
 ///
-/// # Safety
+/// Uses `read_unaligned` to avoid alignment issues with the byte buffer.
+/// Caller must verify the opcode matches `T` before calling.
 ///
-/// Caller must verify the opcode matches `T` before calling. `T` must be
-/// one of the 64-byte `#[repr(C)]` message types defined in this crate.
-pub unsafe fn cast_msg<T: Copy>(buf: &[u8; MESSAGE_SIZE]) -> &T {
+/// # Panics
+///
+/// Debug-asserts that `size_of::<T>() == MESSAGE_SIZE`.
+pub fn decode_msg<T: Copy>(buf: &[u8; MESSAGE_SIZE]) -> T {
     debug_assert!(size_of::<T>() == MESSAGE_SIZE);
-    // SAFETY: T is repr(C), same size as buf, and caller verified opcode.
-    unsafe { &*buf.as_ptr().cast::<T>() }
+    // SAFETY: T is repr(C) and same size as buf. read_unaligned handles
+    // the alignment mismatch between [u8] (align 1) and T.
+    unsafe { core::ptr::read_unaligned(buf.as_ptr().cast::<T>()) }
 }
 
 /// Encode a typed message into a raw 64-byte buffer.
 ///
-/// # Safety
+/// Copies the raw bytes of `msg` into `buf` using `copy_nonoverlapping`.
 ///
-/// `T` must be one of the 64-byte `#[repr(C)]` message types defined in
-/// this crate.
-pub unsafe fn encode_msg<T: Copy>(msg: &T, buf: &mut [u8; MESSAGE_SIZE]) {
+/// # Panics
+///
+/// Debug-asserts that `size_of::<T>() == MESSAGE_SIZE`.
+pub fn encode_msg<T: Copy>(msg: &T, buf: &mut [u8; MESSAGE_SIZE]) {
     debug_assert!(size_of::<T>() == MESSAGE_SIZE);
-    // SAFETY: T is repr(C), same size as buf.
+    // SAFETY: T is repr(C), same size as buf. Copying T's bytes into a
+    // byte array is always valid.
     unsafe {
         core::ptr::copy_nonoverlapping(
             msg as *const T as *const u8,

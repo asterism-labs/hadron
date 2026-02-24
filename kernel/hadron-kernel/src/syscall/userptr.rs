@@ -74,6 +74,22 @@ impl<T> UserPtr<T> {
     pub unsafe fn as_ref(&self) -> &T {
         unsafe { &*(self.addr as *const T) }
     }
+
+    /// Write a value to the validated user-space address.
+    ///
+    /// Uses `write_volatile` to ensure the write is not elided. The address
+    /// has already been validated (user-space, aligned, no overflow) during
+    /// construction.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure:
+    /// - The memory at this address is mapped and writable
+    /// - No concurrent reads or writes that would cause a data race
+    pub unsafe fn write(&self, value: T) {
+        // SAFETY: Address was validated in `new()` as aligned and in user space.
+        unsafe { core::ptr::write_volatile(self.addr as *mut T, value) }
+    }
 }
 
 /// A validated user-space byte slice (pointer + length).

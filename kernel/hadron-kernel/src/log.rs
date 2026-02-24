@@ -17,7 +17,7 @@ extern crate alloc;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::fmt::{self, Write as _};
-use hadron_core::sync::atomic::{AtomicPtr, Ordering};
+use hadron_core::sync::AtomicFn;
 
 use crate::drivers::early_console::{COM1, EarlySerial};
 use crate::drivers::early_fb::EarlyFramebuffer;
@@ -68,7 +68,7 @@ pub type PrintFn = fn(fmt::Arguments<'_>);
 
 fn null_print(_args: fmt::Arguments<'_>) {}
 
-static PRINT_FN: AtomicPtr<()> = AtomicPtr::new(null_print as *mut ());
+static PRINT_FN: AtomicFn<PrintFn> = AtomicFn::new(null_print);
 
 /// Registers the global print function.
 ///
@@ -76,28 +76,14 @@ static PRINT_FN: AtomicPtr<()> = AtomicPtr::new(null_print as *mut ());
 ///
 /// The provided function must be safe to call from any context. May be called
 /// more than once (e.g., once for early serial, once for the full logger).
-/// Uses `Release` ordering so subsequent loads see the new function.
 pub unsafe fn set_print_fn(f: PrintFn) {
-    PRINT_FN.store(f as *mut (), Ordering::Release);
-}
-
-/// Loads the current print function from the atomic pointer.
-///
-/// # Safety
-///
-/// Relies on the invariant that only valid `PrintFn` pointers (or the
-/// initial `null_print`) are ever stored into `PRINT_FN`.
-#[inline]
-fn load_print_fn() -> PrintFn {
-    let ptr = PRINT_FN.load(Ordering::Acquire);
-    // SAFETY: We only ever store valid `PrintFn` function pointers into PRINT_FN.
-    unsafe { core::mem::transmute(ptr) }
+    PRINT_FN.store(f);
 }
 
 /// Implementation detail for [`kprint!`] / [`kprintln!`]. Not public API.
 #[doc(hidden)]
 pub fn _print(args: fmt::Arguments<'_>) {
-    load_print_fn()(args);
+    PRINT_FN.load()(args);
 }
 
 /// Prints to the kernel log sinks (raw, no level, no timestamp).
@@ -122,7 +108,7 @@ pub type LogFn = fn(LogLevel, fmt::Arguments<'_>);
 
 fn null_log(_level: LogLevel, _args: fmt::Arguments<'_>) {}
 
-static LOG_FN: AtomicPtr<()> = AtomicPtr::new(null_log as *mut ());
+static LOG_FN: AtomicFn<LogFn> = AtomicFn::new(null_log);
 
 /// Registers the global leveled log function.
 ///
@@ -130,27 +116,14 @@ static LOG_FN: AtomicPtr<()> = AtomicPtr::new(null_log as *mut ());
 ///
 /// The provided function must be safe to call from any context. May be called
 /// more than once (e.g., once for early serial, once for the full logger).
-/// Uses `Release` ordering so subsequent loads see the new function.
 pub unsafe fn set_log_fn(f: LogFn) {
-    LOG_FN.store(f as *mut (), Ordering::Release);
-}
-
-/// Loads the current log function from the atomic pointer.
-///
-/// # Safety
-///
-/// Same invariant as [`load_print_fn`] — only valid `LogFn` pointers are stored.
-#[inline]
-fn load_log_fn() -> LogFn {
-    let ptr = LOG_FN.load(Ordering::Acquire);
-    // SAFETY: We only ever store valid `LogFn` function pointers into LOG_FN.
-    unsafe { core::mem::transmute(ptr) }
+    LOG_FN.store(f);
 }
 
 /// Implementation detail for [`klog!`]. Not public API.
 #[doc(hidden)]
 pub fn _log(level: LogLevel, args: fmt::Arguments<'_>) {
-    load_log_fn()(level, args);
+    LOG_FN.load()(level, args);
 }
 
 // ---------------------------------------------------------------------------
@@ -162,7 +135,7 @@ pub type SubsysLogFn = fn(LogLevel, &str, fmt::Arguments<'_>);
 
 fn null_subsys_log(_level: LogLevel, _subsys: &str, _args: fmt::Arguments<'_>) {}
 
-static SUBSYS_LOG_FN: AtomicPtr<()> = AtomicPtr::new(null_subsys_log as *mut ());
+static SUBSYS_LOG_FN: AtomicFn<SubsysLogFn> = AtomicFn::new(null_subsys_log);
 
 /// Registers the global subsystem-tagged log function.
 ///
@@ -171,16 +144,13 @@ static SUBSYS_LOG_FN: AtomicPtr<()> = AtomicPtr::new(null_subsys_log as *mut ())
 /// The provided function must be safe to call from any context. May be called
 /// more than once (e.g., once for early serial, once for the full logger).
 pub unsafe fn set_subsys_log_fn(f: SubsysLogFn) {
-    SUBSYS_LOG_FN.store(f as *mut (), Ordering::Release);
+    SUBSYS_LOG_FN.store(f);
 }
 
 /// Implementation detail for [`ktrace_subsys!`]. Not public API.
 #[doc(hidden)]
 pub fn _log_subsys(level: LogLevel, subsys: &str, args: fmt::Arguments<'_>) {
-    let ptr = SUBSYS_LOG_FN.load(Ordering::Acquire);
-    // SAFETY: We only ever store valid `SubsysLogFn` function pointers into SUBSYS_LOG_FN.
-    let f: SubsysLogFn = unsafe { core::mem::transmute(ptr) };
-    f(level, subsys, args);
+    SUBSYS_LOG_FN.load()(level, subsys, args);
 }
 
 /// Logs a message at the given level.

@@ -48,61 +48,7 @@ struct PipeInner {
     writers: AtomicUsize,
 }
 
-/// Fixed-size circular buffer.
-struct CircularBuffer {
-    data: Box<[u8]>,
-    read_pos: usize,
-    write_pos: usize,
-    count: usize,
-}
-
-impl CircularBuffer {
-    fn new(capacity: usize) -> Self {
-        Self {
-            data: alloc::vec![0u8; capacity].into_boxed_slice(),
-            read_pos: 0,
-            write_pos: 0,
-            count: 0,
-        }
-    }
-
-    fn capacity(&self) -> usize {
-        self.data.len()
-    }
-
-    fn is_empty(&self) -> bool {
-        self.count == 0
-    }
-
-    fn is_full(&self) -> bool {
-        self.count == self.capacity()
-    }
-
-    /// Read up to `buf.len()` bytes from the buffer. Returns bytes read.
-    fn read(&mut self, buf: &mut [u8]) -> usize {
-        let to_read = buf.len().min(self.count);
-        let cap = self.capacity();
-        for i in 0..to_read {
-            buf[i] = self.data[(self.read_pos + i) % cap];
-        }
-        self.read_pos = (self.read_pos + to_read) % cap;
-        self.count -= to_read;
-        to_read
-    }
-
-    /// Write up to `buf.len()` bytes to the buffer. Returns bytes written.
-    fn write(&mut self, buf: &[u8]) -> usize {
-        let available = self.capacity() - self.count;
-        let to_write = buf.len().min(available);
-        let cap = self.capacity();
-        for i in 0..to_write {
-            self.data[(self.write_pos + i) % cap] = buf[i];
-        }
-        self.write_pos = (self.write_pos + to_write) % cap;
-        self.count += to_write;
-        to_write
-    }
-}
+use super::circular_buffer::CircularBuffer;
 
 /// Reader half of a pipe.
 pub struct PipeReader(Arc<PipeInner>);
@@ -132,7 +78,7 @@ impl Inode for PipeReader {
     }
 
     fn size(&self) -> usize {
-        self.0.buffer.lock().count
+        self.0.buffer.lock().len()
     }
 
     fn permissions(&self) -> Permissions {
@@ -238,7 +184,7 @@ impl Inode for PipeWriter {
     }
 
     fn size(&self) -> usize {
-        self.0.buffer.lock().count
+        self.0.buffer.lock().len()
     }
 
     fn permissions(&self) -> Permissions {

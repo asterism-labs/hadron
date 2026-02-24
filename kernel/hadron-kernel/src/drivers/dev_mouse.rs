@@ -25,6 +25,17 @@ const EVENT_BUF_SIZE: usize = 64;
 /// Size of a serialized [`MouseEventPacket`] in bytes.
 const PACKET_SIZE: usize = core::mem::size_of::<hadron_syscall::MouseEventPacket>();
 
+/// Serializes a [`MouseEventPacket`] into a byte array using safe field-level
+/// conversion. Avoids `transmute` by writing each field at its known offset.
+fn packet_to_bytes(evt: &hadron_syscall::MouseEventPacket) -> [u8; PACKET_SIZE] {
+    let mut bytes = [0u8; PACKET_SIZE];
+    bytes[0..2].copy_from_slice(&evt.dx.to_ne_bytes());
+    bytes[2..4].copy_from_slice(&evt.dy.to_ne_bytes());
+    bytes[4] = evt.buttons;
+    // bytes[5..8] remain zero (padding).
+    bytes
+}
+
 /// PS/2 i8042 data port.
 const DATA_PORT: u16 = 0x60;
 
@@ -258,17 +269,15 @@ impl Inode for DevMouse {
                     if let Some(evt) = events.pop() {
                         // Serialize the packet into the user buffer.
                         let max_events = buf.len() / PACKET_SIZE;
-                        let bytes: [u8; PACKET_SIZE] = unsafe { core::mem::transmute(evt) };
-                        buf[..PACKET_SIZE].copy_from_slice(&bytes);
+                        buf[..PACKET_SIZE].copy_from_slice(&packet_to_bytes(&evt));
 
                         // Copy additional buffered events if space permits.
                         let mut count = 1;
                         while count < max_events {
                             if let Some(extra) = events.pop() {
                                 let off = count * PACKET_SIZE;
-                                let bytes: [u8; PACKET_SIZE] =
-                                    unsafe { core::mem::transmute(extra) };
-                                buf[off..off + PACKET_SIZE].copy_from_slice(&bytes);
+                                buf[off..off + PACKET_SIZE]
+                                    .copy_from_slice(&packet_to_bytes(&extra));
                                 count += 1;
                             } else {
                                 break;
@@ -330,13 +339,21 @@ impl Inode for DevMouse {
     }
 
     fn poll_readiness(&self, waker: Option<&core::task::Waker>) -> u16 {
+        // Register waker first, then check — an event arriving between these
+        // two steps will wake the waker we just registered, so no wakeup is lost.
         if let Some(w) = waker {
             *READ_WAKER.lock() = Some(w.clone());
         }
-        if EVENT_BUF.lock().is_empty() {
-            0
-        } else {
+        let ready = !EVENT_BUF.lock().is_empty();
+        if ready {
+            // Data is already available. Wake immediately in case the interrupt
+            // handler already consumed our waker before we checked the buffer.
+            if let Some(w) = READ_WAKER.lock().take() {
+                w.wake();
+            }
             hadron_syscall::POLLIN
+        } else {
+            0
         }
     }
 }

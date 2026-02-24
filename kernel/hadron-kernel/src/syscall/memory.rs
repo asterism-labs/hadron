@@ -123,9 +123,25 @@ fn sys_mem_map_anonymous(length: usize, prot: usize) -> isize {
         })
     });
 
-    if let Err(_partial_count) = map_result {
-        // TODO: Unmap partially-mapped pages. For now, leak them.
-        return -EINVAL;
+    if let Err(mapped_count) = map_result {
+        // Unmap and free all pages that were successfully mapped before the failure.
+        ProcessTable::with_current(|process| {
+            pmm::with(|pmm| {
+                for i in 0..mapped_count {
+                    let page_vaddr = base_vaddr.as_u64() + (i as u64) * PAGE_SIZE as u64;
+                    let page = Page::<Size4KiB>::containing_address(VirtAddr::new(page_vaddr));
+                    if let Ok(frame) = process.address_space().unmap_user_page(page) {
+                        // SAFETY: Frame was allocated by PMM during this call and is no
+                        // longer referenced by any page table entry.
+                        let _ = unsafe { pmm.deallocate_frame(frame) };
+                    }
+                }
+            });
+            // Return the virtual region to the mmap allocator.
+            let mut mmap = process.mmap_alloc.lock();
+            let _ = mmap.deallocate(base_vaddr, aligned_length as u64);
+        });
+        return -ENOMEM;
     }
 
     // Track this as an anonymous mapping.
@@ -217,9 +233,20 @@ fn sys_mem_map_device(length: usize, prot: usize, fd: usize) -> isize {
         })
     });
 
-    if let Err(_partial_count) = map_result {
-        // TODO: Unmap partially-mapped pages. For now, leak them.
-        return -EINVAL;
+    if let Err(mapped_count) = map_result {
+        // Unmap PTEs for all pages that were successfully mapped. Device frames
+        // are not freed — they belong to the hardware.
+        ProcessTable::with_current(|process| {
+            for i in 0..mapped_count {
+                let page_vaddr = base_vaddr.as_u64() + (i as u64) * PAGE_SIZE as u64;
+                let page = Page::<Size4KiB>::containing_address(VirtAddr::new(page_vaddr));
+                let _ = process.address_space().unmap_user_page(page);
+            }
+            // Return the virtual region to the mmap allocator.
+            let mut mmap = process.mmap_alloc.lock();
+            let _ = mmap.deallocate(base_vaddr, aligned_length as u64);
+        });
+        return -ENOMEM;
     }
 
     // Track this as a device mapping (physical frames must NOT be freed).

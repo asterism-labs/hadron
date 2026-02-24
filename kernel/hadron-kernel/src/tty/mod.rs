@@ -22,11 +22,12 @@ pub mod ldisc;
 pub mod pty;
 
 use alloc::sync::Arc;
+use core::ptr;
 use core::task::Waker;
-use hadron_core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use hadron_core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicUsize, Ordering};
 
 use crate::drivers::fbcon::FbCon;
-use crate::sync::{IrqSpinLock, SpinLock};
+use crate::sync::IrqSpinLock;
 use hadron_syscall::{ECHO, ICANON, ISIG, Termios};
 use ldisc::{LdiscAction, LineDiscipline};
 use planck_noalloc::ringbuf::RingBuf;
@@ -88,14 +89,17 @@ pub struct Tty {
     foreground_pgid: AtomicU32,
     /// Single-waker slot for the reader future.
     input_waker: IrqSpinLock<Option<Waker>>,
-    /// Per-VT framebuffer console (set during boot, then read-only).
-    fbcon: SpinLock<Option<Arc<FbCon>>>,
+    /// Per-VT framebuffer console (set once during boot via `set_fbcon`).
+    /// Stored as a raw pointer to avoid Arc clone + refcount traffic on every
+    /// console write. The Arc is leaked on `set_fbcon` and the pointer is valid
+    /// for the lifetime of the kernel (VTs are never destroyed).
+    fbcon: AtomicPtr<FbCon>,
     /// Terminal I/O settings (termios).
     termios: IrqSpinLock<Termios>,
 }
 
-// SAFETY: Tty is Sync because all mutable state is behind IrqSpinLock,
-// SpinLock, or atomics.
+// SAFETY: Tty is Sync because all mutable state is behind IrqSpinLock
+// or atomics.
 unsafe impl Sync for Tty {}
 
 impl Tty {
@@ -105,7 +109,7 @@ impl Tty {
             ldisc: IrqSpinLock::leveled("TTY_LDISC", 10, LineDiscipline::new()),
             foreground_pgid: AtomicU32::new(0),
             input_waker: IrqSpinLock::named("TTY_WAKER", None),
-            fbcon: SpinLock::named("TTY_FBCON", None),
+            fbcon: AtomicPtr::new(ptr::null_mut()),
             termios: IrqSpinLock::named("TTY_TERMIOS", default_termios()),
         }
     }
@@ -122,19 +126,22 @@ impl Tty {
 
     /// Get the window size from the attached framebuffer console.
     pub fn get_winsize(&self) -> hadron_syscall::Winsize {
-        let fbcon = self.fbcon.lock().clone();
-        if let Some(ref fbcon) = fbcon {
-            let (cols, rows) = fbcon.dimensions();
+        let ptr = self.fbcon.load(Ordering::Acquire);
+        if ptr.is_null() {
             hadron_syscall::Winsize {
-                rows: rows as u16,
-                cols: cols as u16,
+                rows: 25,
+                cols: 80,
                 xpixel: 0,
                 ypixel: 0,
             }
         } else {
+            // SAFETY: Non-null pointer was set via `set_fbcon` from a leaked Arc
+            // and is valid for the lifetime of the kernel.
+            let fbcon = unsafe { &*ptr };
+            let (cols, rows) = fbcon.dimensions();
             hadron_syscall::Winsize {
-                rows: 25,
-                cols: 80,
+                rows: rows as u16,
+                cols: cols as u16,
                 xpixel: 0,
                 ypixel: 0,
             }
@@ -144,8 +151,11 @@ impl Tty {
     /// Attach a framebuffer console to this TTY.
     ///
     /// Called once during boot to give each VT its own display output.
+    /// Leaks the `Arc` so the raw pointer stored in `self.fbcon` remains valid
+    /// for the lifetime of the kernel.
     pub fn set_fbcon(&self, fbcon: Arc<FbCon>) {
-        *self.fbcon.lock() = Some(fbcon);
+        let ptr = Arc::into_raw(fbcon) as *mut FbCon;
+        self.fbcon.store(ptr, Ordering::Release);
     }
 
     /// Enable or disable this TTY's framebuffer console rendering.
@@ -153,9 +163,10 @@ impl Tty {
     /// Used to blank all VTs when a userspace compositor takes over the
     /// framebuffer, and to unblank when it exits.
     pub fn set_fbcon_active(&self, active: bool) {
-        let fbcon = self.fbcon.lock().clone();
-        if let Some(ref fbcon) = fbcon {
-            fbcon.set_active(active);
+        let ptr = self.fbcon.load(Ordering::Acquire);
+        if !ptr.is_null() {
+            // SAFETY: See `set_fbcon` — pointer is valid for kernel lifetime.
+            unsafe { &*ptr }.set_active(active);
         }
     }
 
@@ -165,9 +176,10 @@ impl Tty {
     /// Clones the `Arc<FbCon>` so the TTY fbcon lock is released before the
     /// (potentially slow) write — matching the pattern used by [`switch_vt`].
     pub fn write_output(&self, s: &str) {
-        let fbcon = self.fbcon.lock().clone();
-        if let Some(ref fbcon) = fbcon {
-            fbcon.write_str(s);
+        let ptr = self.fbcon.load(Ordering::Acquire);
+        if !ptr.is_null() {
+            // SAFETY: See `set_fbcon` — pointer is valid for kernel lifetime.
+            unsafe { &*ptr }.write_str(s);
         }
     }
 
@@ -341,14 +353,16 @@ fn switch_vt(new_vt: usize) {
         return;
     }
 
-    // Clone Arc references to avoid holding both TTY_FBCON locks simultaneously.
-    let old_fbcon = TTY_TABLE[old].fbcon.lock().clone();
-    let new_fbcon = TTY_TABLE[new_vt].fbcon.lock().clone();
+    let old_ptr = TTY_TABLE[old].fbcon.load(Ordering::Acquire);
+    let new_ptr = TTY_TABLE[new_vt].fbcon.load(Ordering::Acquire);
 
-    if let Some(fbcon) = old_fbcon {
-        fbcon.set_active(false);
+    if !old_ptr.is_null() {
+        // SAFETY: See `set_fbcon` — pointer is valid for kernel lifetime.
+        unsafe { &*old_ptr }.set_active(false);
     }
-    if let Some(fbcon) = new_fbcon {
+    if !new_ptr.is_null() {
+        // SAFETY: See `set_fbcon` — pointer is valid for kernel lifetime.
+        let fbcon = unsafe { &*new_ptr };
         fbcon.set_active(true);
         fbcon.redraw_all();
     }

@@ -10,20 +10,71 @@
 
 use crate::pci::cam::regs;
 use crate::pci::caps::{self, MsixCapability, RawCapability, VirtioPciCap, VirtioPciCfgType};
+use hadron_kernel::addr::VirtAddr;
 use hadron_kernel::driver_api::capability::MmioCapability;
 use hadron_kernel::driver_api::error::DriverError;
 use hadron_kernel::driver_api::pci::{PciBar, PciDeviceInfo};
 use hadron_kernel::driver_api::resource::MmioRegion;
+use hadron_mmio::register_block;
+
+// ---------------------------------------------------------------------------
+// VirtIO common configuration register block (VirtIO 1.0 spec §4.1.4.3)
+// ---------------------------------------------------------------------------
+
+register_block! {
+    /// VirtIO PCI common configuration registers.
+    ///
+    /// Generated via `register_block!`. Offsets per VirtIO 1.0 spec §4.1.4.3.
+    /// 64-bit queue addresses are split into low/high 32-bit pairs.
+    pub VirtioCommonCfg {
+        /// `device_feature_select` — selects which 32-bit window of device features to read.
+        [0x00; u32; wo] device_feature_select,
+        /// `device_feature` — 32-bit window of device-offered feature bits.
+        [0x04; u32; ro] device_feature,
+        /// `driver_feature_select` — selects which 32-bit window of driver features to write.
+        [0x08; u32; wo] driver_feature_select,
+        /// `driver_feature` — 32-bit window of driver-accepted feature bits.
+        [0x0C; u32; wo] driver_feature,
+        /// `msix_config` — MSI-X configuration vector.
+        [0x10; u16; wo] msix_config,
+        /// `num_queues` — maximum number of virtqueues (read-only).
+        [0x12; u16; ro] num_queues,
+        /// `device_status` — device status flags.
+        [0x14; u8; rw] device_status,
+        /// `queue_select` — selects which virtqueue the subsequent fields apply to.
+        [0x16; u16; wo] queue_select,
+        /// `queue_size` — size of the selected virtqueue.
+        [0x18; u16; rw] queue_size,
+        /// `queue_msix_vector` — MSI-X vector for the selected queue.
+        [0x1A; u16; rw] queue_msix_vector,
+        /// `queue_enable` — enables the selected virtqueue.
+        [0x1C; u16; wo] queue_enable,
+        /// `queue_notify_off` — notify offset for the selected virtqueue.
+        [0x1E; u16; ro] queue_notify_off,
+        /// `queue_desc` low 32 bits — descriptor table physical address.
+        [0x20; u32; wo] queue_desc_lo,
+        /// `queue_desc` high 32 bits.
+        [0x24; u32; wo] queue_desc_hi,
+        /// `queue_avail` low 32 bits — available ring physical address.
+        [0x28; u32; wo] queue_avail_lo,
+        /// `queue_avail` high 32 bits.
+        [0x2C; u32; wo] queue_avail_hi,
+        /// `queue_used` low 32 bits — used ring physical address.
+        [0x30; u32; wo] queue_used_lo,
+        /// `queue_used` high 32 bits.
+        [0x34; u32; wo] queue_used_hi,
+    }
+}
 
 /// Mapped VirtIO PCI configuration regions.
 ///
 /// Holds MMIO pointers to the four VirtIO config structures discovered
-/// through PCI vendor-specific capabilities.
+/// through PCI vendor-specific capabilities. The common config registers
+/// are accessed through a generated [`VirtioCommonCfg`] register block;
+/// other regions use direct MMIO access.
 pub struct VirtioPciTransport {
-    /// Common configuration structure (device status, features, queue config).
-    common: MmioRegion,
-    /// Offset of common config within its BAR.
-    common_offset: u32,
+    /// Common configuration register block (safe accessors).
+    common: VirtioCommonCfg,
     /// Notify configuration structure (queue doorbell writes).
     notify: MmioRegion,
     /// Offset of notify config within its BAR.
@@ -115,9 +166,16 @@ impl VirtioPciTransport {
             None
         };
 
+        // SAFETY: common_mmio is a valid mapped BAR, and common_cap.offset is the
+        // VirtIO-specified offset of the common config structure within that BAR.
+        let common_cfg = unsafe {
+            VirtioCommonCfg::new(VirtAddr::new(
+                common_mmio.virt_base().as_u64() + u64::from(common_cap.offset),
+            ))
+        };
+
         Ok(Self {
-            common: common_mmio,
-            common_offset: common_cap.offset,
+            common: common_cfg,
             notify: notify_mmio,
             notify_offset: notify_cap.offset,
             notify_off_multiplier,
@@ -134,214 +192,100 @@ impl VirtioPciTransport {
         self.msix_cap.as_ref()
     }
 
-    // -- Common config accessors ----------------------------------------------
-
-    /// Reads a 8-bit value from the common config region at the given offset.
-    ///
-    /// # Safety
-    ///
-    /// `offset` must be within the common config structure bounds.
-    unsafe fn common_read_u8(&self, offset: u32) -> u8 {
-        let ptr = self
-            .common
-            .ptr_at(u64::from(self.common_offset + offset))
-            .expect("common config offset out of bounds");
-        // SAFETY: ptr is within the mapped MMIO region.
-        unsafe { core::ptr::read_volatile(ptr) }
-    }
-
-    /// Writes a 8-bit value to the common config region.
-    ///
-    /// # Safety
-    ///
-    /// `offset` must be within the common config structure bounds.
-    unsafe fn common_write_u8(&self, offset: u32, val: u8) {
-        let ptr = self
-            .common
-            .ptr_at(u64::from(self.common_offset + offset))
-            .expect("common config offset out of bounds");
-        // SAFETY: ptr is within the mapped MMIO region.
-        unsafe { core::ptr::write_volatile(ptr, val) }
-    }
-
-    /// Reads a 16-bit value from the common config region.
-    ///
-    /// # Safety
-    ///
-    /// `offset` must be within the common config structure bounds and
-    /// properly aligned.
-    unsafe fn common_read_u16(&self, offset: u32) -> u16 {
-        let ptr = self
-            .common
-            .ptr_at(u64::from(self.common_offset + offset))
-            .expect("common config offset out of bounds");
-        // SAFETY: ptr is within the mapped MMIO region.
-        unsafe { core::ptr::read_volatile(ptr.cast::<u16>()) }
-    }
-
-    /// Writes a 16-bit value to the common config region.
-    ///
-    /// # Safety
-    ///
-    /// `offset` must be within the common config structure bounds and
-    /// properly aligned.
-    unsafe fn common_write_u16(&self, offset: u32, val: u16) {
-        let ptr = self
-            .common
-            .ptr_at(u64::from(self.common_offset + offset))
-            .expect("common config offset out of bounds");
-        // SAFETY: ptr is within the mapped MMIO region.
-        unsafe { core::ptr::write_volatile(ptr.cast::<u16>(), val) }
-    }
-
-    /// Reads a 32-bit value from the common config region.
-    ///
-    /// # Safety
-    ///
-    /// `offset` must be within the common config structure bounds and
-    /// properly aligned.
-    unsafe fn common_read_u32(&self, offset: u32) -> u32 {
-        let ptr = self
-            .common
-            .ptr_at(u64::from(self.common_offset + offset))
-            .expect("common config offset out of bounds");
-        // SAFETY: ptr is within the mapped MMIO region.
-        unsafe { core::ptr::read_volatile(ptr.cast::<u32>()) }
-    }
-
-    /// Writes a 32-bit value to the common config region.
-    ///
-    /// # Safety
-    ///
-    /// `offset` must be within the common config structure bounds and
-    /// properly aligned.
-    unsafe fn common_write_u32(&self, offset: u32, val: u32) {
-        let ptr = self
-            .common
-            .ptr_at(u64::from(self.common_offset + offset))
-            .expect("common config offset out of bounds");
-        // SAFETY: ptr is within the mapped MMIO region.
-        unsafe { core::ptr::write_volatile(ptr.cast::<u32>(), val) }
-    }
-
-    // -- VirtIO common config fields ------------------------------------------
-    // Offsets per VirtIO 1.0 spec §4.1.4.3
+    // -- VirtIO common config forwarding methods --------------------------------
+    // Delegates to the generated `VirtioCommonCfg` register block.
 
     /// Common config: `device_feature_select` (offset 0x00, 32-bit).
     pub fn set_device_feature_select(&self, val: u32) {
-        // SAFETY: Offset 0x00 is within common config.
-        unsafe { self.common_write_u32(0x00, val) }
+        self.common.set_device_feature_select(val);
     }
 
     /// Common config: `device_feature` (offset 0x04, 32-bit).
     pub fn device_feature(&self) -> u32 {
-        // SAFETY: Offset 0x04 is within common config.
-        unsafe { self.common_read_u32(0x04) }
+        self.common.device_feature()
     }
 
     /// Common config: `driver_feature_select` (offset 0x08, 32-bit).
     pub fn set_driver_feature_select(&self, val: u32) {
-        // SAFETY: Offset 0x08 is within common config.
-        unsafe { self.common_write_u32(0x08, val) }
+        self.common.set_driver_feature_select(val);
     }
 
     /// Common config: `driver_feature` (offset 0x0C, 32-bit).
     pub fn set_driver_feature(&self, val: u32) {
-        // SAFETY: Offset 0x0C is within common config.
-        unsafe { self.common_write_u32(0x0C, val) }
+        self.common.set_driver_feature(val);
     }
 
     /// Common config: `msix_config` (offset 0x10, 16-bit).
     pub fn set_msix_config(&self, val: u16) {
-        // SAFETY: Offset 0x10 is within common config.
-        unsafe { self.common_write_u16(0x10, val) }
+        self.common.set_msix_config(val);
     }
 
     /// Common config: `num_queues` (offset 0x12, 16-bit).
     pub fn num_queues(&self) -> u16 {
-        // SAFETY: Offset 0x12 is within common config.
-        unsafe { self.common_read_u16(0x12) }
+        self.common.num_queues()
     }
 
     /// Common config: `device_status` (offset 0x14, 8-bit).
     pub fn device_status(&self) -> u8 {
-        // SAFETY: Offset 0x14 is within common config.
-        unsafe { self.common_read_u8(0x14) }
+        self.common.device_status()
     }
 
     /// Common config: write `device_status` (offset 0x14, 8-bit).
     pub fn set_device_status(&self, val: u8) {
-        // SAFETY: Offset 0x14 is within common config.
-        unsafe { self.common_write_u8(0x14, val) }
+        self.common.set_device_status(val);
     }
 
     /// Common config: `queue_select` (offset 0x16, 16-bit).
     pub fn set_queue_select(&self, val: u16) {
-        // SAFETY: Offset 0x16 is within common config.
-        unsafe { self.common_write_u16(0x16, val) }
+        self.common.set_queue_select(val);
     }
 
     /// Common config: `queue_size` (offset 0x18, 16-bit).
     pub fn queue_size(&self) -> u16 {
-        // SAFETY: Offset 0x18 is within common config.
-        unsafe { self.common_read_u16(0x18) }
+        self.common.queue_size()
     }
 
     /// Common config: write `queue_size` (offset 0x18, 16-bit).
     pub fn set_queue_size(&self, val: u16) {
-        // SAFETY: Offset 0x18 is within common config.
-        unsafe { self.common_write_u16(0x18, val) }
+        self.common.set_queue_size(val);
     }
 
     /// Common config: `queue_msix_vector` (offset 0x1A, 16-bit).
     pub fn set_queue_msix_vector(&self, val: u16) {
-        // SAFETY: Offset 0x1A is within common config.
-        unsafe { self.common_write_u16(0x1A, val) }
+        self.common.set_queue_msix_vector(val);
     }
 
     /// Common config: read `queue_msix_vector` (offset 0x1A, 16-bit).
     pub fn queue_msix_vector(&self) -> u16 {
-        // SAFETY: Offset 0x1A is within common config.
-        unsafe { self.common_read_u16(0x1A) }
+        self.common.queue_msix_vector()
     }
 
     /// Common config: `queue_enable` (offset 0x1C, 16-bit).
     pub fn set_queue_enable(&self, val: u16) {
-        // SAFETY: Offset 0x1C is within common config.
-        unsafe { self.common_write_u16(0x1C, val) }
+        self.common.set_queue_enable(val);
     }
 
     /// Common config: `queue_notify_off` (offset 0x1E, 16-bit).
     pub fn queue_notify_off(&self) -> u16 {
-        // SAFETY: Offset 0x1E is within common config.
-        unsafe { self.common_read_u16(0x1E) }
+        self.common.queue_notify_off()
     }
 
     /// Common config: `queue_desc` (offset 0x20, 64-bit, written as two 32-bit).
     pub fn set_queue_desc(&self, addr: u64) {
-        // SAFETY: Offsets 0x20 and 0x24 are within common config.
-        unsafe {
-            self.common_write_u32(0x20, addr as u32);
-            self.common_write_u32(0x24, (addr >> 32) as u32);
-        }
+        self.common.set_queue_desc_lo(addr as u32);
+        self.common.set_queue_desc_hi((addr >> 32) as u32);
     }
 
     /// Common config: `queue_avail` (offset 0x28, 64-bit).
     pub fn set_queue_avail(&self, addr: u64) {
-        // SAFETY: Offsets 0x28 and 0x2C are within common config.
-        unsafe {
-            self.common_write_u32(0x28, addr as u32);
-            self.common_write_u32(0x2C, (addr >> 32) as u32);
-        }
+        self.common.set_queue_avail_lo(addr as u32);
+        self.common.set_queue_avail_hi((addr >> 32) as u32);
     }
 
     /// Common config: `queue_used` (offset 0x30, 64-bit).
     pub fn set_queue_used(&self, addr: u64) {
-        // SAFETY: Offsets 0x30 and 0x34 are within common config.
-        unsafe {
-            self.common_write_u32(0x30, addr as u32);
-            self.common_write_u32(0x34, (addr >> 32) as u32);
-        }
+        self.common.set_queue_used_lo(addr as u32);
+        self.common.set_queue_used_hi((addr >> 32) as u32);
     }
 
     // -- Notify ---------------------------------------------------------------

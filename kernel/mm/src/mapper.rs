@@ -15,7 +15,7 @@
 //! early boot where no stale TLB entries exist). In host tests, the no-op
 //! default is used.
 
-use hadron_core::sync::atomic::{AtomicPtr, Ordering};
+use hadron_core::sync::AtomicFn;
 
 use hadron_core::addr::{PhysAddr, VirtAddr};
 use hadron_core::paging::{Page, PageSize, PhysFrame, Size4KiB};
@@ -56,7 +56,7 @@ pub enum UnmapError {
 // ---------------------------------------------------------------------------
 
 /// Registered TLB flush function. Set to no-op by default.
-static TLB_FLUSH_FN: AtomicPtr<()> = AtomicPtr::new(nop_flush as fn(VirtAddr) as *mut ());
+static TLB_FLUSH_FN: AtomicFn<fn(VirtAddr)> = AtomicFn::new(nop_flush);
 
 fn nop_flush(_virt: VirtAddr) {}
 
@@ -65,17 +65,13 @@ fn nop_flush(_virt: VirtAddr) {}
 /// Must be called during early boot before any page table modifications that
 /// require TLB invalidation. On x86_64, this is typically set to `invlpg`.
 pub fn register_tlb_flush(f: fn(VirtAddr)) {
-    TLB_FLUSH_FN.store(f as *mut (), Ordering::Release);
+    TLB_FLUSH_FN.store(f);
 }
 
 /// Dispatches a single-page TLB flush through the registered callback.
 #[inline]
 fn arch_flush_page(virt: VirtAddr) {
-    let ptr = TLB_FLUSH_FN.load(Ordering::Acquire);
-    // SAFETY: The pointer was stored via `register_tlb_flush` which takes a
-    // valid `fn(VirtAddr)`, or it's the initial `nop_flush`.
-    let f: fn(VirtAddr) = unsafe { core::mem::transmute(ptr) };
-    f(virt);
+    TLB_FLUSH_FN.load()(virt);
 }
 
 // ---------------------------------------------------------------------------

@@ -71,14 +71,17 @@ impl FutexTable {
 ///
 /// Called from the trap handler's async context. Returns `true` if the
 /// condition was met and we should sleep, `false` if the value changed.
+///
+/// The table lock is acquired **before** reading the futex word so that a
+/// concurrent `futex_wake` cannot slip between the value check and the
+/// waker registration (TOCTOU).
 pub fn futex_wait_check(addr: usize, expected: u32, waker: &Waker) -> bool {
+    let mut table = FUTEX_TABLE.lock();
     // SAFETY: addr points to user memory, caller has switched to user CR3.
     let current = unsafe { core::ptr::read_volatile(addr as *const u32) };
     if current != expected {
         return false; // Value changed, don't sleep.
     }
-
-    let mut table = FUTEX_TABLE.lock();
     table.register(addr, waker.clone());
     true
 }

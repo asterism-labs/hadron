@@ -10,7 +10,7 @@
 //! - Bits 55-0:  TaskId (56 bits)
 
 use core::task::{RawWaker, RawWakerVTable, Waker};
-use hadron_core::sync::atomic::{AtomicPtr, Ordering};
+use hadron_core::sync::AtomicFn;
 
 use hadron_core::cpu_local::current_cpu_id;
 use hadron_core::id::CpuId;
@@ -32,7 +32,7 @@ static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, dr
 /// Set by the kernel glue layer during initialization via [`set_wake_ipi_fn`].
 /// When a waker fires for a task on a different CPU, this function is called
 /// with the target CPU ID to send an IPI wakeup.
-static WAKE_IPI_FN: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
+static WAKE_IPI_FN: AtomicFn<fn(CpuId)> = AtomicFn::null();
 
 /// Registers the cross-CPU wake IPI function.
 ///
@@ -44,7 +44,7 @@ static WAKE_IPI_FN: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
 /// Must be called before any cross-CPU wakeups occur (i.e., before APs
 /// enter their executor loops).
 pub fn set_wake_ipi_fn(f: fn(CpuId)) {
-    WAKE_IPI_FN.store(f as *mut (), Ordering::Release);
+    WAKE_IPI_FN.store(f);
 }
 
 /// Creates a [`Waker`] that will re-queue the given task at the given
@@ -94,10 +94,7 @@ fn wake_by_ref(data: *const ()) {
     // so it processes the newly enqueued task promptly.
     let current = current_cpu_id();
     if target_cpu.as_u32() != current {
-        let ptr = WAKE_IPI_FN.load(Ordering::Acquire);
-        if !ptr.is_null() {
-            // SAFETY: The pointer was set by set_wake_ipi_fn with a valid fn pointer.
-            let f: fn(CpuId) = unsafe { core::mem::transmute(ptr) };
+        if let Some(f) = WAKE_IPI_FN.load_optional() {
             f(target_cpu);
         }
     }

@@ -92,6 +92,17 @@ impl Cell {
     };
 }
 
+/// Returns a bitmask with bits `[lo..hi)` set within a single u64 word.
+#[inline]
+const fn mask_bits(lo: usize, hi: usize) -> u64 {
+    debug_assert!(lo < hi && hi <= 64);
+    if hi == 64 {
+        !0u64 << lo
+    } else {
+        ((1u64 << hi) - 1) & (!0u64 << lo)
+    }
+}
+
 /// Fixed-size bitset for tracking dirty cells.
 ///
 /// Supports up to `MAX_WORDS * 64` cells. At 1920x1080 with 8x16 glyphs
@@ -123,9 +134,40 @@ impl DirtyBits {
     }
 
     /// Marks a range of cells as dirty (inclusive start, exclusive end).
+    ///
+    /// Uses word-level OR operations instead of per-bit loops — at most
+    /// two partial-word masks plus bulk `u64::MAX` fills for full words.
     pub fn set_range(&mut self, start: u32, end: u32) {
-        for i in start..end {
-            self.set(i);
+        if start >= end {
+            return;
+        }
+        let s = start as usize;
+        let e = end as usize;
+        let first_word = s / 64;
+        let last_word = (e - 1) / 64;
+        if first_word >= Self::MAX_WORDS {
+            return;
+        }
+        let last_word = last_word.min(Self::MAX_WORDS - 1);
+
+        if first_word == last_word {
+            // Entire range fits in one word.
+            let mask = mask_bits(s % 64, ((e - 1) % 64) + 1);
+            self.words[first_word] |= mask;
+        } else {
+            // Partial first word: bits [s%64 .. 64).
+            self.words[first_word] |= !0u64 << (s % 64);
+            // Full middle words.
+            for w in &mut self.words[first_word + 1..last_word] {
+                *w = u64::MAX;
+            }
+            // Partial last word: bits [0 .. e%64), or all 64 if e%64 == 0.
+            let end_bit = e % 64;
+            self.words[last_word] |= if end_bit == 0 {
+                u64::MAX
+            } else {
+                (1u64 << end_bit) - 1
+            };
         }
     }
 

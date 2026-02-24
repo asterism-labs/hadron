@@ -10,7 +10,7 @@
 //! LAPIC EOI.
 
 use hadron_core::static_assert;
-use hadron_core::sync::atomic::{AtomicPtr, Ordering};
+use hadron_core::sync::AtomicFn;
 
 use crate::id::{HwIrqVector, IrqVector};
 
@@ -20,72 +20,9 @@ const NUM_VECTORS: usize = 224;
 /// Handler function signature: receives the vector number.
 pub type InterruptHandler = fn(IrqVector);
 
-// ---------------------------------------------------------------------------
-// HandlerSlot — encapsulated transmute for function pointers
-// ---------------------------------------------------------------------------
-
-/// A single slot in the hardware interrupt dispatch table.
-///
-/// Wraps an [`AtomicPtr<()>`] that stores either null (no handler) or a valid
-/// [`InterruptHandler`] function pointer cast to `*mut ()`. The transmute
-/// between `*mut ()` and `fn(IrqVector)` is encapsulated here with a
-/// documented invariant: only [`try_set`](HandlerSlot::try_set) can store
-/// non-null values, and it only accepts valid `InterruptHandler` pointers.
-#[repr(transparent)]
-struct HandlerSlot(AtomicPtr<()>);
-
-impl HandlerSlot {
-    /// An empty (no handler) slot.
-    const EMPTY: Self = Self(AtomicPtr::new(core::ptr::null_mut()));
-
-    /// Atomically sets the handler if the slot is currently empty.
-    ///
-    /// Returns `Ok(())` on success, `Err(())` if a handler is already registered.
-    fn try_set(&self, handler: InterruptHandler) -> Result<(), ()> {
-        self.0
-            .compare_exchange(
-                core::ptr::null_mut(),
-                handler as *mut (),
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
-            .map(|_| ())
-            .map_err(|_| ())
-    }
-
-    /// Clears the handler slot, setting it back to empty.
-    fn clear(&self) {
-        self.0.store(core::ptr::null_mut(), Ordering::Release);
-    }
-
-    /// Dispatches to the registered handler (if any).
-    ///
-    /// # Safety invariant
-    ///
-    /// The transmute is sound because [`try_set`](HandlerSlot::try_set) only
-    /// stores valid `InterruptHandler` function pointers, and
-    /// [`clear`](HandlerSlot::clear) only stores null.
-    fn dispatch(&self, vector: IrqVector) {
-        let ptr = self.0.load(Ordering::Acquire);
-        if !ptr.is_null() {
-            // SAFETY: `try_set` guarantees all non-null values are valid
-            // `InterruptHandler` pointers.
-            let f: InterruptHandler = unsafe { core::mem::transmute(ptr) };
-            f(vector);
-        }
-    }
-
-    /// Returns `true` if no handler is currently registered.
-    fn is_empty(&self) -> bool {
-        self.0.load(Ordering::Acquire).is_null()
-    }
-}
-
 /// Static dispatch table: one handler slot per vector (32-255).
-static HANDLERS: [HandlerSlot; NUM_VECTORS] = {
-    const INIT: HandlerSlot = HandlerSlot::EMPTY;
-    [INIT; NUM_VECTORS]
-};
+static HANDLERS: [AtomicFn<InterruptHandler>; NUM_VECTORS] =
+    [const { AtomicFn::null() }; NUM_VECTORS];
 
 /// Error type for interrupt registration.
 #[derive(Debug)]
@@ -152,7 +89,9 @@ extern "C" fn dispatch_interrupt(vector: u8) {
 
     let idx = (vector - 32) as usize;
     if idx < NUM_VECTORS {
-        HANDLERS[idx].dispatch(IrqVector::new(vector));
+        if let Some(handler) = HANDLERS[idx].load_optional() {
+            handler(IrqVector::new(vector));
+        }
     }
 
     // Send LAPIC EOI. We access the LAPIC via the global reference set
@@ -310,7 +249,7 @@ pub mod vectors {
 pub fn alloc_vector() -> Result<HwIrqVector, InterruptError> {
     for raw in vectors::DYNAMIC_START..=vectors::DYNAMIC_END {
         let idx = (raw - 32) as usize;
-        if HANDLERS[idx].is_empty() {
+        if HANDLERS[idx].load_optional().is_none() {
             return Ok(HwIrqVector::new(raw));
         }
     }

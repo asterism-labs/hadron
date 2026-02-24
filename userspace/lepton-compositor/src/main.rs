@@ -53,15 +53,64 @@ const CLOSE_BTN_COLOR: u32 = 0x00FF_6060;
 // ── Client state ─────────────────────────────────────────────────────
 
 /// Per-client state tracked by the compositor.
+// ── PixelBuffer ────────────────────────────────────────────────────
+
+/// Safe wrapper around an mmap'd pixel buffer.
+///
+/// Validates bounds once at construction, then provides safe `pixels_mut()`
+/// access without per-call unsafe. The backing memory must remain mapped
+/// for the lifetime of this struct.
+struct PixelBuffer {
+    ptr: *mut u8,
+    /// Total size in bytes.
+    size: usize,
+}
+
+impl PixelBuffer {
+    /// Wraps a raw mmap pointer and size.
+    ///
+    /// # Safety
+    ///
+    /// - `ptr` must point to a valid, writable mapping of at least `size` bytes.
+    /// - The mapping must remain valid for the lifetime of this `PixelBuffer`.
+    unsafe fn new(ptr: *mut u8, size: usize) -> Self {
+        debug_assert!(!ptr.is_null());
+        debug_assert!(size > 0);
+        Self { ptr, size }
+    }
+
+    /// Returns a mutable slice of ARGB pixels.
+    ///
+    /// `pixel_count` must not exceed `self.size / 4`.
+    ///
+    /// Takes `&self` rather than `&mut self` because the backing mmap region
+    /// is not aliased by other struct fields — only one mutable slice is
+    /// created at a time by caller convention.
+    fn pixels_mut(&self, pixel_count: usize) -> &mut [u32] {
+        assert!(
+            pixel_count * 4 <= self.size,
+            "pixel_count exceeds buffer capacity"
+        );
+        // SAFETY: Bounds checked above; ptr is a valid mapping (invariant from `new`).
+        // The caller ensures no overlapping mutable slices exist.
+        unsafe { core::slice::from_raw_parts_mut(self.ptr as *mut u32, pixel_count) }
+    }
+
+    /// Returns the raw pointer (for `copy_nonoverlapping` etc.).
+    fn as_ptr(&self) -> *mut u8 {
+        self.ptr
+    }
+}
+
+// ── Client state ───────────────────────────────────────────────────
+
 struct ClientState {
     /// Child process PID (used by `close_client` to SIGKILL the process).
     pid: u32,
     /// Compositor's channel endpoint fd (reads Commit, writes Configure/Key).
     channel_fd: usize,
     /// Compositor's mapping of the client's shared pixel buffer.
-    shm_ptr: *mut u8,
-    /// Size of the shared-memory region in bytes.
-    shm_size: usize,
+    shm_buf: PixelBuffer,
     /// Shared-memory fd (kept open so the mapping stays valid).
     shm_fd: usize,
     /// Surface placement and dimensions.
@@ -219,8 +268,8 @@ const CURSOR_BITMAP: [u8; (CURSOR_W * CURSOR_H) as usize] = [
 
 /// Top-level compositor state.
 struct Compositor {
-    /// Framebuffer pointer (mmap of `/dev/fb0`).
-    fb_ptr: *mut u8,
+    /// Framebuffer pixel buffer (mmap of `/dev/fb0`).
+    fb_buf: PixelBuffer,
     /// Framebuffer dimensions.
     fb_width: u32,
     fb_height: u32,
@@ -231,7 +280,7 @@ struct Compositor {
     /// Framebuffer file descriptor.
     fb_fd: usize,
     /// Back buffer (anonymous mmap, same layout as fb).
-    back_ptr: *mut u8,
+    back_buf: PixelBuffer,
     /// Connected clients (Z-order: last = topmost).
     clients: Vec<ClientState>,
     /// Index of the focused client, if any.
@@ -291,6 +340,10 @@ impl Compositor {
         // Allocate back buffer via anonymous mmap.
         let back_ptr = sys::mem_map(fb_size)?;
 
+        // SAFETY: fb_ptr and back_ptr are valid mappings of fb_size bytes from mmap.
+        let fb_buf = unsafe { PixelBuffer::new(fb_ptr, fb_size) };
+        let back_buf = unsafe { PixelBuffer::new(back_ptr, fb_size) };
+
         // Try to open /dev/mouse for cursor input.
         let mouse_fd = {
             let fd = io::open("/dev/mouse", 1); // READ
@@ -304,13 +357,13 @@ impl Compositor {
         };
 
         Some(Compositor {
-            fb_ptr,
+            fb_buf,
             fb_width: info.width,
             fb_height: info.height,
             fb_stride: info.pitch / 4,
             fb_size,
             fb_fd,
-            back_ptr,
+            back_buf,
             clients: Vec::new(),
             focused: None,
             dirty: DirtyRegion::new(),
@@ -396,11 +449,13 @@ impl Compositor {
         }
 
         let client_idx = self.clients.len();
+        // SAFETY: shm_ptr is a valid mapping of shm_size bytes from mem_map_shared.
+        let shm_buf = unsafe { PixelBuffer::new(shm_ptr, shm_size) };
+
         self.clients.push(ClientState {
             pid: pid as u32,
             channel_fd: ch_compositor,
-            shm_ptr,
-            shm_size,
+            shm_buf,
             shm_fd,
             x,
             y,
@@ -418,14 +473,12 @@ impl Compositor {
         // Send Configure message.
         let cfg = proto::configure(0, w, h);
         let mut buf = [0u8; MESSAGE_SIZE];
-        // SAFETY: Configure is a 64-byte repr(C) message.
-        unsafe { proto::encode_msg(&cfg, &mut buf) };
+        proto::encode_msg(&cfg, &mut buf);
         let _ = sys::channel_send(ch_compositor, &buf);
 
         // Send FocusGained to the new client.
         let fg = proto::focus_gained(0);
-        // SAFETY: FocusGained is a 64-byte repr(C) message.
-        unsafe { proto::encode_msg(&fg, &mut buf) };
+        proto::encode_msg(&fg, &mut buf);
         let _ = sys::channel_send(ch_compositor, &buf);
     }
 
@@ -479,8 +532,7 @@ impl Compositor {
                 continue;
             }
 
-            // SAFETY: Opcode verified as CreateWindow.
-            let req = unsafe { proto::cast_msg::<proto::CreateWindow>(&buf) };
+            let req = proto::decode_msg::<proto::CreateWindow>(&buf);
             let w = if req.width == 0 {
                 self.fb_width.min(640)
             } else {
@@ -515,8 +567,7 @@ impl Compositor {
             // Send Configure + shm fd to the client.
             let cfg = proto::configure(0, w, h);
             let mut cfg_buf = [0u8; MESSAGE_SIZE];
-            // SAFETY: Configure is a 64-byte repr(C) message.
-            unsafe { proto::encode_msg(&cfg, &mut cfg_buf) };
+            proto::encode_msg(&cfg, &mut cfg_buf);
             if sys::channel_send_fd(ch_fd, shm_fd, &cfg_buf).is_err() {
                 sys::close(ch_fd);
                 sys::mem_unmap(shm_ptr, shm_size);
@@ -534,11 +585,12 @@ impl Compositor {
             title[..label.len()].copy_from_slice(label);
 
             let client_idx = self.clients.len();
+            // SAFETY: shm_ptr is a valid mapping of shm_size bytes.
+            let shm_buf = unsafe { PixelBuffer::new(shm_ptr, shm_size) };
             self.clients.push(ClientState {
                 pid: 0, // dynamic clients aren't spawned by us
                 channel_fd: ch_fd,
-                shm_ptr,
-                shm_size,
+                shm_buf,
                 shm_fd,
                 x,
                 y,
@@ -555,8 +607,7 @@ impl Compositor {
 
             // Send FocusGained.
             let fg = proto::focus_gained(0);
-            // SAFETY: FocusGained is a 64-byte repr(C) message.
-            unsafe { proto::encode_msg(&fg, &mut cfg_buf) };
+            proto::encode_msg(&fg, &mut cfg_buf);
             let _ = sys::channel_send(ch_fd, &cfg_buf);
         }
     }
@@ -599,8 +650,7 @@ impl Compositor {
 
         let msg = proto::keyboard_input(0, u32::from(character), true, character);
         let mut buf = [0u8; MESSAGE_SIZE];
-        // SAFETY: KeyboardInput is a 64-byte repr(C) message.
-        unsafe { proto::encode_msg(&msg, &mut buf) };
+        proto::encode_msg(&msg, &mut buf);
         let _ = sys::channel_send(client.channel_fd, &buf);
     }
 
@@ -620,16 +670,14 @@ impl Compositor {
         if let Some(old_idx) = old {
             let msg = proto::focus_lost(0);
             let mut buf = [0u8; MESSAGE_SIZE];
-            // SAFETY: FocusLost is a 64-byte repr(C) message.
-            unsafe { proto::encode_msg(&msg, &mut buf) };
+            proto::encode_msg(&msg, &mut buf);
             let _ = sys::channel_send(self.clients[old_idx].channel_fd, &buf);
         }
 
         // Send FocusGained to new client.
         let msg = proto::focus_gained(0);
         let mut buf = [0u8; MESSAGE_SIZE];
-        // SAFETY: FocusGained is a 64-byte repr(C) message.
-        unsafe { proto::encode_msg(&msg, &mut buf) };
+        proto::encode_msg(&msg, &mut buf);
         let _ = sys::channel_send(self.clients[new_idx].channel_fd, &buf);
 
         // Move focused surface to top of Z-order.
@@ -650,16 +698,14 @@ impl Compositor {
         if let Some(old_idx) = self.focused {
             let msg = proto::focus_lost(0);
             let mut buf = [0u8; MESSAGE_SIZE];
-            // SAFETY: FocusLost is a 64-byte repr(C) message.
-            unsafe { proto::encode_msg(&msg, &mut buf) };
+            proto::encode_msg(&msg, &mut buf);
             let _ = sys::channel_send(self.clients[old_idx].channel_fd, &buf);
         }
 
         // Send FocusGained to new.
         let msg = proto::focus_gained(0);
         let mut buf = [0u8; MESSAGE_SIZE];
-        // SAFETY: FocusGained is a 64-byte repr(C) message.
-        unsafe { proto::encode_msg(&msg, &mut buf) };
+        proto::encode_msg(&msg, &mut buf);
         let _ = sys::channel_send(self.clients[idx].channel_fd, &buf);
 
         // Move to top of Z-order.
@@ -675,7 +721,7 @@ impl Compositor {
         let client = self.clients.remove(idx);
         sys::kill(client.pid, 9); // SIGKILL
         sys::close(client.channel_fd);
-        sys::mem_unmap(client.shm_ptr, client.shm_size);
+        sys::mem_unmap(client.shm_buf.as_ptr(), client.shm_buf.size);
         sys::close(client.shm_fd);
 
         // Update focused index after removal.
@@ -688,8 +734,7 @@ impl Compositor {
                     let new_top = self.clients.len() - 1;
                     let msg = proto::focus_gained(0);
                     let mut buf = [0u8; MESSAGE_SIZE];
-                    // SAFETY: FocusGained is a 64-byte repr(C) message.
-                    unsafe { proto::encode_msg(&msg, &mut buf) };
+                    proto::encode_msg(&msg, &mut buf);
                     let _ = sys::channel_send(self.clients[new_top].channel_fd, &buf);
                     Some(new_top)
                 };
@@ -853,8 +898,7 @@ impl Compositor {
             u32::from(self.prev_buttons),
         );
         let mut buf = [0u8; MESSAGE_SIZE];
-        // SAFETY: MouseInput is a 64-byte repr(C) message.
-        unsafe { proto::encode_msg(&msg, &mut buf) };
+        proto::encode_msg(&msg, &mut buf);
         let _ = sys::channel_send(c.channel_fd, &buf);
     }
 
@@ -888,9 +932,7 @@ impl Compositor {
         }
 
         let pixel_count = (self.fb_stride * self.fb_height) as usize;
-        // SAFETY: back_ptr is a valid anonymous mapping of fb_size bytes.
-        let back_pixels =
-            unsafe { core::slice::from_raw_parts_mut(self.back_ptr as *mut u32, pixel_count) };
+        let back_pixels = self.back_buf.pixels_mut(pixel_count);
         let mut back =
             Surface::from_raw(back_pixels, self.fb_width, self.fb_height, self.fb_stride);
 
@@ -925,10 +967,7 @@ impl Compositor {
             // 4. Blit client surface below the titlebar.
             let surface_y = y + TITLEBAR_HEIGHT;
             let src_pixel_count = client.width as usize * client.height as usize;
-            // SAFETY: shm_ptr is a valid mapping of client's pixel buffer.
-            let src_pixels = unsafe {
-                core::slice::from_raw_parts_mut(client.shm_ptr as *mut u32, src_pixel_count)
-            };
+            let src_pixels = client.shm_buf.pixels_mut(src_pixel_count);
             let src = Surface::from_raw(src_pixels, client.width, client.height, client.width);
             back.blit(&src, x as i32, surface_y as i32);
 
@@ -972,7 +1011,11 @@ impl Compositor {
         if self.dirty.full_redraw {
             // SAFETY: Both pointers are valid mappings of fb_size bytes.
             unsafe {
-                core::ptr::copy_nonoverlapping(self.back_ptr, self.fb_ptr, self.fb_size);
+                core::ptr::copy_nonoverlapping(
+                    self.back_buf.as_ptr(),
+                    self.fb_buf.as_ptr(),
+                    self.fb_size,
+                );
             }
         } else {
             let stride = self.fb_stride as usize;
@@ -995,8 +1038,8 @@ impl Compositor {
                     // (clamped to fb bounds, both buffers are fb_size bytes).
                     unsafe {
                         core::ptr::copy_nonoverlapping(
-                            self.back_ptr.add(offset),
-                            self.fb_ptr.add(offset),
+                            self.back_buf.as_ptr().add(offset),
+                            self.fb_buf.as_ptr().add(offset),
                             row_bytes,
                         );
                     }
@@ -1026,22 +1069,20 @@ impl Compositor {
     fn shutdown(&mut self) {
         // Clear framebuffer.
         let pixel_count = (self.fb_stride * self.fb_height) as usize;
-        // SAFETY: fb_ptr is still a valid mapping.
-        let pixels =
-            unsafe { core::slice::from_raw_parts_mut(self.fb_ptr as *mut u32, pixel_count) };
+        let pixels = self.fb_buf.pixels_mut(pixel_count);
         let mut s = Surface::from_raw(pixels, self.fb_width, self.fb_height, self.fb_stride);
         s.fill(0);
 
         // Unmap and close client resources.
         for client in &self.clients {
             sys::close(client.channel_fd);
-            sys::mem_unmap(client.shm_ptr, client.shm_size);
+            sys::mem_unmap(client.shm_buf.as_ptr(), client.shm_buf.size);
             sys::close(client.shm_fd);
         }
 
         // Unmap back buffer and framebuffer.
-        sys::mem_unmap(self.back_ptr, self.fb_size);
-        sys::mem_unmap(self.fb_ptr, self.fb_size);
+        sys::mem_unmap(self.back_buf.as_ptr(), self.fb_size);
+        sys::mem_unmap(self.fb_buf.as_ptr(), self.fb_size);
         io::close(self.fb_fd);
     }
 }

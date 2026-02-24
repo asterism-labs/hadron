@@ -339,9 +339,15 @@ static PROCESS_TABLE: SpinLock<BTreeMap<Pid, Arc<Process>>> =
 pub struct ProcessTable;
 
 impl ProcessTable {
-    /// Registers a process in the global table.
+    /// Registers a process in the global table and adds it to its parent's
+    /// child list.
     pub fn register(process: &Arc<Process>) {
         let mut table = PROCESS_TABLE.lock();
+        if let Some(ppid) = process.parent_pid {
+            if let Some(parent) = table.get(&ppid) {
+                parent.children.lock().push(process.pid);
+            }
+        }
         table.insert(process.pid, process.clone());
     }
 
@@ -351,9 +357,17 @@ impl ProcessTable {
         table.get(&pid).cloned()
     }
 
-    /// Removes a process from the global table.
+    /// Removes a process from the global table and from its parent's child
+    /// list.
     pub fn unregister(pid: Pid) {
         let mut table = PROCESS_TABLE.lock();
+        if let Some(process) = table.get(&pid) {
+            if let Some(ppid) = process.parent_pid {
+                if let Some(parent) = table.get(&ppid) {
+                    parent.children.lock().retain(|&c| c != pid);
+                }
+            }
+        }
         table.remove(&pid);
     }
 
@@ -361,10 +375,9 @@ impl ProcessTable {
     pub fn children_of(parent_pid: Pid) -> Vec<Pid> {
         let table = PROCESS_TABLE.lock();
         table
-            .values()
-            .filter(|p| p.parent_pid == Some(parent_pid))
-            .map(|p| p.pid)
-            .collect()
+            .get(&parent_pid)
+            .map(|p| p.children.lock().clone())
+            .unwrap_or_default()
     }
 
     /// Execute a closure with a reference to the current process.
@@ -463,6 +476,9 @@ pub struct Process {
     /// Program break address (heap boundary) for `brk()`.
     /// Shared with address space (`CLONE_VM`).
     pub program_break: Arc<SpinLock<u64>>,
+    /// PIDs of child processes spawned by this process.
+    /// Updated on spawn (push) and reap (remove).
+    pub(crate) children: SpinLock<Vec<Pid>>,
 }
 
 impl Process {
@@ -526,6 +542,7 @@ impl Process {
             exit_notify: HeapWaitQueue::new(),
             cwd: SpinLock::leveled("cwd", 4, String::from("/")),
             program_break: Arc::new(SpinLock::leveled("program_break", 4, 0)),
+            children: SpinLock::leveled("children", 4, Vec::new()),
         }
     }
 
@@ -582,6 +599,7 @@ impl Process {
             exit_notify: HeapWaitQueue::new(),
             cwd: SpinLock::leveled("cwd", 4, parent.cwd.lock().clone()),
             program_break,
+            children: SpinLock::leveled("children", 4, Vec::new()),
         }
     }
 }

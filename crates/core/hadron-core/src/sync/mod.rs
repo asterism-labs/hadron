@@ -32,6 +32,7 @@
 #[macro_use]
 mod macros;
 pub mod atomic;
+mod atomic_fn;
 pub mod cell;
 mod condvar;
 mod heap_waitqueue;
@@ -69,6 +70,7 @@ fn spin_wait_hint() {
     loom::thread::yield_now();
 }
 
+pub use atomic_fn::AtomicFn;
 pub use condvar::Condvar;
 pub use heap_waitqueue::{HeapWaitFuture, HeapWaitQueue};
 pub use irq_spinlock::{IrqSpinLock, IrqSpinLockGuard};
