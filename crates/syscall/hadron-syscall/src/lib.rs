@@ -134,6 +134,24 @@ hadron_syscall_macros::define_syscalls! {
             pixel_format: u32,
         }
 
+        /// Dirty rectangle descriptor for the `FBIODIRTY` ioctl.
+        ///
+        /// Tells the framebuffer driver to flush the specified region to the
+        /// display. Required for RAM-backed framebuffers (e.g. VirtIO GPU)
+        /// where pixel writes go to cacheable memory and an explicit
+        /// transfer-to-host is needed.
+        #[derive(Debug, Clone, Copy)]
+        struct FbDirtyRect {
+            /// X offset in pixels.
+            x: u32,
+            /// Y offset in pixels.
+            y: u32,
+            /// Width in pixels.
+            width: u32,
+            /// Height in pixels.
+            height: u32,
+        }
+
         /// Argument descriptor for [`task_spawn`]: pointer + length of one arg string.
         #[derive(Debug, Clone, Copy)]
         struct SpawnArg {
@@ -351,6 +369,9 @@ hadron_syscall_macros::define_syscalls! {
         /// Framebuffer ioctl: disable/enable kernel console (fbcon) output.
         /// arg=1 blanks (disables fbcon), arg=0 unblanks (re-enables).
         FBIOBLANK: u32 = 0x4611;
+        /// Framebuffer ioctl: flush a dirty rectangle to the display.
+        /// arg is a pointer to an [`FbDirtyRect`].
+        FBIODIRTY: u32 = 0x4602;
         /// Signal: interrupt (Ctrl+C).
         SIGINT: usize = 2;
         /// Signal: quit (Ctrl+\).

@@ -436,13 +436,15 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
     //    framebuffer was registered during driver probing (e.g., Bochs VGA).
     //    Each VT gets its own FbCon with an independent cell buffer; only the
     //    active VT (tty0) renders to the physical framebuffer.
+    // Try virtio-gpu first, fall back to bochs-vga.
     #[cfg(target_arch = "x86_64")]
     if let Some(fb) = crate::drivers::device_registry::DeviceRegistry::with(|dr| {
-        dr.take_framebuffer("bochs-vga-0")
+        dr.take_framebuffer("virtio-gpu-0")
+            .or_else(|| dr.take_framebuffer("bochs-vga-0"))
     }) {
         let info = fb.info();
         let total = info.pitch as usize * info.height as usize;
-        // SAFETY: Entire framebuffer is within the mapped MMIO region.
+        // SAFETY: Entire framebuffer is within the mapped region.
         unsafe { fb.fill_zero(0, total) };
 
         // Create a per-VT fbcon instance for each virtual terminal.
@@ -587,8 +589,10 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
         ));
 
         // Register /dev/fb0 if a framebuffer device is available.
+        // Prefer virtio-gpu, fall back to bochs-vga.
         if let Some(fb) = crate::drivers::device_registry::DeviceRegistry::with(|dr| {
-            dr.take_framebuffer("bochs-vga-0")
+            dr.take_framebuffer("virtio-gpu-0")
+                .or_else(|| dr.take_framebuffer("bochs-vga-0"))
         }) {
             dev_devices.push((
                 "fb0",

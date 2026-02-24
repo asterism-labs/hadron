@@ -98,4 +98,20 @@ pub trait Framebuffer: Send + Sync {
     /// The caller must ensure the range `[offset, offset + count)` is within
     /// the framebuffer bounds.
     unsafe fn fill_zero(&self, offset: u64, count: usize);
+
+    /// Flushes a dirty rectangle to the display.
+    ///
+    /// For MMIO-backed framebuffers this is a no-op (writes are immediately
+    /// visible). RAM-backed framebuffers (e.g. VirtIO GPU) override this to
+    /// transfer the region to the host and request a display update.
+    fn flush_rect(&self, _x: u32, _y: u32, _w: u32, _h: u32) {}
+
+    /// Whether the framebuffer is backed by cacheable RAM.
+    ///
+    /// Returns `false` for MMIO-backed framebuffers (default) and `true` for
+    /// RAM-backed framebuffers like VirtIO GPU. Used to decide whether mmap
+    /// should use write-back or uncacheable mappings.
+    fn is_ram_backed(&self) -> bool {
+        false
+    }
 }

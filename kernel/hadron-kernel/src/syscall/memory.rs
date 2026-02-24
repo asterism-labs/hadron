@@ -170,8 +170,12 @@ fn sys_mem_map_device(length: usize, prot: usize, fd: usize) -> isize {
         return -EINVAL;
     }
 
-    // Build page table flags from prot, with cache disabled for device memory.
-    let mut map_flags = MapFlags::USER | MapFlags::CACHE_DISABLE;
+    // Build page table flags from prot. Use cache-disable for MMIO-backed
+    // devices, write-back for RAM-backed ones (e.g. VirtIO GPU).
+    let mut map_flags = MapFlags::USER;
+    if inode.mmap_cache_disable() {
+        map_flags |= MapFlags::CACHE_DISABLE;
+    }
     if prot & PROT_WRITE != 0 {
         map_flags |= MapFlags::WRITABLE;
     }

@@ -111,6 +111,17 @@ impl Inode for DevFramebuffer {
                 }
                 Ok(0)
             }
+            hadron_syscall::FBIODIRTY => {
+                let ptr = arg as *const hadron_syscall::FbDirtyRect;
+                if ptr.is_null() {
+                    return Err(FsError::InvalidArgument);
+                }
+                // SAFETY: The caller (ioctl syscall handler) has validated the
+                // user pointer and switched to the user's address space (CR3).
+                let rect = unsafe { core::ptr::read_volatile(ptr) };
+                self.fb.flush_rect(rect.x, rect.y, rect.width, rect.height);
+                Ok(0)
+            }
             hadron_syscall::FBIOBLANK => {
                 // arg=1: blank (disable fbcon), arg=0: unblank (re-enable).
                 if arg != 0 {
@@ -129,5 +140,9 @@ impl Inode for DevFramebuffer {
         let phys = self.fb.physical_base();
         let size = info.pitch as usize * info.height as usize;
         Ok((phys, size))
+    }
+
+    fn mmap_cache_disable(&self) -> bool {
+        !self.fb.is_ram_backed()
     }
 }

@@ -397,7 +397,7 @@ pipeline()
 // ===========================================================================
 
 qemu("q35", 256)
-    .extra_args(["-serial", "stdio", "-no-reboot"])
+    .extra_args(["-serial", "stdio", "-no-reboot", "-vga", "none", "-device", "virtio-gpu-pci"])
     .test_success_code(33)
     .test_timeout(30)
     .test_extra_args([

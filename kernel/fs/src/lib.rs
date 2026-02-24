@@ -242,6 +242,15 @@ pub trait Inode: Send + Sync {
         Err(FsError::NotSupported)
     }
 
+    /// Whether mmap of this inode should use cache-disable mapping.
+    ///
+    /// Default is `true` (safe for MMIO devices). RAM-backed devices
+    /// (e.g. VirtIO GPU framebuffer) override this to return `false` so
+    /// userspace gets write-back cacheable mappings.
+    fn mmap_cache_disable(&self) -> bool {
+        true
+    }
+
     /// Read the target path of a symlink.
     ///
     /// Default implementation returns [`FsError::NotSupported`].

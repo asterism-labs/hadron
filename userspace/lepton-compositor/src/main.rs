@@ -15,7 +15,8 @@ use alloc::vec::Vec;
 use lepton_display_protocol::{self as proto, MESSAGE_SIZE, OP_COMMIT};
 use lepton_gfx::Surface;
 use lepton_syslib::hadron_syscall::{
-    self as hsc, ECHO, FBIOBLANK, FBIOGET_INFO, FbInfo, ICANON, TCGETS, TCSETS, Termios,
+    self as hsc, ECHO, FBIOBLANK, FBIODIRTY, FBIOGET_INFO, FbDirtyRect, FbInfo, ICANON, TCGETS,
+    TCSETS, Termios,
 };
 use lepton_syslib::{io, println, sys};
 
@@ -714,6 +715,21 @@ impl Compositor {
         unsafe {
             core::ptr::copy_nonoverlapping(self.back_ptr, self.fb_ptr, self.fb_size);
         }
+
+        // Notify the framebuffer driver that the entire screen is dirty.
+        // For RAM-backed framebuffers (VirtIO GPU) this triggers the host
+        // display update; for MMIO-backed ones (Bochs VGA) it's a no-op.
+        let dirty = FbDirtyRect {
+            x: 0,
+            y: 0,
+            width: self.fb_width,
+            height: self.fb_height,
+        };
+        io::ioctl(
+            self.fb_fd,
+            FBIODIRTY as usize,
+            &dirty as *const FbDirtyRect as usize,
+        );
 
         self.needs_composite = false;
     }
