@@ -5,6 +5,7 @@ use crate::arch::x86_64::structures::paging::{PageTable, PageTableEntry, PageTab
 use crate::mm::PAGE_SIZE;
 use crate::mm::mapper::{self, MapFlags, MapFlush};
 use crate::paging::{Page, PhysFrame, Size1GiB, Size2MiB, Size4KiB};
+use hadron_core::assert_unsafe_precondition;
 
 /// Result of translating a virtual address.
 #[derive(Debug, Clone, Copy)]
@@ -47,12 +48,12 @@ pub enum UnmapError {
 ///
 /// All physical addresses are accessed through `hhdm_offset + phys_addr`.
 pub struct PageTableMapper {
-    hhdm_offset: u64,
+    hhdm_offset: VirtAddr,
 }
 
 impl PageTableMapper {
     /// Creates a new mapper with the given HHDM offset.
-    pub fn new(hhdm_offset: u64) -> Self {
+    pub fn new(hhdm_offset: VirtAddr) -> Self {
         Self { hhdm_offset }
     }
 
@@ -60,12 +61,12 @@ impl PageTableMapper {
     fn phys_to_virt(&self, phys: PhysAddr) -> *mut u8 {
         let p = phys.as_u64();
         assert!(
-            p <= u64::MAX - self.hhdm_offset,
+            p <= u64::MAX - self.hhdm_offset.as_u64(),
             "phys_to_virt: physical address {:#x} overflows HHDM (offset {:#x})",
             p,
-            self.hhdm_offset,
+            self.hhdm_offset.as_u64(),
         );
-        (self.hhdm_offset + p) as *mut u8
+        (self.hhdm_offset + p).as_mut_ptr::<u8>()
     }
 
     /// Returns a mutable reference to the [`PageTable`] at `phys`.
@@ -74,7 +75,7 @@ impl PageTableMapper {
     /// `phys` must point to a valid, 4 KiB-aligned physical frame that is
     /// accessible through the HHDM.
     unsafe fn table_at(&self, phys: PhysAddr) -> &mut PageTable {
-        hadron_core::assert_unsafe_precondition!(
+        assert_unsafe_precondition!(
             phys.is_aligned(4096),
             "table_at: physical address {:#x} is not page-aligned",
             phys.as_u64()
@@ -139,7 +140,7 @@ impl PageTableMapper {
         flags: PageTableFlags,
         alloc: &mut (impl FnMut() -> PhysFrame<Size4KiB> + ?Sized),
     ) {
-        hadron_core::assert_unsafe_precondition!(
+        assert_unsafe_precondition!(
             phys_addr.is_aligned(0x20_0000),
             "map_2mib: physical address {:#x} is not 2 MiB aligned",
             phys_addr.as_u64()
@@ -174,7 +175,7 @@ impl PageTableMapper {
         flags: PageTableFlags,
         alloc: &mut (impl FnMut() -> PhysFrame<Size4KiB> + ?Sized),
     ) {
-        hadron_core::assert_unsafe_precondition!(
+        assert_unsafe_precondition!(
             phys_addr.is_aligned(0x4000_0000),
             "map_1gib: physical address {:#x} is not 1 GiB aligned",
             phys_addr.as_u64()
@@ -206,7 +207,7 @@ impl PageTableMapper {
         flags: PageTableFlags,
         alloc: &mut (impl FnMut() -> PhysFrame<Size4KiB> + ?Sized),
     ) {
-        hadron_core::assert_unsafe_precondition!(
+        assert_unsafe_precondition!(
             phys_addr.is_aligned(4096),
             "map_4k: physical address {:#x} is not 4 KiB aligned",
             phys_addr.as_u64()

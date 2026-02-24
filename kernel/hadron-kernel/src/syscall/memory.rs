@@ -7,7 +7,7 @@
 //! (anonymous) or come from device MMIO regions (device-backed) or shared
 //! memory objects (shared).
 
-use crate::addr::{PhysAddr, VirtAddr};
+use crate::addr::VirtAddr;
 use crate::fs::file::OpenFlags;
 use crate::id::Fd;
 use crate::mm::PAGE_SIZE;
@@ -113,7 +113,7 @@ fn sys_mem_map_anonymous(length: usize, prot: usize) -> isize {
                 }
 
                 // Zero the page via HHDM.
-                let frame_ptr = (hhdm_offset + frame.start_address().as_u64()) as *mut u8;
+                let frame_ptr = (hhdm_offset + frame.start_address().as_u64()).as_mut_ptr::<u8>();
                 // SAFETY: Frame was just allocated; zeroing via HHDM is safe.
                 unsafe {
                     core::ptr::write_bytes(frame_ptr, 0, PAGE_SIZE);
@@ -200,7 +200,7 @@ fn sys_mem_map_device(length: usize, prot: usize, fd: usize) -> isize {
                 let phys_addr = phys_base + (i as u64) * PAGE_SIZE as u64;
 
                 let page = Page::<Size4KiB>::containing_address(VirtAddr::new(page_vaddr));
-                let frame = PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(phys_addr));
+                let frame = PhysFrame::<Size4KiB>::containing_address(phys_addr);
 
                 if let Err(_e) = process
                     .address_space()
@@ -334,7 +334,7 @@ pub(super) fn sys_mem_brk(addr: usize) -> isize {
                     }
 
                     // Zero the page via HHDM.
-                    let frame_ptr = (hhdm_offset + frame.start_address().as_u64()) as *mut u8;
+                    let frame_ptr = (hhdm_offset + frame.start_address().as_u64()).as_mut_ptr::<u8>();
                     // SAFETY: Frame was just allocated; zeroing via HHDM is safe.
                     unsafe {
                         core::ptr::write_bytes(frame_ptr, 0, PAGE_SIZE);
@@ -466,7 +466,7 @@ pub(super) fn sys_mem_map_shared(fd: usize, size: usize, prot: usize) -> isize {
             for i in 0..page_count {
                 let page_vaddr = base_vaddr.as_u64() + (i as u64) * PAGE_SIZE as u64;
                 let page = Page::<Size4KiB>::containing_address(VirtAddr::new(page_vaddr));
-                let frame = PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(phys_addrs[i]));
+                let frame = PhysFrame::<Size4KiB>::containing_address(phys_addrs[i]);
 
                 if let Err(_e) = process
                     .address_space()

@@ -30,7 +30,7 @@ pub fn apply_dyn_relocations<M: PageMapper<Size4KiB> + PageTranslator>(
     address_space: &AddressSpace<M>,
     elf: &ElfFile<'_>,
     base_addr: u64,
-    hhdm_offset: u64,
+    hhdm_offset: crate::addr::VirtAddr,
 ) -> Result<(), BinaryError> {
     // Find the symbol table — try .dynsym first, fall back to .symtab.
     let symtab = elf
@@ -108,7 +108,7 @@ fn write_reloc_value<M: PageMapper<Size4KiB> + PageTranslator>(
     address_space: &AddressSpace<M>,
     vaddr: u64,
     value: RelocValue,
-    hhdm_offset: u64,
+    hhdm_offset: crate::addr::VirtAddr,
 ) -> Result<(), BinaryError> {
     let phys = address_space
         .translate(VirtAddr::new(vaddr))
@@ -116,7 +116,7 @@ fn write_reloc_value<M: PageMapper<Size4KiB> + PageTranslator>(
             "relocation target address not mapped",
         ))?;
 
-    let hhdm_ptr = (hhdm_offset + phys.as_u64()) as *mut u8;
+    let hhdm_ptr = (hhdm_offset + phys.as_u64()).as_mut_ptr::<u8>();
 
     match value {
         RelocValue::U32(v) => {

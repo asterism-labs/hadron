@@ -15,6 +15,7 @@ use hadron_kernel::driver_api::error::DriverError;
 use hadron_kernel::driver_api::framebuffer::{Framebuffer, FramebufferInfo, PixelFormat};
 use hadron_kernel::driver_api::pci::{PciBar, PciDeviceId, PciDeviceInfo};
 use hadron_kernel::driver_api::resource::MmioRegion;
+use hadron_kernel::{kinfo, kwarn};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -146,14 +147,14 @@ impl BochsVga {
         // SAFETY: Reading the BGA version register via DISPI ports.
         let version = unsafe { dispi.read(DISPI_INDEX_ID) };
         if version < BGA_VERSION_MIN {
-            hadron_kernel::kwarn!(
+            kwarn!(
                 "bochs-vga: unsupported BGA version {:#06x} (need >= {:#06x})",
                 version,
                 BGA_VERSION_MIN
             );
             return Err(DriverError::Unsupported);
         }
-        hadron_kernel::kinfo!("bochs-vga: BGA version {:#06x}", version);
+        kinfo!("bochs-vga: BGA version {:#06x}", version);
 
         // Extract BAR0 (framebuffer memory).
         let (bar0_phys, bar0_size) = match info.bars[0] {
@@ -197,7 +198,7 @@ impl BochsVga {
             pixel_format: PixelFormat::Bgr32,
         };
 
-        hadron_kernel::kinfo!(
+        kinfo!(
             "bochs-vga: mode set {}x{}x{}, pitch={}, fb at {:#x}",
             width,
             height,
@@ -353,7 +354,7 @@ impl BochsVgaDriver {
         );
         devices.add_framebuffer(path, vga_arc);
 
-        hadron_kernel::kinfo!("bochs-vga: driver initialized successfully");
+        kinfo!("bochs-vga: driver initialized successfully");
         Ok(PciDriverRegistration {
             devices,
             lifecycle: None,

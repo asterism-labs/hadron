@@ -89,7 +89,7 @@ pub use log::LogLevel;
 #[cfg(target_os = "none")]
 pub fn test_init(boot_info: &impl boot::BootInfo) {
     crate::arch::cpu_init();
-    crate::mm::hhdm::init(boot_info.hhdm_offset());
+    crate::mm::hhdm::init(addr::VirtAddr::new(boot_info.hhdm_offset()));
     #[cfg(target_arch = "x86_64")]
     crate::mm::mapper::register_tlb_flush(crate::arch::x86_64::instructions::tlb::flush);
     crate::backtrace::Backtrace::init_from_embedded(

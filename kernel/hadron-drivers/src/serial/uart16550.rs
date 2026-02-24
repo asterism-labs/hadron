@@ -10,6 +10,10 @@ use core::fmt;
 
 use bitflags::bitflags;
 use hadron_kernel::arch::x86_64::Port;
+use hadron_kernel::driver_api::error::DriverError;
+use hadron_kernel::driver_api::registration::{DeviceSet, PlatformDriverRegistration};
+use hadron_kernel::driver_api::AcpiMatchId;
+use hadron_kernel::kinfo;
 
 // ---------------------------------------------------------------------------
 // Register offsets
@@ -400,21 +404,17 @@ struct Uart16550Driver;
     name = "uart16550",
     kind = platform,
     capabilities = [Irq, Spawner],
-    acpi_ids = &[hadron_kernel::driver_api::AcpiMatchId::eisa("PNP0501")],
+    acpi_ids = &[AcpiMatchId::eisa("PNP0501")],
 )]
 impl Uart16550Driver {
     /// Platform probe for the 16550 UART. Reads I/O port and IRQ from ACPI
     /// `_CRS` resources and sets up async serial I/O.
     fn probe(
         ctx: DriverContext,
-    ) -> Result<
-        hadron_kernel::driver_api::registration::PlatformDriverRegistration,
-        hadron_kernel::driver_api::error::DriverError,
-    > {
+    ) -> Result<PlatformDriverRegistration, DriverError> {
         use alloc::boxed::Box;
         use core::pin::Pin;
         use hadron_kernel::driver_api::capability::{CapabilityAccess, IrqCapability, TaskSpawner};
-        use hadron_kernel::driver_api::registration::{DeviceSet, PlatformDriverRegistration};
 
         let device = ctx.device();
         let irq_cap = ctx.capability::<IrqCapability>();
@@ -445,7 +445,7 @@ impl Uart16550Driver {
             })),
         );
 
-        hadron_kernel::kinfo!(
+        kinfo!(
             "uart16550: serial echo task spawned (I/O {:#x}, IRQ {})",
             io_base,
             irq

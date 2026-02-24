@@ -323,7 +323,7 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
     }
 
     // 2. Initialize HHDM global offset.
-    crate::mm::hhdm::init(boot_info.hhdm_offset());
+    crate::mm::hhdm::init(crate::addr::VirtAddr::new(boot_info.hhdm_offset()));
     crate::kinfo!("HHDM initialized at offset {:#x}", boot_info.hhdm_offset());
 
     // 2a. Register architecture-specific TLB flush for hadron-mm.

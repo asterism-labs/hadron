@@ -9,6 +9,7 @@ pub use hadron_mm::vmm::*;
 use crate::addr::{PhysAddr, VirtAddr};
 use crate::boot::BootInfo;
 use crate::mm::pmm::BitmapFrameAllocRef;
+use crate::paging::Page;
 use crate::sync::SpinLock;
 
 #[cfg(target_arch = "x86_64")]
@@ -26,7 +27,7 @@ static VMM: SpinLock<Option<KernelVmm>> = SpinLock::leveled("VMM", 2, None);
 ///
 /// Creates the `Vmm`, maps the initial heap, and stores globally.
 pub fn init(boot_info: &impl BootInfo) {
-    let hhdm_offset = boot_info.hhdm_offset();
+    let hhdm_offset = VirtAddr::new(boot_info.hhdm_offset());
     let root_phys = boot_info.page_table_root();
 
     // Find max physical address from memory map.
@@ -138,7 +139,7 @@ fn default_mmio_cleanup(virt_base: VirtAddr, size: u64) {
         let page_count = size / page_size;
         for i in 0..page_count {
             let virt = virt_base + i * page_size;
-            let page = crate::paging::Page::containing_address(virt);
+            let page = Page::containing_address(virt);
             // Ignore errors — the page may already be unmapped.
             let _ = vmm.unmap_page(page);
         }

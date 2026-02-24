@@ -141,15 +141,15 @@ pub enum FaultRegion {
 impl MemoryLayout {
     /// Creates a new `MemoryLayout` from the HHDM offset and maximum physical
     /// address. Uses the default (non-KASLR) regions base.
-    pub fn new(hhdm_offset: u64, max_phys: u64) -> Self {
+    pub fn new(hhdm_offset: VirtAddr, max_phys: u64) -> Self {
         Self::with_regions_base(hhdm_offset, max_phys, DEFAULT_REGIONS_BASE)
     }
 
     /// Creates a new `MemoryLayout` with a custom regions base (for KASLR).
-    pub fn with_regions_base(hhdm_offset: u64, max_phys: u64, regions_base: u64) -> Self {
+    pub fn with_regions_base(hhdm_offset: VirtAddr, max_phys: u64, regions_base: u64) -> Self {
         let rb = VirtAddr::new_truncate(regions_base);
         Self {
-            hhdm_base: VirtAddr::new_truncate(hhdm_offset),
+            hhdm_base: hhdm_offset,
             hhdm_size: max_phys,
             regions_base: rb,
             heap: VirtRegion::new(rb + HEAP_OFFSET, HEAP_MAX_SIZE),
@@ -222,20 +222,20 @@ mod tests {
 
     #[test]
     fn memory_layout_default_base() {
-        let layout = MemoryLayout::new(0xFFFF_8000_0000_0000, 0x1_0000_0000);
+        let layout = MemoryLayout::new(VirtAddr::new(0xFFFF_8000_0000_0000), 0x1_0000_0000);
         assert_eq!(layout.regions_base.as_u64(), DEFAULT_REGIONS_BASE);
     }
 
     #[test]
     fn heap_at_base() {
-        let layout = MemoryLayout::new(0xFFFF_8000_0000_0000, 0x1_0000_0000);
+        let layout = MemoryLayout::new(VirtAddr::new(0xFFFF_8000_0000_0000), 0x1_0000_0000);
         // HEAP_OFFSET is 0, so heap base should equal regions_base.
         assert_eq!(layout.heap.base().as_u64(), layout.regions_base.as_u64());
     }
 
     #[test]
     fn regions_non_overlapping() {
-        let layout = MemoryLayout::new(0xFFFF_8000_0000_0000, 0x1_0000_0000);
+        let layout = MemoryLayout::new(VirtAddr::new(0xFFFF_8000_0000_0000), 0x1_0000_0000);
         assert!(
             layout.heap.end().as_u64() <= layout.stacks.base().as_u64(),
             "heap must end before stacks"
@@ -254,7 +254,7 @@ mod tests {
     fn custom_regions_base() {
         let custom_base = 0xFFFF_D000_0000_0000u64;
         let layout =
-            MemoryLayout::with_regions_base(0xFFFF_8000_0000_0000, 0x1_0000_0000, custom_base);
+            MemoryLayout::with_regions_base(VirtAddr::new(0xFFFF_8000_0000_0000), 0x1_0000_0000, custom_base);
         assert_eq!(
             layout.regions_base.as_u64(),
             VirtAddr::new_truncate(custom_base).as_u64()
@@ -267,50 +267,50 @@ mod tests {
 
     #[test]
     fn identify_region_heap() {
-        let layout = MemoryLayout::new(0xFFFF_8000_0000_0000, 0x1_0000_0000);
+        let layout = MemoryLayout::new(VirtAddr::new(0xFFFF_8000_0000_0000), 0x1_0000_0000);
         let addr = layout.heap.base() + 0x1000;
         assert_eq!(layout.identify_region(addr), FaultRegion::Heap);
     }
 
     #[test]
     fn identify_region_stacks() {
-        let layout = MemoryLayout::new(0xFFFF_8000_0000_0000, 0x1_0000_0000);
+        let layout = MemoryLayout::new(VirtAddr::new(0xFFFF_8000_0000_0000), 0x1_0000_0000);
         let addr = layout.stacks.base() + 0x1000;
         assert_eq!(layout.identify_region(addr), FaultRegion::Stacks);
     }
 
     #[test]
     fn identify_region_mmio() {
-        let layout = MemoryLayout::new(0xFFFF_8000_0000_0000, 0x1_0000_0000);
+        let layout = MemoryLayout::new(VirtAddr::new(0xFFFF_8000_0000_0000), 0x1_0000_0000);
         let addr = layout.mmio.base() + 0x1000;
         assert_eq!(layout.identify_region(addr), FaultRegion::Mmio);
     }
 
     #[test]
     fn identify_region_percpu() {
-        let layout = MemoryLayout::new(0xFFFF_8000_0000_0000, 0x1_0000_0000);
+        let layout = MemoryLayout::new(VirtAddr::new(0xFFFF_8000_0000_0000), 0x1_0000_0000);
         let addr = layout.percpu.base() + 0x1000;
         assert_eq!(layout.identify_region(addr), FaultRegion::PerCpu);
     }
 
     #[test]
     fn identify_region_kernel_image() {
-        let layout = MemoryLayout::new(0xFFFF_8000_0000_0000, 0x1_0000_0000);
+        let layout = MemoryLayout::new(VirtAddr::new(0xFFFF_8000_0000_0000), 0x1_0000_0000);
         let addr = VirtAddr::new_truncate(KERNEL_IMAGE_BASE + 0x1000);
         assert_eq!(layout.identify_region(addr), FaultRegion::KernelImage);
     }
 
     #[test]
     fn identify_region_hhdm() {
-        let hhdm_offset = 0xFFFF_8000_0000_0000u64;
+        let hhdm_offset = VirtAddr::new(0xFFFF_8000_0000_0000);
         let layout = MemoryLayout::new(hhdm_offset, 0x1_0000_0000);
-        let addr = VirtAddr::new_truncate(hhdm_offset + 0x1000);
+        let addr = hhdm_offset + 0x1000;
         assert_eq!(layout.identify_region(addr), FaultRegion::Hhdm);
     }
 
     #[test]
     fn identify_region_unknown() {
-        let layout = MemoryLayout::new(0xFFFF_8000_0000_0000, 0x1_0000_0000);
+        let layout = MemoryLayout::new(VirtAddr::new(0xFFFF_8000_0000_0000), 0x1_0000_0000);
         let addr = VirtAddr::new(0x1000);
         assert_eq!(layout.identify_region(addr), FaultRegion::Unknown);
     }

@@ -15,10 +15,10 @@ pub fn init() {
     let (heap_start, heap_size) = super::vmm::map_initial_heap();
 
     unsafe {
-        hadron_mm::heap::init_raw(heap_start, heap_size);
+        init_raw(heap_start, heap_size);
     }
 
-    hadron_mm::heap::register_grow_fn(grow_callback);
+    register_grow_fn(grow_callback);
 
     crate::ktrace_subsys!(
         mm,

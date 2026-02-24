@@ -5,7 +5,7 @@
 //! Word-level scanning with `trailing_zeros()` (compiles to TZCNT/BSF on
 //! x86_64) provides efficient allocation.
 
-use hadron_core::addr::PhysAddr;
+use hadron_core::addr::{PhysAddr, VirtAddr};
 use hadron_core::paging::{PhysFrame, Size4KiB};
 use hadron_core::sync::SpinLock;
 
@@ -21,40 +21,6 @@ const BITS_PER_WORD: usize = 64;
 /// Poison pattern written to freed pages: `0xDEAD_DEAD` repeated.
 const PAGE_POISON_PATTERN: u32 = 0xDEAD_DEAD;
 
-/// Writes the poison pattern across a 4 KiB page via HHDM.
-fn poison_page(phys_addr: u64, hhdm_offset: u64) {
-    let virt = (hhdm_offset + phys_addr) as *mut u32;
-    for i in 0..(FRAME_SIZE as usize / 4) {
-        // SAFETY: The virtual address is within the HHDM region and the page
-        // has just been freed (no longer in use).
-        unsafe { virt.add(i).write_volatile(PAGE_POISON_PATTERN) };
-    }
-}
-
-/// Checks whether a previously poisoned page is still intact.
-///
-/// Returns `true` if the page was never poisoned (first word doesn't match)
-/// or if the full poison pattern is intact. Returns `false` only when partial
-/// corruption is detected (first word matches but later words don't),
-/// indicating a use-after-free.
-fn check_page_poison(phys_addr: u64, hhdm_offset: u64) -> bool {
-    let virt = (hhdm_offset + phys_addr) as *const u32;
-    // Quick check: if the first word isn't poison, page was never poisoned
-    // (first allocation after boot). Skip verification.
-    // SAFETY: The virtual address is within the HHDM region.
-    if unsafe { virt.read_volatile() } != PAGE_POISON_PATTERN {
-        return true;
-    }
-    // First word matches; verify the rest of the page.
-    for i in 1..(FRAME_SIZE as usize / 4) {
-        // SAFETY: The virtual address is within the HHDM region.
-        if unsafe { virt.add(i).read_volatile() } != PAGE_POISON_PATTERN {
-            return false;
-        }
-    }
-    true
-}
-
 /// A bitmap-based physical frame allocator.
 ///
 /// All mutation goes through `&mut self`; the outer `PMM: SpinLock<Option<…>>`
@@ -69,10 +35,39 @@ pub struct BitmapAllocator {
     /// Word index hint for next allocation search (amortized O(1)).
     search_hint: usize,
     /// HHDM offset for physical-to-virtual translation (used by page poisoning).
-    hhdm_offset: u64,
+    hhdm_offset: VirtAddr,
 }
 
 impl BitmapAllocator {
+    /// Writes the poison pattern across a 4 KiB page via HHDM.
+    fn poison_page(&self, phys_addr: PhysAddr) {
+        let virt = (self.hhdm_offset + phys_addr.as_u64()).as_mut_ptr::<u32>();
+        for i in 0..(FRAME_SIZE as usize / 4) {
+            // SAFETY: The virtual address is within the HHDM region and the page
+            // has just been freed (no longer in use).
+            unsafe { virt.add(i).write_volatile(PAGE_POISON_PATTERN) };
+        }
+    }
+
+    /// Checks whether a previously poisoned page is still intact.
+    fn check_page_poison(&self, phys_addr: PhysAddr) -> bool {
+        let virt = (self.hhdm_offset + phys_addr.as_u64()).as_ptr::<u32>();
+        // Quick check: if the first word isn't poison, page was never poisoned
+        // (first allocation after boot). Skip verification.
+        // SAFETY: The virtual address is within the HHDM region.
+        if unsafe { virt.read_volatile() } != PAGE_POISON_PATTERN {
+            return true;
+        }
+        // First word matches; verify the rest of the page.
+        for i in 1..(FRAME_SIZE as usize / 4) {
+            // SAFETY: The virtual address is within the HHDM region.
+            if unsafe { virt.add(i).read_volatile() } != PAGE_POISON_PATTERN {
+                return false;
+            }
+        }
+        true
+    }
+
     /// Creates a new bitmap allocator from a slice of physical memory regions.
     ///
     /// # Safety
@@ -80,7 +75,7 @@ impl BitmapAllocator {
     /// - `hhdm_offset` must be the correct HHDM offset.
     /// - `regions` must accurately describe physical memory.
     /// - This must be called exactly once during boot.
-    pub unsafe fn new(regions: &[PhysMemoryRegion], hhdm_offset: u64) -> Result<Self, PmmError> {
+    pub unsafe fn new(regions: &[PhysMemoryRegion], hhdm_offset: VirtAddr) -> Result<Self, PmmError> {
         // 1. Find highest usable physical address to determine bitmap size.
         // We only need to track frames up to the end of the last usable region,
         // since we never allocate from non-usable regions.
@@ -113,7 +108,7 @@ impl BitmapAllocator {
         // usable physical region large enough for bitmap_words * 8 bytes. The
         // region is not aliased because we are the sole consumer during boot.
         let bitmap = unsafe {
-            let ptr = (hhdm_offset + bitmap_phys_start.as_u64()) as *mut u64;
+            let ptr = (hhdm_offset + bitmap_phys_start.as_u64()).as_mut_ptr::<u64>();
             core::slice::from_raw_parts_mut(ptr, bitmap_words)
         };
 
@@ -198,7 +193,9 @@ impl BitmapAllocator {
             // Verify poison pattern is intact (detects use-after-free).
             // NOTE: No logging here — PMM lock is held and logging would
             // acquire LOGGER, creating a PMM → LOGGER lock ordering violation.
-            if cfg!(hadron_debug_pmm_poison) && !check_page_poison(phys_addr, self.hhdm_offset) {
+            if cfg!(hadron_debug_pmm_poison)
+                && !self.check_page_poison(PhysAddr::new(phys_addr))
+            {
                 panic!(
                     "PMM: page at {:#x} modified after free (use-after-free)",
                     phys_addr
@@ -299,7 +296,7 @@ impl BitmapAllocator {
             // NOTE: No logging here — PMM lock is held (see allocate_frame).
             if cfg!(hadron_debug_pmm_poison) {
                 let phys_addr = (fi as u64) * FRAME_SIZE;
-                if !check_page_poison(phys_addr, self.hhdm_offset) {
+                if !self.check_page_poison(PhysAddr::new(phys_addr)) {
                     panic!(
                         "PMM: page at {:#x} modified after free (use-after-free)",
                         phys_addr
@@ -340,7 +337,7 @@ impl BitmapAllocator {
 
         // Poison the freed page so use-after-free is detectable on re-allocation.
         if cfg!(hadron_debug_pmm_poison) {
-            poison_page(frame.start_address().as_u64(), self.hhdm_offset);
+            self.poison_page(frame.start_address());
         }
 
         // Update hint to potentially speed up next allocation.
@@ -382,7 +379,7 @@ impl BitmapAllocator {
 
             // Poison each freed page.
             if cfg!(hadron_debug_pmm_poison) {
-                poison_page((fi as u64) * FRAME_SIZE, self.hhdm_offset);
+                self.poison_page(PhysAddr::new((fi as u64) * FRAME_SIZE));
             }
         }
 
@@ -432,7 +429,7 @@ static PMM: SpinLock<Option<BitmapAllocator>> = SpinLock::leveled("PMM", 3, None
 ///
 /// The caller is responsible for converting bootloader-specific memory maps
 /// into [`PhysMemoryRegion`] descriptors before calling this function.
-pub fn init(regions: &[PhysMemoryRegion], hhdm_offset: u64) {
+pub fn init(regions: &[PhysMemoryRegion], hhdm_offset: VirtAddr) {
     let allocator =
         unsafe { BitmapAllocator::new(regions, hhdm_offset).expect("failed to initialize PMM") };
 
@@ -480,12 +477,21 @@ mod tests {
         unsafe { std::alloc::dealloc(ptr, layout) };
     }
 
+    fn dummy_allocator(buf: *mut u8) -> BitmapAllocator {
+        BitmapAllocator {
+            bitmap: &mut [],
+            total_frames: 0,
+            free_count: 0,
+            search_hint: 0,
+            hhdm_offset: VirtAddr::new(buf as u64),
+        }
+    }
+
     #[test]
     fn test_poison_page_writes_pattern() {
         let buf = alloc_page();
-        // poison_page expects a physical address and hhdm_offset such that
-        // hhdm_offset + phys_addr = virtual address. We set phys=0, hhdm=buf.
-        poison_page(0, buf as u64);
+        let allocator = dummy_allocator(buf);
+        allocator.poison_page(PhysAddr::new(0));
 
         let words = unsafe { core::slice::from_raw_parts(buf as *const u32, PAGE_SIZE / 4) };
         assert!(words.iter().all(|&w| w == PAGE_POISON_PATTERN));
@@ -496,44 +502,48 @@ mod tests {
     #[test]
     fn test_check_page_poison_intact() {
         let buf = alloc_page();
-        poison_page(0, buf as u64);
-        assert!(check_page_poison(0, buf as u64));
+        let allocator = dummy_allocator(buf);
+        allocator.poison_page(PhysAddr::new(0));
+        assert!(allocator.check_page_poison(PhysAddr::new(0)));
         unsafe { free_page(buf) };
     }
 
     #[test]
     fn test_check_page_poison_never_poisoned() {
         let buf = alloc_page();
+        let allocator = dummy_allocator(buf);
         // Zero-filled page: first word is 0, not the poison pattern.
         // Heuristic returns true (assumes never-poisoned).
-        assert!(check_page_poison(0, buf as u64));
+        assert!(allocator.check_page_poison(PhysAddr::new(0)));
         unsafe { free_page(buf) };
     }
 
     #[test]
     fn test_check_page_poison_partial_corruption() {
         let buf = alloc_page();
-        poison_page(0, buf as u64);
+        let allocator = dummy_allocator(buf);
+        allocator.poison_page(PhysAddr::new(0));
 
         // Corrupt a word in the middle of the page.
         let words = buf as *mut u32;
         unsafe { words.add(512).write_volatile(0x0) };
 
-        assert!(!check_page_poison(0, buf as u64));
+        assert!(!allocator.check_page_poison(PhysAddr::new(0)));
         unsafe { free_page(buf) };
     }
 
     #[test]
     fn test_check_page_poison_first_word_zero() {
         let buf = alloc_page();
-        poison_page(0, buf as u64);
+        let allocator = dummy_allocator(buf);
+        allocator.poison_page(PhysAddr::new(0));
 
         // Overwrite first word with 0 — heuristic thinks page was never
         // poisoned, so it returns true (skip verification).
         let words = buf as *mut u32;
         unsafe { words.write_volatile(0x0) };
 
-        assert!(check_page_poison(0, buf as u64));
+        assert!(allocator.check_page_poison(PhysAddr::new(0)));
         unsafe { free_page(buf) };
     }
 }

@@ -21,6 +21,8 @@ use alloc::vec::Vec;
 use core::future::Future;
 use core::pin::Pin;
 
+use hadron_core::addr::PhysAddr;
+
 /// File type of an inode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InodeType {
@@ -236,7 +238,7 @@ pub trait Inode: Send + Sync {
     ///
     /// Only meaningful for device inodes that support memory mapping
     /// (e.g. framebuffer devices). Default returns [`FsError::NotSupported`].
-    fn mmap_phys(&self) -> Result<(u64, usize), FsError> {
+    fn mmap_phys(&self) -> Result<(PhysAddr, usize), FsError> {
         Err(FsError::NotSupported)
     }
 
@@ -299,7 +301,7 @@ pub trait Inode: Send + Sync {
     /// Only meaningful for shared memory objects. Returns a vector of
     /// physical addresses, one per 4 KiB page. Default returns
     /// [`FsError::NotSupported`].
-    fn shared_phys_frames(&self) -> Result<Vec<u64>, FsError> {
+    fn shared_phys_frames(&self) -> Result<Vec<PhysAddr>, FsError> {
         Err(FsError::NotSupported)
     }
 

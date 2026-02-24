@@ -49,7 +49,7 @@ impl<M: PageMapper<Size4KiB> + PageTranslator> AddressSpace<M> {
     pub unsafe fn new_user(
         kernel_root: PhysAddr,
         mapper: M,
-        hhdm_offset: u64,
+        hhdm_offset: VirtAddr,
         alloc: &mut impl FrameAllocator<Size4KiB>,
         dealloc_fn: FrameDeallocFn,
     ) -> Result<Self, VmmError> {
@@ -59,8 +59,8 @@ impl<M: PageMapper<Size4KiB> + PageTranslator> AddressSpace<M> {
         // SAFETY: The frames are accessible via HHDM. We zero the user half
         // and copy the kernel half.
         unsafe {
-            let new_pml4 = (hhdm_offset + new_pml4_phys.as_u64()) as *mut u64;
-            let kernel_pml4 = (hhdm_offset + kernel_root.as_u64()) as *const u64;
+            let new_pml4 = (hhdm_offset + new_pml4_phys.as_u64()).as_mut_ptr::<u64>();
+            let kernel_pml4 = (hhdm_offset + kernel_root.as_u64()).as_ptr::<u64>();
 
             // Zero the lower half (entries 0–255).
             core::ptr::write_bytes(new_pml4, 0, KERNEL_PML4_ENTRIES);

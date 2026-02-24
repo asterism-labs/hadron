@@ -8,6 +8,7 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use hadron_core::addr::{PhysAddr, VirtAddr};
+use hadron_core::assert_unsafe_precondition;
 
 /// Sentinel value indicating the HHDM offset has not been initialized.
 const HHDM_UNINIT: u64 = u64::MAX;
@@ -21,9 +22,13 @@ static HHDM_OFFSET: AtomicU64 = AtomicU64::new(HHDM_UNINIT);
 /// # Panics
 ///
 /// Panics if called more than once.
-pub fn init(offset: u64) {
-    let prev =
-        HHDM_OFFSET.compare_exchange(HHDM_UNINIT, offset, Ordering::Release, Ordering::Relaxed);
+pub fn init(offset: VirtAddr) {
+    let prev = HHDM_OFFSET.compare_exchange(
+        HHDM_UNINIT,
+        offset.as_u64(),
+        Ordering::Release,
+        Ordering::Relaxed,
+    );
     assert!(
         prev.is_ok(),
         "HHDM: already initialized (double init detected)"
@@ -36,10 +41,10 @@ pub fn init(offset: u64) {
 ///
 /// Panics if called before [`init`].
 #[inline]
-pub fn offset() -> u64 {
+pub fn offset() -> VirtAddr {
     let val = HHDM_OFFSET.load(Ordering::Acquire);
     assert!(val != HHDM_UNINIT, "HHDM: accessed before initialization");
-    val
+    VirtAddr::new_truncate(val)
 }
 
 /// Converts a physical address to its HHDM virtual address.
@@ -54,7 +59,7 @@ pub fn phys_to_virt(phys: PhysAddr) -> VirtAddr {
 #[inline]
 pub fn virt_to_phys(virt: VirtAddr) -> PhysAddr {
     let offset = HHDM_OFFSET.load(Ordering::Relaxed);
-    hadron_core::assert_unsafe_precondition!(
+    assert_unsafe_precondition!(
         virt.as_u64() >= offset,
         "virt_to_phys: address {:#x} is below HHDM base {:#x}",
         virt.as_u64(),

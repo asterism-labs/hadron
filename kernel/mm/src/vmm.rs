@@ -133,7 +133,7 @@ pub struct Vmm<M: PageMapper<Size4KiB> + PageTranslator> {
 
 impl<M: PageMapper<Size4KiB> + PageTranslator> Vmm<M> {
     /// Creates a new VMM wrapping the given root page table.
-    pub fn new(root_phys: PhysAddr, mapper: M, hhdm_offset: u64, max_phys: u64) -> Self {
+    pub fn new(root_phys: PhysAddr, mapper: M, hhdm_offset: VirtAddr, max_phys: u64) -> Self {
         let layout = MemoryLayout::new(hhdm_offset, max_phys);
         Self {
             root_phys,

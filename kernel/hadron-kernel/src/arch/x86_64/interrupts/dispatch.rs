@@ -10,6 +10,7 @@
 //! LAPIC EOI.
 
 use core::sync::atomic::{AtomicPtr, Ordering};
+use hadron_core::static_assert;
 
 use crate::id::{HwIrqVector, IrqVector};
 
@@ -277,7 +278,7 @@ pub static STUBS: [StubFn; NUM_VECTORS] = make_stub_table![
     208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223,
 ];
 
-hadron_core::static_assert!(STUBS.len() == NUM_VECTORS);
+static_assert!(STUBS.len() == NUM_VECTORS);
 
 /// Well-known vector assignments.
 pub mod vectors {

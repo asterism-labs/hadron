@@ -14,7 +14,10 @@ use core::pin::Pin;
 
 use hadris_iso::directory::DirectoryRef;
 use hadris_iso::read::IsoImage;
-use hadron_kernel::fs::block_adapter::BoxedBlockAdapter;
+use hadron_kernel::fs::block_adapter::{BlockDeviceAdapter, BoxedBlockAdapter};
+use hadron_kernel::driver_api::dyn_dispatch::DynBlockDevice;
+use hadron_kernel::driver_api::registration::BlockFsEntry;
+use hadron_kernel::block_fs_entry;
 
 use hadron_kernel::fs::{DirEntry, FileSystem, FsError, Inode, InodeType, Permissions};
 
@@ -258,17 +261,17 @@ impl Inode for Iso9660FileInode {
 
 #[cfg(target_os = "none")]
 fn iso9660_mount(
-    disk: alloc::boxed::Box<dyn hadron_kernel::driver_api::dyn_dispatch::DynBlockDevice>,
-) -> Result<alloc::sync::Arc<dyn hadron_kernel::fs::FileSystem>, hadron_kernel::fs::FsError> {
-    let adapter = hadron_kernel::fs::block_adapter::BlockDeviceAdapter::new(disk);
+    disk: Box<dyn DynBlockDevice>,
+) -> Result<Arc<dyn FileSystem>, FsError> {
+    let adapter = BlockDeviceAdapter::new(disk);
     let fs = Iso9660Fs::mount(adapter)?;
-    Ok(alloc::sync::Arc::new(fs))
+    Ok(Arc::new(fs))
 }
 
 #[cfg(target_os = "none")]
-hadron_kernel::block_fs_entry!(
+block_fs_entry!(
     ISO9660_FS_ENTRY,
-    hadron_kernel::driver_api::registration::BlockFsEntry {
+    BlockFsEntry {
         name: "iso9660",
         mount: iso9660_mount,
     }

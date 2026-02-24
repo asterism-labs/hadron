@@ -16,6 +16,7 @@ use crate::fs::{DirEntry, FsError, Inode, InodeType, Permissions};
 use crate::mm::PAGE_SIZE;
 use crate::mm::pmm;
 use crate::paging::{PhysFrame, Size4KiB};
+use crate::addr::PhysAddr;
 
 /// A shared memory object backed by physical frames.
 ///
@@ -50,7 +51,7 @@ impl ShmObject {
                 let frame = pmm.allocate_frame()?;
 
                 // Zero the frame via HHDM.
-                let ptr = (hhdm_offset + frame.start_address().as_u64()) as *mut u8;
+                let ptr = (hhdm_offset + frame.start_address().as_u64()).as_mut_ptr::<u8>();
                 // SAFETY: Frame was just allocated; zeroing via HHDM is safe.
                 unsafe {
                     core::ptr::write_bytes(ptr, 0, PAGE_SIZE);
@@ -139,11 +140,11 @@ impl Inode for ShmObject {
         Box::pin(async { Err(FsError::NotADirectory) })
     }
 
-    fn shared_phys_frames(&self) -> Result<Vec<u64>, FsError> {
+    fn shared_phys_frames(&self) -> Result<Vec<PhysAddr>, FsError> {
         Ok(self
             .frames
             .iter()
-            .map(|f| f.start_address().as_u64())
+            .map(|f| f.start_address())
             .collect())
     }
 }

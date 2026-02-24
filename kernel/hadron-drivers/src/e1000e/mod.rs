@@ -8,12 +8,13 @@ extern crate alloc;
 
 use core::ptr;
 
-use hadron_kernel::driver_api::capability::DmaCapability;
+use hadron_kernel::driver_api::capability::{DmaCapability, IrqCapability, MmioCapability};
 use hadron_kernel::driver_api::error::DriverError;
 use hadron_kernel::driver_api::net::{MacAddress, NetError, NetworkDevice};
-use hadron_kernel::driver_api::pci::{PciBar, PciDeviceId};
+use hadron_kernel::driver_api::pci::{PciBar, PciDeviceId, PciDeviceInfo};
 use hadron_kernel::drivers::irq::IrqLine;
 use hadron_kernel::sync::SpinLock;
+use hadron_kernel::{kinfo, kwarn};
 
 use crate::pci::msix::MsixTable;
 
@@ -298,9 +299,9 @@ fn clear_mta(regs: &E1000eRegs) {
 /// Sets up IRQ delivery for the e1000e device.
 #[cfg(target_os = "none")]
 fn setup_irq(
-    info: &hadron_kernel::driver_api::pci::PciDeviceInfo,
-    irq_cap: &hadron_kernel::driver_api::capability::IrqCapability,
-    mmio_cap: &hadron_kernel::driver_api::capability::MmioCapability,
+    info: &PciDeviceInfo,
+    irq_cap: &IrqCapability,
+    mmio_cap: &MmioCapability,
 ) -> Result<(IrqLine, Option<MsixTable>), DriverError> {
     // Walk PCI capabilities to find MSI-X.
     if let Some(caps) = crate::pci::caps::walk_capabilities(&info.address) {
@@ -309,11 +310,11 @@ fn setup_irq(
                 let msix_cap = crate::pci::caps::read_msix_cap(&info.address, cap.offset);
                 match try_setup_msix(info, &msix_cap, irq_cap, mmio_cap) {
                     Ok((irq, table)) => {
-                        hadron_kernel::kinfo!("e1000e: MSI-X enabled, vector {}", irq.vector());
+                        kinfo!("e1000e: MSI-X enabled, vector {}", irq.vector());
                         return Ok((irq, Some(table)));
                     }
                     Err(e) => {
-                        hadron_kernel::kwarn!(
+                        kwarn!(
                             "e1000e: MSI-X setup failed ({:?}), falling back to legacy",
                             e
                         );
@@ -337,10 +338,10 @@ fn setup_irq(
 /// Attempts to set up MSI-X for the device.
 #[cfg(target_os = "none")]
 fn try_setup_msix(
-    info: &hadron_kernel::driver_api::pci::PciDeviceInfo,
+    info: &PciDeviceInfo,
     msix_cap: &crate::pci::caps::MsixCapability,
-    irq_cap: &hadron_kernel::driver_api::capability::IrqCapability,
-    mmio_cap: &hadron_kernel::driver_api::capability::MmioCapability,
+    irq_cap: &IrqCapability,
+    mmio_cap: &MmioCapability,
 ) -> Result<(IrqLine, MsixTable), DriverError> {
     let msix_table = MsixTable::setup(info, msix_cap, mmio_cap)?;
 
@@ -397,7 +398,7 @@ impl E1000eDriver {
         let irq_cap = ctx.capability::<IrqCapability>();
         let dma = ctx.capability::<DmaCapability>();
 
-        hadron_kernel::kinfo!(
+        kinfo!(
             "e1000e: probing {:04x}:{:04x} at {}",
             info.vendor_id,
             info.device_id,
@@ -411,7 +412,7 @@ impl E1000eDriver {
         let (bar_phys, bar_size) = match info.bars[0] {
             PciBar::Memory { base, size, .. } => (base, size),
             _ => {
-                hadron_kernel::kwarn!("e1000e: BAR0 is not a memory BAR");
+                kwarn!("e1000e: BAR0 is not a memory BAR");
                 return Err(DriverError::InitFailed);
             }
         };
@@ -439,7 +440,7 @@ impl E1000eDriver {
 
         // 6. Read MAC address.
         let mac = read_mac(&regs);
-        hadron_kernel::kinfo!("e1000e: MAC={}", mac);
+        kinfo!("e1000e: MAC={}", mac);
 
         // 7. Set link up.
         regs.set_ctrl(Ctrl::SLU);
@@ -520,9 +521,9 @@ impl E1000eDriver {
         // Check link status.
         let status = regs.status();
         if status.contains(regs::Status::LU) {
-            hadron_kernel::kinfo!("e1000e: link up, device ready, irq vector {}", irq.vector());
+            kinfo!("e1000e: link up, device ready, irq vector {}", irq.vector());
         } else {
-            hadron_kernel::kwarn!(
+            kwarn!(
                 "e1000e: link down (may come up later), irq vector {}",
                 irq.vector()
             );
@@ -568,7 +569,7 @@ impl E1000eDriver {
         );
         devices.add_net_device(path, nic);
 
-        hadron_kernel::kinfo!("e1000e: registered as \"e1000e-{}\"", idx);
+        kinfo!("e1000e: registered as \"e1000e-{}\"", idx);
         Ok(PciDriverRegistration {
             devices,
             lifecycle: None,

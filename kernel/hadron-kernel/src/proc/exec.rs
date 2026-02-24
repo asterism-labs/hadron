@@ -142,7 +142,7 @@ pub fn create_process_from_binary(
 fn map_segment<M: crate::mm::mapper::PageMapper<Size4KiB> + crate::mm::mapper::PageTranslator>(
     address_space: &AddressSpace<M>,
     seg: &ExecSegment<'_>,
-    hhdm_offset: u64,
+    hhdm_offset: crate::addr::VirtAddr,
     alloc: &mut BitmapFrameAllocRef<'_>,
 ) {
     let mut flags = MapFlags::USER;
@@ -183,7 +183,7 @@ fn map_segment<M: crate::mm::mapper::PageMapper<Size4KiB> + crate::mm::mapper::P
 
         // Write the segment data into the frame via HHDM.
         let frame_phys = frame.start_address();
-        let frame_ptr = (hhdm_offset + frame_phys.as_u64()) as *mut u8;
+        let frame_ptr = (hhdm_offset + frame_phys.as_u64()).as_mut_ptr::<u8>();
 
         // SAFETY: The frame was just allocated and mapped; zeroing via HHDM is safe.
         unsafe {
@@ -249,7 +249,7 @@ fn map_user_stack<
 
         // SAFETY: The frame was just allocated and mapped; zeroing via HHDM is safe.
         let hhdm_offset = crate::mm::hhdm::offset();
-        let frame_ptr = (hhdm_offset + frame.start_address().as_u64()) as *mut u8;
+        let frame_ptr = (hhdm_offset + frame.start_address().as_u64()).as_mut_ptr::<u8>();
         unsafe {
             core::ptr::write_bytes(frame_ptr, 0, PAGE_SIZE);
         }
@@ -268,7 +268,7 @@ fn map_sigreturn_trampoline<
     M: crate::mm::mapper::PageMapper<Size4KiB> + crate::mm::mapper::PageTranslator,
 >(
     address_space: &AddressSpace<M>,
-    hhdm_offset: u64,
+    hhdm_offset: crate::addr::VirtAddr,
     alloc: &mut BitmapFrameAllocRef<'_>,
 ) {
     let trampoline_addr = super::SIGRETURN_TRAMPOLINE_ADDR;
@@ -287,7 +287,7 @@ fn map_sigreturn_trampoline<
         .ignore();
 
     // Write the trampoline stub into the frame via HHDM.
-    let frame_ptr = (hhdm_offset + frame.start_address().as_u64()) as *mut u8;
+    let frame_ptr = (hhdm_offset + frame.start_address().as_u64()).as_mut_ptr::<u8>();
     // SAFETY: The frame was just allocated and is not yet accessible from userspace
     // (address space not in CR3). Writing via HHDM is safe.
     unsafe {
@@ -341,7 +341,7 @@ fn write_startup_data<M: PageMapper<Size4KiB> + PageTranslator>(
     address_space: &AddressSpace<M>,
     args: &[&str],
     envs: &[&str],
-    hhdm_offset: u64,
+    hhdm_offset: crate::addr::VirtAddr,
 ) -> Result<u64, BinaryError> {
     if args.is_empty() && envs.is_empty() {
         // Write argc=0, envc=0 at the top of the stack, 16-byte aligned.
@@ -435,14 +435,14 @@ fn write_string_bytes<M: PageMapper<Size4KiB> + PageTranslator>(
     address_space: &AddressSpace<M>,
     vaddr: u64,
     s: &str,
-    hhdm_offset: u64,
+    hhdm_offset: crate::addr::VirtAddr,
 ) -> Result<(), BinaryError> {
     for (j, &byte) in s.as_bytes().iter().enumerate() {
         let addr = vaddr + j as u64;
         let phys = address_space
             .translate(VirtAddr::new(addr))
             .ok_or(BinaryError::ParseError("string address not mapped"))?;
-        let hhdm_ptr = (hhdm_offset + phys.as_u64()) as *mut u8;
+        let hhdm_ptr = (hhdm_offset + phys.as_u64()).as_mut_ptr::<u8>();
         // SAFETY: The page was allocated by map_user_stack and zeroed.
         // Writing via HHDM before the address space is in CR3 is safe.
         unsafe {
@@ -457,12 +457,12 @@ fn write_usize_to_user<M: PageMapper<Size4KiB> + PageTranslator>(
     address_space: &AddressSpace<M>,
     vaddr: u64,
     value: usize,
-    hhdm_offset: u64,
+    hhdm_offset: crate::addr::VirtAddr,
 ) -> Result<(), BinaryError> {
     let phys = address_space
         .translate(VirtAddr::new(vaddr))
         .ok_or(BinaryError::ParseError("argv address not mapped in child"))?;
-    let hhdm_ptr = (hhdm_offset + phys.as_u64()) as *mut usize;
+    let hhdm_ptr = (hhdm_offset + phys.as_u64()).as_mut_ptr::<usize>();
     // SAFETY: The page was allocated by map_user_stack and the address space
     // is not yet loaded into CR3. Writing via HHDM is safe.
     unsafe {
@@ -481,7 +481,7 @@ fn write_usize_to_user<M: PageMapper<Size4KiB> + PageTranslator>(
 /// Returns [`BinaryError`] if address translation fails.
 pub fn write_argv_to_init_stack<M: PageMapper<Size4KiB> + PageTranslator>(
     address_space: &AddressSpace<M>,
-    hhdm_offset: u64,
+    hhdm_offset: crate::addr::VirtAddr,
 ) -> Result<u64, BinaryError> {
     write_startup_data(address_space, &["/bin/init"], &[], hhdm_offset)
 }

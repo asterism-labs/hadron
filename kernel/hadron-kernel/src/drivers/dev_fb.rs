@@ -14,6 +14,7 @@ use core::pin::Pin;
 
 use crate::driver_api::framebuffer::{Framebuffer, PixelFormat};
 use crate::fs::{DirEntry, FsError, Inode, InodeType, Permissions};
+use crate::addr::PhysAddr;
 
 /// Framebuffer device inode wrapping an `Arc<dyn Framebuffer>`.
 pub struct DevFramebuffer {
@@ -114,9 +115,9 @@ impl Inode for DevFramebuffer {
         }
     }
 
-    fn mmap_phys(&self) -> Result<(u64, usize), FsError> {
+    fn mmap_phys(&self) -> Result<(PhysAddr, usize), FsError> {
         let info = self.fb.info();
-        let phys = self.fb.physical_base().as_u64();
+        let phys = self.fb.physical_base();
         let size = info.pitch as usize * info.height as usize;
         Ok((phys, size))
     }

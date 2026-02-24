@@ -214,7 +214,7 @@ fn build_page_tables(
     framebuffers: &ArrayVec<FramebufferInfo, MAX_FRAMEBUFFERS>,
     alloc: &mut BumpFrameAllocator,
 ) -> PhysAddr {
-    let mapper = PageTableMapper::new(hhdm_offset);
+    let mapper = PageTableMapper::new(hadron_kernel::addr::VirtAddr::new(hhdm_offset));
     let pml4_phys = alloc.alloc_frame().start_address();
 
     // --- HHDM mappings (2 MiB huge pages, sequential fill) ---

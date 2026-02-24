@@ -6,7 +6,7 @@
 
 pub use hadron_mm::pmm::*;
 
-use crate::addr::PhysAddr;
+use crate::addr::{PhysAddr, VirtAddr};
 use crate::boot::{BootInfo, MemoryRegionKind};
 
 use hadron_mm::PhysMemoryRegion;
@@ -16,7 +16,7 @@ use hadron_mm::PhysMemoryRegion;
 /// Converts the bootloader memory map into `PhysMemoryRegion` descriptors
 /// and creates the bitmap allocator.
 pub fn init(boot_info: &impl BootInfo) {
-    let hhdm_offset = boot_info.hhdm_offset();
+    let hhdm_offset = VirtAddr::new(boot_info.hhdm_offset());
     let memory_map = boot_info.memory_map();
 
     // Convert boot info regions to PhysMemoryRegion.
@@ -40,5 +40,6 @@ pub fn init(boot_info: &impl BootInfo) {
         count += 1;
     }
 
-    hadron_mm::pmm::init(&regions[..count], hhdm_offset);
+    use hadron_mm::pmm;
+    pmm::init(&regions[..count], hhdm_offset);
 }

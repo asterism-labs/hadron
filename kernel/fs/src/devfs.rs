@@ -35,7 +35,10 @@ impl DevFs {
     /// Creates a new devfs with standard device entries (null, zero).
     #[must_use]
     pub fn new() -> Self {
-        let mut entries: BTreeMap<&str, Arc<dyn Inode>> = BTreeMap::new();
+        use alloc::collections::BTreeMap;
+        use alloc::sync::Arc;
+
+        let mut entries: BTreeMap<&'static str, Arc<dyn Inode>> = BTreeMap::new();
         entries.insert("null", Arc::new(DevNull));
         entries.insert("zero", Arc::new(DevZero));
 
@@ -51,7 +54,10 @@ impl DevFs {
     pub fn with_extra_devices(
         devices: impl IntoIterator<Item = (&'static str, Arc<dyn Inode>)>,
     ) -> Self {
-        let mut entries: BTreeMap<&str, Arc<dyn Inode>> = BTreeMap::new();
+        use alloc::collections::BTreeMap;
+        use alloc::sync::Arc;
+
+        let mut entries: BTreeMap<&'static str, Arc<dyn Inode>> = BTreeMap::new();
         entries.insert("null", Arc::new(DevNull));
         entries.insert("zero", Arc::new(DevZero));
         for (name, inode) in devices {
