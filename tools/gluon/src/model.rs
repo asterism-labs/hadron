@@ -385,6 +385,7 @@ pub struct ImageDef {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TestsDef {
     pub host_testable: Vec<String>,
+    pub kani_verifiable: Vec<String>,
     pub kernel_tests_dir: Option<String>,
     /// Which crate owns the kernel integration tests.
     pub kernel_tests_crate: Option<String>,

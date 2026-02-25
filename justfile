@@ -45,6 +45,10 @@ clippy *args: bootstrap
 fmt *args: bootstrap
     {{hb}} fmt {{args}}
 
+# Run Kani formal verification proofs
+kani *args: bootstrap
+    {{hb}} kani {{args}}
+
 # Run miri on hadron-core sync primitives
 miri *args:
     cargo +nightly miri test -p hadron-core -- sync:: {{args}}

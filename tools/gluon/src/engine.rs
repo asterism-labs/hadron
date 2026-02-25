@@ -1080,6 +1080,15 @@ fn register_tests_api(engine: &mut Engine, model: SharedModel) {
         }
     );
 
+    builder_method!(engine, "kani_verifiable", TestsBuilder,
+        |builder, model, crates: rhai::Array| {
+            model.tests.kani_verifiable = crates
+                .into_iter()
+                .filter_map(|v| v.into_string().ok())
+                .collect();
+        }
+    );
+
     builder_method!(engine, "kernel_tests_dir", TestsBuilder,
         |builder, model, dir: &str| {
             model.tests.kernel_tests_dir = Some(dir.into());

@@ -58,6 +58,8 @@ pub enum Command {
     Clean,
     /// Run kernel benchmarks.
     Bench(BenchArgs),
+    /// Run Kani formal verification proofs on project crates.
+    Kani(KaniArgs),
     /// Vendor external dependencies into vendor/.
     Vendor(VendorArgs),
     /// Analyze profiling data captured from kernel serial output.
@@ -128,6 +130,18 @@ pub struct BenchArgs {
     pub format: String,
 
     /// Extra arguments passed to the benchmark harness after `--`.
+    #[arg(last = true)]
+    pub extra_args: Vec<String>,
+}
+
+/// Arguments for the `kani` subcommand.
+#[derive(Parser)]
+pub struct KaniArgs {
+    /// Only verify a specific crate.
+    #[arg(long, short = 'p')]
+    pub package: Option<String>,
+
+    /// Extra arguments passed to cargo-kani after `--`.
     #[arg(last = true)]
     pub extra_args: Vec<String>,
 }

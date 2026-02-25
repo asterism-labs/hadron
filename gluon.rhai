@@ -397,7 +397,7 @@ pipeline()
 // ===========================================================================
 
 qemu("q35", 256)
-    .extra_args(["-serial", "stdio", "-no-reboot", "-vga", "none", "-device", "virtio-gpu-pci"])
+    .extra_args(["-serial", "stdio", "-no-reboot"])
     .test_success_code(33)
     .test_timeout(30)
     .test_extra_args([
@@ -444,6 +444,7 @@ tests()
         "hadron-drivers",
         "hadron-kernel"
     ])
+    .kani_verifiable(["hadron-core"])
     .kernel_tests_dir("kernel/hadron-kernel/tests")
     .kernel_tests_crate("hadron-kernel")
     .kernel_tests_linker_script("targets/x86_64-unknown-hadron.ld");

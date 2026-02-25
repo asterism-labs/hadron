@@ -16,6 +16,7 @@ mod config;
 mod crate_graph;
 mod engine;
 mod fmt;
+mod kani;
 mod kconfig;
 mod menuconfig;
 mod model;
@@ -51,6 +52,7 @@ fn main() -> Result<()> {
         cli::Command::Run(ref args) => cmd_run(&cli, &args.extra_args),
         cli::Command::Test(ref args) => cmd_test(&cli, args),
         cli::Command::Bench(ref args) => cmd_bench(&cli, args),
+        cli::Command::Kani(ref args) => cmd_kani(&cli, args),
         cli::Command::Check => cmd_check(&cli),
         cli::Command::Clippy => cmd_clippy(&cli),
         cli::Command::Fmt(ref args) => fmt::cmd_fmt(args),
@@ -585,6 +587,12 @@ fn prune_vendor_dir(resolved: &[vendor::ResolvedDep], vendor_dir: &std::path::Pa
     }
 
     Ok(())
+}
+
+/// Run Kani formal verification proofs.
+fn cmd_kani(cli: &cli::Cli, args: &cli::KaniArgs) -> Result<()> {
+    let (resolved, _model) = resolve_config(cli)?;
+    kani::run_kani(&resolved, cli.jobs.unwrap_or(0), args)
 }
 
 /// Run kernel benchmarks.
