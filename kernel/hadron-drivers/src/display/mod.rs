@@ -1,4 +1,4 @@
 //! Display and framebuffer drivers.
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(hadron_driver_bochs_vga)]
 pub mod bochs_vga;

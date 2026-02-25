@@ -38,7 +38,7 @@ pub mod arch;
 pub mod backtrace;
 #[cfg(target_os = "none")]
 pub mod boot;
-#[cfg(target_os = "none")]
+#[cfg(all(target_os = "none", hadron_pci))]
 pub mod bus;
 #[cfg(target_os = "none")]
 pub mod config;
@@ -54,7 +54,7 @@ pub mod log;
 pub mod mm;
 #[cfg(target_os = "none")]
 pub mod net;
-#[cfg(target_os = "none")]
+#[cfg(all(target_os = "none", hadron_pci))]
 pub mod pci;
 #[cfg(target_os = "none")]
 pub mod percpu;

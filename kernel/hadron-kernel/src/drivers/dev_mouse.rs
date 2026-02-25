@@ -215,7 +215,14 @@ pub fn init() {
     dispatch::register_handler(vector, mouse_irq_handler)
         .expect("dev_mouse: failed to register mouse IRQ handler");
 
+    #[cfg(hadron_apic)]
     crate::arch::x86_64::acpi::Acpi::with_io_apic(|ioapic| ioapic.unmask(12));
+
+    #[cfg(not(hadron_apic))]
+    // SAFETY: Unmasking IRQ 12 (PS/2 mouse) on the PIC from driver init.
+    unsafe {
+        crate::arch::x86_64::hw::pic::unmask(12);
+    };
 
     // Enable the mouse device itself — without this, the hardware stays silent.
     enable_mouse_data_reporting();

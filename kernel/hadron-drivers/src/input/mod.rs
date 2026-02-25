@@ -1,7 +1,8 @@
 //! Input device drivers.
 
+#[cfg(hadron_driver_i8042)]
 pub mod i8042;
-#[cfg(target_arch = "x86_64")]
+#[cfg(hadron_driver_i8042)]
 pub mod keyboard_async;
-#[cfg(target_arch = "x86_64")]
+#[cfg(hadron_driver_i8042)]
 pub mod mouse_async;

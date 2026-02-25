@@ -14,7 +14,9 @@ use crate::arch::x86_64::structures::idt::InterruptDescriptorTable;
 use crate::sync::LazyLock;
 
 use super::gdt::DOUBLE_FAULT_IST_INDEX;
-use super::interrupts::{dispatch, exception_table::exception_table, handlers, timer_stub};
+#[cfg(hadron_apic)]
+use super::interrupts::timer_stub;
+use super::interrupts::{dispatch, exception_table::exception_table, handlers};
 
 /// Static Interrupt Descriptor Table with all exception and hardware interrupt
 /// handlers wired.
@@ -70,6 +72,7 @@ static IDT: LazyLock<InterruptDescriptorTable> = LazyLock::new(|| {
     // stub that saves user register state on ring-3 interrupts.
     // SAFETY: timer_preempt_stub follows the interrupt stub convention with
     // additional full-register-state save for userspace preemption.
+    #[cfg(hadron_apic)]
     unsafe {
         idt.interrupts[dispatch::vectors::TIMER.table_index()]
             .set_naked_stub(timer_stub::timer_preempt_stub);

@@ -82,12 +82,18 @@ impl IrqCapability {
         Err(DriverError::Unsupported)
     }
 
-    /// Unmasks (enables) an ISA IRQ line in the I/O APIC.
+    /// Unmasks (enables) an ISA IRQ line in the interrupt controller.
     pub fn unmask_irq(&self, isa_irq: u8) -> Result<(), DriverError> {
-        #[cfg(all(target_os = "none", target_arch = "x86_64"))]
+        #[cfg(all(target_os = "none", target_arch = "x86_64", hadron_apic))]
         {
             crate::arch::x86_64::acpi::Acpi::with_io_apic(|ioapic| ioapic.unmask(isa_irq))
                 .ok_or(DriverError::InitFailed)
+        }
+        #[cfg(all(target_os = "none", target_arch = "x86_64", not(hadron_apic)))]
+        {
+            // SAFETY: Unmasking a PIC IRQ line from driver init context is safe.
+            unsafe { crate::arch::x86_64::hw::pic::unmask(isa_irq) };
+            Ok(())
         }
         #[cfg(not(all(target_os = "none", target_arch = "x86_64")))]
         {
@@ -96,12 +102,18 @@ impl IrqCapability {
         }
     }
 
-    /// Masks (disables) an ISA IRQ line in the I/O APIC.
+    /// Masks (disables) an ISA IRQ line in the interrupt controller.
     pub fn mask_irq(&self, isa_irq: u8) -> Result<(), DriverError> {
-        #[cfg(all(target_os = "none", target_arch = "x86_64"))]
+        #[cfg(all(target_os = "none", target_arch = "x86_64", hadron_apic))]
         {
             crate::arch::x86_64::acpi::Acpi::with_io_apic(|ioapic| ioapic.mask(isa_irq))
                 .ok_or(DriverError::InitFailed)
+        }
+        #[cfg(all(target_os = "none", target_arch = "x86_64", not(hadron_apic)))]
+        {
+            // SAFETY: Masking a PIC IRQ line from driver context is safe.
+            unsafe { crate::arch::x86_64::hw::pic::mask(isa_irq) };
+            Ok(())
         }
         #[cfg(not(all(target_os = "none", target_arch = "x86_64")))]
         {
@@ -112,8 +124,11 @@ impl IrqCapability {
 
     /// Sends an End-of-Interrupt signal.
     pub fn send_eoi(&self) {
-        #[cfg(all(target_os = "none", target_arch = "x86_64"))]
+        #[cfg(all(target_os = "none", target_arch = "x86_64", hadron_apic))]
         crate::arch::x86_64::acpi::Acpi::send_lapic_eoi();
+
+        // In legacy PIC mode, EOI is sent by the dispatch handler per-vector.
+        // Driver-level send_eoi is a no-op since the dispatcher handles it.
     }
 }
 
@@ -303,7 +318,7 @@ impl PciConfigCapability {
     ///
     /// Sets bits 1 (Memory Space) and 2 (Bus Master) in the PCI Command register.
     pub fn enable_bus_mastering(&self) {
-        #[cfg(target_os = "none")]
+        #[cfg(all(target_os = "none", hadron_pci))]
         {
             use crate::pci::cam::PciCam;
             // SAFETY: We are setting standard PCI command register bits for a
@@ -318,13 +333,13 @@ impl PciConfigCapability {
 
     /// Reads a 32-bit value from PCI configuration space.
     pub fn read_config_u32(&self, offset: u8) -> u32 {
-        #[cfg(target_os = "none")]
+        #[cfg(all(target_os = "none", hadron_pci))]
         {
             use crate::pci::cam::PciCam;
             // SAFETY: Reading PCI config space for an enumerated device.
             unsafe { PciCam::read_u32(self.bus, self.device, self.function, offset) }
         }
-        #[cfg(not(target_os = "none"))]
+        #[cfg(not(all(target_os = "none", hadron_pci)))]
         {
             let _ = offset;
             0
@@ -333,13 +348,13 @@ impl PciConfigCapability {
 
     /// Writes a 32-bit value to PCI configuration space.
     pub fn write_config_u32(&self, offset: u8, value: u32) {
-        #[cfg(target_os = "none")]
+        #[cfg(all(target_os = "none", hadron_pci))]
         {
             use crate::pci::cam::PciCam;
             // SAFETY: Writing PCI config space for an enumerated device.
             unsafe { PciCam::write_u32(self.bus, self.device, self.function, offset, value) }
         }
-        #[cfg(not(target_os = "none"))]
+        #[cfg(not(all(target_os = "none", hadron_pci)))]
         let _ = (offset, value);
     }
 

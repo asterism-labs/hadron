@@ -11,6 +11,7 @@
 
 use hadron_core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
+#[cfg(hadron_apic)]
 use crate::arch::x86_64::hw::local_apic::LocalApic;
 use crate::id::CpuId;
 use crate::percpu::MAX_CPUS;
@@ -66,14 +67,19 @@ fn ipi_wake_handler(_vector: crate::id::IrqVector) {}
 /// The target CPU will exit `enable_and_hlt()`, re-enter the executor loop,
 /// and poll any newly enqueued tasks.
 pub fn send_wake_ipi(target_cpu: CpuId) {
-    let target_apic_id = CPU_APIC_IDS[target_cpu.as_u32() as usize].load(Ordering::Acquire);
-    if let Some(lapic_virt) = crate::arch::x86_64::acpi::Acpi::lapic_virt() {
-        // SAFETY: The LAPIC is mapped and permanent. The target APIC ID was
-        // registered during bootstrap. IPI_WAKE_VECTOR has a registered
-        // handler (no-op) so the interrupt will be handled normally.
-        let lapic = unsafe { LocalApic::new(lapic_virt) };
-        unsafe { lapic.send_ipi(target_apic_id, IPI_WAKE_VECTOR.as_irq_vector()) };
+    #[cfg(hadron_apic)]
+    {
+        let target_apic_id = CPU_APIC_IDS[target_cpu.as_u32() as usize].load(Ordering::Acquire);
+        if let Some(lapic_virt) = crate::arch::x86_64::acpi::Acpi::lapic_virt() {
+            // SAFETY: The LAPIC is mapped and permanent. The target APIC ID was
+            // registered during bootstrap. IPI_WAKE_VECTOR has a registered
+            // handler (no-op) so the interrupt will be handled normally.
+            let lapic = unsafe { LocalApic::new(lapic_virt) };
+            unsafe { lapic.send_ipi(target_apic_id, IPI_WAKE_VECTOR.as_irq_vector()) };
+        }
     }
+    #[cfg(not(hadron_apic))]
+    let _ = target_cpu;
 }
 
 /// Type alias matching the signature expected by `Executor::run`.
@@ -140,6 +146,7 @@ pub fn panic_halt_other_cpus() {
         }
     }
 
+    #[cfg(hadron_apic)]
     if let Some(lapic_virt) = crate::arch::x86_64::acpi::Acpi::lapic_virt() {
         // SAFETY: The LAPIC is mapped and permanent. NMI delivery is always
         // safe — it cannot be masked, so all CPUs will receive it.

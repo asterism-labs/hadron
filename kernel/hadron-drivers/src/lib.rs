@@ -7,18 +7,19 @@ extern crate alloc;
 
 // ── Subsystem modules ───────────────────────────────────────────────────
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(hadron_driver_ahci)]
 pub mod ahci;
 pub mod block;
 pub mod display;
-#[cfg(target_arch = "x86_64")]
+#[cfg(hadron_driver_e1000e)]
 pub mod e1000e;
 #[cfg(target_os = "none")]
 pub mod fs;
 pub mod input;
+#[cfg(hadron_pci)]
 pub mod pci;
 pub mod serial;
-#[cfg(target_arch = "x86_64")]
+#[cfg(hadron_driver_virtio)]
 pub mod virtio;
 
 // ── Re-exports for convenience ──────────────────────────────────────────

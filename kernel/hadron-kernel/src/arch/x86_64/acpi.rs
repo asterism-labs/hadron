@@ -4,29 +4,43 @@
 //! and stores parsed ACPI information (MADT, HPET, MCFG, FADT, SRAT, SLIT,
 //! DMAR, IVRS, BGRT, DSDT/SSDT) for use by kernel subsystems.
 
+#[cfg(hadron_apic)]
 use hadron_core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 
+use hadron_acpi::aml::Namespace;
+#[cfg(hadron_acpi)]
 use hadron_acpi::aml::namespace::NamespaceBuilder;
-use hadron_acpi::aml::{self, AmlValue, Namespace};
+#[cfg(hadron_acpi)]
+use hadron_acpi::aml::{self, AmlValue};
+#[cfg(hadron_acpi)]
 use hadron_acpi::{AcpiHandler, AcpiTables, SdtHeader, madt};
 
+#[cfg(hadron_acpi)]
 use crate::addr::{PhysAddr, VirtAddr};
+#[cfg(hadron_hpet)]
 use crate::arch::x86_64::hw::hpet::Hpet;
+#[cfg(hadron_apic)]
 use crate::arch::x86_64::hw::io_apic::{
     DeliveryMode, DestinationMode, IoApic, Polarity, RedirectionEntry, TriggerMode,
 };
+#[cfg(hadron_apic)]
 use crate::arch::x86_64::hw::local_apic::LocalApic;
+#[cfg(hadron_apic)]
 use crate::id::IrqVector;
+#[cfg(hadron_acpi)]
 use crate::mm::hhdm;
 use crate::sync::IrqSpinLock;
 
+#[cfg(hadron_apic)]
 use crate::arch::x86_64::interrupts::dispatch::vectors;
 
 /// HHDM-based ACPI handler — translates physical addresses via the HHDM offset.
+#[cfg(hadron_acpi)]
 struct HhdmAcpiHandler;
 
 // SAFETY: HHDM is initialized before ACPI parsing, so `phys_to_virt` is valid.
 // The HHDM maps all physical memory and the mapping is permanent ('static).
+#[cfg(hadron_acpi)]
 unsafe impl AcpiHandler for HhdmAcpiHandler {
     unsafe fn map_physical_region(&self, phys: u64, size: usize) -> &'static [u8] {
         // SAFETY: The HHDM provides a permanent, identity-offset mapping of all
@@ -40,6 +54,7 @@ unsafe impl AcpiHandler for HhdmAcpiHandler {
 }
 
 /// Consolidated APIC platform state, initialized once during ACPI init.
+#[cfg(hadron_apic)]
 struct AcpiPlatformState {
     /// LAPIC virtual base address.
     lapic_base: VirtAddr,
@@ -53,14 +68,17 @@ struct AcpiPlatformState {
 ///
 /// Now only used for I/O APIC operations (`with_io_apic`). The LAPIC base
 /// address is cached in `LAPIC_BASE` for lock-free access on hot paths.
+#[cfg(hadron_apic)]
 static PLATFORM: IrqSpinLock<Option<AcpiPlatformState>> =
     IrqSpinLock::leveled("PLATFORM", 11, None);
 
 /// LAPIC timer initial count (ticks per interval), stored after BSP calibration
 /// so APs can start their timers with the same configuration.
+#[cfg(hadron_apic)]
 static LAPIC_TIMER_INITIAL_COUNT: AtomicU32 = AtomicU32::new(0);
 
 /// LAPIC timer divide value, stored after BSP calibration for AP reuse.
+#[cfg(hadron_apic)]
 static LAPIC_TIMER_DIVIDE: AtomicU8 = AtomicU8::new(0);
 
 /// Cached LAPIC virtual base address, set once during ACPI init.
@@ -69,6 +87,7 @@ static LAPIC_TIMER_DIVIDE: AtomicU8 = AtomicU8::new(0);
 /// routes each access to the requesting CPU's local APIC. This atomic
 /// allows lock-free access to the LAPIC for EOI, IPI, and other hot-path
 /// operations without acquiring the PLATFORM lock.
+#[cfg(hadron_apic)]
 static LAPIC_BASE: AtomicU64 = AtomicU64::new(0);
 
 /// ACPI namespace, stored after AML parsing for use by platform device discovery.
@@ -118,6 +137,7 @@ impl Acpi {
     ///
     /// Called by the interrupt dispatch subsystem after every hardware interrupt.
     /// Reads the cached `LAPIC_BASE` atomic — no lock, EOI is never dropped.
+    #[cfg(hadron_apic)]
     pub fn send_lapic_eoi() {
         let base = LAPIC_BASE.load(Ordering::Acquire);
         if base != 0 {
@@ -131,6 +151,7 @@ impl Acpi {
     ///
     /// APs use this to start their periodic timers with the same interval.
     /// Returns `(0, 0)` if the timer has not been calibrated yet.
+    #[cfg(hadron_apic)]
     pub fn lapic_timer_config() -> (u32, u8) {
         (
             LAPIC_TIMER_INITIAL_COUNT.load(Ordering::Acquire),
@@ -143,6 +164,7 @@ impl Acpi {
     /// Reads the cached `LAPIC_BASE` atomic — no lock required.
     /// All CPUs share the same virtual address for LAPIC MMIO; the hardware
     /// routes each access to the requesting CPU's local APIC.
+    #[cfg(hadron_apic)]
     pub fn lapic_virt() -> Option<VirtAddr> {
         let base = LAPIC_BASE.load(Ordering::Acquire);
         if base != 0 {
@@ -156,6 +178,7 @@ impl Acpi {
     ///
     /// Reconstructs the `IoApic` from the stored virtual base address. Drivers use
     /// this to unmask their IRQ lines after binding a handler.
+    #[cfg(hadron_apic)]
     pub fn with_io_apic<R>(f: impl FnOnce(&IoApic) -> R) -> Option<R> {
         let lock = PLATFORM.lock();
         let state = lock.as_ref()?;
@@ -170,12 +193,14 @@ impl Acpi {
 /// Called from both ring-0 and ring-3 paths of the naked timer stub.
 /// Performs the timer tick logic (increment counter, wake sleepers, set
 /// preempt flag) and sends LAPIC EOI.
+#[cfg(hadron_apic)]
 pub(crate) extern "C" fn timer_tick_and_eoi() {
     timer_handler(vectors::TIMER.as_irq_vector());
     Acpi::send_lapic_eoi();
 }
 
 /// LAPIC timer interrupt handler.
+#[cfg(hadron_apic)]
 fn timer_handler(_vector: IrqVector) {
     // Wake tasks whose sleep deadline has expired.
     crate::sched::timer::wake_expired(crate::time::Time::timer_ticks());
@@ -195,6 +220,7 @@ fn timer_handler(_vector: IrqVector) {
 /// 5. Initializes HPET (if available)
 /// 6. Calibrates and starts LAPIC timer
 /// 7. Enables interrupts
+#[cfg(hadron_acpi)]
 pub fn init(rsdp_phys: Option<PhysAddr>) {
     let rsdp_phys = match rsdp_phys {
         Some(addr) => addr,
@@ -667,6 +693,7 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
 }
 
 /// Sets up ISA IRQ routing through the I/O APIC, respecting MADT overrides.
+#[cfg(hadron_acpi)]
 fn setup_isa_irqs(ioapic: &IoApic, madt_data: &hadron_acpi::madt::Madt, bsp_apic_id: u8) {
     // Build override table for ISA IRQs 0-15.
     for irq in 0u8..16 {
@@ -734,6 +761,7 @@ fn setup_isa_irqs(ioapic: &IoApic, madt_data: &hadron_acpi::madt::Madt, bsp_apic
 }
 
 /// Calibrates the LAPIC timer and starts it in periodic mode.
+#[cfg(hadron_acpi)]
 fn calibrate_and_start_timer(lapic: &LocalApic, hpet: Option<&Hpet>) {
     // Register the timer handler.
     crate::arch::x86_64::interrupts::dispatch::register_handler(vectors::TIMER, timer_handler)
@@ -787,6 +815,7 @@ fn calibrate_and_start_timer(lapic: &LocalApic, hpet: Option<&Hpet>) {
 ///
 /// Returns the namespace for persistence. The caller stores it in
 /// `ACPI_NAMESPACE` for later use by platform device discovery.
+#[cfg(hadron_acpi)]
 fn parse_aml_namespace(tables: &AcpiTables<HhdmAcpiHandler>) -> Option<Namespace> {
     let dsdt = match tables.dsdt() {
         Ok(d) => d,

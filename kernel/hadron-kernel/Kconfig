@@ -20,7 +20,20 @@ config KERNEL_HEAP_SIZE
 
 endmenu
 
-menu "SMP"
+menu "Processor"
+
+config acpi
+    bool "ACPI table parsing and platform device discovery"
+    default y
+    binding cfg
+    help "Parse ACPI tables (MADT, HPET, MCFG) for interrupt routing, timers, and PCI ECAM"
+
+config apic
+    bool "APIC interrupt controller (auto-selected by SMP)"
+    default n
+    depends on acpi
+    binding cfg
+    help "Advanced interrupt controller. Requires ACPI MADT. Auto-selected by SMP."
 
 config smp
     bool "Enable symmetric multiprocessing"
@@ -29,6 +42,7 @@ config smp
     select apic
     binding cfg
     binding build
+    help "Boot application processors and enable per-CPU scheduling"
 
 config MAX_CPUS
     u32 "Maximum number of CPUs supported"
@@ -36,10 +50,6 @@ config MAX_CPUS
     range 1 256
     depends on smp
     binding const
-
-endmenu
-
-menu "CPU Features"
 
 config alt_instructions
     bool "Enable alternative-instruction patching"
@@ -56,17 +66,41 @@ config kernel_fpu
 
 endmenu
 
-menu "Hardware"
+menu "Platform"
 
-config acpi
-    bool "Enable ACPI table parsing"
+config pci
+    bool "PCI/PCIe bus support"
     default y
     binding cfg
+    binding build
+    help "PCI bus enumeration, ECAM, and driver matching. Disabling removes all PCI drivers."
 
-config apic
-    bool "Enable APIC interrupt controller"
-    default n
-    binding cfg
+menu "Interrupt Controllers"
+
+    config pic_legacy
+        bool "Legacy PIC interrupt delivery"
+        default y
+        binding cfg
+        help "Use 8259 PIC for interrupt routing when APIC is unavailable. Required for non-ACPI configs."
+
+endmenu
+
+menu "Timers"
+
+    config hpet
+        bool "HPET (High Precision Event Timer)"
+        default y
+        depends on acpi
+        binding cfg
+        help "High-resolution timer discovered via ACPI HPET table. Preferred clock source."
+
+    config pit_timer
+        bool "PIT periodic timer (legacy system timer)"
+        default y
+        binding cfg
+        help "8254 PIT channel 0 as system timer. Fallback when HPET is unavailable."
+
+endmenu
 
 endmenu
 
@@ -93,6 +127,7 @@ config no_work_steal
     default n
     depends on smp
     binding cfg
+    help "Force tasks to run on the CPU they were spawned on"
 
 config lock_stress
     bool "Lock contention stress delays"
@@ -113,8 +148,11 @@ config lock_stat
     default n
     depends on lockdep
     binding cfg
+    help "Track per-lock contention counts and hold times"
 
-menu "Subsystem Tracing"
+endmenu
+
+menu "Tracing"
 
 config trace_mm
     bool "Memory management tracing (PMM, VMM, heap)"
@@ -232,8 +270,6 @@ config PROFILE_DURATION_SECS
 
 endmenu
 
-endmenu
-
 # ===========================================================================
 # Presets
 # ===========================================================================
@@ -242,6 +278,10 @@ preset debug
     help "Development defaults with full debug aids"
     set serial_log y
     set LOG_LEVEL "debug"
+    set pci y
+    set hpet y
+    set pit_timer y
+    set pic_legacy y
     set lock_debug y
     set lockdep y
     set lockdep_warn y
@@ -250,6 +290,10 @@ preset release
     help "Production settings, minimal debug overhead"
     set serial_log y
     set LOG_LEVEL "warn"
+    set pci y
+    set hpet y
+    set pit_timer y
+    set pic_legacy y
     set lock_debug n
     set lockdep n
 

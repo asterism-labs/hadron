@@ -1,12 +1,16 @@
 //! 8254 PIT (Programmable Interval Timer) driver.
 //!
-//! Used only for LAPIC timer calibration via channel 2 one-shot mode.
+//! Channel 2 is used for LAPIC timer calibration (one-shot mode).
+//! Channel 0 can be used as a periodic system timer via [`start_periodic`]
+//! when HPET is unavailable (legacy fallback).
 
 use crate::arch::x86_64::Port;
 
 /// PIT oscillator frequency: 1,193,182 Hz.
 const PIT_FREQUENCY: u32 = 1_193_182;
 
+/// Channel 0 data port (connected to IRQ 0).
+const CHANNEL0_DATA: u16 = 0x40;
 const CHANNEL2_DATA: u16 = 0x42;
 const PIT_CMD: u16 = 0x43;
 /// Port B (NMI status and speaker control).
@@ -54,5 +58,36 @@ pub unsafe fn busy_wait_ms(ms: u32) {
             }
             core::hint::spin_loop();
         }
+    }
+}
+
+/// Starts PIT channel 0 as a periodic timer at approximately `freq_hz` Hz.
+///
+/// Generates IRQ 0 at the specified rate. Used as the system timer in
+/// legacy (non-HPET) configurations.
+///
+/// # Safety
+///
+/// Must be called with interrupts disabled. Channel 0 must not be in use.
+pub unsafe fn start_periodic(freq_hz: u32) {
+    let divisor = PIT_FREQUENCY / freq_hz;
+    let divisor = if divisor > 0xFFFF {
+        0xFFFF_u16
+    } else {
+        divisor as u16
+    };
+
+    let channel0 = Port::<u8>::new(CHANNEL0_DATA);
+    let cmd = Port::<u8>::new(PIT_CMD);
+
+    // SAFETY: Writing to PIT command and channel 0 data ports. Caller
+    // guarantees interrupts are disabled and channel 0 is not in use.
+    unsafe {
+        // Channel 0, lobyte/hibyte, rate generator (mode 2), binary.
+        cmd.write(0b0011_0100);
+
+        // Load divisor (lobyte then hibyte).
+        channel0.write(divisor as u8);
+        channel0.write((divisor >> 8) as u8);
     }
 }

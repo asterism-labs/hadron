@@ -1,4 +1,74 @@
 # Hadron driver configuration.
-#
-# Driver-specific config options will be added here as drivers
-# gain configurable parameters (AHCI, VirtIO, etc.).
+
+menu "Storage Drivers"
+
+config driver_ahci
+    bool "AHCI SATA storage controller"
+    default y
+    depends on pci
+    binding cfg
+
+endmenu
+
+menu "Network Drivers"
+
+config driver_e1000e
+    bool "Intel PRO/1000 PCIe (e1000e) Ethernet"
+    default y
+    depends on pci
+    binding cfg
+
+endmenu
+
+menu "Display Drivers"
+
+config driver_bochs_vga
+    bool "Bochs/QEMU VGA display"
+    default y
+    depends on pci
+    binding cfg
+
+endmenu
+
+menu "Input Drivers"
+
+config driver_i8042
+    bool "PS/2 (i8042) keyboard and mouse controller"
+    default y
+    binding cfg
+
+endmenu
+
+menu "Virtualization Drivers"
+
+config driver_virtio
+    bool "VirtIO devices (block, GPU, network)"
+    default y
+    depends on pci
+    binding cfg
+
+endmenu
+
+menu "Filesystem Drivers"
+
+config driver_fs_fat
+    bool "FAT filesystem"
+    default y
+    binding cfg
+
+config driver_fs_iso9660
+    bool "ISO 9660 filesystem (CD-ROM)"
+    default y
+    binding cfg
+
+config driver_fs_ramfs
+    bool "RAM filesystem"
+    default y
+    binding cfg
+
+config driver_fs_initramfs
+    bool "Initial ramdisk filesystem (initramfs)"
+    default y
+    binding cfg
+
+endmenu

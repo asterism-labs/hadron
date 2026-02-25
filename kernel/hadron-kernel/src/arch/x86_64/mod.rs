@@ -12,9 +12,12 @@ pub mod hw;
 pub mod idt;
 pub mod instructions;
 pub mod interrupts;
+#[cfg(not(hadron_acpi))]
+pub mod legacy;
 pub mod mem;
 pub mod paging;
 pub mod registers;
+#[cfg(hadron_smp)]
 pub mod smp;
 pub mod structures;
 pub mod syscall;

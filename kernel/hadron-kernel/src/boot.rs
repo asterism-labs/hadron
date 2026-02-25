@@ -466,9 +466,12 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
     crate::kinfo!("Hadron kernel initialized successfully.");
 
     // 8b. Initialize cross-CPU wakeup IPI, then boot Application Processors.
-    crate::sched::smp::init();
-    #[cfg(target_arch = "x86_64")]
-    crate::arch::x86_64::smp::boot_aps(boot_info);
+    #[cfg(hadron_smp)]
+    {
+        crate::sched::smp::init();
+        #[cfg(target_arch = "x86_64")]
+        crate::arch::x86_64::smp::boot_aps(boot_info);
+    }
 
     // 8c. Apply alt-fn (atomic pointer swaps) and alt-instr (binary .text
     // patches) now that all APs are online with FPU enabled and GS base set.

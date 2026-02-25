@@ -94,11 +94,23 @@ extern "C" fn dispatch_interrupt(vector: u8) {
         }
     }
 
-    // Send LAPIC EOI. We access the LAPIC via the global reference set
-    // during boot. If the LAPIC hasn't been initialized yet, skip EOI
-    // (shouldn't happen in practice since interrupts are only enabled
-    // after LAPIC init).
+    // Increment PIT tick counter for timer IRQ (vector 32 = IRQ 0).
+    if vector == 32 {
+        crate::time::Time::pit_tick();
+    }
+
+    // Send EOI to the interrupt controller.
+    #[cfg(hadron_apic)]
     crate::arch::x86_64::acpi::Acpi::send_lapic_eoi();
+
+    #[cfg(not(hadron_apic))]
+    {
+        // In legacy PIC mode, send EOI for vectors 32-47 (IRQs 0-15).
+        if vector >= 32 && vector < 48 {
+            // SAFETY: Called from a legitimate PIC interrupt handler.
+            unsafe { crate::arch::x86_64::hw::pic::send_eoi((vector - 32) as u8) };
+        }
+    }
 }
 
 // We generate stubs with a function array indexed by vector offset (0-223 → vectors 32-255).

@@ -172,12 +172,16 @@ extern "C" fn _start() -> ! {
     }
 
     // 10b. Build SMP CPU entry list from Limine MP response.
+    #[cfg(hadron_smp)]
     let (smp_cpus, bsp_lapic_id) = build_smp_cpus();
+    #[cfg(not(hadron_smp))]
+    let (smp_cpus, bsp_lapic_id) = (ArrayVec::<SmpCpuEntry, MAX_SMP_CPUS>::new(), 0u32);
 
     // 10c. Park APs on kernel page tables immediately.
     // Limine starts APs in a spin loop using shared page tables (base revision 0).
     // The BSP's kernel init can corrupt the AP's execution environment, so we
     // must park them on the kernel page tables before proceeding.
+    #[cfg(hadron_smp)]
     hadron_kernel::arch::x86_64::smp::park_aps(smp_cpus.as_slice(), pml4_phys.as_u64());
 
     // 11. Build BootInfoData (after CR3 switch, using new page tables).
