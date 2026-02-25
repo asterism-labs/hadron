@@ -4,8 +4,11 @@
 //! writer. Readers retry if they observe a write in progress. Best for
 //! small, frequently-read, infrequently-written data (e.g., clock values).
 
-use super::atomic::{AtomicU32, Ordering};
-use super::cell::UnsafeCell;
+use core::sync::atomic::Ordering;
+
+use super::backend::{AtomicIntOps, Backend, CoreBackend, UnsafeCellOps};
+
+// ─── Type aliases ─────────────────────────────────────────────────────
 
 /// A sequence lock.
 ///
@@ -18,41 +21,52 @@ use super::cell::UnsafeCell;
 /// `T` must be `Copy` — readers perform a bitwise copy, which may observe
 /// partial writes if the sequence check fails (the copy is discarded in
 /// that case).
-///
-/// # Example
-///
-/// ```ignore
-/// static CLOCK: SeqLock<u64> = SeqLock::new(0);
-///
-/// // Reader (lock-free):
-/// let time = CLOCK.read();
-///
-/// // Writer (exclusive):
-/// let mut guard = CLOCK.write();
-/// *guard = 42;
-/// ```
-pub struct SeqLock<T: Copy> {
+pub type SeqLock<T> = SeqLockInner<T, CoreBackend>;
+
+/// RAII guard for exclusive write access.
+pub type SeqLockWriteGuard<'a, T> = SeqLockWriteGuardInner<'a, T, CoreBackend>;
+
+// ─── Generic inner type ───────────────────────────────────────────────
+
+/// Backend-generic sequence lock.
+pub struct SeqLockInner<T: Copy, B: Backend> {
     /// Sequence number. Even = unlocked, odd = write in progress.
-    seq: AtomicU32,
-    data: UnsafeCell<T>,
+    seq: B::AtomicU32,
+    data: B::UnsafeCell<T>,
 }
 
 // SAFETY: SeqLock ensures readers only see consistent data (via retry)
 // and writers have exclusive access.
-unsafe impl<T: Copy + Send> Send for SeqLock<T> {}
-unsafe impl<T: Copy + Send + Sync> Sync for SeqLock<T> {}
+unsafe impl<T: Copy + Send, B: Backend> Send for SeqLockInner<T, B> {}
+unsafe impl<T: Copy + Send + Sync, B: Backend> Sync for SeqLockInner<T, B> {}
+
+// ─── Const constructors (CoreBackend only) ────────────────────────────
 
 impl<T: Copy> SeqLock<T> {
-    maybe_const_fn! {
-        /// Creates a new `SeqLock` wrapping `value`.
-        pub fn new(value: T) -> Self {
-            Self {
-                seq: AtomicU32::new(0),
-                data: UnsafeCell::new(value),
-            }
+    /// Creates a new `SeqLock` wrapping `value`.
+    pub const fn new(value: T) -> Self {
+        Self {
+            seq: core::sync::atomic::AtomicU32::new(0),
+            data: core::cell::UnsafeCell::new(value),
         }
     }
+}
 
+// ─── Generic non-const constructor ────────────────────────────────────
+
+impl<T: Copy, B: Backend> SeqLockInner<T, B> {
+    /// Creates a new `SeqLockInner` using backend factory functions.
+    pub fn new_with_backend(value: T) -> Self {
+        Self {
+            seq: B::new_atomic_u32(0),
+            data: B::new_unsafe_cell(value),
+        }
+    }
+}
+
+// ─── Algorithm (generic over B) ───────────────────────────────────────
+
+impl<T: Copy, B: Backend> SeqLockInner<T, B> {
     /// Performs an optimistic lock-free read.
     ///
     /// Retries automatically if a write is in progress. This method never
@@ -63,7 +77,7 @@ impl<T: Copy> SeqLock<T> {
             let s1 = self.seq.load(Ordering::Acquire);
             if s1 & 1 != 0 {
                 // Write in progress — spin and retry.
-                core::hint::spin_loop();
+                B::spin_wait_hint();
                 continue;
             }
 
@@ -79,22 +93,18 @@ impl<T: Copy> SeqLock<T> {
             }
 
             // Sequence changed — a write occurred during our read. Retry.
-            core::hint::spin_loop();
+            B::spin_wait_hint();
         }
     }
 
     /// Acquires exclusive write access.
-    ///
-    /// Increments the sequence number to odd (signaling write in progress),
-    /// returns a guard that allows mutation, and restores the sequence to
-    /// the next even number on drop.
-    pub fn write(&self) -> SeqLockWriteGuard<'_, T> {
+    pub fn write(&self) -> SeqLockWriteGuardInner<'_, T, B> {
         // Spin until we can transition from even to odd.
         loop {
             let s = self.seq.load(Ordering::Relaxed);
             if s & 1 != 0 {
                 // Another writer is active — spin.
-                core::hint::spin_loop();
+                B::spin_wait_hint();
                 continue;
             }
             if self
@@ -102,18 +112,20 @@ impl<T: Copy> SeqLock<T> {
                 .compare_exchange_weak(s, s + 1, Ordering::Acquire, Ordering::Relaxed)
                 .is_ok()
             {
-                return SeqLockWriteGuard { lock: self };
+                return SeqLockWriteGuardInner { lock: self };
             }
         }
     }
 }
 
-/// RAII guard for exclusive write access to a [`SeqLock`].
-pub struct SeqLockWriteGuard<'a, T: Copy> {
-    lock: &'a SeqLock<T>,
+// ─── Write guard ──────────────────────────────────────────────────────
+
+/// RAII guard for exclusive write access to a [`SeqLockInner`].
+pub struct SeqLockWriteGuardInner<'a, T: Copy, B: Backend> {
+    lock: &'a SeqLockInner<T, B>,
 }
 
-impl<T: Copy> core::ops::Deref for SeqLockWriteGuard<'_, T> {
+impl<T: Copy, B: Backend> core::ops::Deref for SeqLockWriteGuardInner<'_, T, B> {
     type Target = T;
 
     fn deref(&self) -> &T {
@@ -122,19 +134,21 @@ impl<T: Copy> core::ops::Deref for SeqLockWriteGuard<'_, T> {
     }
 }
 
-impl<T: Copy> core::ops::DerefMut for SeqLockWriteGuard<'_, T> {
+impl<T: Copy, B: Backend> core::ops::DerefMut for SeqLockWriteGuardInner<'_, T, B> {
     fn deref_mut(&mut self) -> &mut T {
         // SAFETY: We hold exclusive write access.
         self.lock.data.with_mut(|ptr| unsafe { &mut *ptr })
     }
 }
 
-impl<T: Copy> Drop for SeqLockWriteGuard<'_, T> {
+impl<T: Copy, B: Backend> Drop for SeqLockWriteGuardInner<'_, T, B> {
     fn drop(&mut self) {
         // Increment sequence to next even number, signaling write complete.
         self.lock.seq.fetch_add(1, Ordering::Release);
     }
 }
+
+// ─── Tests ────────────────────────────────────────────────────────────
 
 #[cfg(all(test, not(loom)))]
 mod tests {
@@ -229,5 +243,34 @@ mod tests {
             *guard = Pair { a: 10, b: 20 };
         }
         assert_eq!(lock.read(), Pair { a: 10, b: 20 });
+    }
+}
+
+#[cfg(kani)]
+mod kani_proofs {
+    use super::*;
+
+    /// Verify that data written under a write guard is visible to subsequent reads.
+    #[kani::proof]
+    fn seqlock_write_read_consistency() {
+        let val: u32 = kani::any();
+        let lock = SeqLock::new(0u32);
+        {
+            let mut guard = lock.write();
+            *guard = val;
+        }
+        assert_eq!(lock.read(), val);
+    }
+
+    /// Verify sequence number is even after write completes (stable state).
+    #[kani::proof]
+    fn seqlock_even_after_write() {
+        let lock = SeqLock::new(0u32);
+        {
+            let mut guard = lock.write();
+            *guard = 42;
+        }
+        // After write completes, read should succeed (sequence is even/stable).
+        assert_eq!(lock.read(), 42);
     }
 }

@@ -13,33 +13,56 @@ use core::task::{Context, Poll, Waker};
 
 use planck_noalloc::vec::ArrayVec;
 
-use crate::sync::IrqSpinLock;
+use super::backend::{CoreBackend, IrqBackend};
+use super::irq_spinlock::{IrqSpinLock, IrqSpinLockInner};
 
 /// Maximum number of waiters per queue.
 const MAX_WAITERS: usize = 32;
+
+// ─── Type aliases ─────────────────────────────────────────────────────
 
 /// A queue of [`Waker`]s waiting for an event.
 ///
 /// Tasks call [`wait`](WaitQueue::wait) to obtain a future that completes
 /// when the queue is woken. Interrupt handlers call [`wake_one`](WaitQueue::wake_one)
 /// or [`wake_all`](WaitQueue::wake_all) to resume waiting tasks.
-pub struct WaitQueue {
-    waiters: IrqSpinLock<ArrayVec<Waker, MAX_WAITERS>>,
+pub type WaitQueue = WaitQueueInner<CoreBackend>;
+
+// ─── Generic inner type ───────────────────────────────────────────────
+
+/// Backend-generic wait queue.
+pub struct WaitQueueInner<B: IrqBackend> {
+    waiters: IrqSpinLockInner<ArrayVec<Waker, MAX_WAITERS>, B>,
 }
 
+// ─── Const constructor (CoreBackend only) ─────────────────────────────
+
 impl WaitQueue {
-    maybe_const_fn! {
-        /// Creates an empty wait queue.
-        pub fn new() -> Self {
-            Self {
-                waiters: IrqSpinLock::new(ArrayVec::new()),
-            }
+    /// Creates an empty wait queue.
+    pub const fn new() -> Self {
+        Self {
+            waiters: IrqSpinLock::new(ArrayVec::new()),
         }
     }
+}
 
+// ─── Generic non-const constructor ────────────────────────────────────
+
+impl<B: IrqBackend> WaitQueueInner<B> {
+    /// Creates an empty wait queue using backend factory functions.
+    pub fn new_with_backend() -> Self {
+        Self {
+            waiters: IrqSpinLockInner::new_with_backend(ArrayVec::new()),
+        }
+    }
+}
+
+// ─── Algorithm (generic over B) ───────────────────────────────────────
+
+impl<B: IrqBackend> WaitQueueInner<B> {
     /// Returns a future that completes when this queue is woken.
-    pub fn wait(&self) -> WaitFuture<'_> {
-        WaitFuture {
+    pub fn wait(&self) -> WaitFutureInner<'_, B> {
+        WaitFutureInner {
             queue: self,
             registered: false,
         }
@@ -56,10 +79,6 @@ impl WaitQueue {
             waiters.push(waker.clone());
             true
         } else {
-            // Queue is full — the caller will degrade to spin-polling.
-            // With hadron_lock_debug, this condition can be traced via the
-            // returned false. Increasing MAX_WAITERS or switching to
-            // HeapWaitQueue may be warranted if this triggers often.
             false
         }
     }
@@ -89,13 +108,18 @@ impl WaitQueue {
     }
 }
 
-/// Future returned by [`WaitQueue::wait`].
-pub struct WaitFuture<'a> {
-    queue: &'a WaitQueue,
+// ─── Wait future ──────────────────────────────────────────────────────
+
+/// Future returned by [`WaitQueueInner::wait`].
+pub struct WaitFutureInner<'a, B: IrqBackend> {
+    queue: &'a WaitQueueInner<B>,
     registered: bool,
 }
 
-impl Future for WaitFuture<'_> {
+/// Future returned by [`WaitQueue::wait`].
+pub type WaitFuture<'a> = WaitFutureInner<'a, CoreBackend>;
+
+impl<B: IrqBackend> Future for WaitFutureInner<'_, B> {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
@@ -112,6 +136,8 @@ impl Future for WaitFuture<'_> {
         }
     }
 }
+
+// ─── Tests ────────────────────────────────────────────────────────────
 
 #[cfg(all(test, not(loom)))]
 mod tests {
@@ -204,14 +230,17 @@ mod loom_tests {
     use loom::sync::Arc;
     use loom::thread;
 
-    use super::super::atomic::Ordering;
-    use super::super::test_waker::counting_waker;
-    use super::WaitQueue;
+    use super::WaitQueueInner;
+    use crate::sync::atomic::Ordering;
+    use crate::sync::backend::LoomBackend;
+    use crate::sync::test_waker::counting_waker;
+
+    type LoomWaitQueue = WaitQueueInner<LoomBackend>;
 
     #[test]
     fn loom_register_then_wake() {
         loom::model(|| {
-            let wq = Arc::new(WaitQueue::new());
+            let wq = Arc::new(LoomWaitQueue::new_with_backend());
             let (waker, count) = counting_waker();
 
             let wq2 = wq.clone();
@@ -222,9 +251,6 @@ mod loom_tests {
             wq.register_waker(&waker);
             t.join().unwrap();
 
-            // Waker may or may not have been woken depending on ordering:
-            // - If register happens before wake_one: count == 1
-            // - If wake_one happens before register: count == 0 (wake_one found empty queue)
             let c = count.load(Ordering::SeqCst);
             assert!(c == 0 || c == 1);
         });
@@ -233,11 +259,10 @@ mod loom_tests {
     #[test]
     fn loom_wake_all() {
         loom::model(|| {
-            let wq = Arc::new(WaitQueue::new());
+            let wq = Arc::new(LoomWaitQueue::new_with_backend());
             let (waker1, count1) = counting_waker();
             let (waker2, count2) = counting_waker();
 
-            // Both register before wake_all.
             wq.register_waker(&waker1);
             wq.register_waker(&waker2);
 
@@ -255,15 +280,13 @@ mod loom_tests {
     #[test]
     fn loom_wake_before_register() {
         loom::model(|| {
-            let wq = Arc::new(WaitQueue::new());
+            let wq = Arc::new(LoomWaitQueue::new_with_backend());
 
-            // wake_one on empty queue — should be a no-op.
             wq.wake_one();
 
             let (waker, count) = counting_waker();
             wq.register_waker(&waker);
 
-            // The earlier wake_one should NOT have woken this later-registered waker.
             assert_eq!(count.load(Ordering::SeqCst), 0);
         });
     }

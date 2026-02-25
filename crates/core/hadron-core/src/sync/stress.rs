@@ -12,7 +12,7 @@
 //!   no-ops so early boot is unaffected.
 //! - **Delay**: spins for a random duration in `[0, max_us)` microseconds.
 
-use super::atomic::const_only::{AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use crate::cpu_local::{CpuLocal, MAX_CPUS};
 

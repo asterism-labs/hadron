@@ -7,7 +7,10 @@ use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll, Waker};
 
-use super::IrqSpinLock;
+use super::backend::{CoreBackend, IrqBackend};
+use super::irq_spinlock::{IrqSpinLock, IrqSpinLockInner};
+
+// ─── Type aliases ─────────────────────────────────────────────────────
 
 /// Heap-backed wait queue with unbounded capacity.
 ///
@@ -17,23 +20,46 @@ use super::IrqSpinLock;
 ///
 /// Uses `VecDeque` so that `wake_one()` is O(1) FIFO (pop_front) rather
 /// than O(n) (Vec::swap_remove(0) shifts elements or breaks FIFO order).
-pub struct HeapWaitQueue {
-    waiters: IrqSpinLock<VecDeque<Waker>>,
+pub type HeapWaitQueue = HeapWaitQueueInner<CoreBackend>;
+
+/// Future returned by [`HeapWaitQueue::wait`].
+pub type HeapWaitFuture<'a> = HeapWaitFutureInner<'a, CoreBackend>;
+
+// ─── Generic inner type ───────────────────────────────────────────────
+
+/// Backend-generic heap-backed wait queue.
+pub struct HeapWaitQueueInner<B: IrqBackend> {
+    waiters: IrqSpinLockInner<VecDeque<Waker>, B>,
 }
 
+// ─── Const constructor (CoreBackend only) ─────────────────────────────
+
 impl HeapWaitQueue {
-    maybe_const_fn! {
-        /// Creates an empty heap-backed wait queue.
-        pub fn new() -> Self {
-            Self {
-                waiters: IrqSpinLock::new(VecDeque::new()),
-            }
+    /// Creates an empty heap-backed wait queue.
+    pub const fn new() -> Self {
+        Self {
+            waiters: IrqSpinLock::new(VecDeque::new()),
         }
     }
+}
 
+// ─── Generic non-const constructor ────────────────────────────────────
+
+impl<B: IrqBackend> HeapWaitQueueInner<B> {
+    /// Creates an empty heap-backed wait queue using backend factory functions.
+    pub fn new_with_backend() -> Self {
+        Self {
+            waiters: IrqSpinLockInner::new_with_backend(VecDeque::new()),
+        }
+    }
+}
+
+// ─── Algorithm (generic over B) ───────────────────────────────────────
+
+impl<B: IrqBackend> HeapWaitQueueInner<B> {
     /// Returns a future that completes when this queue is woken.
-    pub fn wait(&self) -> HeapWaitFuture<'_> {
-        HeapWaitFuture {
+    pub fn wait(&self) -> HeapWaitFutureInner<'_, B> {
+        HeapWaitFutureInner {
             queue: self,
             registered: false,
         }
@@ -73,13 +99,15 @@ impl HeapWaitQueue {
     }
 }
 
-/// Future returned by [`HeapWaitQueue::wait`].
-pub struct HeapWaitFuture<'a> {
-    queue: &'a HeapWaitQueue,
+// ─── Wait future ──────────────────────────────────────────────────────
+
+/// Future returned by [`HeapWaitQueueInner::wait`].
+pub struct HeapWaitFutureInner<'a, B: IrqBackend> {
+    queue: &'a HeapWaitQueueInner<B>,
     registered: bool,
 }
 
-impl Future for HeapWaitFuture<'_> {
+impl<B: IrqBackend> Future for HeapWaitFutureInner<'_, B> {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {

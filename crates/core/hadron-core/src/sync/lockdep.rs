@@ -23,10 +23,11 @@
 //!
 //! Gated behind `cfg(hadron_lockdep)`.
 
-use super::atomic::const_only::{
-    AtomicBool, AtomicPtr, AtomicU8, AtomicU16, AtomicU32, AtomicU64, AtomicUsize, Ordering,
-};
+use super::atomic::AtomicPtr;
 use core::fmt;
+use core::sync::atomic::{
+    AtomicBool, AtomicU8, AtomicU16, AtomicU32, AtomicU64, AtomicUsize, Ordering,
+};
 
 use crate::cpu_local::{CpuLocal, MAX_CPUS};
 

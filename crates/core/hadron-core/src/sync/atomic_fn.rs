@@ -45,10 +45,21 @@ impl<F: Copy> AtomicFn<F> {
     /// The caller must ensure `F` is a function pointer type (e.g.
     /// `fn(u32) -> bool`). This is not enforced by the type system but
     /// is an API contract — storing non-fn-pointer `Copy` types is unsound.
+    #[cfg(not(loom))]
     pub const fn new(f: F) -> Self {
         // SAFETY: Function pointers and `*mut ()` have the same size and
         // representation on all Rust targets. This is a const-context
         // transmute confined to this single constructor.
+        let ptr = unsafe { core::mem::transmute_copy(&f) };
+        Self {
+            ptr: AtomicPtr::new(ptr),
+            _marker: PhantomData,
+        }
+    }
+
+    /// Creates a new `AtomicFn` initialized with `f` (loom variant).
+    #[cfg(loom)]
+    pub fn new(f: F) -> Self {
         let ptr = unsafe { core::mem::transmute_copy(&f) };
         Self {
             ptr: AtomicPtr::new(ptr),
@@ -61,7 +72,17 @@ impl<F: Copy> AtomicFn<F> {
     /// [`load_optional`](Self::load_optional) must be used to safely handle
     /// the null case. Calling [`load`](Self::load) on a null `AtomicFn` is
     /// undefined behavior.
+    #[cfg(not(loom))]
     pub const fn null() -> Self {
+        Self {
+            ptr: AtomicPtr::new(core::ptr::null_mut()),
+            _marker: PhantomData,
+        }
+    }
+
+    /// Creates a new `AtomicFn` initialized to null (loom variant).
+    #[cfg(loom)]
+    pub fn null() -> Self {
         Self {
             ptr: AtomicPtr::new(core::ptr::null_mut()),
             _marker: PhantomData,

@@ -7,87 +7,96 @@
 use core::future::Future;
 use core::ops::{Deref, DerefMut};
 use core::pin::Pin;
+use core::sync::atomic::Ordering;
 use core::task::{Context, Poll};
 
-use super::atomic::{AtomicBool, Ordering};
-use super::cell::UnsafeCell;
-
-use crate::sync::WaitQueue;
+use super::backend::{AtomicBoolOps, CoreBackend, IrqBackend, UnsafeCellOps};
+use super::waitqueue::{WaitQueue, WaitQueueInner};
 
 #[cfg(hadron_lockdep)]
 use super::lockdep::LockClassId;
 
+// ─── Type aliases ─────────────────────────────────────────────────────
+
 /// An async-aware mutual exclusion lock.
 ///
 /// When contended, waiting tasks yield to the executor and are woken via
-/// [`WaitQueue`] when the lock becomes available. This avoids wasting CPU
-/// cycles spinning in async contexts.
-///
-/// # Example
-///
-/// ```ignore
-/// static COUNTER: Mutex<u64> = Mutex::new(0);
-///
-/// async fn increment() {
-///     let mut guard = COUNTER.lock().await;
-///     *guard += 1;
-/// }
-/// ```
-pub struct Mutex<T> {
-    locked: AtomicBool,
-    waiters: WaitQueue,
+/// [`WaitQueue`] when the lock becomes available.
+pub type Mutex<T> = MutexInner<T, CoreBackend>;
+
+/// RAII guard that releases the [`Mutex`] when dropped.
+pub type MutexGuard<'a, T> = MutexGuardInner<'a, T, CoreBackend>;
+
+/// Future returned by [`Mutex::lock`].
+pub type MutexLockFuture<'a, T> = MutexLockFutureInner<'a, T, CoreBackend>;
+
+// ─── Generic inner type ───────────────────────────────────────────────
+
+/// Backend-generic async-aware mutex.
+pub struct MutexInner<T, B: IrqBackend> {
+    locked: B::AtomicBool,
+    waiters: WaitQueueInner<B>,
     #[cfg(hadron_lockdep)]
     name: &'static str,
-    data: UnsafeCell<T>,
+    data: B::UnsafeCell<T>,
 }
 
 // SAFETY: The Mutex ensures exclusive access to `T` via atomic operations.
-// `T: Send` is required because the data may be accessed from different threads.
-unsafe impl<T: Send> Send for Mutex<T> {}
-unsafe impl<T: Send> Sync for Mutex<T> {}
+unsafe impl<T: Send, B: IrqBackend> Send for MutexInner<T, B> {}
+unsafe impl<T: Send, B: IrqBackend> Sync for MutexInner<T, B> {}
+
+// ─── Const constructors (CoreBackend only) ────────────────────────────
 
 impl<T> Mutex<T> {
-    maybe_const_fn! {
-        /// Creates a new unlocked `Mutex` wrapping `value`.
-        pub fn new(value: T) -> Self {
-            Self {
-                locked: AtomicBool::new(false),
-                waiters: WaitQueue::new(),
-                #[cfg(hadron_lockdep)]
-                name: "<unnamed>",
-                data: UnsafeCell::new(value),
-            }
+    /// Creates a new unlocked `Mutex` wrapping `value`.
+    pub const fn new(value: T) -> Self {
+        Self {
+            locked: core::sync::atomic::AtomicBool::new(false),
+            waiters: WaitQueue::new(),
+            #[cfg(hadron_lockdep)]
+            name: "<unnamed>",
+            data: core::cell::UnsafeCell::new(value),
         }
     }
 
-    maybe_const_fn! {
-        /// Creates a new unlocked `Mutex` with a name for lockdep diagnostics.
-        pub fn named(name: &'static str, value: T) -> Self {
-            let _ = name;
-            Self {
-                locked: AtomicBool::new(false),
-                waiters: WaitQueue::new(),
-                #[cfg(hadron_lockdep)]
-                name,
-                data: UnsafeCell::new(value),
-            }
+    /// Creates a new unlocked `Mutex` with a name for lockdep diagnostics.
+    pub const fn named(name: &'static str, value: T) -> Self {
+        let _ = name;
+        Self {
+            locked: core::sync::atomic::AtomicBool::new(false),
+            waiters: WaitQueue::new(),
+            #[cfg(hadron_lockdep)]
+            name,
+            data: core::cell::UnsafeCell::new(value),
         }
     }
+}
 
+// ─── Generic non-const constructor ────────────────────────────────────
+
+impl<T, B: IrqBackend> MutexInner<T, B> {
+    /// Creates a new unlocked `MutexInner` using backend factory functions.
+    pub fn new_with_backend(value: T) -> Self {
+        Self {
+            locked: B::new_atomic_bool(false),
+            waiters: WaitQueueInner::new_with_backend(),
+            #[cfg(hadron_lockdep)]
+            name: "<unnamed>",
+            data: B::new_unsafe_cell(value),
+        }
+    }
+}
+
+// ─── Algorithm (generic over B) ───────────────────────────────────────
+
+impl<T, B: IrqBackend> MutexInner<T, B> {
     /// Asynchronously acquires the lock.
-    ///
-    /// Returns a future that resolves to a [`MutexGuard`] once the lock is
-    /// acquired. If the lock is already held, the current task yields and is
-    /// woken when the lock becomes available.
-    pub fn lock(&self) -> MutexLockFuture<'_, T> {
-        MutexLockFuture { mutex: self }
+    pub fn lock(&self) -> MutexLockFutureInner<'_, T, B> {
+        MutexLockFutureInner { mutex: self }
     }
 
     /// Attempts to acquire the lock without blocking.
-    ///
-    /// Returns `Some(guard)` if the lock was acquired, `None` if it was
-    /// already held.
-    pub fn try_lock(&self) -> Option<MutexGuard<'_, T>> {
+    pub fn try_lock(&self) -> Option<MutexGuardInner<'_, T, B>> {
         #[cfg(hadron_lock_debug)]
         {
             let depth = super::irq_spinlock::irq_lock_depth();
@@ -107,7 +116,7 @@ impl<T> Mutex<T> {
             #[cfg(hadron_lockdep)]
             let class = self.lockdep_acquire();
 
-            Some(MutexGuard {
+            Some(MutexGuardInner {
                 mutex: self,
                 #[cfg(hadron_lockdep)]
                 class,
@@ -120,8 +129,8 @@ impl<T> Mutex<T> {
     /// Acquires the lock synchronously by spinning.
     ///
     /// Intended for use during initialization or in contexts where async is
-    /// not available. Prefer [`lock`](Mutex::lock) in async contexts.
-    pub fn lock_sync(&self) -> MutexGuard<'_, T> {
+    /// not available. Prefer [`lock`](MutexInner::lock) in async contexts.
+    pub fn lock_sync(&self) -> MutexGuardInner<'_, T, B> {
         #[cfg(hadron_lock_debug)]
         {
             let depth = super::irq_spinlock::irq_lock_depth();
@@ -137,7 +146,7 @@ impl<T> Mutex<T> {
             if let Some(guard) = self.try_lock() {
                 return guard;
             }
-            super::spin_wait_hint();
+            B::spin_wait_hint();
         }
     }
 
@@ -154,13 +163,15 @@ impl<T> Mutex<T> {
     }
 }
 
-/// Future returned by [`Mutex::lock`].
-pub struct MutexLockFuture<'a, T> {
-    mutex: &'a Mutex<T>,
+// ─── Lock future ──────────────────────────────────────────────────────
+
+/// Future returned by [`MutexInner::lock`].
+pub struct MutexLockFutureInner<'a, T, B: IrqBackend> {
+    mutex: &'a MutexInner<T, B>,
 }
 
-impl<'a, T> Future for MutexLockFuture<'a, T> {
-    type Output = MutexGuard<'a, T>;
+impl<'a, T, B: IrqBackend> Future for MutexLockFutureInner<'a, T, B> {
+    type Output = MutexGuardInner<'a, T, B>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         #[cfg(hadron_lock_debug)]
@@ -187,7 +198,7 @@ impl<'a, T> Future for MutexLockFuture<'a, T> {
             #[cfg(hadron_lockdep)]
             let class = self.mutex.lockdep_acquire();
 
-            return Poll::Ready(MutexGuard {
+            return Poll::Ready(MutexGuardInner {
                 mutex: self.mutex,
                 #[cfg(hadron_lockdep)]
                 class,
@@ -198,9 +209,7 @@ impl<'a, T> Future for MutexLockFuture<'a, T> {
         let registered = self.mutex.waiters.register_waker(cx.waker());
 
         // Retry after registration — the lock may have been released between
-        // our first attempt and the waker registration.  Must use strong CAS
-        // here: a spurious failure would return Pending with no guarantee of
-        // a future wake, causing a lost wakeup.
+        // our first attempt and the waker registration.
         if self
             .mutex
             .locked
@@ -210,7 +219,7 @@ impl<'a, T> Future for MutexLockFuture<'a, T> {
             #[cfg(hadron_lockdep)]
             let class = self.mutex.lockdep_acquire();
 
-            return Poll::Ready(MutexGuard {
+            return Poll::Ready(MutexGuardInner {
                 mutex: self.mutex,
                 #[cfg(hadron_lockdep)]
                 class,
@@ -226,23 +235,25 @@ impl<'a, T> Future for MutexLockFuture<'a, T> {
     }
 }
 
-/// RAII guard that releases the [`Mutex`] when dropped.
-pub struct MutexGuard<'a, T> {
-    mutex: &'a Mutex<T>,
+// ─── Guard ────────────────────────────────────────────────────────────
+
+/// RAII guard that releases the [`MutexInner`] when dropped.
+pub struct MutexGuardInner<'a, T, B: IrqBackend> {
+    mutex: &'a MutexInner<T, B>,
     #[cfg(hadron_lockdep)]
     class: LockClassId,
 }
 
-impl<'a, T> MutexGuard<'a, T> {
-    /// Returns a reference to the underlying [`Mutex`].
+impl<'a, T, B: IrqBackend> MutexGuardInner<'a, T, B> {
+    /// Returns a reference to the underlying [`MutexInner`].
     ///
     /// Used by [`Condvar::wait_async`](super::Condvar::wait_async) to re-acquire after release.
-    pub fn mutex_ref(&self) -> &'a Mutex<T> {
+    pub fn mutex_ref(&self) -> &'a MutexInner<T, B> {
         self.mutex
     }
 }
 
-impl<T> Deref for MutexGuard<'_, T> {
+impl<T, B: IrqBackend> Deref for MutexGuardInner<'_, T, B> {
     type Target = T;
 
     fn deref(&self) -> &T {
@@ -251,14 +262,14 @@ impl<T> Deref for MutexGuard<'_, T> {
     }
 }
 
-impl<T> DerefMut for MutexGuard<'_, T> {
+impl<T, B: IrqBackend> DerefMut for MutexGuardInner<'_, T, B> {
     fn deref_mut(&mut self) -> &mut T {
         // SAFETY: The guard guarantees exclusive access while it exists.
         self.mutex.data.with_mut(|ptr| unsafe { &mut *ptr })
     }
 }
 
-impl<T> Drop for MutexGuard<'_, T> {
+impl<T, B: IrqBackend> Drop for MutexGuardInner<'_, T, B> {
     fn drop(&mut self) {
         self.mutex.locked.store(false, Ordering::Release);
 
@@ -270,6 +281,8 @@ impl<T> Drop for MutexGuard<'_, T> {
         self.mutex.waiters.wake_one();
     }
 }
+
+// ─── Tests ────────────────────────────────────────────────────────────
 
 #[cfg(all(test, not(loom)))]
 mod tests {
@@ -338,14 +351,12 @@ mod tests {
         let mutex = Mutex::new(42);
         let guard = mutex.try_lock().unwrap();
 
-        // Register a counting waker via the lock future.
         let (waker, count) = counting_waker();
         let mut cx = Context::from_waker(&waker);
         let mut fut = mutex.lock();
         let result = Pin::new(&mut fut).poll(&mut cx);
         assert!(matches!(result, Poll::Pending));
 
-        // Drop the guard — should call wake_one and increment our counter.
         drop(guard);
         assert!(
             count.load(Ordering::SeqCst) > 0,
@@ -359,13 +370,15 @@ mod loom_tests {
     use loom::sync::Arc;
     use loom::thread;
 
-    use super::Mutex;
+    use super::MutexInner;
+    use crate::sync::backend::LoomBackend;
 
-    /// Verify sync lock path provides mutual exclusion under all interleavings.
+    type LoomMutex<T> = MutexInner<T, LoomBackend>;
+
     #[test]
     fn loom_mutex_mutual_exclusion() {
         loom::model(|| {
-            let mutex = Arc::new(Mutex::new(0usize));
+            let mutex = Arc::new(LoomMutex::new_with_backend(0usize));
 
             let handles: Vec<_> = (0..2)
                 .map(|_| {
@@ -385,9 +398,6 @@ mod loom_tests {
         });
     }
 
-    /// Verify async lock path (Future::poll) handles contention without
-    /// lost wakeups. If a wakeup is lost, the poll loop deadlocks and
-    /// loom reports it.
     #[test]
     fn loom_mutex_async_contention() {
         use core::future::Future;
@@ -395,13 +405,13 @@ mod loom_tests {
         use core::task::Context;
 
         loom::model(|| {
-            let mutex = Arc::new(Mutex::new(0usize));
+            let mutex = Arc::new(LoomMutex::new_with_backend(0usize));
 
             let handles: Vec<_> = (0..2)
                 .map(|_| {
                     let m = mutex.clone();
                     thread::spawn(move || {
-                        let waker = super::super::test_waker::noop_waker();
+                        let waker = crate::sync::test_waker::noop_waker();
                         let mut cx = Context::from_waker(&waker);
                         let mut fut = m.lock();
                         loop {

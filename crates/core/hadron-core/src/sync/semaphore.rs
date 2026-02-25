@@ -5,56 +5,67 @@
 
 use core::future::Future;
 use core::pin::Pin;
+use core::sync::atomic::Ordering;
 use core::task::{Context, Poll};
 
-use super::atomic::{AtomicU32, Ordering};
+use super::backend::{AtomicIntOps, CoreBackend, IrqBackend};
+use super::heap_waitqueue::{HeapWaitQueue, HeapWaitQueueInner};
 
-use super::HeapWaitQueue;
+// ─── Type aliases ─────────────────────────────────────────────────────
 
 /// A counting semaphore.
 ///
 /// Controls access to a resource with a fixed number of permits.
-/// Acquiring a permit decrements the count; releasing increments it.
-///
-/// # Example
-///
-/// ```ignore
-/// static SEM: Semaphore = Semaphore::new(3); // 3 concurrent permits
-///
-/// async fn access_resource() {
-///     let _permit = SEM.acquire().await;
-///     // ... use the resource ...
-///     // permit is released on drop
-/// }
-/// ```
-pub struct Semaphore {
-    permits: AtomicU32,
-    waiters: HeapWaitQueue,
+pub type Semaphore = SemaphoreInner<CoreBackend>;
+
+/// Future returned by [`Semaphore::acquire`].
+pub type SemaphoreAcquireFuture<'a> = SemaphoreAcquireFutureInner<'a, CoreBackend>;
+
+/// RAII permit that releases back to the [`Semaphore`] on drop.
+pub type SemaphorePermit<'a> = SemaphorePermitInner<'a, CoreBackend>;
+
+// ─── Generic inner type ───────────────────────────────────────────────
+
+/// Backend-generic counting semaphore.
+pub struct SemaphoreInner<B: IrqBackend> {
+    permits: B::AtomicU32,
+    waiters: HeapWaitQueueInner<B>,
 }
 
+// ─── Const constructor (CoreBackend only) ─────────────────────────────
+
 impl Semaphore {
-    maybe_const_fn! {
-        /// Creates a new semaphore with the given number of permits.
-        pub fn new(permits: u32) -> Self {
-            Self {
-                permits: AtomicU32::new(permits),
-                waiters: HeapWaitQueue::new(),
-            }
+    /// Creates a new semaphore with the given number of permits.
+    pub const fn new(permits: u32) -> Self {
+        Self {
+            permits: core::sync::atomic::AtomicU32::new(permits),
+            waiters: HeapWaitQueue::new(),
         }
     }
+}
 
+// ─── Generic non-const constructor ────────────────────────────────────
+
+impl<B: IrqBackend> SemaphoreInner<B> {
+    /// Creates a new semaphore using backend factory functions.
+    pub fn new_with_backend(permits: u32) -> Self {
+        Self {
+            permits: B::new_atomic_u32(permits),
+            waiters: HeapWaitQueueInner::new_with_backend(),
+        }
+    }
+}
+
+// ─── Algorithm (generic over B) ───────────────────────────────────────
+
+impl<B: IrqBackend> SemaphoreInner<B> {
     /// Asynchronously acquires a permit.
-    ///
-    /// If no permits are available, the current task yields until one
-    /// is released.
-    pub fn acquire(&self) -> SemaphoreAcquireFuture<'_> {
-        SemaphoreAcquireFuture { sem: self }
+    pub fn acquire(&self) -> SemaphoreAcquireFutureInner<'_, B> {
+        SemaphoreAcquireFutureInner { sem: self }
     }
 
     /// Tries to acquire a permit without blocking.
-    ///
-    /// Returns `Some(permit)` if a permit was available, `None` otherwise.
-    pub fn try_acquire(&self) -> Option<SemaphorePermit<'_>> {
+    pub fn try_acquire(&self) -> Option<SemaphorePermitInner<'_, B>> {
         loop {
             let current = self.permits.load(Ordering::Relaxed);
             if current == 0 {
@@ -65,7 +76,7 @@ impl Semaphore {
                 .compare_exchange_weak(current, current - 1, Ordering::Acquire, Ordering::Relaxed)
                 .is_ok()
             {
-                return Some(SemaphorePermit { sem: self });
+                return Some(SemaphorePermitInner { sem: self });
             }
         }
     }
@@ -76,32 +87,29 @@ impl Semaphore {
     }
 
     /// Releases a permit back to the semaphore.
-    ///
-    /// Usually called automatically by [`SemaphorePermit::drop`].
     fn release(&self) {
         self.permits.fetch_add(1, Ordering::Release);
         self.waiters.wake_one();
     }
 }
 
-/// Future returned by [`Semaphore::acquire`].
-pub struct SemaphoreAcquireFuture<'a> {
-    sem: &'a Semaphore,
+// ─── Acquire future ───────────────────────────────────────────────────
+
+/// Future returned by [`SemaphoreInner::acquire`].
+pub struct SemaphoreAcquireFutureInner<'a, B: IrqBackend> {
+    sem: &'a SemaphoreInner<B>,
 }
 
-impl<'a> Future for SemaphoreAcquireFuture<'a> {
-    type Output = SemaphorePermit<'a>;
+impl<'a, B: IrqBackend> Future for SemaphoreAcquireFutureInner<'a, B> {
+    type Output = SemaphorePermitInner<'a, B>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // Fast path: try to acquire directly.
         if let Some(permit) = self.sem.try_acquire() {
             return Poll::Ready(permit);
         }
 
-        // Register waker before retry.
         self.sem.waiters.register_waker(cx.waker());
 
-        // Retry after registration.
         if let Some(permit) = self.sem.try_acquire() {
             return Poll::Ready(permit);
         }
@@ -110,16 +118,20 @@ impl<'a> Future for SemaphoreAcquireFuture<'a> {
     }
 }
 
-/// RAII permit that releases back to the [`Semaphore`] on drop.
-pub struct SemaphorePermit<'a> {
-    sem: &'a Semaphore,
+// ─── Permit ───────────────────────────────────────────────────────────
+
+/// RAII permit that releases back to the [`SemaphoreInner`] on drop.
+pub struct SemaphorePermitInner<'a, B: IrqBackend> {
+    sem: &'a SemaphoreInner<B>,
 }
 
-impl Drop for SemaphorePermit<'_> {
+impl<B: IrqBackend> Drop for SemaphorePermitInner<'_, B> {
     fn drop(&mut self) {
         self.sem.release();
     }
 }
+
+// ─── Tests ────────────────────────────────────────────────────────────
 
 #[cfg(all(test, not(loom)))]
 mod tests {
@@ -149,7 +161,6 @@ mod tests {
             let _p = sem.try_acquire().unwrap();
             assert_eq!(sem.available_permits(), 0);
         }
-        // Permit dropped — should be available again.
         assert_eq!(sem.available_permits(), 1);
         assert!(sem.try_acquire().is_some());
     }
@@ -201,23 +212,23 @@ mod loom_tests {
     use loom::sync::Arc;
     use loom::thread;
 
-    use super::super::atomic::Ordering;
-    use super::Semaphore;
+    use super::SemaphoreInner;
+    use crate::sync::atomic::Ordering;
+    use crate::sync::backend::LoomBackend;
 
-    /// Verify CAS loop handles contention: with 1 permit and 2 threads,
-    /// at most one thread holds the permit at any given time.
+    type LoomSemaphore = SemaphoreInner<LoomBackend>;
+
     #[test]
     fn loom_semaphore_permit_exhaustion() {
         loom::model(|| {
-            let sem = Arc::new(Semaphore::new(1));
-            let in_critical = Arc::new(super::super::atomic::AtomicUsize::new(0));
+            let sem = Arc::new(LoomSemaphore::new_with_backend(1));
+            let in_critical = Arc::new(crate::sync::atomic::AtomicUsize::new(0));
 
             let handles: Vec<_> = (0..2)
                 .map(|_| {
                     let sem = sem.clone();
                     let crit = in_critical.clone();
                     thread::spawn(move || {
-                        // Spin until permit acquired.
                         let _permit = loop {
                             if let Some(p) = sem.try_acquire() {
                                 break p;
@@ -225,7 +236,6 @@ mod loom_tests {
                             loom::thread::yield_now();
                         };
 
-                        // Verify mutual exclusion: only one thread in critical section.
                         let prev = crit.fetch_add(1, Ordering::SeqCst);
                         assert_eq!(prev, 0, "two threads in critical section");
                         crit.fetch_sub(1, Ordering::SeqCst);
@@ -239,8 +249,6 @@ mod loom_tests {
         });
     }
 
-    /// Verify async acquire path: thread 1 acquires, thread 2 polls
-    /// acquire (Pending then eventually Ready). No lost wakeup.
     #[test]
     fn loom_semaphore_release_wakes_waiter() {
         use core::future::Future;
@@ -248,13 +256,12 @@ mod loom_tests {
         use core::task::Context;
 
         loom::model(|| {
-            let sem = Arc::new(Semaphore::new(1));
+            let sem = Arc::new(LoomSemaphore::new_with_backend(1));
 
             let s1 = sem.clone();
             let s2 = sem.clone();
 
             let t1 = thread::spawn(move || {
-                // Acquire and hold briefly, then release via drop.
                 let _p = loop {
                     if let Some(p) = s1.try_acquire() {
                         break p;
@@ -264,7 +271,7 @@ mod loom_tests {
             });
 
             let t2 = thread::spawn(move || {
-                let waker = super::super::test_waker::noop_waker();
+                let waker = crate::sync::test_waker::noop_waker();
                 let mut cx = Context::from_waker(&waker);
                 let mut fut = s2.acquire();
                 loop {
@@ -278,16 +285,14 @@ mod loom_tests {
             t1.join().unwrap();
             t2.join().unwrap();
 
-            // Both acquired and released — permits should be back.
             assert_eq!(sem.available_permits(), 1);
         });
     }
 
-    /// Verify permits are conserved: acquire + release cycles don't leak.
     #[test]
     fn loom_semaphore_no_permit_leak() {
         loom::model(|| {
-            let sem = Arc::new(Semaphore::new(2));
+            let sem = Arc::new(LoomSemaphore::new_with_backend(2));
 
             let handles: Vec<_> = (0..2)
                 .map(|_| {
@@ -299,7 +304,6 @@ mod loom_tests {
                             }
                             loom::thread::yield_now();
                         };
-                        // Permit released on drop.
                     })
                 })
                 .collect();
@@ -310,5 +314,35 @@ mod loom_tests {
 
             assert_eq!(sem.available_permits(), 2);
         });
+    }
+}
+
+#[cfg(kani)]
+mod kani_proofs {
+    use super::*;
+
+    /// Verify permits never underflow: acquire + release preserves count.
+    #[kani::proof]
+    fn semaphore_permits_non_negative() {
+        let n: u32 = kani::any();
+        kani::assume(n > 0 && n <= 8);
+        let sem = Semaphore::new(n);
+        assert_eq!(sem.available_permits(), n);
+
+        let p = sem.try_acquire();
+        assert!(p.is_some());
+        assert_eq!(sem.available_permits(), n - 1);
+        drop(p);
+        assert_eq!(sem.available_permits(), n);
+    }
+
+    /// Verify release always increases available permits by one.
+    #[kani::proof]
+    fn semaphore_release_monotonic() {
+        let sem = Semaphore::new(1);
+        let p = sem.try_acquire().unwrap();
+        assert_eq!(sem.available_permits(), 0);
+        drop(p);
+        assert_eq!(sem.available_permits(), 1);
     }
 }

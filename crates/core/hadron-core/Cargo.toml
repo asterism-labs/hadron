@@ -35,6 +35,7 @@ check-cfg = [
     'cfg(hadron_hardened)',
     'cfg(loom)',
     'cfg(miri)',
+    'cfg(kani)',
 ]
 
 [lints.clippy]

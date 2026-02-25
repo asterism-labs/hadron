@@ -5,11 +5,11 @@
 //! a lock is shared between interrupt handlers and normal kernel code.
 
 use core::ops::{Deref, DerefMut};
+use core::sync::atomic::Ordering;
 
 #[cfg(hadron_lock_debug)]
 use super::atomic::AtomicU32;
-use super::atomic::{AtomicBool, Ordering};
-use super::cell::UnsafeCell;
+use super::backend::{AtomicBoolOps, Backend, CoreBackend, IrqBackend, UnsafeCellOps};
 
 #[cfg(hadron_lockdep)]
 use super::lockdep::LockClassId;
@@ -70,73 +70,101 @@ fn decrement_irq_depth() {
     IRQ_LOCK_DEPTH.get().fetch_sub(1, Ordering::Relaxed);
 }
 
+// ─── Type aliases ─────────────────────────────────────────────────────
+
 /// A spin lock that disables interrupts while held.
-pub struct IrqSpinLock<T> {
-    locked: AtomicBool,
+pub type IrqSpinLock<T> = IrqSpinLockInner<T, CoreBackend>;
+
+/// RAII guard that restores interrupt state on drop.
+pub type IrqSpinLockGuard<'a, T> = IrqSpinLockGuardInner<'a, T, CoreBackend>;
+
+// ─── Generic inner type ───────────────────────────────────────────────
+
+/// Backend-generic interrupt-safe spin lock.
+///
+/// Use [`IrqSpinLock`] (the [`CoreBackend`] alias) in production code.
+pub struct IrqSpinLockInner<T, B: Backend> {
+    locked: B::AtomicBool,
     #[cfg(hadron_lockdep)]
     name: &'static str,
     #[cfg(hadron_lockdep)]
     level: u8,
-    data: UnsafeCell<T>,
+    data: B::UnsafeCell<T>,
 }
 
 // SAFETY: Same reasoning as SpinLock — atomic ops ensure exclusive access.
-unsafe impl<T: Send> Send for IrqSpinLock<T> {}
-unsafe impl<T: Send> Sync for IrqSpinLock<T> {}
+unsafe impl<T: Send, B: Backend> Send for IrqSpinLockInner<T, B> {}
+unsafe impl<T: Send, B: Backend> Sync for IrqSpinLockInner<T, B> {}
+
+// ─── Const constructors (CoreBackend only) ────────────────────────────
 
 impl<T> IrqSpinLock<T> {
-    maybe_const_fn! {
-        /// Creates a new unlocked `IrqSpinLock`.
-        pub fn new(value: T) -> Self {
-            Self {
-                locked: AtomicBool::new(false),
-                #[cfg(hadron_lockdep)]
-                name: "<unnamed>",
-                #[cfg(hadron_lockdep)]
-                level: 0,
-                data: UnsafeCell::new(value),
-            }
+    /// Creates a new unlocked `IrqSpinLock`.
+    pub const fn new(value: T) -> Self {
+        Self {
+            locked: core::sync::atomic::AtomicBool::new(false),
+            #[cfg(hadron_lockdep)]
+            name: "<unnamed>",
+            #[cfg(hadron_lockdep)]
+            level: 0,
+            data: core::cell::UnsafeCell::new(value),
         }
     }
 
-    maybe_const_fn! {
-        /// Creates a new unlocked `IrqSpinLock` with a name for lockdep diagnostics.
-        pub fn named(name: &'static str, value: T) -> Self {
-            let _ = name;
-            Self {
-                locked: AtomicBool::new(false),
-                #[cfg(hadron_lockdep)]
-                name,
-                #[cfg(hadron_lockdep)]
-                level: 0,
-                data: UnsafeCell::new(value),
-            }
+    /// Creates a new unlocked `IrqSpinLock` with a name for lockdep diagnostics.
+    pub const fn named(name: &'static str, value: T) -> Self {
+        let _ = name;
+        Self {
+            locked: core::sync::atomic::AtomicBool::new(false),
+            #[cfg(hadron_lockdep)]
+            name,
+            #[cfg(hadron_lockdep)]
+            level: 0,
+            data: core::cell::UnsafeCell::new(value),
         }
     }
 
-    maybe_const_fn! {
-        /// Creates a new unlocked `IrqSpinLock` with a name and lock ordering level.
-        ///
-        /// `level` is used for lockdep ordering checks: a lock at level N may
-        /// only be acquired while holding locks at levels <= N.
-        /// Level 0 means "unassigned" (no ordering check).
-        pub fn leveled(name: &'static str, level: u8, value: T) -> Self {
-            let _ = (name, level);
-            Self {
-                locked: AtomicBool::new(false),
-                #[cfg(hadron_lockdep)]
-                name,
-                #[cfg(hadron_lockdep)]
-                level,
-                data: UnsafeCell::new(value),
-            }
+    /// Creates a new unlocked `IrqSpinLock` with a name and lock ordering level.
+    ///
+    /// `level` is used for lockdep ordering checks: a lock at level N may
+    /// only be acquired while holding locks at levels <= N.
+    /// Level 0 means "unassigned" (no ordering check).
+    pub const fn leveled(name: &'static str, level: u8, value: T) -> Self {
+        let _ = (name, level);
+        Self {
+            locked: core::sync::atomic::AtomicBool::new(false),
+            #[cfg(hadron_lockdep)]
+            name,
+            #[cfg(hadron_lockdep)]
+            level,
+            data: core::cell::UnsafeCell::new(value),
         }
     }
+}
 
+// ─── Generic non-const constructor ────────────────────────────────────
+
+impl<T, B: Backend> IrqSpinLockInner<T, B> {
+    /// Creates a new unlocked `IrqSpinLockInner` using backend factory functions.
+    pub fn new_with_backend(value: T) -> Self {
+        Self {
+            locked: B::new_atomic_bool(false),
+            #[cfg(hadron_lockdep)]
+            name: "<unnamed>",
+            #[cfg(hadron_lockdep)]
+            level: 0,
+            data: B::new_unsafe_cell(value),
+        }
+    }
+}
+
+// ─── Algorithm (generic over B: IrqBackend) ───────────────────────────
+
+impl<T, B: IrqBackend> IrqSpinLockInner<T, B> {
     /// Acquires the lock, disabling interrupts first.
-    pub fn lock(&self) -> IrqSpinLockGuard<'_, T> {
+    pub fn lock(&self) -> IrqSpinLockGuardInner<'_, T, B> {
         // Save current RFLAGS and disable interrupts.
-        let saved_flags = save_flags_and_cli();
+        let saved_flags = B::save_flags_and_cli();
 
         #[cfg(hadron_lock_stress)]
         super::stress::stress_delay();
@@ -154,7 +182,7 @@ impl<T> IrqSpinLock<T> {
                 #[cfg(hadron_lockdep)]
                 let class = self.lockdep_acquire();
 
-                return IrqSpinLockGuard {
+                return IrqSpinLockGuardInner {
                     lock: self,
                     saved_flags,
                     #[cfg(hadron_lockdep)]
@@ -162,14 +190,14 @@ impl<T> IrqSpinLock<T> {
                 };
             }
             while self.locked.load(Ordering::Relaxed) {
-                super::spin_wait_hint();
+                B::spin_wait_hint();
             }
         }
     }
 
     /// Attempts to acquire the lock without blocking.
-    pub fn try_lock(&self) -> Option<IrqSpinLockGuard<'_, T>> {
-        let saved_flags = save_flags_and_cli();
+    pub fn try_lock(&self) -> Option<IrqSpinLockGuardInner<'_, T, B>> {
+        let saved_flags = B::save_flags_and_cli();
         if self
             .locked
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
@@ -181,7 +209,7 @@ impl<T> IrqSpinLock<T> {
             #[cfg(hadron_lockdep)]
             let class = self.lockdep_acquire();
 
-            Some(IrqSpinLockGuard {
+            Some(IrqSpinLockGuardInner {
                 lock: self,
                 saved_flags,
                 #[cfg(hadron_lockdep)]
@@ -189,7 +217,7 @@ impl<T> IrqSpinLock<T> {
             })
         } else {
             // Failed — restore flags.
-            restore_flags(saved_flags);
+            B::restore_flags(saved_flags);
             None
         }
     }
@@ -208,15 +236,17 @@ impl<T> IrqSpinLock<T> {
     }
 }
 
+// ─── Guard ────────────────────────────────────────────────────────────
+
 /// RAII guard that restores interrupt state on drop.
-pub struct IrqSpinLockGuard<'a, T> {
-    lock: &'a IrqSpinLock<T>,
+pub struct IrqSpinLockGuardInner<'a, T, B: IrqBackend> {
+    lock: &'a IrqSpinLockInner<T, B>,
     saved_flags: u64,
     #[cfg(hadron_lockdep)]
     class: LockClassId,
 }
 
-impl<T> Deref for IrqSpinLockGuard<'_, T> {
+impl<T, B: IrqBackend> Deref for IrqSpinLockGuardInner<'_, T, B> {
     type Target = T;
     fn deref(&self) -> &T {
         // SAFETY: The lock is held, so we have exclusive access to the data.
@@ -224,14 +254,14 @@ impl<T> Deref for IrqSpinLockGuard<'_, T> {
     }
 }
 
-impl<T> DerefMut for IrqSpinLockGuard<'_, T> {
+impl<T, B: IrqBackend> DerefMut for IrqSpinLockGuardInner<'_, T, B> {
     fn deref_mut(&mut self) -> &mut T {
         // SAFETY: The lock is held, so we have exclusive access to the data.
         self.lock.data.with_mut(|ptr| unsafe { &mut *ptr })
     }
 }
 
-impl<T> Drop for IrqSpinLockGuard<'_, T> {
+impl<T, B: IrqBackend> Drop for IrqSpinLockGuardInner<'_, T, B> {
     fn drop(&mut self) {
         self.lock.locked.store(false, Ordering::Release);
 
@@ -246,105 +276,30 @@ impl<T> Drop for IrqSpinLockGuard<'_, T> {
         #[cfg(all(hadron_lock_debug, target_os = "none"))]
         decrement_irq_depth();
 
-        restore_flags(self.saved_flags);
+        B::restore_flags(self.saved_flags);
     }
 }
 
 /// !Send — must not be sent across threads (interrupt state is per-CPU).
-impl<T> !Send for IrqSpinLockGuard<'_, T> {}
+impl<T, B: IrqBackend> !Send for IrqSpinLockGuardInner<'_, T, B> {}
 
-#[cfg(all(target_os = "none", target_arch = "x86_64"))]
-#[inline]
-fn save_flags_and_cli() -> u64 {
-    let flags: u64;
-    // SAFETY: Reading RFLAGS and disabling interrupts is safe in kernel mode.
-    unsafe {
-        core::arch::asm!(
-            "pushfq",
-            "pop {}",
-            "cli",
-            out(reg) flags,
-            options(nomem),
-        );
-    }
-    flags
-}
-
-#[cfg(all(target_os = "none", target_arch = "x86_64"))]
-#[inline]
-fn restore_flags(flags: u64) {
-    // Only restore the IF bit — push full flags and use popfq.
-    if flags & (1 << 9) != 0 {
-        // SAFETY: Re-enabling interrupts is safe; we are restoring a previous state.
-        unsafe {
-            core::arch::asm!("sti", options(nomem, nostack, preserves_flags));
-        }
-    }
-}
-
-#[cfg(all(target_os = "none", target_arch = "aarch64"))]
-#[inline]
-fn save_flags_and_cli() -> u64 {
-    let flags: u64;
-    // SAFETY: Reading DAIF and masking interrupts is safe in kernel mode.
-    unsafe {
-        core::arch::asm!(
-            "mrs {}, DAIF",
-            "msr DAIFSet, #0xf",
-            out(reg) flags,
-            options(nomem),
-        );
-    }
-    flags
-}
-
-#[cfg(all(target_os = "none", target_arch = "aarch64"))]
-#[inline]
-fn restore_flags(flags: u64) {
-    // SAFETY: Restoring DAIF is safe; we are restoring a previous state.
-    unsafe {
-        core::arch::asm!(
-            "msr DAIF, {}",
-            in(reg) flags,
-            options(nomem, nostack, preserves_flags),
-        );
-    }
-}
-
-#[cfg(all(not(target_os = "none"), not(loom)))]
-#[inline]
-fn save_flags_and_cli() -> u64 {
-    0
-}
-
-#[cfg(all(not(target_os = "none"), not(loom)))]
-#[inline]
-fn restore_flags(_flags: u64) {}
-
-#[cfg(loom)]
-#[inline]
-fn save_flags_and_cli() -> u64 {
-    super::loom_mock::mock_save_flags_and_cli()
-}
-
-#[cfg(loom)]
-#[inline]
-fn restore_flags(flags: u64) {
-    super::loom_mock::mock_restore_flags(flags);
-}
+// ─── Tests ────────────────────────────────────────────────────────────
 
 #[cfg(loom)]
 mod loom_tests {
     use loom::sync::Arc;
     use loom::thread;
 
-    use super::super::loom_mock;
-    use super::IrqSpinLock;
+    use super::IrqSpinLockInner;
+    use crate::sync::backend::LoomBackend;
+    use crate::sync::loom_mock;
+
+    type LoomIrqSpinLock<T> = IrqSpinLockInner<T, LoomBackend>;
 
     #[test]
     fn loom_irq_spinlock_mutual_exclusion() {
         loom::model(|| {
-            let lock = Arc::new(IrqSpinLock::new(0usize));
+            let lock = Arc::new(LoomIrqSpinLock::new_with_backend(0usize));
 
             let threads: Vec<_> = (0..2)
                 .map(|_| {
@@ -369,7 +324,7 @@ mod loom_tests {
     #[test]
     fn loom_irq_spinlock_interrupt_state() {
         loom::model(|| {
-            let lock = IrqSpinLock::new(42usize);
+            let lock = LoomIrqSpinLock::new_with_backend(42usize);
 
             // Interrupts start enabled.
             assert!(loom_mock::mock_irq_enabled());

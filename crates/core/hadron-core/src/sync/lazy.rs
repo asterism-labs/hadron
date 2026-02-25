@@ -5,9 +5,9 @@
 
 use core::mem::MaybeUninit;
 use core::ops::Deref;
+use core::sync::atomic::Ordering;
 
-use super::atomic::{AtomicU8, Ordering};
-use super::cell::UnsafeCell;
+use super::backend::{AtomicIntOps, Backend, CoreBackend, UnsafeCellOps};
 
 const UNINIT: u8 = 0;
 const INITIALIZING: u8 = 1;
@@ -19,6 +19,8 @@ const READY: u8 = 2;
 /// It exists so that if this code is ever used in a test harness with
 /// `panic = unwind`, waiters don't spin forever.
 const POISONED: u8 = 3;
+
+// ─── Type alias ───────────────────────────────────────────────────────
 
 /// A value that is initialized on first access.
 ///
@@ -32,29 +34,30 @@ const POISONED: u8 = 3;
 /// configuration this is moot — the kernel halts on the first panic — but
 /// the poisoning logic provides defense-in-depth for non-abort contexts
 /// (e.g. host-side unit tests).
-pub struct LazyLock<T, F = fn() -> T> {
-    state: AtomicU8,
-    value: UnsafeCell<MaybeUninit<T>>,
-    init: UnsafeCell<Option<F>>,
+pub type LazyLock<T, F = fn() -> T> = LazyLockInner<T, F, CoreBackend>;
+
+// ─── Generic inner type ───────────────────────────────────────────────
+
+/// Backend-generic lazy lock.
+pub struct LazyLockInner<T, F, B: Backend> {
+    state: B::AtomicU8,
+    value: B::UnsafeCell<MaybeUninit<T>>,
+    init: B::UnsafeCell<Option<F>>,
 }
 
 // SAFETY: The atomic state machine ensures that the value is fully initialized
 // before any thread can read it, and that the init closure is consumed exactly
 // once.
-unsafe impl<T: Send + Sync, F: Send> Send for LazyLock<T, F> {}
-unsafe impl<T: Send + Sync, F: Send> Sync for LazyLock<T, F> {}
+unsafe impl<T: Send + Sync, F: Send, B: Backend> Send for LazyLockInner<T, F, B> {}
+unsafe impl<T: Send + Sync, F: Send, B: Backend> Sync for LazyLockInner<T, F, B> {}
 
 /// Guard that poisons the `LazyLock` if dropped without completing init.
-///
-/// On successful initialization, the caller calls [`InitGuard::defuse`] to
-/// prevent poisoning. If the init closure panics (unwind), the `Drop` impl
-/// transitions the state to `POISONED`.
-struct InitGuard<'a> {
-    state: &'a AtomicU8,
+struct InitGuard<'a, B: Backend> {
+    state: &'a B::AtomicU8,
 }
 
-impl<'a> InitGuard<'a> {
-    fn new(state: &'a AtomicU8) -> Self {
+impl<'a, B: Backend> InitGuard<'a, B> {
+    fn new(state: &'a B::AtomicU8) -> Self {
         Self { state }
     }
 
@@ -64,24 +67,41 @@ impl<'a> InitGuard<'a> {
     }
 }
 
-impl Drop for InitGuard<'_> {
+impl<B: Backend> Drop for InitGuard<'_, B> {
     fn drop(&mut self) {
         self.state.store(POISONED, Ordering::Release);
     }
 }
 
+// ─── Const constructor (CoreBackend only) ─────────────────────────────
+
 impl<T, F: FnOnce() -> T> LazyLock<T, F> {
-    maybe_const_fn! {
-        /// Creates a new `LazyLock` with the given initializer.
-        pub fn new(init: F) -> Self {
-            Self {
-                state: AtomicU8::new(UNINIT),
-                value: UnsafeCell::new(MaybeUninit::uninit()),
-                init: UnsafeCell::new(Some(init)),
-            }
+    /// Creates a new `LazyLock` with the given initializer.
+    pub const fn new(init: F) -> Self {
+        Self {
+            state: core::sync::atomic::AtomicU8::new(UNINIT),
+            value: core::cell::UnsafeCell::new(MaybeUninit::uninit()),
+            init: core::cell::UnsafeCell::new(Some(init)),
         }
     }
+}
 
+// ─── Generic non-const constructor ────────────────────────────────────
+
+impl<T, F: FnOnce() -> T, B: Backend> LazyLockInner<T, F, B> {
+    /// Creates a new `LazyLockInner` using backend factory functions.
+    pub fn new_with_backend(init: F) -> Self {
+        Self {
+            state: B::new_atomic_u8(UNINIT),
+            value: B::new_unsafe_cell(MaybeUninit::uninit()),
+            init: B::new_unsafe_cell(Some(init)),
+        }
+    }
+}
+
+// ─── Algorithm (generic over B) ───────────────────────────────────────
+
+impl<T, F: FnOnce() -> T, B: Backend> LazyLockInner<T, F, B> {
     /// Forces initialization if not already done, then returns a reference.
     fn force(&self) -> &T {
         match self.state.load(Ordering::Acquire) {
@@ -98,7 +118,7 @@ impl<T, F: FnOnce() -> T> LazyLock<T, F> {
                     .is_ok()
                 {
                     // We won the race — initialize.
-                    let guard = InitGuard::new(&self.state);
+                    let guard = InitGuard::<B>::new(&self.state);
                     // SAFETY: We are the only thread in INITIALIZING state.
                     let init = self.init.with_mut(|ptr| unsafe { (*ptr).take().unwrap() });
                     let value = init();
@@ -116,16 +136,11 @@ impl<T, F: FnOnce() -> T> LazyLock<T, F> {
         }
 
         // Spin until the value is ready (or poisoned).
-        //
-        // Safety argument for liveness: with `panic = abort` (our kernel
-        // target), a panic in the init closure halts the entire kernel, so
-        // we can never get stuck in INITIALIZING. The POISONED check below
-        // is defense-in-depth for non-abort environments (unit tests).
         loop {
             match self.state.load(Ordering::Acquire) {
                 READY => break,
                 POISONED => panic!("LazyLock poisoned: init closure panicked"),
-                _ => super::spin_wait_hint(),
+                _ => B::spin_wait_hint(),
             }
         }
         // SAFETY: State is READY.
@@ -133,7 +148,7 @@ impl<T, F: FnOnce() -> T> LazyLock<T, F> {
     }
 }
 
-impl<T, F: FnOnce() -> T> Deref for LazyLock<T, F> {
+impl<T, F: FnOnce() -> T, B: Backend> Deref for LazyLockInner<T, F, B> {
     type Target = T;
 
     #[inline]
@@ -142,7 +157,7 @@ impl<T, F: FnOnce() -> T> Deref for LazyLock<T, F> {
     }
 }
 
-impl<T, F> Drop for LazyLock<T, F> {
+impl<T, F, B: Backend> Drop for LazyLockInner<T, F, B> {
     fn drop(&mut self) {
         // Drop has exclusive access (&mut self), so Relaxed is sufficient.
         if self.state.load(Ordering::Relaxed) == READY {
@@ -151,6 +166,8 @@ impl<T, F> Drop for LazyLock<T, F> {
         }
     }
 }
+
+// ─── Tests ────────────────────────────────────────────────────────────
 
 #[cfg(all(test, not(loom)))]
 mod tests {
@@ -187,8 +204,11 @@ mod loom_tests {
     use loom::sync::Arc;
     use loom::thread;
 
-    use super::super::atomic::{AtomicUsize, Ordering};
-    use super::LazyLock;
+    use super::LazyLockInner;
+    use crate::sync::atomic::{AtomicUsize, Ordering};
+    use crate::sync::backend::LoomBackend;
+
+    type LoomLazyLock<T, F> = LazyLockInner<T, F, LoomBackend>;
 
     /// Verify that when multiple threads race to initialize a LazyLock,
     /// the init closure runs exactly once and all threads see the same value.
@@ -197,7 +217,7 @@ mod loom_tests {
         loom::model(|| {
             let init_count = Arc::new(AtomicUsize::new(0));
             let count_ref = init_count.clone();
-            let lazy = Arc::new(LazyLock::new(move || {
+            let lazy = Arc::new(LoomLazyLock::new_with_backend(move || {
                 count_ref.fetch_add(1, Ordering::SeqCst);
                 42usize
             }));
@@ -228,7 +248,7 @@ mod loom_tests {
     #[test]
     fn loom_lazy_deref_after_init() {
         loom::model(|| {
-            let lazy = Arc::new(LazyLock::new(|| 99usize));
+            let lazy = Arc::new(LoomLazyLock::new_with_backend(|| 99usize));
 
             let l1 = lazy.clone();
             let t = thread::spawn(move || {
@@ -240,5 +260,36 @@ mod loom_tests {
             // Reader sees the initialized value.
             assert_eq!(**lazy, 99);
         });
+    }
+}
+
+#[cfg(kani)]
+mod kani_proofs {
+    use super::*;
+
+    /// Verify the state machine transitions: UNINIT -> READY after deref.
+    #[kani::proof]
+    fn lazy_state_machine_completeness() {
+        let lazy = LazyLock::new(|| 42u32);
+        // Before access, state is UNINIT.
+        // After first access, should transition to READY.
+        let val = *lazy;
+        assert_eq!(val, 42);
+        // Second access should also return the same value (still READY).
+        assert_eq!(*lazy, 42);
+    }
+
+    /// Verify the init closure executes exactly once.
+    #[kani::proof]
+    fn lazy_init_once() {
+        static CALL_COUNT: core::sync::atomic::AtomicUsize =
+            core::sync::atomic::AtomicUsize::new(0);
+        let lazy = LazyLock::new(|| {
+            CALL_COUNT.fetch_add(1, core::sync::atomic::Ordering::SeqCst);
+            99u32
+        });
+        let _ = *lazy;
+        let _ = *lazy;
+        assert_eq!(CALL_COUNT.load(core::sync::atomic::Ordering::SeqCst), 1);
     }
 }

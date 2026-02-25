@@ -3,84 +3,114 @@
 //! Uses test-and-test-and-set (TTAS) to reduce cache-line contention.
 
 use core::ops::{Deref, DerefMut};
+use core::sync::atomic::Ordering;
 
-use super::atomic::{AtomicBool, Ordering};
-use super::cell::UnsafeCell;
+use super::backend::{AtomicBoolOps, Backend, CoreBackend, UnsafeCellOps};
 
 #[cfg(hadron_lockdep)]
 use super::lockdep::LockClassId;
+
+// ─── Type aliases ─────────────────────────────────────────────────────
 
 /// A spin-based mutual exclusion lock.
 ///
 /// Uses test-and-test-and-set (TTAS) to reduce cache-line contention.
 /// Const-constructable so it can be placed in `static` items.
-pub struct SpinLock<T> {
-    locked: AtomicBool,
+pub type SpinLock<T> = SpinLockInner<T, CoreBackend>;
+
+/// RAII guard that releases the [`SpinLock`] when dropped.
+pub type SpinLockGuard<'a, T> = SpinLockGuardInner<'a, T, CoreBackend>;
+
+// ─── Generic inner type ───────────────────────────────────────────────
+
+/// Backend-generic spin lock.
+///
+/// Use [`SpinLock`] (the [`CoreBackend`] alias) in production code.
+pub struct SpinLockInner<T, B: Backend> {
+    locked: B::AtomicBool,
     #[cfg(hadron_lockdep)]
     name: &'static str,
     #[cfg(hadron_lockdep)]
     level: u8,
-    data: UnsafeCell<T>,
+    data: B::UnsafeCell<T>,
 }
 
 // SAFETY: The SpinLock ensures exclusive access to `T` via atomic operations.
 // `T: Send` is required because the data may be accessed from different threads.
-unsafe impl<T: Send> Send for SpinLock<T> {}
-unsafe impl<T: Send> Sync for SpinLock<T> {}
+unsafe impl<T: Send, B: Backend> Send for SpinLockInner<T, B> {}
+unsafe impl<T: Send, B: Backend> Sync for SpinLockInner<T, B> {}
+
+// ─── Const constructors (CoreBackend only) ────────────────────────────
 
 impl<T> SpinLock<T> {
-    maybe_const_fn! {
-        /// Creates a new unlocked `SpinLock` wrapping `value`.
-        pub fn new(value: T) -> Self {
-            Self {
-                locked: AtomicBool::new(false),
-                #[cfg(hadron_lockdep)]
-                name: "<unnamed>",
-                #[cfg(hadron_lockdep)]
-                level: 0,
-                data: UnsafeCell::new(value),
-            }
+    /// Creates a new unlocked `SpinLock` wrapping `value`.
+    pub const fn new(value: T) -> Self {
+        Self {
+            locked: core::sync::atomic::AtomicBool::new(false),
+            #[cfg(hadron_lockdep)]
+            name: "<unnamed>",
+            #[cfg(hadron_lockdep)]
+            level: 0,
+            data: core::cell::UnsafeCell::new(value),
         }
     }
 
-    maybe_const_fn! {
-        /// Creates a new unlocked `SpinLock` with a name for lockdep diagnostics.
-        pub fn named(name: &'static str, value: T) -> Self {
-            let _ = name;
-            Self {
-                locked: AtomicBool::new(false),
-                #[cfg(hadron_lockdep)]
-                name,
-                #[cfg(hadron_lockdep)]
-                level: 0,
-                data: UnsafeCell::new(value),
-            }
+    /// Creates a new unlocked `SpinLock` with a name for lockdep diagnostics.
+    pub const fn named(name: &'static str, value: T) -> Self {
+        let _ = name;
+        Self {
+            locked: core::sync::atomic::AtomicBool::new(false),
+            #[cfg(hadron_lockdep)]
+            name,
+            #[cfg(hadron_lockdep)]
+            level: 0,
+            data: core::cell::UnsafeCell::new(value),
         }
     }
 
-    maybe_const_fn! {
-        /// Creates a new unlocked `SpinLock` with a name and lock ordering level.
-        ///
-        /// `level` is used for lockdep ordering checks: a lock at level N may
-        /// only be acquired while holding locks at levels <= N.
-        /// Level 0 means "unassigned" (no ordering check).
-        pub fn leveled(name: &'static str, level: u8, value: T) -> Self {
-            let _ = (name, level);
-            Self {
-                locked: AtomicBool::new(false),
-                #[cfg(hadron_lockdep)]
-                name,
-                #[cfg(hadron_lockdep)]
-                level,
-                data: UnsafeCell::new(value),
-            }
+    /// Creates a new unlocked `SpinLock` with a name and lock ordering level.
+    ///
+    /// `level` is used for lockdep ordering checks: a lock at level N may
+    /// only be acquired while holding locks at levels <= N.
+    /// Level 0 means "unassigned" (no ordering check).
+    pub const fn leveled(name: &'static str, level: u8, value: T) -> Self {
+        let _ = (name, level);
+        Self {
+            locked: core::sync::atomic::AtomicBool::new(false),
+            #[cfg(hadron_lockdep)]
+            name,
+            #[cfg(hadron_lockdep)]
+            level,
+            data: core::cell::UnsafeCell::new(value),
         }
     }
+}
 
+// ─── Generic non-const constructor ────────────────────────────────────
+
+impl<T, B: Backend> SpinLockInner<T, B> {
+    /// Creates a new unlocked `SpinLockInner` using backend factory functions.
+    ///
+    /// For loom tests and other non-`CoreBackend` backends.
+    pub fn new_with_backend(value: T) -> Self {
+        Self {
+            locked: B::new_atomic_bool(false),
+            #[cfg(hadron_lockdep)]
+            name: "<unnamed>",
+            #[cfg(hadron_lockdep)]
+            level: 0,
+            data: B::new_unsafe_cell(value),
+        }
+    }
+}
+
+// ─── Algorithm (generic over B) ───────────────────────────────────────
+
+impl<T, B: Backend> SpinLockInner<T, B> {
     /// Acquires the lock, spinning until it becomes available.
     ///
-    /// Returns a [`SpinLockGuard`] that releases the lock when dropped.
-    pub fn lock(&self) -> SpinLockGuard<'_, T> {
+    /// Returns a [`SpinLockGuardInner`] that releases the lock when dropped.
+    pub fn lock(&self) -> SpinLockGuardInner<'_, T, B> {
         #[cfg(hadron_lock_debug)]
         {
             if super::irq_spinlock::irq_lock_depth() != 0 {
@@ -101,7 +131,7 @@ impl<T> SpinLock<T> {
                 #[cfg(hadron_lockdep)]
                 let class = self.lockdep_acquire();
 
-                return SpinLockGuard {
+                return SpinLockGuardInner {
                     lock: self,
                     #[cfg(hadron_lockdep)]
                     class,
@@ -110,7 +140,7 @@ impl<T> SpinLock<T> {
 
             // TTAS: spin on a read (shared cache line) until it looks free.
             while self.locked.load(Ordering::Relaxed) {
-                super::spin_wait_hint();
+                B::spin_wait_hint();
             }
         }
     }
@@ -119,7 +149,7 @@ impl<T> SpinLock<T> {
     ///
     /// Returns `Some(guard)` if the lock was acquired, `None` if it was already held.
     /// Useful in panic handlers where blocking would risk deadlock.
-    pub fn try_lock(&self) -> Option<SpinLockGuard<'_, T>> {
+    pub fn try_lock(&self) -> Option<SpinLockGuardInner<'_, T, B>> {
         if self
             .locked
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
@@ -128,7 +158,7 @@ impl<T> SpinLock<T> {
             #[cfg(hadron_lockdep)]
             let class = self.lockdep_acquire();
 
-            Some(SpinLockGuard {
+            Some(SpinLockGuardInner {
                 lock: self,
                 #[cfg(hadron_lockdep)]
                 class,
@@ -143,14 +173,14 @@ impl<T> SpinLock<T> {
     /// Only for locks known-safe to hold with interrupts disabled — specifically
     /// the heap allocator, which may be entered from any context including
     /// `IrqSpinLock` critical sections that allocate.
-    pub fn lock_unchecked(&self) -> SpinLockGuard<'_, T> {
+    pub fn lock_unchecked(&self) -> SpinLockGuardInner<'_, T, B> {
         loop {
             if self
                 .locked
                 .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
                 .is_ok()
             {
-                return SpinLockGuard {
+                return SpinLockGuardInner {
                     lock: self,
                     #[cfg(hadron_lockdep)]
                     class: LockClassId::NONE,
@@ -158,7 +188,7 @@ impl<T> SpinLock<T> {
             }
 
             while self.locked.load(Ordering::Relaxed) {
-                super::spin_wait_hint();
+                B::spin_wait_hint();
             }
         }
     }
@@ -188,27 +218,29 @@ impl<T> SpinLock<T> {
     }
 }
 
-/// RAII guard that releases the [`SpinLock`] when dropped.
-pub struct SpinLockGuard<'a, T> {
-    lock: &'a SpinLock<T>,
+// ─── Guard ────────────────────────────────────────────────────────────
+
+/// RAII guard that releases the [`SpinLockInner`] when dropped.
+pub struct SpinLockGuardInner<'a, T, B: Backend> {
+    lock: &'a SpinLockInner<T, B>,
     #[cfg(hadron_lockdep)]
     class: LockClassId,
 }
 
 // !Send — holding a SpinLock guard across .await would block other
 // tasks from acquiring the lock while the holding task is suspended.
-impl<T> !Send for SpinLockGuard<'_, T> {}
+impl<T, B: Backend> !Send for SpinLockGuardInner<'_, T, B> {}
 
-impl<'a, T> SpinLockGuard<'a, T> {
-    /// Returns a reference to the underlying [`SpinLock`].
+impl<'a, T, B: Backend> SpinLockGuardInner<'a, T, B> {
+    /// Returns a reference to the underlying [`SpinLockInner`].
     ///
     /// Used by [`Condvar::wait`](super::Condvar::wait) to re-acquire after release.
-    pub fn lock_ref(&self) -> &'a SpinLock<T> {
+    pub fn lock_ref(&self) -> &'a SpinLockInner<T, B> {
         self.lock
     }
 }
 
-impl<T> Deref for SpinLockGuard<'_, T> {
+impl<T, B: Backend> Deref for SpinLockGuardInner<'_, T, B> {
     type Target = T;
 
     fn deref(&self) -> &T {
@@ -217,14 +249,14 @@ impl<T> Deref for SpinLockGuard<'_, T> {
     }
 }
 
-impl<T> DerefMut for SpinLockGuard<'_, T> {
+impl<T, B: Backend> DerefMut for SpinLockGuardInner<'_, T, B> {
     fn deref_mut(&mut self) -> &mut T {
         // SAFETY: The guard guarantees exclusive access while it exists.
         self.lock.data.with_mut(|ptr| unsafe { &mut *ptr })
     }
 }
 
-impl<T> Drop for SpinLockGuard<'_, T> {
+impl<T, B: Backend> Drop for SpinLockGuardInner<'_, T, B> {
     fn drop(&mut self) {
         self.lock.locked.store(false, Ordering::Release);
 
@@ -237,6 +269,8 @@ impl<T> Drop for SpinLockGuard<'_, T> {
         }
     }
 }
+
+// ─── Tests ────────────────────────────────────────────────────────────
 
 #[cfg(all(test, not(loom)))]
 mod tests {
@@ -324,12 +358,15 @@ mod loom_tests {
     use loom::sync::Arc;
     use loom::thread;
 
-    use super::SpinLock;
+    use super::SpinLockInner;
+    use crate::sync::backend::LoomBackend;
+
+    type LoomSpinLock<T> = SpinLockInner<T, LoomBackend>;
 
     #[test]
     fn loom_mutual_exclusion() {
         loom::model(|| {
-            let lock = Arc::new(SpinLock::new(0usize));
+            let lock = Arc::new(LoomSpinLock::new_with_backend(0usize));
 
             let threads: Vec<_> = (0..2)
                 .map(|_| {
@@ -354,7 +391,7 @@ mod loom_tests {
     #[test]
     fn loom_try_lock_contention() {
         loom::model(|| {
-            let lock = Arc::new(SpinLock::new(0usize));
+            let lock = Arc::new(LoomSpinLock::new_with_backend(0usize));
 
             let l1 = lock.clone();
             let t1 = thread::spawn(move || {
@@ -378,5 +415,36 @@ mod loom_tests {
             // t1 always adds 1; t2 adds 10 only if it got the lock
             assert!(val == 1 || val == 11);
         });
+    }
+}
+
+#[cfg(kani)]
+mod kani_proofs {
+    use super::*;
+
+    /// Verify that `try_lock` returns `None` when the lock is already held.
+    #[kani::proof]
+    fn spinlock_try_lock_semantics() {
+        let lock = SpinLock::new(0u32);
+        let guard = lock.try_lock();
+        assert!(guard.is_some());
+        // While held, a second try_lock must fail.
+        assert!(lock.try_lock().is_none());
+        drop(guard);
+        // After release, try_lock must succeed again.
+        assert!(lock.try_lock().is_some());
+    }
+
+    /// Verify that data written under the lock is visible after re-acquisition.
+    #[kani::proof]
+    fn spinlock_protects_data() {
+        let val: u32 = kani::any();
+        let lock = SpinLock::new(0u32);
+        {
+            let mut guard = lock.lock();
+            *guard = val;
+        }
+        let guard = lock.lock();
+        assert_eq!(*guard, val);
     }
 }

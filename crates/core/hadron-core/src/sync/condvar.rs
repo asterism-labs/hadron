@@ -10,10 +10,15 @@ use core::task::{Context, Poll, Waker};
 
 use planck_noalloc::vec::ArrayVec;
 
-use super::{IrqSpinLock, MutexGuard, SpinLockGuard};
+use super::backend::{CoreBackend, IrqBackend};
+use super::irq_spinlock::{IrqSpinLock, IrqSpinLockInner};
+use super::mutex::MutexGuardInner;
+use super::spinlock::SpinLockGuardInner;
 
 /// Maximum number of waiters per condition variable.
 const MAX_WAITERS: usize = 32;
+
+// ─── Type aliases ─────────────────────────────────────────────────────
 
 /// A condition variable.
 ///
@@ -39,21 +44,41 @@ const MAX_WAITERS: usize = 32;
 /// *READY.lock() = true;
 /// COND.notify_one();
 /// ```
-pub struct Condvar {
-    waiters: IrqSpinLock<ArrayVec<Waker, MAX_WAITERS>>,
+pub type Condvar = CondvarInner<CoreBackend>;
+
+// ─── Generic inner type ───────────────────────────────────────────────
+
+/// Backend-generic condition variable.
+pub struct CondvarInner<B: IrqBackend> {
+    waiters: IrqSpinLockInner<ArrayVec<Waker, MAX_WAITERS>, B>,
 }
 
+// ─── Const constructor (CoreBackend only) ─────────────────────────────
+
 impl Condvar {
-    maybe_const_fn! {
-        /// Creates a new condition variable.
-        pub fn new() -> Self {
-            Self {
-                waiters: IrqSpinLock::new(ArrayVec::new()),
-            }
+    /// Creates a new condition variable.
+    pub const fn new() -> Self {
+        Self {
+            waiters: IrqSpinLock::new(ArrayVec::new()),
         }
     }
+}
 
-    /// Atomically releases the [`SpinLockGuard`], waits for notification,
+// ─── Generic non-const constructor ────────────────────────────────────
+
+impl<B: IrqBackend> CondvarInner<B> {
+    /// Creates a new condition variable using backend factory functions.
+    pub fn new_with_backend() -> Self {
+        Self {
+            waiters: IrqSpinLockInner::new_with_backend(ArrayVec::new()),
+        }
+    }
+}
+
+// ─── Algorithm (generic over B) ───────────────────────────────────────
+
+impl<B: IrqBackend> CondvarInner<B> {
+    /// Atomically releases the [`SpinLockGuardInner`], waits for notification,
     /// then re-acquires and returns a new guard.
     ///
     /// The caller should always recheck the predicate in a loop:
@@ -62,7 +87,7 @@ impl Condvar {
     ///     guard = condvar.wait(guard);
     /// }
     /// ```
-    pub fn wait<'a, T>(&self, guard: SpinLockGuard<'a, T>) -> SpinLockGuard<'a, T> {
+    pub fn wait<'a, T>(&self, guard: SpinLockGuardInner<'a, T, B>) -> SpinLockGuardInner<'a, T, B> {
         // Get the lock reference before dropping the guard.
         let lock = guard.lock_ref();
 
@@ -79,19 +104,22 @@ impl Condvar {
             if let Some(new_guard) = lock.try_lock() {
                 return new_guard;
             }
-            super::spin_wait_hint();
+            B::spin_wait_hint();
         }
     }
 
     /// Asynchronously waits for notification, yielding the current task.
     ///
-    /// Releases the [`MutexGuard`], registers a waker, and yields. When
+    /// Releases the [`MutexGuardInner`], registers a waker, and yields. When
     /// notified, re-acquires the mutex and returns a new guard.
-    pub async fn wait_async<'a, T>(&self, guard: MutexGuard<'a, T>) -> MutexGuard<'a, T> {
+    pub async fn wait_async<'a, T>(
+        &self,
+        guard: MutexGuardInner<'a, T, B>,
+    ) -> MutexGuardInner<'a, T, B> {
         let mutex = guard.mutex_ref();
 
         // Register waker before releasing the lock to avoid lost wakeup.
-        let wait = CondvarWaitFuture {
+        let wait = CondvarWaitFutureInner {
             condvar: self,
             registered: false,
         };
@@ -136,13 +164,15 @@ impl Condvar {
     }
 }
 
+// ─── Wait future ──────────────────────────────────────────────────────
+
 /// Future that waits for a condvar notification.
-struct CondvarWaitFuture<'a> {
-    condvar: &'a Condvar,
+struct CondvarWaitFutureInner<'a, B: IrqBackend> {
+    condvar: &'a CondvarInner<B>,
     registered: bool,
 }
 
-impl Future for CondvarWaitFuture<'_> {
+impl<B: IrqBackend> Future for CondvarWaitFutureInner<'_, B> {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
@@ -158,6 +188,8 @@ impl Future for CondvarWaitFuture<'_> {
         }
     }
 }
+
+// ─── Tests ────────────────────────────────────────────────────────────
 
 #[cfg(all(test, not(loom)))]
 mod tests {
@@ -203,18 +235,21 @@ mod loom_tests {
     use loom::thread;
 
     use super::super::atomic::Ordering;
+    use super::super::backend::LoomBackend;
     use super::super::test_waker::counting_waker;
-    use super::{Condvar, CondvarWaitFuture};
+    use super::{CondvarInner, CondvarWaitFutureInner};
+
+    type LoomCondvar = CondvarInner<LoomBackend>;
 
     /// Verify notify_one wakes a registered waiter under all interleavings.
     #[test]
     fn loom_condvar_notify_wakes_waiter() {
         loom::model(|| {
-            let cv = Arc::new(Condvar::new());
+            let cv = Arc::new(LoomCondvar::new_with_backend());
             let (waker, count) = counting_waker();
 
             // Poll the wait future once to register the waker.
-            let mut fut = CondvarWaitFuture {
+            let mut fut = CondvarWaitFutureInner {
                 condvar: &cv,
                 registered: false,
             };
@@ -236,12 +271,12 @@ mod loom_tests {
     #[test]
     fn loom_condvar_notify_all() {
         loom::model(|| {
-            let cv = Arc::new(Condvar::new());
+            let cv = Arc::new(LoomCondvar::new_with_backend());
             let (waker1, count1) = counting_waker();
             let (waker2, count2) = counting_waker();
 
-            // Register two waiters via CondvarWaitFuture.
-            let mut fut1 = CondvarWaitFuture {
+            // Register two waiters via CondvarWaitFutureInner.
+            let mut fut1 = CondvarWaitFutureInner {
                 condvar: &cv,
                 registered: false,
             };
@@ -251,7 +286,7 @@ mod loom_tests {
                 core::task::Poll::Pending
             ));
 
-            let mut fut2 = CondvarWaitFuture {
+            let mut fut2 = CondvarWaitFutureInner {
                 condvar: &cv,
                 registered: false,
             };

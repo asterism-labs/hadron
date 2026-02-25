@@ -5,10 +5,18 @@
 //! Also provides [`HeapWaitQueue`] for service-layer primitives that need
 //! unbounded capacity.
 //!
+//! # Backend trait system
+//!
+//! All primitives are generic over a [`backend::Backend`] (or
+//! [`backend::IrqBackend`]) trait, with concrete type aliases for
+//! production use (e.g. `SpinLock<T> = SpinLockInner<T, CoreBackend>`).
+//! This keeps `cfg(loom)` isolated to the [`backend`] module and enables
+//! formal verification with Kani.
+//!
 //! # Loom testing
 //!
-//! All primitives are built on the [`atomic`] and [`cell`] compat layers so
-//! they can be tested under [loom](https://docs.rs/loom) (`just loom`).
+//! All primitives can be tested under [loom](https://docs.rs/loom) (`just loom`)
+//! by instantiating their `Inner` types with [`backend::LoomBackend`].
 //!
 //! ## What loom verifies
 //!
@@ -29,10 +37,9 @@
 //! These hardware properties are tested by ktest integration tests
 //! (`just test --kernel-only`) running on real (emulated) hardware.
 
-#[macro_use]
-mod macros;
 pub mod atomic;
 mod atomic_fn;
+pub mod backend;
 pub mod cell;
 mod condvar;
 mod heap_waitqueue;
@@ -54,30 +61,17 @@ pub mod waitqueue;
 #[cfg(test)]
 pub(crate) mod test_waker;
 
-/// Yields execution in a spin-wait loop.
-///
-/// Under normal builds this emits a processor spin-wait hint
-/// (`core::hint::spin_loop()`). Under loom this yields to the
-/// scheduler (`loom::thread::yield_now()`) so other threads can
-/// make progress — loom's model checker cannot make forward progress
-/// through `spin_loop()` hints since they are invisible to its
-/// scheduler.
-#[inline(always)]
-fn spin_wait_hint() {
-    #[cfg(not(loom))]
-    core::hint::spin_loop();
-    #[cfg(loom)]
-    loom::thread::yield_now();
-}
-
 pub use atomic_fn::AtomicFn;
-pub use condvar::Condvar;
-pub use heap_waitqueue::{HeapWaitFuture, HeapWaitQueue};
-pub use irq_spinlock::{IrqSpinLock, IrqSpinLockGuard};
-pub use lazy::LazyLock;
-pub use mutex::{Mutex, MutexGuard, MutexLockFuture};
-pub use rwlock::{RwLock, RwLockReadGuard, RwLockWriteGuard};
-pub use semaphore::{Semaphore, SemaphoreAcquireFuture, SemaphorePermit};
-pub use seqlock::{SeqLock, SeqLockWriteGuard};
-pub use spinlock::{SpinLock, SpinLockGuard};
-pub use waitqueue::WaitQueue;
+pub use condvar::{Condvar, CondvarInner};
+pub use heap_waitqueue::{HeapWaitFuture, HeapWaitQueue, HeapWaitQueueInner};
+pub use irq_spinlock::{IrqSpinLock, IrqSpinLockGuard, IrqSpinLockGuardInner, IrqSpinLockInner};
+pub use lazy::{LazyLock, LazyLockInner};
+pub use mutex::{Mutex, MutexGuard, MutexGuardInner, MutexInner, MutexLockFuture};
+pub use rwlock::{
+    RwLock, RwLockInner, RwLockReadGuard, RwLockReadGuardInner, RwLockWriteGuard,
+    RwLockWriteGuardInner,
+};
+pub use semaphore::{Semaphore, SemaphoreAcquireFuture, SemaphoreInner, SemaphorePermit};
+pub use seqlock::{SeqLock, SeqLockInner, SeqLockWriteGuard, SeqLockWriteGuardInner};
+pub use spinlock::{SpinLock, SpinLockGuard, SpinLockGuardInner, SpinLockInner};
+pub use waitqueue::{WaitQueue, WaitQueueInner};
