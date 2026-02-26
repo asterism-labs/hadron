@@ -395,6 +395,76 @@ mod tests {
     }
 }
 
+#[cfg(shuttle)]
+mod shuttle_tests {
+    use shuttle::sync::Arc;
+    use shuttle::thread;
+
+    use super::RwLockInner;
+    use crate::sync::backend::ShuttleBackend;
+
+    type ShuttleRwLock<T> = RwLockInner<T, ShuttleBackend>;
+
+    #[test]
+    fn shuttle_concurrent_readers() {
+        shuttle::check_random(
+            || {
+                let lock = Arc::new(ShuttleRwLock::new_with_backend(42usize));
+
+                let threads: Vec<_> = (0..4)
+                    .map(|_| {
+                        let lock = lock.clone();
+                        thread::spawn(move || {
+                            let guard = lock.read();
+                            assert_eq!(*guard, 42);
+                        })
+                    })
+                    .collect();
+
+                for t in threads {
+                    t.join().unwrap();
+                }
+            },
+            100,
+        );
+    }
+
+    #[test]
+    fn shuttle_readers_and_writer() {
+        shuttle::check_random(
+            || {
+                let lock = Arc::new(ShuttleRwLock::new_with_backend(0usize));
+
+                let w = {
+                    let lock = lock.clone();
+                    thread::spawn(move || {
+                        let mut guard = lock.write();
+                        *guard += 1;
+                    })
+                };
+
+                let readers: Vec<_> = (0..3)
+                    .map(|_| {
+                        let lock = lock.clone();
+                        thread::spawn(move || {
+                            let guard = lock.read();
+                            assert!(*guard <= 1);
+                        })
+                    })
+                    .collect();
+
+                w.join().unwrap();
+                for t in readers {
+                    t.join().unwrap();
+                }
+
+                assert_eq!(*lock.read(), 1);
+            },
+            100,
+        );
+    }
+}
+
 #[cfg(kani)]
 mod kani_proofs {
     use super::*;

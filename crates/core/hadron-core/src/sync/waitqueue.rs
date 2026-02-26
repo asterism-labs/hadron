@@ -291,3 +291,42 @@ mod loom_tests {
         });
     }
 }
+
+#[cfg(kani)]
+mod kani_proofs {
+    use super::*;
+    use core::task::{RawWaker, RawWakerVTable, Waker};
+
+    fn kani_noop_waker() -> Waker {
+        fn noop(_: *const ()) {}
+        fn clone(p: *const ()) -> RawWaker {
+            RawWaker::new(p, &VTABLE)
+        }
+        static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, noop, noop, noop);
+        // SAFETY: The vtable operations are all valid no-ops.
+        unsafe { Waker::from_raw(RawWaker::new(core::ptr::null(), &VTABLE)) }
+    }
+
+    /// Verify that `register_waker` respects the capacity limit.
+    #[kani::proof]
+    fn waitqueue_capacity_limit() {
+        let wq = WaitQueue::new();
+        // Fill to capacity — all registrations should succeed.
+        for _ in 0..MAX_WAITERS {
+            let waker = kani_noop_waker();
+            assert!(wq.register_waker(&waker));
+        }
+        // Next registration should fail (queue full).
+        let waker = kani_noop_waker();
+        assert!(!wq.register_waker(&waker));
+    }
+
+    /// Verify that wake/register on an empty queue do not panic.
+    #[kani::proof]
+    fn waitqueue_empty_ops() {
+        let wq = WaitQueue::new();
+        // Operations on an empty queue must be no-ops, never panic.
+        wq.wake_one();
+        wq.wake_all();
+    }
+}

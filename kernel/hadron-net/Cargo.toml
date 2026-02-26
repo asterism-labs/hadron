@@ -1,0 +1,19 @@
+[package]
+name = "hadron-net"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Network protocol stack for Hadron OS"
+
+[lib]
+bench = false
+doctest = false
+
+[dependencies]
+hadron-driver-api = { workspace = true }
+
+[lints]
+workspace = true

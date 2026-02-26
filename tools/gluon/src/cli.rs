@@ -60,6 +60,8 @@ pub enum Command {
     Bench(BenchArgs),
     /// Run Kani formal verification proofs on project crates.
     Kani(KaniArgs),
+    /// Run Shuttle randomized concurrency tests on project crates.
+    Shuttle(ShuttleArgs),
     /// Vendor external dependencies into vendor/.
     Vendor(VendorArgs),
     /// Analyze profiling data captured from kernel serial output.
@@ -142,6 +144,18 @@ pub struct KaniArgs {
     pub package: Option<String>,
 
     /// Extra arguments passed to cargo-kani after `--`.
+    #[arg(last = true)]
+    pub extra_args: Vec<String>,
+}
+
+/// Arguments for the `shuttle` subcommand.
+#[derive(Parser)]
+pub struct ShuttleArgs {
+    /// Only test a specific crate.
+    #[arg(long, short = 'p')]
+    pub package: Option<String>,
+
+    /// Extra arguments passed to cargo test after `--`.
     #[arg(last = true)]
     pub extra_args: Vec<String>,
 }

@@ -1,6 +1,6 @@
 //! Hardware resource types representing exclusive claims on I/O ports, MMIO regions, and IRQ lines.
 
-use crate::addr::{PhysAddr, VirtAddr};
+use hadron_core::addr::{PhysAddr, VirtAddr};
 
 /// An exclusive claim on a contiguous range of x86 I/O ports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

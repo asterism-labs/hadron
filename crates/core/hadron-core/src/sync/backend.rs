@@ -283,6 +283,20 @@ impl<T> UnsafeCellOps<T> for loom::cell::UnsafeCell<T> {
     }
 }
 
+// ─── Shuttle trait impls ─────────────────────────────────────────────
+
+#[cfg(shuttle)]
+impl_atomic_bool_ops!(shuttle::sync::atomic::AtomicBool);
+#[cfg(shuttle)]
+impl_atomic_int_ops!(shuttle::sync::atomic::AtomicU8, u8);
+#[cfg(shuttle)]
+impl_atomic_int_ops!(shuttle::sync::atomic::AtomicU32, u32);
+#[cfg(shuttle)]
+impl_atomic_int_ops!(shuttle::sync::atomic::AtomicUsize, usize);
+
+// ShuttleBackend uses core::cell::UnsafeCell, which already has
+// UnsafeCellOps implemented above.
+
 // ─── CoreBackend ──────────────────────────────────────────────────────
 
 /// Production backend using `core::sync::atomic` and `core::cell`.
@@ -469,5 +483,75 @@ impl IrqBackend for LoomBackend {
     #[inline]
     fn restore_flags(flags: u64) {
         super::loom_mock::mock_restore_flags(flags);
+    }
+}
+
+// ─── ShuttleBackend ──────────────────────────────────────────────────
+
+/// Shuttle random-testing backend using `shuttle::sync::atomic`.
+///
+/// Unlike loom (which exhaustively explores all interleavings), Shuttle uses
+/// randomized scheduling to cover large state spaces (3+ threads, many
+/// iterations) that would be infeasible under exhaustive exploration.
+///
+/// Shuttle has no cell model — `core::cell::UnsafeCell` is used directly.
+/// Cell-level data races are loom's domain; Shuttle tests focus on protocol
+/// correctness under realistic concurrency.
+#[cfg(shuttle)]
+pub struct ShuttleBackend;
+
+#[cfg(shuttle)]
+impl Backend for ShuttleBackend {
+    type AtomicBool = shuttle::sync::atomic::AtomicBool;
+    type AtomicU8 = shuttle::sync::atomic::AtomicU8;
+    type AtomicU32 = shuttle::sync::atomic::AtomicU32;
+    type AtomicUsize = shuttle::sync::atomic::AtomicUsize;
+    type UnsafeCell<T> = core::cell::UnsafeCell<T>;
+
+    #[inline]
+    fn new_atomic_bool(val: bool) -> Self::AtomicBool {
+        shuttle::sync::atomic::AtomicBool::new(val)
+    }
+    #[inline]
+    fn new_atomic_u8(val: u8) -> Self::AtomicU8 {
+        shuttle::sync::atomic::AtomicU8::new(val)
+    }
+    #[inline]
+    fn new_atomic_u32(val: u32) -> Self::AtomicU32 {
+        shuttle::sync::atomic::AtomicU32::new(val)
+    }
+    #[inline]
+    fn new_atomic_usize(val: usize) -> Self::AtomicUsize {
+        shuttle::sync::atomic::AtomicUsize::new(val)
+    }
+    #[inline]
+    fn new_unsafe_cell<T>(val: T) -> Self::UnsafeCell<T> {
+        core::cell::UnsafeCell::new(val)
+    }
+
+    #[inline]
+    fn fence(order: Ordering) {
+        shuttle::sync::atomic::fence(order);
+    }
+    #[inline]
+    fn compiler_fence(order: Ordering) {
+        // Shuttle does not intercept compiler fences; use core version.
+        core::sync::atomic::compiler_fence(order);
+    }
+    #[inline]
+    fn spin_wait_hint() {
+        shuttle::thread::yield_now();
+    }
+}
+
+#[cfg(shuttle)]
+impl IrqBackend for ShuttleBackend {
+    #[inline]
+    fn save_flags_and_cli() -> u64 {
+        super::shuttle_mock::mock_save_flags_and_cli()
+    }
+    #[inline]
+    fn restore_flags(flags: u64) {
+        super::shuttle_mock::mock_restore_flags(flags);
     }
 }

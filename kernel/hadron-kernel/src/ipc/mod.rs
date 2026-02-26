@@ -1,11 +1,13 @@
 //! Inter-process communication primitives.
 //!
-//! Provides channels for message-oriented IPC, pipes for byte-oriented IPC,
-//! and futex for fast userspace mutexes.
+//! Pure IPC logic (pipes, channels, services) lives in the `hadron-ipc` crate.
+//! This module re-exports those types and provides kernel-specific IPC
+//! (futex, shared memory) that depends on kernel internals.
 
-pub mod channel;
-pub(crate) mod circular_buffer;
+pub use hadron_ipc::channel;
+pub use hadron_ipc::circular_buffer;
+pub use hadron_ipc::pipe;
+pub use hadron_ipc::service;
+
 pub mod futex;
-pub mod pipe;
-pub mod service;
 pub mod shm;

@@ -10,8 +10,8 @@
 //! All primitives are generic over a [`backend::Backend`] (or
 //! [`backend::IrqBackend`]) trait, with concrete type aliases for
 //! production use (e.g. `SpinLock<T> = SpinLockInner<T, CoreBackend>`).
-//! This keeps `cfg(loom)` isolated to the [`backend`] module and enables
-//! formal verification with Kani.
+//! This keeps `cfg(loom)`/`cfg(shuttle)` isolated to the [`backend`]
+//! module and enables formal verification with Kani.
 //!
 //! # Loom testing
 //!
@@ -53,6 +53,8 @@ mod mutex;
 mod rwlock;
 mod semaphore;
 mod seqlock;
+#[cfg(shuttle)]
+mod shuttle_mock;
 mod spinlock;
 #[cfg(hadron_lock_stress)]
 pub mod stress;

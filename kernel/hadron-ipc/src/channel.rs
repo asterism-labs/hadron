@@ -16,8 +16,8 @@ use core::future::Future;
 use core::pin::Pin;
 use hadron_core::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::fs::{DirEntry, FsError, Inode, InodeType, Permissions};
-use crate::sync::{HeapWaitQueue, SpinLock};
+use hadron_core::sync::{HeapWaitQueue, SpinLock};
+use hadron_fs::{DirEntry, FsError, Inode, InodeType, Permissions};
 
 /// Maximum size of a single channel message in bytes.
 const MAX_MESSAGE_SIZE: usize = 4096;

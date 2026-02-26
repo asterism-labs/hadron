@@ -435,3 +435,111 @@ mod loom_tests {
         });
     }
 }
+
+#[cfg(shuttle)]
+mod shuttle_tests {
+    use shuttle::sync::Arc;
+    use shuttle::thread;
+
+    use super::MutexInner;
+    use crate::sync::backend::ShuttleBackend;
+
+    type ShuttleMutex<T> = MutexInner<T, ShuttleBackend>;
+
+    #[test]
+    fn shuttle_three_thread_mutual_exclusion() {
+        shuttle::check_random(
+            || {
+                let mutex = Arc::new(ShuttleMutex::new_with_backend(0usize));
+
+                let threads: Vec<_> = (0..3)
+                    .map(|_| {
+                        let mutex = mutex.clone();
+                        thread::spawn(move || {
+                            for _ in 0..5 {
+                                let mut guard = mutex.lock_sync();
+                                *guard += 1;
+                            }
+                        })
+                    })
+                    .collect();
+
+                for t in threads {
+                    t.join().unwrap();
+                }
+
+                assert_eq!(*mutex.lock_sync(), 15);
+            },
+            100,
+        );
+    }
+
+    #[test]
+    fn shuttle_try_lock_contention() {
+        shuttle::check_random(
+            || {
+                let mutex = Arc::new(ShuttleMutex::new_with_backend(0usize));
+
+                let threads: Vec<_> = (0..3)
+                    .map(|i| {
+                        let mutex = mutex.clone();
+                        thread::spawn(move || {
+                            if let Some(mut guard) = mutex.try_lock() {
+                                *guard += i + 1;
+                            }
+                        })
+                    })
+                    .collect();
+
+                for t in threads {
+                    t.join().unwrap();
+                }
+
+                // At least one thread succeeds; exact value depends on schedule.
+                let val = *mutex.lock_sync();
+                assert!(val > 0);
+            },
+            100,
+        );
+    }
+}
+
+#[cfg(kani)]
+mod kani_proofs {
+    use super::*;
+
+    /// Verify that `try_lock` returns `None` when the mutex is already held.
+    #[kani::proof]
+    fn mutex_try_lock_semantics() {
+        let mutex = Mutex::new(0u32);
+        let guard = mutex.try_lock();
+        assert!(guard.is_some());
+        // While held, a second try_lock must fail.
+        assert!(mutex.try_lock().is_none());
+        drop(guard);
+        // After release, try_lock must succeed again.
+        assert!(mutex.try_lock().is_some());
+    }
+
+    /// Verify that data written under the mutex is visible after re-acquisition.
+    #[kani::proof]
+    fn mutex_protects_data() {
+        let val: u32 = kani::any();
+        let mutex = Mutex::new(0u32);
+        {
+            let mut guard = mutex.try_lock().unwrap();
+            *guard = val;
+        }
+        let guard = mutex.try_lock().unwrap();
+        assert_eq!(*guard, val);
+    }
+
+    /// Verify that `lock_sync` acquires an uncontended mutex.
+    #[kani::proof]
+    fn mutex_lock_sync_uncontended() {
+        let val: u32 = kani::any();
+        let mutex = Mutex::new(val);
+        let guard = mutex.lock_sync();
+        assert_eq!(*guard, val);
+    }
+}

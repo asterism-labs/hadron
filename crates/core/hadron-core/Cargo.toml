@@ -19,6 +19,7 @@ planck-noalloc = { workspace = true }
 
 [dev-dependencies]
 loom = "0.7"
+shuttle = "0.8"
 
 [lints.rust]
 unsafe_op_in_unsafe_fn = "warn"
@@ -36,6 +37,7 @@ check-cfg = [
     'cfg(loom)',
     'cfg(miri)',
     'cfg(kani)',
+    'cfg(shuttle)',
 ]
 
 [lints.clippy]

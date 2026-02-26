@@ -418,6 +418,77 @@ mod loom_tests {
     }
 }
 
+#[cfg(shuttle)]
+mod shuttle_tests {
+    use shuttle::sync::Arc;
+    use shuttle::thread;
+
+    use super::SpinLockInner;
+    use crate::sync::backend::ShuttleBackend;
+
+    type ShuttleSpinLock<T> = SpinLockInner<T, ShuttleBackend>;
+
+    #[test]
+    fn shuttle_three_thread_mutual_exclusion() {
+        shuttle::check_random(
+            || {
+                let lock = Arc::new(ShuttleSpinLock::new_with_backend(0usize));
+
+                let threads: Vec<_> = (0..3)
+                    .map(|_| {
+                        let lock = lock.clone();
+                        thread::spawn(move || {
+                            for _ in 0..5 {
+                                let mut guard = lock.lock();
+                                *guard += 1;
+                            }
+                        })
+                    })
+                    .collect();
+
+                for t in threads {
+                    t.join().unwrap();
+                }
+
+                assert_eq!(*lock.lock(), 15);
+            },
+            100,
+        );
+    }
+
+    #[test]
+    fn shuttle_try_lock_three_threads() {
+        shuttle::check_random(
+            || {
+                let lock = Arc::new(ShuttleSpinLock::new_with_backend(0usize));
+                let success_count = Arc::new(shuttle::sync::atomic::AtomicUsize::new(0));
+
+                let threads: Vec<_> = (0..3)
+                    .map(|_| {
+                        let lock = lock.clone();
+                        let count = success_count.clone();
+                        thread::spawn(move || {
+                            if let Some(mut guard) = lock.try_lock() {
+                                *guard += 1;
+                                count.fetch_add(1, core::sync::atomic::Ordering::SeqCst);
+                            }
+                        })
+                    })
+                    .collect();
+
+                for t in threads {
+                    t.join().unwrap();
+                }
+
+                let val = *lock.lock();
+                let successes = success_count.load(core::sync::atomic::Ordering::SeqCst);
+                assert_eq!(val, successes);
+            },
+            100,
+        );
+    }
+}
+
 #[cfg(kani)]
 mod kani_proofs {
     use super::*;

@@ -1,6 +1,6 @@
 //! Framebuffer interface trait and associated types.
 
-use crate::addr::{PhysAddr, VirtAddr};
+use hadron_core::addr::{PhysAddr, VirtAddr};
 
 /// Pixel format of a framebuffer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -171,6 +171,20 @@ kernel_libs.add("hadron-elf", "crates/parse/elf");
 kernel_libs.add("hadron-dwarf", "crates/parse/dwarf");
 kernel_libs.add("hadron-mmio", "crates/driver/hadron-mmio")
     .deps(#{ hadron_mmio_macros: #{ "crate": "hadron-mmio-macros", proc_macro: true } });
+kernel_libs.add("hadron-driver-api", "crates/driver/hadron-driver-api")
+    .deps(#{ hadron_core: "hadron-core", hadron_acpi: "hadron-acpi" });
+
+kernel_libs.add("hadron-net", "kernel/hadron-net")
+    .deps(#{ hadron_driver_api: "hadron-driver-api" });
+
+kernel_libs.add("hadron-ipc", "kernel/hadron-ipc")
+    .deps(#{ hadron_core: "hadron-core", hadron_fs: "hadron-fs", hadron_syscall: "hadron-syscall" });
+
+kernel_libs.add("hadron-pci", "kernel/hadron-pci")
+    .deps(#{ hadron_driver_api: "hadron-driver-api" });
+
+kernel_libs.add("hadron-tty", "kernel/hadron-tty")
+    .deps(#{ hadron_driver_api: "hadron-driver-api", planck_noalloc: "planck-noalloc" });
 
 kernel_libs.add("hadron-mm", "kernel/mm")
     .deps(#{
@@ -232,6 +246,7 @@ kernel_drivers.add("hadron-drivers", "kernel/hadron-drivers")
         hadron_kernel: "hadron-kernel",
         hadron_linkset: "hadron-linkset",
         hadron_mmio: "hadron-mmio",
+        hadron_pci: "hadron-pci",
         hadron_driver_macros: #{ "crate": "hadron-driver-macros", proc_macro: true }
     });
 
@@ -267,12 +282,17 @@ kernel_main.add("hadron-kernel", "kernel/hadron-kernel")
         hadris_io: "hadris-io",
         hadron_acpi: "hadron-acpi",
         hadron_core: "hadron-core",
+        hadron_driver_api: "hadron-driver-api",
         hadron_elf: "hadron-elf",
         hadron_fs: "hadron-fs",
         hadron_intrinsics: "hadron-intrinsics",
+        hadron_ipc: "hadron-ipc",
         hadron_ktest: "hadron-ktest",
+        hadron_pci: "hadron-pci",
+        hadron_tty: "hadron-tty",
         hadron_linkset: "hadron-linkset",
         hadron_mm: "hadron-mm",
+        hadron_net: "hadron-net",
         hadron_sched: "hadron-sched",
         hadron_syscall: "hadron-syscall",
         planck_noalloc: "planck-noalloc"
@@ -435,16 +455,22 @@ tests()
         "hadron-acpi",
         "hadron-binparse",
         "hadron-core",
+        "hadron-driver-api",
         "hadron-dwarf",
         "hadron-elf",
         "hadron-fdt",
         "hadron-fs",
         "hadron-mm",
         "hadron-sched",
+        "hadron-net",
+        "hadron-ipc",
+        "hadron-pci",
+        "hadron-tty",
         "hadron-drivers",
         "hadron-kernel"
     ])
     .kani_verifiable(["hadron-core"])
+    .shuttle_testable(["hadron-core"])
     .kernel_tests_dir("kernel/hadron-kernel/tests")
     .kernel_tests_crate("hadron-kernel")
     .kernel_tests_linker_script("targets/x86_64-unknown-hadron.ld");

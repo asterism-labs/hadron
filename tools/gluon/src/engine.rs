@@ -1089,6 +1089,15 @@ fn register_tests_api(engine: &mut Engine, model: SharedModel) {
         }
     );
 
+    builder_method!(engine, "shuttle_testable", TestsBuilder,
+        |builder, model, crates: rhai::Array| {
+            model.tests.shuttle_testable = crates
+                .into_iter()
+                .filter_map(|v| v.into_string().ok())
+                .collect();
+        }
+    );
+
     builder_method!(engine, "kernel_tests_dir", TestsBuilder,
         |builder, model, dir: &str| {
             model.tests.kernel_tests_dir = Some(dir.into());
@@ -1366,6 +1375,7 @@ fn register_kconfig_api(engine: &mut Engine, model: SharedModel, root: &Path) {
         let (options, order, presets, files) = crate::kconfig::load_kconfig(&root_path, path)
             .unwrap_or_else(|e| panic!("kconfig error: {e}"));
         let mut model = m.lock().unwrap();
+        model.kconfig_path = Some(path.to_string());
         model.config_options.extend(options);
         for menu in order {
             if !model.menu_order.iter().any(|m| m == &menu) {

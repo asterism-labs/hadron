@@ -10,9 +10,9 @@ use alloc::boxed::Box;
 use core::future::Future;
 use core::pin::Pin;
 
-use super::error::DriverError;
-use super::resource::MmioRegion;
 use crate::id::{HwIrqVector, IrqVector};
+use hadron_driver_api::error::DriverError;
+use hadron_driver_api::resource::MmioRegion;
 
 // ---------------------------------------------------------------------------
 // IrqCapability

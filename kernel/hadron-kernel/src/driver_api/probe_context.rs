@@ -4,11 +4,12 @@
 //! with exactly the capabilities a driver needs, then passes it to the
 //! driver's probe/init function.
 
-use super::acpi_device::AcpiDeviceInfo;
+use hadron_driver_api::acpi_device::AcpiDeviceInfo;
+use hadron_driver_api::pci::PciDeviceInfo;
+
 use super::capability::{
     DmaCapability, IrqCapability, MmioCapability, PciConfigCapability, TaskSpawner, TimerCapability,
 };
-use super::pci::PciDeviceInfo;
 
 /// Probe context for PCI drivers.
 ///

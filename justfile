@@ -57,6 +57,10 @@ miri *args:
 loom *args:
     RUSTFLAGS="--cfg loom" cargo test -p hadron-core {{args}}
 
+# Run Shuttle randomized concurrency tests on hadron-core
+shuttle *args:
+    RUSTFLAGS="--cfg shuttle" cargo test -p hadron-core {{args}}
+
 # Analyze profiling data (perf report, perf record)
 perf *args: bootstrap
     {{hb}} perf {{args}}

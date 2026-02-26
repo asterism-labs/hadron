@@ -14,8 +14,8 @@ use alloc::vec::Vec;
 use core::future::Future;
 use core::pin::Pin;
 
-use crate::fs::{DirEntry, FsError, Inode, InodeType, Permissions};
-use crate::sync::{HeapWaitQueue, SpinLock};
+use hadron_core::sync::{HeapWaitQueue, SpinLock};
+use hadron_fs::{DirEntry, FsError, Inode, InodeType, Permissions};
 
 /// Maximum pending connections before new opens are rejected.
 const MAX_PENDING: usize = 16;
@@ -204,7 +204,7 @@ impl Inode for ServiceConnector {
         if pending.len() >= MAX_PENDING {
             return Err(FsError::NotSupported);
         }
-        let (server_end, client_end) = crate::ipc::channel::channel();
+        let (server_end, client_end) = crate::channel::channel();
         pending.push_back(server_end);
         drop(pending);
         self.inner.accept_wq.wake_one();

@@ -15,49 +15,48 @@
 
 extern crate alloc;
 
-pub mod acpi_device;
-pub mod block;
+// ── Re-export portable types from hadron-driver-api ──────────────────────
+
+// Sub-modules (re-exported from the driver-api crate).
+pub use hadron_driver_api::acpi_device;
+pub use hadron_driver_api::block;
+pub use hadron_driver_api::category;
+pub use hadron_driver_api::device_path;
+pub use hadron_driver_api::device_set;
+pub use hadron_driver_api::driver;
+pub use hadron_driver_api::dyn_dispatch;
+pub use hadron_driver_api::error;
+pub use hadron_driver_api::framebuffer;
+pub use hadron_driver_api::hw;
+pub use hadron_driver_api::input;
+pub use hadron_driver_api::lifecycle;
+pub use hadron_driver_api::net;
+pub use hadron_driver_api::pci;
+pub use hadron_driver_api::resource;
+pub use hadron_driver_api::serial;
+
+// Flat re-exports for ergonomic imports.
+pub use hadron_driver_api::{
+    AcpiDeviceId, AcpiDeviceInfo, AcpiMatchId, BlockDevice, ClockSource, DevicePath, DeviceSet,
+    Driver, DriverError, DriverInfo, DriverState, DriverType, DynBlockDevice,
+    DynBlockDeviceWrapper, DynNetDevice, DynNetDeviceWrapper, Framebuffer, FramebufferInfo,
+    InterruptController, IoError, IoPortRange, IrqLine, KeyCode, KeyEvent, KeyboardDevice,
+    MacAddress, ManagedDriver, MmioRegion, MouseDevice, MouseEvent, NetError, NetworkDevice,
+    PciAddress, PciBar, PciDeviceId, PciDeviceInfo, PciDriverRegistration, PixelFormat,
+    PlatformDriver, PlatformDriverRegistration, SerialPort, Timer, Watchdog,
+};
+
+// ── Kernel-local modules (depend on kernel internals) ────────────────────
+
 pub mod capability;
-pub mod category;
-pub mod device_path;
-pub mod driver;
-pub mod dyn_dispatch;
-pub mod error;
-pub mod framebuffer;
-pub mod hw;
-pub mod input;
-pub mod lifecycle;
-pub mod net;
-pub mod pci;
 pub mod probe_context;
 pub mod registration;
-pub mod resource;
-pub mod serial;
 
-// Re-export all public types at the module root for ergonomic imports.
-pub use acpi_device::{AcpiDeviceId, AcpiDeviceInfo, AcpiMatchId};
-pub use block::{BlockDevice, IoError};
 pub use capability::{
     CapabilityAccess, CapabilityFlags, CapabilityToken, DmaCapability, HasCapability,
     IrqCapability, MmioCapability, PciConfigCapability, TaskSpawner, TimerCapability,
 };
-pub use category::PlatformDriver;
-pub use device_path::DevicePath;
-pub use driver::{Driver, DriverInfo, DriverState, DriverType};
-pub use dyn_dispatch::{DynBlockDevice, DynBlockDeviceWrapper, DynNetDevice, DynNetDeviceWrapper};
-pub use error::DriverError;
-pub use framebuffer::{Framebuffer, FramebufferInfo, PixelFormat};
-pub use hw::{ClockSource, InterruptController, Timer, Watchdog};
-pub use input::{KeyCode, KeyEvent, KeyboardDevice, MouseDevice, MouseEvent};
-pub use lifecycle::ManagedDriver;
-pub use net::{MacAddress, NetError, NetworkDevice};
-pub use pci::{PciAddress, PciBar, PciDeviceId, PciDeviceInfo};
 pub use probe_context::{PciProbeContext, PlatformProbeContext};
 #[cfg(target_os = "none")]
 pub use registration::{BlockFsEntry, InitramFsEntry, VirtualFsEntry};
-pub use registration::{
-    DeviceSet, PciDriverEntry, PciDriverRegistration, PlatformDriverEntry,
-    PlatformDriverRegistration,
-};
-pub use resource::{IoPortRange, IrqLine, MmioRegion};
-pub use serial::SerialPort;
+pub use registration::{PciDriverEntry, PlatformDriverEntry};

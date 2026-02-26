@@ -447,6 +447,7 @@ mod tests {
                 is_project_crate: false,
                 cfg_flags: vec![],
                 requires_config: vec![],
+                rustc_flags: vec![],
             },
         );
 

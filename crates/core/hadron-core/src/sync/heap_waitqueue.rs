@@ -120,3 +120,17 @@ impl<B: IrqBackend> Future for HeapWaitFutureInner<'_, B> {
         }
     }
 }
+
+#[cfg(kani)]
+mod kani_proofs {
+    use super::*;
+
+    /// Verify that wake operations on an empty heap wait queue do not panic.
+    #[kani::proof]
+    fn heap_waitqueue_empty_ops() {
+        let wq = HeapWaitQueue::new();
+        // Operations on an empty queue must be no-ops, never panic.
+        wq.wake_one();
+        wq.wake_all();
+    }
+}

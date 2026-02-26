@@ -1,0 +1,8 @@
+[package]
+name = "hadron-tty"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+hadron-driver-api = { workspace = true }
+planck-noalloc = { workspace = true }

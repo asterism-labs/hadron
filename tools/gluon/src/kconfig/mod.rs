@@ -16,6 +16,50 @@ use crate::model::{ConfigOptionDef, ConfigType, ConfigValue, PresetDef};
 use ast::*;
 use parser::Parser;
 
+/// Parse a root Kconfig file and resolve all `source` directives inline,
+/// returning the fully expanded AST tree.
+///
+/// Unlike [`load_kconfig`] which flattens the tree into [`ConfigOptionDef`]
+/// entries, this preserves the full [`MenuBlock`][ast::MenuBlock] hierarchy
+/// for use by the hierarchical menuconfig TUI.
+pub fn load_kconfig_tree(
+    root_path: &Path,
+    kconfig_path: &str,
+) -> Result<KconfigFile, String> {
+    let abs_path = root_path.join(kconfig_path);
+    let file = parse_file(&abs_path)?;
+    let items = resolve_sources(file.items, root_path)?;
+    Ok(KconfigFile { items })
+}
+
+/// Recursively resolve `Source` directives by replacing them with the
+/// parsed contents of the referenced files.
+fn resolve_sources(
+    items: Vec<KconfigItem>,
+    root_path: &Path,
+) -> Result<Vec<KconfigItem>, String> {
+    let mut resolved = Vec::with_capacity(items.len());
+    for item in items {
+        match item {
+            KconfigItem::Source(path) => {
+                let abs_path = root_path.join(&path);
+                let sub_file = parse_file(&abs_path)?;
+                let sub_items = resolve_sources(sub_file.items, root_path)?;
+                resolved.extend(sub_items);
+            }
+            KconfigItem::Menu(menu) => {
+                let children = resolve_sources(menu.items, root_path)?;
+                resolved.push(KconfigItem::Menu(MenuBlock {
+                    title: menu.title,
+                    items: children,
+                }));
+            }
+            other => resolved.push(other),
+        }
+    }
+    Ok(resolved)
+}
+
 /// Parse a root Kconfig file and all sourced sub-files.
 ///
 /// Returns the parsed config options, the menu ordering, presets, and all file paths loaded.
@@ -381,5 +425,51 @@ mod tests {
             err.contains("no type"),
             "error message should mention 'no type', got: {err}"
         );
+    }
+
+    #[test]
+    fn resolve_sources_inlines_and_recurses_menus() {
+        // Build a synthetic AST with a Source and a Menu containing a Source.
+        // Since we can't actually source files in a unit test, test
+        // resolve_sources with items that have no Source directives to verify
+        // the pass-through and menu recursion paths.
+        let items = vec![
+            KconfigItem::Config(ConfigBlock {
+                name: "A".to_string(),
+                ty: Some(TypeDecl { kind: TypeKind::Bool, variants: vec![], prompt: None }),
+                prompt: None,
+                default: None,
+                depends_on: None,
+                selects: vec![],
+                range: None,
+                bindings: vec![],
+                help: None,
+            }),
+            KconfigItem::Menu(MenuBlock {
+                title: "Sub".to_string(),
+                items: vec![
+                    KconfigItem::Config(ConfigBlock {
+                        name: "B".to_string(),
+                        ty: Some(TypeDecl { kind: TypeKind::U32, variants: vec![], prompt: None }),
+                        prompt: None,
+                        default: None,
+                        depends_on: None,
+                        selects: vec![],
+                        range: None,
+                        bindings: vec![],
+                        help: None,
+                    }),
+                ],
+            }),
+        ];
+
+        let resolved = resolve_sources(items, Path::new("/fake")).unwrap();
+        assert_eq!(resolved.len(), 2);
+        assert!(matches!(&resolved[0], KconfigItem::Config(c) if c.name == "A"));
+        assert!(matches!(&resolved[1], KconfigItem::Menu(m) if m.title == "Sub"));
+        if let KconfigItem::Menu(m) = &resolved[1] {
+            assert_eq!(m.items.len(), 1);
+            assert!(matches!(&m.items[0], KconfigItem::Config(c) if c.name == "B"));
+        }
     }
 }

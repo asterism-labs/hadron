@@ -9,7 +9,7 @@ use alloc::vec::Vec;
 use crate::driver_api::acpi_device::AcpiDeviceInfo;
 use crate::driver_api::pci::PciDeviceInfo;
 
-use crate::pci::enumerate::class_name;
+use crate::pci::class_name;
 
 /// Information about a device in the tree.
 pub enum DeviceInfo {

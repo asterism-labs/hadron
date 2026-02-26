@@ -1,0 +1,21 @@
+[package]
+name = "hadron-ipc"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "IPC primitives (pipe, channel, service) for Hadron OS"
+
+[lib]
+bench = false
+doctest = false
+
+[dependencies]
+hadron-core = { workspace = true }
+hadron-fs = { workspace = true }
+hadron-syscall = { workspace = true }
+
+[lints]
+workspace = true

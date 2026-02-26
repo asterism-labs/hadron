@@ -4,8 +4,10 @@
 //! register (offset 0x34), parsing each capability header. Supports VirtIO PCI
 //! capabilities (cap ID 0x09) and MSI-X capabilities (cap ID 0x11).
 
-use super::cam::{PciCam, regs};
-use crate::driver_api::pci::PciAddress;
+use hadron_driver_api::pci::PciAddress;
+
+use crate::PciConfigAccess;
+use crate::regs;
 
 /// A raw PCI capability header: capability ID and its config-space offset.
 #[derive(Debug, Clone, Copy)]
@@ -17,14 +19,15 @@ pub struct RawCapability {
 }
 
 /// Iterator over PCI capabilities in a device's config space.
-pub struct CapabilityIter {
+pub struct CapabilityIter<'a, C: PciConfigAccess + ?Sized> {
+    cam: &'a C,
     bus: u8,
     device: u8,
     function: u8,
     next_offset: u8,
 }
 
-impl Iterator for CapabilityIter {
+impl<C: PciConfigAccess + ?Sized> Iterator for CapabilityIter<'_, C> {
     type Item = RawCapability;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -36,8 +39,14 @@ impl Iterator for CapabilityIter {
 
             // SAFETY: We are reading PCI config space of a device that was
             // previously enumerated and confirmed to exist.
-            let cap_id = unsafe { PciCam::read_u8(self.bus, self.device, self.function, offset) };
-            let next = unsafe { PciCam::read_u8(self.bus, self.device, self.function, offset + 1) };
+            let cap_id = unsafe {
+                self.cam
+                    .read_u8(self.bus, self.device, self.function, offset)
+            };
+            let next = unsafe {
+                self.cam
+                    .read_u8(self.bus, self.device, self.function, offset + 1)
+            };
 
             self.next_offset = next;
 
@@ -51,9 +60,12 @@ impl Iterator for CapabilityIter {
 ///
 /// Returns `None` if the device does not have a capabilities list (status
 /// register bit 4 is clear).
-pub fn walk_capabilities(addr: &PciAddress) -> Option<CapabilityIter> {
+pub fn walk_capabilities<'a, C: PciConfigAccess + ?Sized>(
+    cam: &'a C,
+    addr: &PciAddress,
+) -> Option<CapabilityIter<'a, C>> {
     // SAFETY: Reading status register of an enumerated PCI device.
-    let status = unsafe { PciCam::read_u16(addr.bus, addr.device, addr.function, regs::STATUS) };
+    let status = unsafe { cam.read_u16(addr.bus, addr.device, addr.function, regs::STATUS) };
 
     if status & regs::STATUS_CAPABILITIES_LIST == 0 {
         return None;
@@ -61,9 +73,10 @@ pub fn walk_capabilities(addr: &PciAddress) -> Option<CapabilityIter> {
 
     // SAFETY: Reading capabilities pointer of an enumerated PCI device.
     let cap_ptr =
-        unsafe { PciCam::read_u8(addr.bus, addr.device, addr.function, regs::CAPABILITIES_PTR) };
+        unsafe { cam.read_u8(addr.bus, addr.device, addr.function, regs::CAPABILITIES_PTR) };
 
     Some(CapabilityIter {
+        cam,
         bus: addr.bus,
         device: addr.device,
         function: addr.function,
@@ -123,17 +136,21 @@ pub struct VirtioPciCap {
 /// Reads a VirtIO PCI capability at the given config-space offset.
 ///
 /// Returns `None` if the capability type is not recognized.
-pub fn read_virtio_pci_cap(addr: &PciAddress, cap_offset: u8) -> Option<VirtioPciCap> {
+pub fn read_virtio_pci_cap<C: PciConfigAccess + ?Sized>(
+    cam: &C,
+    addr: &PciAddress,
+    cap_offset: u8,
+) -> Option<VirtioPciCap> {
     let (bus, dev, func) = (addr.bus, addr.device, addr.function);
 
     // SAFETY: Reading PCI config space of an enumerated device at known
     // capability offsets.
-    let cfg_type_raw = unsafe { PciCam::read_u8(bus, dev, func, cap_offset + 3) };
+    let cfg_type_raw = unsafe { cam.read_u8(bus, dev, func, cap_offset + 3) };
     let cfg_type = VirtioPciCfgType::from_u8(cfg_type_raw)?;
 
-    let bar = unsafe { PciCam::read_u8(bus, dev, func, cap_offset + 4) };
-    let offset = unsafe { PciCam::read_u32(bus, dev, func, cap_offset + 8) };
-    let length = unsafe { PciCam::read_u32(bus, dev, func, cap_offset + 12) };
+    let bar = unsafe { cam.read_u8(bus, dev, func, cap_offset + 4) };
+    let offset = unsafe { cam.read_u32(bus, dev, func, cap_offset + 8) };
+    let length = unsafe { cam.read_u32(bus, dev, func, cap_offset + 12) };
 
     Some(VirtioPciCap {
         cfg_type,
@@ -166,18 +183,20 @@ pub struct MsixCapability {
 }
 
 /// Reads an MSI-X capability at the given config-space offset.
-pub fn read_msix_cap(addr: &PciAddress, cap_offset: u8) -> MsixCapability {
+pub fn read_msix_cap<C: PciConfigAccess + ?Sized>(
+    cam: &C,
+    addr: &PciAddress,
+    cap_offset: u8,
+) -> MsixCapability {
     let (bus, dev, func) = (addr.bus, addr.device, addr.function);
 
     // SAFETY: Reading PCI config space of an enumerated device at known
     // MSI-X capability offsets.
-    let msg_control = unsafe { PciCam::read_u16(bus, dev, func, cap_offset + 2) };
-    let table_bir_offset = unsafe { PciCam::read_u32(bus, dev, func, cap_offset + 4) };
-    let pba_bir_offset = unsafe { PciCam::read_u32(bus, dev, func, cap_offset + 8) };
+    let msg_control = unsafe { cam.read_u16(bus, dev, func, cap_offset + 2) };
+    let table_bir_offset = unsafe { cam.read_u32(bus, dev, func, cap_offset + 4) };
+    let pba_bir_offset = unsafe { cam.read_u32(bus, dev, func, cap_offset + 8) };
 
-    // Table size is bits 10:0 of message control.
     let table_size = msg_control & 0x7FF;
-    // BIR = bits 2:0, offset = bits 31:3 (shifted left by 3).
     let table_bar = (table_bir_offset & 0x7) as u8;
     let table_offset = table_bir_offset & !0x7;
     let pba_bar = (pba_bir_offset & 0x7) as u8;
@@ -190,30 +209,5 @@ pub fn read_msix_cap(addr: &PciAddress, cap_offset: u8) -> MsixCapability {
         table_offset,
         pba_bar,
         pba_offset,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn virtio_pci_cfg_type_from_u8() {
-        assert_eq!(
-            VirtioPciCfgType::from_u8(1),
-            Some(VirtioPciCfgType::CommonCfg)
-        );
-        assert_eq!(
-            VirtioPciCfgType::from_u8(2),
-            Some(VirtioPciCfgType::NotifyCfg)
-        );
-        assert_eq!(VirtioPciCfgType::from_u8(3), Some(VirtioPciCfgType::IsrCfg));
-        assert_eq!(
-            VirtioPciCfgType::from_u8(4),
-            Some(VirtioPciCfgType::DeviceCfg)
-        );
-        assert_eq!(VirtioPciCfgType::from_u8(5), Some(VirtioPciCfgType::PciCfg));
-        assert_eq!(VirtioPciCfgType::from_u8(0), None);
-        assert_eq!(VirtioPciCfgType::from_u8(6), None);
     }
 }

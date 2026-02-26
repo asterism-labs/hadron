@@ -246,6 +246,54 @@ mod tests {
     }
 }
 
+#[cfg(shuttle)]
+mod shuttle_tests {
+    use shuttle::sync::Arc;
+    use shuttle::thread;
+
+    use super::SeqLockInner;
+    use crate::sync::backend::ShuttleBackend;
+
+    type ShuttleSeqLock<T> = SeqLockInner<T, ShuttleBackend>;
+
+    #[test]
+    fn shuttle_writer_and_readers() {
+        shuttle::check_random(
+            || {
+                let lock = Arc::new(ShuttleSeqLock::new_with_backend(0u64));
+
+                // 1 writer, 3 readers.
+                let w = {
+                    let lock = lock.clone();
+                    thread::spawn(move || {
+                        let mut guard = lock.write();
+                        *guard = 42;
+                    })
+                };
+
+                let readers: Vec<_> = (0..3)
+                    .map(|_| {
+                        let lock = lock.clone();
+                        thread::spawn(move || {
+                            let val = lock.read();
+                            // Readers see either 0 (before write) or 42 (after write).
+                            assert!(val == 0 || val == 42);
+                        })
+                    })
+                    .collect();
+
+                w.join().unwrap();
+                for t in readers {
+                    t.join().unwrap();
+                }
+
+                assert_eq!(lock.read(), 42);
+            },
+            100,
+        );
+    }
+}
+
 #[cfg(kani)]
 mod kani_proofs {
     use super::*;

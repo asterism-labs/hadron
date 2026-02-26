@@ -263,6 +263,49 @@ mod loom_tests {
     }
 }
 
+#[cfg(shuttle)]
+mod shuttle_tests {
+    use shuttle::sync::Arc;
+    use shuttle::thread;
+
+    use super::LazyLockInner;
+    use crate::sync::backend::ShuttleBackend;
+
+    #[test]
+    fn shuttle_init_once_under_contention() {
+        shuttle::check_random(
+            || {
+                let init_count = Arc::new(shuttle::sync::atomic::AtomicUsize::new(0));
+                let count_clone = init_count.clone();
+                let lazy = Arc::new(LazyLockInner::<usize, _, ShuttleBackend>::new_with_backend(
+                    move || {
+                        count_clone.fetch_add(1, core::sync::atomic::Ordering::SeqCst);
+                        42usize
+                    },
+                ));
+
+                // 4 threads race to initialize.
+                let threads: Vec<_> = (0..4)
+                    .map(|_| {
+                        let lazy = lazy.clone();
+                        thread::spawn(move || {
+                            assert_eq!(**lazy, 42);
+                        })
+                    })
+                    .collect();
+
+                for t in threads {
+                    t.join().unwrap();
+                }
+
+                // Init closure executed exactly once.
+                assert_eq!(init_count.load(core::sync::atomic::Ordering::SeqCst), 1);
+            },
+            100,
+        );
+    }
+}
+
 #[cfg(kani)]
 mod kani_proofs {
     use super::*;

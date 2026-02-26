@@ -18,6 +18,7 @@ mod engine;
 mod fmt;
 mod kani;
 mod kconfig;
+mod shuttle;
 mod menuconfig;
 mod model;
 mod model_cache;
@@ -53,6 +54,7 @@ fn main() -> Result<()> {
         cli::Command::Test(ref args) => cmd_test(&cli, args),
         cli::Command::Bench(ref args) => cmd_bench(&cli, args),
         cli::Command::Kani(ref args) => cmd_kani(&cli, args),
+        cli::Command::Shuttle(ref args) => cmd_shuttle(&cli, args),
         cli::Command::Check => cmd_check(&cli),
         cli::Command::Clippy => cmd_clippy(&cli),
         cli::Command::Fmt(ref args) => fmt::cmd_fmt(args),
@@ -286,7 +288,15 @@ fn cmd_test(cli: &cli::Cli, args: &cli::TestArgs) -> Result<()> {
 fn cmd_menuconfig(cli: &cli::Cli) -> Result<()> {
     let root = config::find_project_root()?;
     let model = load_model(&root, false)?;
-    menuconfig::run_menuconfig(&model, &root, cli.profile.as_deref().unwrap_or("default"))
+    let kconfig_path = model.kconfig_path.as_deref().unwrap_or("Kconfig");
+    let kconfig_tree = kconfig::load_kconfig_tree(&root, kconfig_path)
+        .map_err(|e| anyhow::anyhow!("failed to load kconfig tree: {e}"))?;
+    menuconfig::run_menuconfig(
+        &model,
+        &root,
+        cli.profile.as_deref().unwrap_or("default"),
+        &kconfig_tree,
+    )
 }
 
 /// Remove build artifacts.
@@ -593,6 +603,12 @@ fn prune_vendor_dir(resolved: &[vendor::ResolvedDep], vendor_dir: &std::path::Pa
 fn cmd_kani(cli: &cli::Cli, args: &cli::KaniArgs) -> Result<()> {
     let (resolved, _model) = resolve_config(cli)?;
     kani::run_kani(&resolved, cli.jobs.unwrap_or(0), args)
+}
+
+/// Run Shuttle randomized concurrency tests.
+fn cmd_shuttle(cli: &cli::Cli, args: &cli::ShuttleArgs) -> Result<()> {
+    let (resolved, _model) = resolve_config(cli)?;
+    shuttle::run_shuttle(&resolved, cli.jobs.unwrap_or(0), args)
 }
 
 /// Run kernel benchmarks.

@@ -7,8 +7,8 @@ extern crate alloc;
 
 use alloc::boxed::Box;
 
-use crate::driver_api::dyn_dispatch::DynNetDevice;
-use crate::driver_api::net::NetworkDevice;
+use hadron_driver_api::dyn_dispatch::DynNetDevice;
+use hadron_driver_api::net::NetworkDevice;
 
 use super::NetConfig;
 use super::arp::ArpTable;
@@ -20,17 +20,13 @@ use super::ipv4::{Ipv4Header, PROTO_ICMP};
 const MAX_FRAME: usize = 1518;
 
 /// Async receive loop that processes incoming Ethernet frames.
+///
+/// Takes ownership of the NIC and loops forever, dispatching received
+/// frames to the appropriate protocol handler (ARP, ICMP). Yields via
+/// `.await` when no packets are available.
 pub async fn net_rx_loop(nic: Box<dyn DynNetDevice>, config: NetConfig) {
     let our_mac = nic.mac_address().0;
     let our_ip = config.ip;
-
-    crate::kinfo!(
-        "net: RX loop started (IP={}.{}.{}.{})",
-        our_ip[0],
-        our_ip[1],
-        our_ip[2],
-        our_ip[3],
-    );
 
     let mut rx_buf = [0u8; MAX_FRAME];
     let mut tx_buf = [0u8; MAX_FRAME];
@@ -40,10 +36,7 @@ pub async fn net_rx_loop(nic: Box<dyn DynNetDevice>, config: NetConfig) {
         // Wait for an incoming frame.
         let len = match nic.recv(&mut rx_buf).await {
             Ok(n) => n,
-            Err(e) => {
-                crate::kwarn!("net: recv error: {}", e);
-                continue;
-            }
+            Err(_) => continue,
         };
 
         let frame = &rx_buf[..len];
@@ -58,9 +51,7 @@ pub async fn net_rx_loop(nic: Box<dyn DynNetDevice>, config: NetConfig) {
             ETHERTYPE_ARP => {
                 if let Some(reply_len) = arp_table.handle_arp(our_ip, our_mac, payload, &mut tx_buf)
                 {
-                    if let Err(e) = nic.send(&tx_buf[..reply_len]).await {
-                        crate::kwarn!("net: ARP send error: {}", e);
-                    }
+                    let _ = nic.send(&tx_buf[..reply_len]).await;
                 }
             }
             ETHERTYPE_IPV4 => {
@@ -83,9 +74,7 @@ pub async fn net_rx_loop(nic: Box<dyn DynNetDevice>, config: NetConfig) {
                         ip_payload,
                         &mut tx_buf,
                     ) {
-                        if let Err(e) = nic.send(&tx_buf[..reply_len]).await {
-                            crate::kwarn!("net: ICMP send error: {}", e);
-                        }
+                        let _ = nic.send(&tx_buf[..reply_len]).await;
                     }
                 }
             }

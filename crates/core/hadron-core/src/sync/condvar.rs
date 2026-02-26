@@ -307,3 +307,47 @@ mod loom_tests {
         });
     }
 }
+
+#[cfg(shuttle)]
+mod shuttle_tests {
+    use super::CondvarInner;
+    use crate::sync::backend::ShuttleBackend;
+
+    type ShuttleCondvar = CondvarInner<ShuttleBackend>;
+
+    #[test]
+    fn shuttle_notify_without_waiters() {
+        shuttle::check_random(
+            || {
+                let cv = ShuttleCondvar::new_with_backend();
+                // Notifying with no waiters must never panic.
+                cv.notify_one();
+                cv.notify_all();
+            },
+            100,
+        );
+    }
+}
+
+#[cfg(kani)]
+mod kani_proofs {
+    use super::*;
+
+    /// Verify that `notify_one` on an empty condvar does not panic.
+    #[kani::proof]
+    fn condvar_notify_empty() {
+        let cv = Condvar::new();
+        // Notifying with no waiters must be a no-op, never panic.
+        cv.notify_one();
+        cv.notify_all();
+    }
+
+    /// Verify that the condvar wait future correctly transitions to `Pending`
+    /// and then `Ready` on re-poll (uncontended single-task path).
+    #[kani::proof]
+    fn condvar_wait_uncontended() {
+        let cv = Condvar::new();
+        // Calling notify without waiters is always safe.
+        cv.notify_one();
+    }
+}

@@ -1,7 +1,8 @@
 //! Interactive TUI menuconfig for Kconfig-style configuration.
 //!
-//! Provides a terminal UI for browsing and editing build configuration
-//! options, organized by menu categories. Saves overrides to `.hadron-config`.
+//! Provides a hierarchical, page-based terminal UI (Linux kernel style) for
+//! browsing and editing build configuration options. Saves overrides to
+//! `.hadron-config`.
 
 use std::collections::BTreeMap;
 use std::io;
@@ -9,24 +10,116 @@ use std::path::Path;
 
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
 use crossterm::ExecutableCommand;
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 use ratatui::Terminal;
 
 use crate::config;
 use crate::model::{BuildModel, ConfigOptionDef, ConfigType, ConfigValue};
 
-/// A menu entry in the TUI.
-enum MenuEntry {
-    /// Collapsible category header.
-    Category { name: String, expanded: bool },
-    /// A config option belonging to a category.
+// ─── Hierarchical menu tree ──────────────────────────────────────────
+
+/// A node in the hierarchical menu tree (submenu page).
+struct MenuNode {
+    title: String,
+    children: Vec<MenuChild>,
+}
+
+/// An entry within a menu page — either a submenu link or a config option.
+enum MenuChild {
+    /// Navigate into a sub-page.
+    SubMenu(MenuNode),
+    /// A leaf config option.
     Option { name: String },
+}
+
+/// Tracks the current page position within a `MenuNode`.
+struct Page {
+    /// Path of child indices from root to this page's parent.
+    path: Vec<usize>,
+    cursor: usize,
+    scroll_offset: usize,
+}
+
+/// Stack of pages for hierarchical navigation (back = pop).
+struct NavStack {
+    pages: Vec<Page>,
+}
+
+impl NavStack {
+    fn new() -> Self {
+        Self {
+            pages: vec![Page {
+                path: vec![],
+                cursor: 0,
+                scroll_offset: 0,
+            }],
+        }
+    }
+
+    fn current(&self) -> &Page {
+        self.pages.last().expect("nav stack is never empty")
+    }
+
+    fn current_mut(&mut self) -> &mut Page {
+        self.pages.last_mut().expect("nav stack is never empty")
+    }
+
+    /// Push a new page when entering a submenu.
+    fn push(&mut self, child_index: usize) {
+        let mut path = self.current().path.clone();
+        path.push(child_index);
+        self.pages.push(Page {
+            path,
+            cursor: 0,
+            scroll_offset: 0,
+        });
+    }
+
+    /// Pop back to the parent page. Returns false if already at root.
+    fn pop(&mut self) -> bool {
+        if self.pages.len() > 1 {
+            self.pages.pop();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Build a breadcrumb trail from the current navigation path.
+    fn breadcrumbs(&self, root: &MenuNode) -> Vec<String> {
+        let mut crumbs = vec![root.title.clone()];
+        let current = self.current();
+        let mut node = root;
+        for &idx in &current.path {
+            if let Some(MenuChild::SubMenu(sub)) = node.children.get(idx) {
+                crumbs.push(sub.title.clone());
+                node = sub;
+            }
+        }
+        crumbs
+    }
+}
+
+/// Reverse dependency information for help popups.
+struct ReverseDeps {
+    /// Options that depend on a given symbol (symbol → dependents).
+    depended_on_by: BTreeMap<String, Vec<String>>,
+    /// Options that are selected by a given symbol (symbol → selectors).
+    selected_by: BTreeMap<String, Vec<String>>,
+}
+
+/// State for the help popup overlay.
+struct HelpPopupState {
+    option_name: String,
+    scroll_offset: usize,
 }
 
 /// State for an in-progress value edit.
@@ -35,22 +128,145 @@ struct EditState {
     buffer: String,
 }
 
+/// A search result pointing to an option anywhere in the tree.
+struct SearchResult {
+    /// Path of child indices to the menu containing this option.
+    path: Vec<usize>,
+    /// Index within the containing menu's children.
+    child_index: usize,
+    /// Config option name.
+    name: String,
+}
+
+// ─── Tree builder ────────────────────────────────────────────────────
+
+/// Build a `MenuNode` tree from the fully-expanded Kconfig AST.
+fn build_menu_tree(ast: &crate::kconfig::ast::KconfigFile) -> MenuNode {
+    fn convert_items(items: &[crate::kconfig::ast::KconfigItem]) -> Vec<MenuChild> {
+        let mut children = Vec::new();
+        for item in items {
+            match item {
+                crate::kconfig::ast::KconfigItem::Config(block) => {
+                    children.push(MenuChild::Option {
+                        name: block.name.clone(),
+                    });
+                }
+                crate::kconfig::ast::KconfigItem::Menu(menu) => {
+                    children.push(MenuChild::SubMenu(MenuNode {
+                        title: menu.title.clone(),
+                        children: convert_items(&menu.items),
+                    }));
+                }
+                // Source directives are already resolved; Presets are not menu items.
+                _ => {}
+            }
+        }
+        children
+    }
+
+    MenuNode {
+        title: "Main Menu".to_string(),
+        children: convert_items(&ast.items),
+    }
+}
+
+/// Compute reverse dependency maps from the config option definitions.
+fn build_reverse_deps(options: &BTreeMap<String, ConfigOptionDef>) -> ReverseDeps {
+    let mut depended_on_by: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut selected_by: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
+    for (name, opt) in options {
+        for dep in &opt.depends_on {
+            depended_on_by
+                .entry(dep.clone())
+                .or_default()
+                .push(name.clone());
+        }
+        for sel in &opt.selects {
+            selected_by
+                .entry(sel.clone())
+                .or_default()
+                .push(name.clone());
+        }
+    }
+
+    ReverseDeps {
+        depended_on_by,
+        selected_by,
+    }
+}
+
+/// Resolve the current `MenuNode` from the root given a navigation path.
+fn resolve_current_node<'a>(root: &'a MenuNode, path: &[usize]) -> &'a MenuNode {
+    let mut node = root;
+    for &idx in path {
+        if let Some(MenuChild::SubMenu(sub)) = node.children.get(idx) {
+            node = sub;
+        }
+    }
+    node
+}
+
+/// Recursively search the tree for options matching a query.
+fn search_tree(
+    node: &MenuNode,
+    query: &str,
+    options: &BTreeMap<String, ConfigOptionDef>,
+    path: &[usize],
+    results: &mut Vec<SearchResult>,
+) {
+    let query_lower = query.to_lowercase();
+    for (i, child) in node.children.iter().enumerate() {
+        match child {
+            MenuChild::Option { name } => {
+                let matches = name.to_lowercase().contains(&query_lower)
+                    || options
+                        .get(name)
+                        .and_then(|o| o.help.as_ref())
+                        .is_some_and(|h| h.to_lowercase().contains(&query_lower));
+                if matches {
+                    results.push(SearchResult {
+                        path: path.to_vec(),
+                        child_index: i,
+                        name: name.clone(),
+                    });
+                }
+            }
+            MenuChild::SubMenu(sub) => {
+                let mut sub_path = path.to_vec();
+                sub_path.push(i);
+                search_tree(sub, query, options, &sub_path, results);
+            }
+        }
+    }
+}
+
+// ─── Application state ──────────────────────────────────────────────
+
 /// Main TUI application state.
 struct App {
     model_options: BTreeMap<String, ConfigOptionDef>,
     values: BTreeMap<String, ConfigValue>,
-    entries: Vec<MenuEntry>,
-    cursor: usize,
-    scroll_offset: usize,
+    menu_tree: MenuNode,
+    nav: NavStack,
+    reverse_deps: ReverseDeps,
+    help_popup: Option<HelpPopupState>,
     search_mode: bool,
     search_query: String,
+    search_results: Vec<SearchResult>,
+    search_cursor: usize,
     dirty: bool,
     editing: Option<EditState>,
     root: std::path::PathBuf,
 }
 
 impl App {
-    fn new(model: &BuildModel, root: &Path, profile_name: &str) -> Result<Self> {
+    fn new(
+        model: &BuildModel,
+        root: &Path,
+        profile_name: &str,
+        kconfig_tree: &crate::kconfig::ast::KconfigFile,
+    ) -> Result<Self> {
         let model_options = model.config_options.clone();
 
         // Load existing values: defaults → profile overrides → .hadron-config.
@@ -58,99 +274,48 @@ impl App {
         let file_overrides = config::load_config_overrides(root)?;
         let mut values = BTreeMap::new();
         for (name, opt) in &model_options {
-            let val = file_overrides.get(name)
+            let val = file_overrides
+                .get(name)
                 .or_else(|| profile_overrides.get(name))
                 .unwrap_or(&opt.default)
                 .clone();
             values.insert(name.clone(), val);
         }
 
-        // Build menu entries from menu_order.
-        let mut entries = Vec::new();
-        let mut categorized: BTreeMap<String, Vec<String>> = BTreeMap::new();
-
-        for (name, opt) in &model_options {
-            let menu = opt.menu.as_deref().unwrap_or("General").to_string();
-            categorized.entry(menu).or_default().push(name.clone());
-        }
-
-        // Use model.menu_order for ordering, then fall back to sorted keys.
-        let mut ordered_menus: Vec<String> = model.menu_order.clone();
-        for menu in categorized.keys() {
-            if !ordered_menus.contains(menu) {
-                ordered_menus.push(menu.clone());
-            }
-        }
-
-        for menu in &ordered_menus {
-            if let Some(options) = categorized.get(menu) {
-                entries.push(MenuEntry::Category {
-                    name: menu.clone(),
-                    expanded: true,
-                });
-                for opt_name in options {
-                    let opt_def = model_options.get(opt_name);
-                    if opt_def.is_some_and(|o| o.ty == ConfigType::Group) {
-                        // Group markers render as expandable sub-categories.
-                        entries.push(MenuEntry::Category {
-                            name: opt_name.clone(),
-                            expanded: true,
-                        });
-                    } else {
-                        entries.push(MenuEntry::Option {
-                            name: opt_name.clone(),
-                        });
-                    }
-                }
-            }
-        }
+        let menu_tree = build_menu_tree(kconfig_tree);
+        let reverse_deps = build_reverse_deps(&model_options);
 
         Ok(App {
             model_options,
             values,
-            entries,
-            cursor: 0,
-            scroll_offset: 0,
+            menu_tree,
+            nav: NavStack::new(),
+            reverse_deps,
+            help_popup: None,
             search_mode: false,
             search_query: String::new(),
+            search_results: Vec::new(),
+            search_cursor: 0,
             dirty: false,
             editing: None,
             root: root.to_path_buf(),
         })
     }
 
-    /// Get the visible entries (respecting collapsed categories).
-    fn visible_entries(&self) -> Vec<(usize, &MenuEntry)> {
-        let mut visible = Vec::new();
-        let mut skip = false;
+    /// Get the children of the currently displayed page.
+    fn current_children(&self) -> &[MenuChild] {
+        let path = &self.nav.current().path;
+        let node = resolve_current_node(&self.menu_tree, path);
+        &node.children
+    }
 
-        for (i, entry) in self.entries.iter().enumerate() {
-            match entry {
-                MenuEntry::Category { expanded, .. } => {
-                    visible.push((i, entry));
-                    skip = !expanded;
-                }
-                MenuEntry::Option { name } => {
-                    if skip {
-                        continue;
-                    }
-                    // Filter by search query if active.
-                    if !self.search_query.is_empty() {
-                        let query = self.search_query.to_lowercase();
-                        let matches = name.to_lowercase().contains(&query)
-                            || self.model_options.get(name)
-                                .and_then(|o| o.help.as_ref())
-                                .map(|h| h.to_lowercase().contains(&query))
-                                .unwrap_or(false);
-                        if !matches {
-                            continue;
-                        }
-                    }
-                    visible.push((i, entry));
-                }
-            }
+    /// Get the name of the currently selected option (if it's an option).
+    fn selected_option_name(&self) -> Option<String> {
+        let cursor = self.nav.current().cursor;
+        match self.current_children().get(cursor) {
+            Some(MenuChild::Option { name }) => Some(name.clone()),
+            _ => None,
         }
-        visible
     }
 
     /// Check if an option's dependencies are satisfied.
@@ -184,8 +349,12 @@ impl App {
         if !self.deps_satisfied(name) {
             return;
         }
-        let Some(opt) = self.model_options.get(name) else { return };
-        let Some(ref choices) = opt.choices else { return };
+        let Some(opt) = self.model_options.get(name) else {
+            return;
+        };
+        let Some(choices) = opt.choices.as_ref() else {
+            return;
+        };
         if choices.is_empty() {
             return;
         }
@@ -203,27 +372,24 @@ impl App {
             (idx + choices.len() - 1) % choices.len()
         };
 
-        self.values.insert(name.into(), ConfigValue::Choice(choices[new_idx].clone()));
+        self.values
+            .insert(name.into(), ConfigValue::Choice(choices[new_idx].clone()));
         self.dirty = true;
     }
 
     /// Apply select and dependency propagation until stable.
-    ///
-    /// Pass 1: disable any enabled option whose `depends_on` is unsatisfied.
-    /// Pass 2: enable any option forced on by another option's `selects`.
-    /// Loop until no changes occur (fixed-point).
     fn apply_selects(&mut self) {
         loop {
             let mut changed = false;
 
-            // Pass 1: propagate disables — if an option is enabled but a
-            // dependency is off, force-disable it.
+            // Pass 1: disable any enabled option whose depends_on is unsatisfied.
             for (name, opt) in &self.model_options {
                 let is_enabled = matches!(self.values.get(name), Some(ConfigValue::Bool(true)));
                 if is_enabled {
-                    let deps_ok = opt.depends_on.iter().all(|dep| {
-                        matches!(self.values.get(dep), Some(ConfigValue::Bool(true)))
-                    });
+                    let deps_ok = opt
+                        .depends_on
+                        .iter()
+                        .all(|dep| matches!(self.values.get(dep), Some(ConfigValue::Bool(true))));
                     if !deps_ok {
                         self.values.insert(name.clone(), ConfigValue::Bool(false));
                         changed = true;
@@ -231,8 +397,7 @@ impl App {
                 }
             }
 
-            // Pass 2: propagate selects — if an option is enabled and selects
-            // another, force-enable the selected option.
+            // Pass 2: enable any option forced on by another's selects.
             for (name, opt) in &self.model_options {
                 let is_enabled = matches!(self.values.get(name), Some(ConfigValue::Bool(true)));
                 if is_enabled {
@@ -251,34 +416,8 @@ impl App {
         }
     }
 
-    /// Get help text for the currently selected option.
-    fn current_help(&self) -> (String, String) {
-        let visible = self.visible_entries();
-        if self.cursor >= visible.len() {
-            return (String::new(), String::new());
-        }
-        let (_, entry) = &visible[self.cursor];
-        match entry {
-            MenuEntry::Category { name, .. } => {
-                (name.clone(), format!("Category: {name}"))
-            }
-            MenuEntry::Option { name } => {
-                let opt = self.model_options.get(name);
-                let help = opt.and_then(|o| o.help.as_ref())
-                    .cloned()
-                    .unwrap_or_else(|| "No help available.".into());
-                let type_str = opt.map(|o| format!("Type: {:?}", o.ty))
-                    .unwrap_or_default();
-                let default_str = opt.map(|o| format!("  Default: {:?}", o.default))
-                    .unwrap_or_default();
-                (help, format!("{type_str}{default_str}"))
-            }
-        }
-    }
-
     /// Save current values to .hadron-config.
     fn save(&mut self) -> Result<()> {
-        // Only save values that differ from defaults.
         let mut overrides = BTreeMap::new();
         for (name, val) in &self.values {
             if let Some(opt) = self.model_options.get(name) {
@@ -292,98 +431,98 @@ impl App {
         Ok(())
     }
 
-    /// Move cursor up.
+    /// Move cursor up within the current page (wraps around).
     fn cursor_up(&mut self) {
-        let visible = self.visible_entries();
-        if self.cursor > 0 {
-            self.cursor -= 1;
-        } else if !visible.is_empty() {
-            self.cursor = visible.len() - 1;
-        }
-    }
-
-    /// Move cursor down.
-    fn cursor_down(&mut self) {
-        let visible = self.visible_entries();
-        if self.cursor + 1 < visible.len() {
-            self.cursor += 1;
-        } else {
-            self.cursor = 0;
-        }
-    }
-
-    /// Toggle category expansion.
-    fn toggle_category(&mut self) {
-        let visible = self.visible_entries();
-        if self.cursor >= visible.len() {
+        let len = self.current_children().len();
+        if len == 0 {
             return;
         }
-        let (idx, _) = visible[self.cursor];
-        if let MenuEntry::Category { ref mut expanded, .. } = self.entries[idx] {
-            *expanded = !*expanded;
+        let page = self.nav.current_mut();
+        if page.cursor > 0 {
+            page.cursor -= 1;
+        } else {
+            page.cursor = len - 1;
         }
+    }
+
+    /// Move cursor down within the current page (wraps around).
+    fn cursor_down(&mut self) {
+        let len = self.current_children().len();
+        if len == 0 {
+            return;
+        }
+        let page = self.nav.current_mut();
+        if page.cursor + 1 < len {
+            page.cursor += 1;
+        } else {
+            page.cursor = 0;
+        }
+    }
+
+    /// Enter a submenu (if the cursor is on one).
+    fn enter_submenu(&mut self) {
+        let cursor = self.nav.current().cursor;
+        if let Some(MenuChild::SubMenu(_)) = self.current_children().get(cursor) {
+            self.nav.push(cursor);
+        }
+    }
+
+    /// Go back to the parent page.
+    fn go_back(&mut self) {
+        self.nav.pop();
     }
 
     /// Start editing the currently selected option.
     fn start_edit(&mut self) {
-        // Extract what we need without holding a borrow on self.
-        let action = {
-            let visible = self.visible_entries();
-            if self.cursor >= visible.len() {
-                return;
-            }
-            let (_, entry) = &visible[self.cursor];
-            if let MenuEntry::Option { name } = entry {
-                let name = name.clone();
-                if !self.deps_satisfied(&name) {
-                    return;
-                }
-                let ty = self.model_options.get(&name).map(|o| o.ty);
-                Some((name, ty))
-            } else {
-                None
-            }
+        let Some(name) = self.selected_option_name() else {
+            return;
         };
+        if !self.deps_satisfied(&name) {
+            return;
+        }
+        let ty = self.model_options.get(&name).map(|o| o.ty);
 
-        if let Some((name, ty)) = action {
-            match ty {
-                Some(ConfigType::Bool) => {
-                    self.toggle_bool(&name);
-                }
-                Some(ConfigType::Choice) => {
-                    // Enter/Space cycles forward for Choice options.
-                    self.cycle_choice(&name, true);
-                }
-                Some(ConfigType::Group) => {
-                    // Group markers are not directly editable.
-                }
-                Some(ConfigType::List) => {
-                    // Open text editor pre-filled with comma-separated items.
-                    let current = match self.values.get(&name) {
-                        Some(ConfigValue::List(items)) => items.join(", "),
-                        _ => String::new(),
-                    };
-                    self.editing = Some(EditState {
-                        option_name: name,
-                        buffer: current,
-                    });
-                }
-                Some(_) => {
-                    let current = self.values.get(&name).map(format_value).unwrap_or_default();
-                    self.editing = Some(EditState {
-                        option_name: name,
-                        buffer: current,
-                    });
-                }
-                None => {}
+        match ty {
+            Some(ConfigType::Bool) => {
+                self.toggle_bool(&name);
             }
+            Some(ConfigType::Choice) => {
+                self.cycle_choice(&name, true);
+            }
+            Some(ConfigType::Group) => {}
+            Some(ConfigType::List) => {
+                let current = match self.values.get(&name) {
+                    Some(ConfigValue::List(items)) => items.join(", "),
+                    _ => String::new(),
+                };
+                self.editing = Some(EditState {
+                    option_name: name,
+                    buffer: current,
+                });
+            }
+            Some(_) => {
+                let current = self
+                    .values
+                    .get(&name)
+                    .map(format_value)
+                    .unwrap_or_default();
+                self.editing = Some(EditState {
+                    option_name: name,
+                    buffer: current,
+                });
+            }
+            None => {}
         }
     }
 
     /// Commit the current edit.
     fn commit_edit(&mut self) {
-        let Some(edit) = self.editing.take() else { return };
-        let Some(opt) = self.model_options.get(&edit.option_name) else { return };
+        let Some(edit) = self.editing.take() else {
+            return;
+        };
+        let Some(opt) = self.model_options.get(&edit.option_name) else {
+            return;
+        };
 
         let new_val = match opt.ty {
             ConfigType::U32 => edit.buffer.parse::<u32>().ok().map(ConfigValue::U32),
@@ -406,7 +545,9 @@ impl App {
                     .collect();
                 Some(ConfigValue::List(items))
             }
-            ConfigType::Bool | ConfigType::Group => unreachable!("bools/groups are not text-edited"),
+            ConfigType::Bool | ConfigType::Group => {
+                unreachable!("bools/groups are not text-edited")
+            }
         };
 
         if let Some(val) = new_val {
@@ -414,11 +555,131 @@ impl App {
             self.dirty = true;
         }
     }
+
+    /// Open the help popup for the currently selected option.
+    fn open_help(&mut self) {
+        if let Some(name) = self.selected_option_name() {
+            self.help_popup = Some(HelpPopupState {
+                option_name: name,
+                scroll_offset: 0,
+            });
+        }
+    }
+
+    /// Build help popup content lines for a given option.
+    fn help_content(&self, name: &str) -> Vec<String> {
+        let mut lines = Vec::new();
+        let opt = self.model_options.get(name);
+
+        // Help text.
+        if let Some(opt) = opt {
+            lines.push(format!("  {} ", name));
+            lines.push(String::new());
+            if let Some(help) = &opt.help {
+                lines.push(help.clone());
+            } else {
+                lines.push("No help available.".into());
+            }
+            lines.push(String::new());
+
+            // Type / default / range / current value.
+            lines.push(format!("  Type:    {:?}", opt.ty));
+            lines.push(format!("  Default: {}", format_value(&opt.default)));
+            if let Some(val) = self.values.get(name) {
+                lines.push(format!("  Current: {}", format_value(val)));
+            }
+            if let Some((lo, hi)) = opt.range {
+                lines.push(format!("  Range:   {lo}..{hi}"));
+            }
+            if let Some(choices) = &opt.choices {
+                lines.push(format!("  Choices: {}", choices.join(", ")));
+            }
+
+            // Dependencies.
+            if !opt.depends_on.is_empty() {
+                lines.push(String::new());
+                lines.push(format!("  Depends on: {}", opt.depends_on.join(", ")));
+            }
+            if !opt.selects.is_empty() {
+                lines.push(format!("  Selects:    {}", opt.selects.join(", ")));
+            }
+        }
+
+        // Reverse deps.
+        if let Some(required_by) = self.reverse_deps.depended_on_by.get(name) {
+            lines.push(String::new());
+            lines.push(format!("  Required by: {}", required_by.join(", ")));
+        }
+        if let Some(selected_by) = self.reverse_deps.selected_by.get(name) {
+            lines.push(format!("  Selected by: {}", selected_by.join(", ")));
+        }
+
+        // Impact analysis: what would be disabled if this is turned off.
+        if matches!(self.values.get(name), Some(ConfigValue::Bool(true))) {
+            let mut impacted = Vec::new();
+            for (other_name, other_opt) in &self.model_options {
+                if other_name == name {
+                    continue;
+                }
+                if other_opt.depends_on.contains(&name.to_string()) {
+                    if matches!(self.values.get(other_name), Some(ConfigValue::Bool(true))) {
+                        impacted.push(other_name.clone());
+                    }
+                }
+            }
+            if !impacted.is_empty() {
+                lines.push(String::new());
+                lines.push(format!(
+                    "  Would disable if turned off: {}",
+                    impacted.join(", ")
+                ));
+            }
+        }
+
+        lines
+    }
+
+    /// Execute a search and populate search_results.
+    fn execute_search(&mut self) {
+        self.search_results.clear();
+        self.search_cursor = 0;
+        if !self.search_query.is_empty() {
+            search_tree(
+                &self.menu_tree,
+                &self.search_query,
+                &self.model_options,
+                &[],
+                &mut self.search_results,
+            );
+        }
+    }
+
+    /// Navigate to the page containing a search result.
+    fn navigate_to_search_result(&mut self) {
+        if let Some(result) = self.search_results.get(self.search_cursor) {
+            // Rebuild the nav stack to the result's path.
+            self.nav = NavStack::new();
+            for &idx in &result.path {
+                self.nav.push(idx);
+            }
+            self.nav.current_mut().cursor = result.child_index;
+            self.search_mode = false;
+            self.search_query.clear();
+            self.search_results.clear();
+        }
+    }
 }
 
+// ─── Entry point ─────────────────────────────────────────────────────
+
 /// Run the interactive TUI menuconfig.
-pub fn run_menuconfig(model: &BuildModel, root: &Path, profile_name: &str) -> Result<()> {
-    let mut app = App::new(model, root, profile_name)?;
+pub fn run_menuconfig(
+    model: &BuildModel,
+    root: &Path,
+    profile_name: &str,
+    kconfig_tree: &crate::kconfig::ast::KconfigFile,
+) -> Result<()> {
+    let mut app = App::new(model, root, profile_name, kconfig_tree)?;
 
     // Set up terminal.
     enable_raw_mode()?;
@@ -435,6 +696,8 @@ pub fn run_menuconfig(model: &BuildModel, root: &Path, profile_name: &str) -> Re
     result
 }
 
+// ─── Event loop ──────────────────────────────────────────────────────
+
 fn run_event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
@@ -443,7 +706,28 @@ fn run_event_loop(
         terminal.draw(|f| draw_ui(f, app))?;
 
         if let Event::Key(key) = event::read()? {
-            // Handle editing mode.
+            // Priority 1: Help popup.
+            if app.help_popup.is_some() {
+                match key.code {
+                    KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => {
+                        app.help_popup = None;
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        if let Some(popup) = &mut app.help_popup {
+                            popup.scroll_offset = popup.scroll_offset.saturating_sub(1);
+                        }
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        if let Some(popup) = &mut app.help_popup {
+                            popup.scroll_offset += 1;
+                        }
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+
+            // Priority 2: Editing mode.
             if let Some(ref mut edit) = app.editing {
                 match key.code {
                     KeyCode::Enter => {
@@ -463,30 +747,52 @@ fn run_event_loop(
                 continue;
             }
 
-            // Handle search mode.
+            // Priority 3: Search mode.
             if app.search_mode {
                 match key.code {
-                    KeyCode::Enter | KeyCode::Esc => {
+                    KeyCode::Enter => {
+                        app.navigate_to_search_result();
+                    }
+                    KeyCode::Esc => {
                         app.search_mode = false;
+                        app.search_query.clear();
+                        app.search_results.clear();
                     }
                     KeyCode::Backspace => {
                         app.search_query.pop();
-                        app.cursor = 0;
+                        app.execute_search();
                     }
                     KeyCode::Char(c) => {
                         app.search_query.push(c);
-                        app.cursor = 0;
+                        app.execute_search();
+                    }
+                    KeyCode::Up => {
+                        if !app.search_results.is_empty() {
+                            if app.search_cursor > 0 {
+                                app.search_cursor -= 1;
+                            } else {
+                                app.search_cursor = app.search_results.len() - 1;
+                            }
+                        }
+                    }
+                    KeyCode::Down => {
+                        if !app.search_results.is_empty() {
+                            if app.search_cursor + 1 < app.search_results.len() {
+                                app.search_cursor += 1;
+                            } else {
+                                app.search_cursor = 0;
+                            }
+                        }
                     }
                     _ => {}
                 }
                 continue;
             }
 
-            // Normal mode.
+            // Priority 4: Normal navigation.
             match key.code {
                 KeyCode::Char('q') | KeyCode::Char('Q') => {
                     if app.dirty {
-                        // Prompt to save. For simplicity, just save.
                         app.save()?;
                     }
                     return Ok(());
@@ -496,79 +802,36 @@ fn run_event_loop(
                 }
                 KeyCode::Up | KeyCode::Char('k') => app.cursor_up(),
                 KeyCode::Down | KeyCode::Char('j') => app.cursor_down(),
+                KeyCode::Enter | KeyCode::Right => {
+                    let cursor = app.nav.current().cursor;
+                    match app.current_children().get(cursor) {
+                        Some(MenuChild::SubMenu(_)) => app.enter_submenu(),
+                        Some(MenuChild::Option { .. }) => app.start_edit(),
+                        _ => {}
+                    }
+                }
+                KeyCode::Esc | KeyCode::Backspace | KeyCode::Left => {
+                    app.go_back();
+                }
                 KeyCode::Char(' ') => {
-                    let action = {
-                        let visible = app.visible_entries();
-                        visible.get(app.cursor).map(|&(_, entry)| match entry {
-                            MenuEntry::Category { .. } => None,
-                            MenuEntry::Option { name } => Some(name.clone()),
-                        })
-                    };
-                    match action {
-                        Some(None) => app.toggle_category(),
-                        Some(Some(ref name)) => {
-                            let ty = app.model_options.get(name).map(|o| o.ty);
-                            match ty {
-                                Some(ConfigType::Choice) => app.cycle_choice(name, true),
-                                _ => app.toggle_bool(name),
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                KeyCode::Left => {
-                    // Left arrow cycles Choice backward.
-                    let name = {
-                        let visible = app.visible_entries();
-                        visible.get(app.cursor).and_then(|&(_, entry)| match entry {
-                            MenuEntry::Option { name } => Some(name.clone()),
-                            _ => None,
-                        })
-                    };
-                    if let Some(ref name) = name {
-                        if app.model_options.get(name).is_some_and(|o| o.ty == ConfigType::Choice) {
-                            app.cycle_choice(name, false);
+                    // Space toggles/cycles the current option.
+                    if let Some(name) = app.selected_option_name() {
+                        let ty = app.model_options.get(&name).map(|o| o.ty);
+                        match ty {
+                            Some(ConfigType::Choice) => app.cycle_choice(&name, true),
+                            _ => app.toggle_bool(&name),
                         }
                     }
                 }
-                KeyCode::Right => {
-                    // Right arrow cycles Choice forward.
-                    let name = {
-                        let visible = app.visible_entries();
-                        visible.get(app.cursor).and_then(|&(_, entry)| match entry {
-                            MenuEntry::Option { name } => Some(name.clone()),
-                            _ => None,
-                        })
-                    };
-                    if let Some(ref name) = name {
-                        if app.model_options.get(name).is_some_and(|o| o.ty == ConfigType::Choice) {
-                            app.cycle_choice(name, true);
-                        }
-                    }
-                }
-                KeyCode::Enter => {
-                    let is_category = {
-                        let visible = app.visible_entries();
-                        visible.get(app.cursor).map(|&(_, entry)| matches!(entry, MenuEntry::Category { .. }))
-                    };
-                    match is_category {
-                        Some(true) => app.toggle_category(),
-                        Some(false) => app.start_edit(),
-                        _ => {}
-                    }
-                }
+                KeyCode::Char('?') => app.open_help(),
                 KeyCode::Char('/') => {
                     app.search_mode = true;
                     app.search_query.clear();
+                    app.search_results.clear();
+                    app.search_cursor = 0;
                 }
                 KeyCode::Char('s') | KeyCode::Char('S') => {
                     app.save()?;
-                }
-                KeyCode::Esc => {
-                    if !app.search_query.is_empty() {
-                        app.search_query.clear();
-                        app.cursor = 0;
-                    }
                 }
                 _ => {}
             }
@@ -576,40 +839,80 @@ fn run_event_loop(
     }
 }
 
+// ─── Rendering ───────────────────────────────────────────────────────
+
 fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
     let size = f.area();
 
-    // Layout: main list, help panel, key hints.
+    // Layout: breadcrumb (1), page list (min 6), status bar (1), key hints (3).
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Length(1),
             Constraint::Min(6),
-            Constraint::Length(5),
+            Constraint::Length(1),
             Constraint::Length(3),
         ])
         .split(size);
 
-    // Adjust scroll offset.
-    let list_height = chunks[0].height.saturating_sub(2) as usize;
-    if app.cursor < app.scroll_offset {
-        app.scroll_offset = app.cursor;
+    // Search mode replaces the page list.
+    if app.search_mode {
+        draw_search_ui(f, app, &chunks);
+    } else {
+        draw_breadcrumb(f, app, chunks[0]);
+        draw_page_list(f, app, chunks[1]);
     }
-    if app.cursor >= app.scroll_offset + list_height {
-        app.scroll_offset = app.cursor.saturating_sub(list_height - 1);
+    draw_status_bar(f, app, chunks[2]);
+    draw_key_hints(f, app, chunks[3]);
+
+    // Help popup overlay.
+    if let Some(popup) = &app.help_popup {
+        draw_help_popup(f, app, popup, size);
     }
 
-    // Build list items.
-    let visible = app.visible_entries();
-    let items: Vec<ListItem> = visible
+    // Editing overlay on status bar.
+    if let Some(ref edit) = app.editing {
+        let text = format!(" Editing {}: {}█", edit.option_name, edit.buffer);
+        let widget = Paragraph::new(text).style(Style::default().fg(Color::Yellow));
+        f.render_widget(widget, chunks[2]);
+    }
+}
+
+fn draw_breadcrumb(f: &mut ratatui::Frame, app: &App, area: Rect) {
+    let crumbs = app.nav.breadcrumbs(&app.menu_tree);
+    let breadcrumb = crumbs.join(" > ");
+    let widget = Paragraph::new(format!(" {breadcrumb}"))
+        .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+    f.render_widget(widget, area);
+}
+
+fn draw_page_list(f: &mut ratatui::Frame, app: &mut App, area: Rect) {
+    // Adjust scroll offset first (mutable borrow).
+    let list_height = area.height.saturating_sub(2) as usize;
+    {
+        let page = app.nav.current_mut();
+        if page.cursor < page.scroll_offset {
+            page.scroll_offset = page.cursor;
+        }
+        if page.cursor >= page.scroll_offset + list_height && list_height > 0 {
+            page.scroll_offset = page.cursor.saturating_sub(list_height - 1);
+        }
+    }
+
+    let children = app.current_children();
+    let cursor = app.nav.current().cursor;
+    let scroll_offset = app.nav.current().scroll_offset;
+
+    let items: Vec<ListItem> = children
         .iter()
         .enumerate()
-        .skip(app.scroll_offset)
+        .skip(scroll_offset)
         .take(list_height)
-        .map(|(vi, (_, entry))| {
-            let is_selected = vi == app.cursor;
-            match entry {
-                MenuEntry::Category { name, expanded } => {
-                    let arrow = if *expanded { "▼" } else { "▶" };
+        .map(|(i, child)| {
+            let is_selected = i == cursor;
+            match child {
+                MenuChild::SubMenu(sub) => {
+                    let count = sub.children.len();
                     let style = Style::default()
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD);
@@ -619,19 +922,23 @@ fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
                         style
                     };
                     ListItem::new(Line::from(Span::styled(
-                        format!("  {arrow} {name}"),
+                        format!("  ▶ {}  ({count} items)", sub.title),
                         style,
                     )))
                 }
-                MenuEntry::Option { name } => {
+                MenuChild::Option { name } => {
                     let opt = app.model_options.get(name);
                     let val = app.values.get(name);
                     let deps_ok = app.deps_satisfied(name);
 
                     let val_str = match (opt.map(|o| o.ty), val) {
-                        (Some(ConfigType::Bool), Some(ConfigValue::Bool(true))) => "[*]".to_string(),
+                        (Some(ConfigType::Bool), Some(ConfigValue::Bool(true))) => {
+                            "[*]".to_string()
+                        }
                         (Some(ConfigType::Bool), _) => "[ ]".to_string(),
-                        (Some(ConfigType::Choice), Some(ConfigValue::Choice(v))) => format!("< {v} >"),
+                        (Some(ConfigType::Choice), Some(ConfigValue::Choice(v))) => {
+                            format!("< {v} >")
+                        }
                         (Some(ConfigType::List), Some(ConfigValue::List(items))) => {
                             format!("[{} items]", items.len())
                         }
@@ -659,9 +966,7 @@ fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
                         style
                     };
 
-                    // Extra indent for dotted sub-fields (group children).
-                    let indent = if name.contains('.') { "          " } else { "      " };
-                    let line = format!("{indent}{val_str} {name:<24} {help_brief}");
+                    let line = format!("      {val_str} {name:<24} {help_brief}");
                     ListItem::new(Line::from(Span::styled(line, style)))
                 }
             }
@@ -669,40 +974,132 @@ fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
         .collect();
 
     let title = if app.dirty {
-        " Project Configuration [modified] "
+        " Configuration [modified] "
     } else {
-        " Project Configuration "
+        " Configuration "
     };
-    let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title(title));
-    f.render_widget(list, chunks[0]);
+    let list = List::new(items).block(Block::default().borders(Borders::ALL).title(title));
+    f.render_widget(list, area);
+}
 
-    // Help panel.
-    let (help_text, help_meta) = app.current_help();
-    let help_content = if let Some(ref edit) = app.editing {
-        format!("Editing {}: {}_", edit.option_name, edit.buffer)
-    } else if app.search_mode {
-        format!("Search: {}_", app.search_query)
-    } else {
-        format!("{help_text}\n{help_meta}")
+fn draw_search_ui(f: &mut ratatui::Frame, app: &App, chunks: &[Rect]) {
+    // Breadcrumb area shows search prompt.
+    let search_text = format!(" / {}_", app.search_query);
+    let search_widget = Paragraph::new(search_text)
+        .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+    f.render_widget(search_widget, chunks[0]);
+
+    // Page list area shows search results.
+    let list_height = chunks[1].height.saturating_sub(2) as usize;
+    let items: Vec<ListItem> = app
+        .search_results
+        .iter()
+        .enumerate()
+        .take(list_height)
+        .map(|(i, result)| {
+            let is_selected = i == app.search_cursor;
+            let help_brief = app
+                .model_options
+                .get(&result.name)
+                .and_then(|o| o.help.as_ref())
+                .map(|h| h.as_str())
+                .unwrap_or("");
+
+            let style = if is_selected {
+                Style::default().fg(Color::White).bg(Color::DarkGray)
+            } else {
+                Style::default()
+            };
+
+            ListItem::new(Line::from(Span::styled(
+                format!("      {:<24} {help_brief}", result.name),
+                style,
+            )))
+        })
+        .collect();
+
+    let title = format!(" Search: {} result(s) ", app.search_results.len());
+    let list = List::new(items).block(Block::default().borders(Borders::ALL).title(title));
+    f.render_widget(list, chunks[1]);
+}
+
+fn draw_status_bar(f: &mut ratatui::Frame, app: &App, area: Rect) {
+    let children = app.current_children();
+    let cursor = app.nav.current().cursor;
+    let total = children.len();
+    let pos = if total > 0 { cursor + 1 } else { 0 };
+
+    let status = match children.get(cursor) {
+        Some(MenuChild::Option { name }) => {
+            let opt = app.model_options.get(name);
+            let type_str = opt.map(|o| format!("{:?}", o.ty)).unwrap_or_default();
+            format!(" {name} ({type_str})  [{pos}/{total}]")
+        }
+        Some(MenuChild::SubMenu(sub)) => {
+            format!(" {} (submenu)  [{pos}/{total}]", sub.title)
+        }
+        None => format!(" (empty)  [{pos}/{total}]"),
     };
-    let help = Paragraph::new(help_content)
-        .block(Block::default().borders(Borders::ALL).title(" Help "))
-        .wrap(Wrap { trim: true });
-    f.render_widget(help, chunks[1]);
 
-    // Key hints.
+    let widget =
+        Paragraph::new(status).style(Style::default().fg(Color::Black).bg(Color::DarkGray));
+    f.render_widget(widget, area);
+}
+
+fn draw_key_hints(f: &mut ratatui::Frame, app: &App, area: Rect) {
     let hints = if app.editing.is_some() {
         " Enter Confirm  Esc Cancel "
     } else if app.search_mode {
-        " Type to search  Enter/Esc Done "
+        " ↑↓/jk Navigate  Enter Select  Esc Cancel "
+    } else if app.help_popup.is_some() {
+        " ↑↓/jk Scroll  Esc/? Close "
     } else {
-        " ↑↓/jk Navigate  Space Toggle  ←→ Cycle Choice  Enter Edit  / Search  S Save  Q Quit "
+        " ↑↓/jk Navigate  Enter/→ Into  Esc/← Back  Space Toggle  ? Help  / Search  S Save  Q Quit "
     };
-    let hints_widget = Paragraph::new(hints)
-        .block(Block::default().borders(Borders::ALL));
-    f.render_widget(hints_widget, chunks[2]);
+    let widget = Paragraph::new(hints).block(Block::default().borders(Borders::ALL));
+    f.render_widget(widget, area);
 }
+
+fn draw_help_popup(
+    f: &mut ratatui::Frame,
+    app: &App,
+    popup: &HelpPopupState,
+    area: Rect,
+) {
+    let content_lines = app.help_content(&popup.option_name);
+
+    // Center the popup with ~60% width and ~60% height.
+    let popup_width = (area.width * 3 / 5).max(40).min(area.width.saturating_sub(4));
+    let popup_height = (area.height * 3 / 5).max(10).min(area.height.saturating_sub(4));
+    let x = (area.width.saturating_sub(popup_width)) / 2;
+    let y = (area.height.saturating_sub(popup_height)) / 2;
+    let popup_area = Rect::new(x, y, popup_width, popup_height);
+
+    // Clear the area behind the popup.
+    f.render_widget(Clear, popup_area);
+
+    let visible_height = popup_height.saturating_sub(2) as usize;
+    let text: String = content_lines
+        .iter()
+        .skip(popup.scroll_offset)
+        .take(visible_height)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let title = format!(" Help: {} ", popup.option_name);
+    let paragraph = Paragraph::new(text)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .style(Style::default().bg(Color::Black)),
+        )
+        .wrap(Wrap { trim: false });
+    f.render_widget(paragraph, popup_area);
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────
 
 /// Format a config value for display.
 fn format_value(val: &ConfigValue) -> String {

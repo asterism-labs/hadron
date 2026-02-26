@@ -1,32 +1,13 @@
 //! Minimal network stack: ARP resolution/reply and ICMP echo (ping).
 //!
-//! Provides Ethernet framing, ARP, IPv4, and ICMP with a static IP
-//! configuration. The stack runs as a single async background task that
-//! takes ownership of the first available NIC.
+//! Protocol logic lives in the `hadron-net` crate.  This module provides
+//! the kernel glue: device registry lookup and task spawning.
 
 extern crate alloc;
-
-mod arp;
-mod checksum;
-mod ethernet;
-mod icmp;
-mod ipv4;
-mod task;
 
 use alloc::string::String;
 
 use crate::drivers::device_registry::DeviceRegistry;
-
-/// Static network configuration.
-#[derive(Clone, Copy)]
-pub struct NetConfig {
-    /// Our IPv4 address.
-    pub ip: [u8; 4],
-    /// Subnet mask.
-    pub netmask: [u8; 4],
-    /// Default gateway.
-    pub gateway: [u8; 4],
-}
 
 /// Initializes the network stack.
 ///
@@ -52,11 +33,11 @@ pub fn init() {
     let mac = nic.mac_address();
     crate::kinfo!("net: starting stack on {} (MAC={})", name, mac);
 
-    let config = NetConfig {
+    let config = hadron_net::NetConfig {
         ip: [192, 168, 100, 2],
         netmask: [255, 255, 255, 0],
         gateway: [192, 168, 100, 1],
     };
 
-    crate::sched::spawn_background("net-rx", task::net_rx_loop(nic, config));
+    crate::sched::spawn_background("net-rx", hadron_net::task::net_rx_loop(nic, config));
 }

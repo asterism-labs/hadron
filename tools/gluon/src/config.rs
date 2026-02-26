@@ -64,6 +64,7 @@ pub struct ImageConfig {
 pub struct TestsConfig {
     pub host_testable: Vec<String>,
     pub kani_verifiable: Vec<String>,
+    pub shuttle_testable: Vec<String>,
     pub kernel_tests_dir: Option<String>,
     /// Which crate owns the kernel integration tests.
     pub kernel_tests_crate: Option<String>,
@@ -254,6 +255,7 @@ pub fn resolve_from_model(
     let tests = TestsConfig {
         host_testable: model.tests.host_testable.clone(),
         kani_verifiable: model.tests.kani_verifiable.clone(),
+        shuttle_testable: model.tests.shuttle_testable.clone(),
         kernel_tests_dir: model.tests.kernel_tests_dir.clone(),
         kernel_tests_crate: model.tests.kernel_tests_crate.clone(),
         kernel_tests_linker_script: model.tests.kernel_tests_linker_script.clone(),

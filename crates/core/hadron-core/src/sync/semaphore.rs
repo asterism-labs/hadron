@@ -317,6 +317,53 @@ mod loom_tests {
     }
 }
 
+#[cfg(shuttle)]
+mod shuttle_tests {
+    use shuttle::sync::Arc;
+    use shuttle::thread;
+
+    use super::SemaphoreInner;
+    use crate::sync::backend::ShuttleBackend;
+
+    type ShuttleSemaphore = SemaphoreInner<ShuttleBackend>;
+
+    #[test]
+    fn shuttle_bounded_concurrency() {
+        shuttle::check_random(
+            || {
+                // Semaphore with 2 permits, 4 threads competing.
+                let sem = Arc::new(ShuttleSemaphore::new_with_backend(2));
+                let active = Arc::new(shuttle::sync::atomic::AtomicUsize::new(0));
+
+                let threads: Vec<_> = (0..4)
+                    .map(|_| {
+                        let sem = sem.clone();
+                        let active = active.clone();
+                        thread::spawn(move || {
+                            loop {
+                                if let Some(_permit) = sem.try_acquire() {
+                                    let prev =
+                                        active.fetch_add(1, core::sync::atomic::Ordering::SeqCst);
+                                    // At most 2 threads can be active simultaneously.
+                                    assert!(prev < 2);
+                                    active.fetch_sub(1, core::sync::atomic::Ordering::SeqCst);
+                                    break;
+                                }
+                                shuttle::thread::yield_now();
+                            }
+                        })
+                    })
+                    .collect();
+
+                for t in threads {
+                    t.join().unwrap();
+                }
+            },
+            100,
+        );
+    }
+}
+
 #[cfg(kani)]
 mod kani_proofs {
     use super::*;

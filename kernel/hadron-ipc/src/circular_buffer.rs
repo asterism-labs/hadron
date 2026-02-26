@@ -9,7 +9,7 @@ extern crate alloc;
 use alloc::boxed::Box;
 
 /// Fixed-size circular buffer backed by a heap-allocated byte slice.
-pub(crate) struct CircularBuffer {
+pub struct CircularBuffer {
     data: Box<[u8]>,
     read_pos: usize,
     write_pos: usize,

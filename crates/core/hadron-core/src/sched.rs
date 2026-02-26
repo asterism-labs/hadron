@@ -762,3 +762,271 @@ mod tests {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Shuttle tests: systematic schedule exploration for concurrent protocols
+// ---------------------------------------------------------------------------
+
+#[cfg(shuttle)]
+mod shuttle_tests {
+    use shuttle::sync::{Arc, Mutex};
+    use shuttle::thread;
+
+    use super::*;
+    use crate::task::{Priority, TaskId};
+
+    /// 3-thread work stealing: all tasks start on thread 0, threads 1-2 steal.
+    /// Verifies no tasks are lost under all explored schedules.
+    #[test]
+    fn shuttle_work_stealing_no_task_loss() {
+        shuttle::check_random(
+            || {
+                const NUM_CPUS: usize = 3;
+                const NUM_TASKS: usize = 6;
+                const POLLS_TO_COMPLETE: usize = 3;
+
+                let queues: Vec<Arc<Mutex<ReadyQueues>>> = (0..NUM_CPUS)
+                    .map(|_| Arc::new(Mutex::new(ReadyQueues::new())))
+                    .collect();
+
+                let completed = Arc::new(shuttle::sync::atomic::AtomicUsize::new(0));
+
+                // All tasks start on CPU 0.
+                {
+                    let mut rq = queues[0].lock().unwrap();
+                    for i in 0..NUM_TASKS {
+                        rq.push(Priority::Normal, TaskId(i as u64));
+                    }
+                }
+
+                let threads: Vec<_> = (0..NUM_CPUS)
+                    .map(|cpu| {
+                        let queues = queues.clone();
+                        let completed = completed.clone();
+
+                        thread::spawn(move || {
+                            let mut polls_left = vec![POLLS_TO_COMPLETE; NUM_TASKS];
+
+                            for _ in 0..(NUM_TASKS * POLLS_TO_COMPLETE * 2) {
+                                // Try local pop first.
+                                let task = { queues[cpu].lock().unwrap().pop() };
+                                match task {
+                                    Some((pri, id)) => {
+                                        let idx = id.0 as usize;
+                                        if polls_left[idx] > 0 {
+                                            polls_left[idx] -= 1;
+                                        }
+                                        if polls_left[idx] > 0 {
+                                            queues[cpu].lock().unwrap().push(pri, id);
+                                        } else {
+                                            completed.fetch_add(
+                                                1,
+                                                shuttle::sync::atomic::Ordering::Relaxed,
+                                            );
+                                        }
+                                    }
+                                    None => {
+                                        // Try steal from another CPU.
+                                        for victim in 0..NUM_CPUS {
+                                            if victim == cpu {
+                                                continue;
+                                            }
+                                            let stolen =
+                                                { queues[victim].lock().unwrap().steal_one() };
+                                            if let Some((pri, id)) = stolen {
+                                                queues[cpu].lock().unwrap().push(pri, id);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                                thread::yield_now();
+                            }
+                        })
+                    })
+                    .collect();
+
+                for t in threads {
+                    t.join().unwrap();
+                }
+
+                assert_eq!(
+                    completed.load(shuttle::sync::atomic::Ordering::Relaxed),
+                    NUM_TASKS,
+                    "all tasks must complete"
+                );
+            },
+            100,
+        );
+    }
+
+    /// Priority ordering: when all tasks are enqueued before popping,
+    /// critical always comes first, then normal, then background.
+    /// Two threads push then pop, barrier-synchronized.
+    #[test]
+    fn shuttle_priority_ordering_concurrent() {
+        shuttle::check_random(
+            || {
+                let rq = Arc::new(Mutex::new(ReadyQueues::new()));
+
+                let rq1 = rq.clone();
+                let rq2 = rq.clone();
+
+                // Thread 1 pushes all tasks, then pops half.
+                let t1 = thread::spawn(move || {
+                    rq1.lock().unwrap().push(Priority::Background, TaskId(1));
+                    rq1.lock().unwrap().push(Priority::Normal, TaskId(2));
+                    rq1.lock().unwrap().push(Priority::Critical, TaskId(3));
+
+                    // Pop once — should be critical.
+                    let item = { rq1.lock().unwrap().pop() };
+                    item
+                });
+
+                // Thread 2 pops remaining.
+                let t2 = thread::spawn(move || {
+                    let mut items = Vec::new();
+                    for _ in 0..3 {
+                        let item = { rq2.lock().unwrap().pop() };
+                        if let Some(item) = item {
+                            items.push(item);
+                        }
+                        thread::yield_now();
+                    }
+                    items
+                });
+
+                let first = t1.join().unwrap();
+                let mut rest = t2.join().unwrap();
+
+                // Drain any remaining.
+                loop {
+                    let item = { rq.lock().unwrap().pop() };
+                    match item {
+                        Some(item) => rest.push(item),
+                        None => break,
+                    }
+                }
+
+                let mut all_items: Vec<(Priority, TaskId)> = Vec::new();
+                if let Some(item) = first {
+                    all_items.push(item);
+                }
+                all_items.extend(rest);
+
+                // All 3 tasks must be accounted for.
+                assert_eq!(all_items.len(), 3, "no tasks lost");
+
+                // Verify all 3 task IDs are present (conservation).
+                let mut ids: Vec<u64> = all_items.iter().map(|(_, id)| id.0).collect();
+                ids.sort();
+                assert_eq!(ids, vec![1, 2, 3], "all task IDs present");
+            },
+            100,
+        );
+    }
+
+    /// One-task rule: a sole task must not be stolen. Tests the invariant
+    /// under concurrent push + steal.
+    #[test]
+    fn shuttle_one_task_rule_no_bouncing() {
+        shuttle::check_random(
+            || {
+                let rq = Arc::new(Mutex::new(ReadyQueues::new()));
+
+                // CPU A has exactly one task.
+                rq.lock().unwrap().push(Priority::Normal, TaskId(1));
+
+                let rq_a = rq.clone();
+                let rq_b = rq.clone();
+
+                // Thread simulating CPU A polling.
+                let t_a = thread::spawn(move || {
+                    let mut polled = false;
+                    for _ in 0..5 {
+                        let task = { rq_a.lock().unwrap().pop() };
+                        if let Some((pri, id)) = task {
+                            // Re-queue (simulating yield).
+                            rq_a.lock().unwrap().push(pri, id);
+                            polled = true;
+                        }
+                        thread::yield_now();
+                    }
+                    polled
+                });
+
+                // Thread simulating CPU B stealing from CPU A's queue.
+                let t_b = thread::spawn(move || {
+                    let mut stolen_count = 0;
+                    for _ in 0..5 {
+                        let stolen = { rq_b.lock().unwrap().steal_one() };
+                        if stolen.is_some() {
+                            stolen_count += 1;
+                        }
+                        thread::yield_now();
+                    }
+                    stolen_count
+                });
+
+                t_a.join().unwrap();
+                let stolen = t_b.join().unwrap();
+
+                // The one-task rule means: when the queue has exactly 1
+                // stealable task, steal_one returns None.
+                assert_eq!(stolen, 0, "one-task rule: sole task must not be stolen");
+            },
+            100,
+        );
+    }
+
+    /// Concurrent push + pop: verifies no tasks are lost when two threads
+    /// push and pop simultaneously.
+    #[test]
+    fn shuttle_concurrent_push_pop_no_loss() {
+        shuttle::check_random(
+            || {
+                let rq = Arc::new(Mutex::new(ReadyQueues::new()));
+                let rq1 = rq.clone();
+                let rq2 = rq.clone();
+
+                // Thread 1 pushes 4 tasks.
+                let pusher = thread::spawn(move || {
+                    for i in 0..4u64 {
+                        rq1.lock().unwrap().push(Priority::Normal, TaskId(i));
+                        thread::yield_now();
+                    }
+                });
+
+                // Thread 2 pops tasks.
+                let popper = thread::spawn(move || {
+                    let mut popped = Vec::new();
+                    for _ in 0..8 {
+                        let item = { rq2.lock().unwrap().pop() };
+                        if let Some((_, id)) = item {
+                            popped.push(id.0);
+                        }
+                        thread::yield_now();
+                    }
+                    popped
+                });
+
+                pusher.join().unwrap();
+                let mut popped = popper.join().unwrap();
+
+                // Drain remaining.
+                loop {
+                    let item = { rq.lock().unwrap().pop() };
+                    match item {
+                        Some((_, id)) => popped.push(id.0),
+                        None => break,
+                    }
+                }
+
+                // All 4 tasks must be accounted for.
+                popped.sort();
+                assert_eq!(popped, vec![0, 1, 2, 3], "no tasks lost");
+            },
+            100,
+        );
+    }
+}

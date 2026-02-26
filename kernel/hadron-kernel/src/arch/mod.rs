@@ -42,9 +42,9 @@ pub fn platform_init(boot_info: &impl crate::boot::BootInfo) {
         // 2. PCI enumeration + driver matching (requires PCI).
         #[cfg(hadron_pci)]
         {
-            let mut pci_devices = crate::pci::enumerate::enumerate();
+            let mut pci_devices = crate::pci::enumerate();
             crate::kinfo!("PCI: found {} devices", pci_devices.len());
-            crate::pci::enumerate::apply_prt_routing(&mut pci_devices);
+            crate::pci::apply_prt_routing(&mut pci_devices);
 
             // ACPI platform device enumeration (if ACPI is available).
             #[cfg(hadron_acpi)]

@@ -9,21 +9,19 @@
 
 extern crate alloc;
 
-use alloc::boxed::Box;
 use alloc::sync::Arc;
-use alloc::vec::Vec;
 
-use super::block::BlockDevice;
-use super::device_path::DevicePath;
-use super::dyn_dispatch::{
-    DynBlockDevice, DynBlockDeviceWrapper, DynNetDevice, DynNetDeviceWrapper,
+use hadron_driver_api::acpi_device::AcpiMatchId;
+use hadron_driver_api::error::DriverError;
+use hadron_driver_api::pci::PciDeviceId;
+
+// Re-export types that moved to hadron-driver-api so existing import paths
+// (`hadron_kernel::driver_api::registration::{DeviceSet, ...}`) continue to work.
+pub use hadron_driver_api::device_set::{
+    DeviceSet, PciDriverRegistration, PlatformDriverRegistration,
 };
-use super::error::DriverError;
-use super::framebuffer::Framebuffer;
-use super::hw::Watchdog;
-use super::lifecycle::ManagedDriver;
-use super::net::NetworkDevice;
-use super::pci::PciDeviceId;
+
+use super::capability::CapabilityFlags;
 use super::probe_context::{PciProbeContext, PlatformProbeContext};
 
 // ---------------------------------------------------------------------------
@@ -42,23 +40,12 @@ pub struct PciDriverEntry {
     /// Device IDs this driver supports.
     pub id_table: &'static [PciDeviceId],
     /// Declared capability flags for runtime auditing.
-    pub capabilities: super::capability::CapabilityFlags,
+    pub capabilities: CapabilityFlags,
     /// Called when a matching device is found.
     ///
     /// Receives a [`PciProbeContext`] with typed capability tokens.
     /// Returns a [`PciDriverRegistration`] describing the devices created.
     pub probe: fn(PciProbeContext) -> Result<PciDriverRegistration, DriverError>,
-}
-
-/// Registration bundle returned by a PCI driver's probe function.
-///
-/// Contains the set of devices the driver created and an optional lifecycle
-/// handle for power management.
-pub struct PciDriverRegistration {
-    /// Devices registered by this driver.
-    pub devices: DeviceSet,
-    /// Optional lifecycle handle for suspend/resume/shutdown.
-    pub lifecycle: Option<Arc<dyn ManagedDriver>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -74,9 +61,9 @@ pub struct PlatformDriverEntry {
     /// Driver name (for logging).
     pub name: &'static str,
     /// ACPI ID table for matching against device `_HID`/`_CID`.
-    pub id_table: &'static [super::acpi_device::AcpiMatchId],
+    pub id_table: &'static [AcpiMatchId],
     /// Declared capability flags for runtime auditing.
-    pub capabilities: super::capability::CapabilityFlags,
+    pub capabilities: CapabilityFlags,
     /// Probe function called when a matching device is found.
     ///
     /// Receives a [`PlatformProbeContext`] with typed capability tokens.
@@ -84,82 +71,8 @@ pub struct PlatformDriverEntry {
     pub probe: fn(PlatformProbeContext) -> Result<PlatformDriverRegistration, DriverError>,
 }
 
-/// Registration bundle returned by a platform driver's init function.
-pub struct PlatformDriverRegistration {
-    /// Devices registered by this driver.
-    pub devices: DeviceSet,
-    /// Optional lifecycle handle for suspend/resume/shutdown.
-    pub lifecycle: Option<Arc<dyn ManagedDriver>>,
-}
-
 // ---------------------------------------------------------------------------
-// DeviceSet — bundle of devices a driver registers
-// ---------------------------------------------------------------------------
-
-/// A collection of devices created by a driver during probe/init.
-///
-/// Drivers add their devices to this set, and the kernel processes the
-/// set after probe completes to register them in the device registry.
-pub struct DeviceSet {
-    /// Framebuffer devices.
-    pub(crate) framebuffers: Vec<(DevicePath, Arc<dyn Framebuffer>)>,
-    /// Block devices (type-erased for dynamic dispatch).
-    pub(crate) block_devices: Vec<(DevicePath, Box<dyn DynBlockDevice>)>,
-    /// Network devices (type-erased for dynamic dispatch).
-    pub(crate) net_devices: Vec<(DevicePath, Box<dyn DynNetDevice>)>,
-    /// Watchdog devices.
-    pub(crate) watchdogs: Vec<(DevicePath, Arc<dyn Watchdog>)>,
-}
-
-impl DeviceSet {
-    /// Creates an empty device set.
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            framebuffers: Vec::new(),
-            block_devices: Vec::new(),
-            net_devices: Vec::new(),
-            watchdogs: Vec::new(),
-        }
-    }
-
-    /// Adds a block device to the set.
-    ///
-    /// The concrete `BlockDevice` is automatically wrapped in a
-    /// [`DynBlockDeviceWrapper`] for type-erased storage.
-    pub fn add_block_device<D: BlockDevice + 'static>(&mut self, path: DevicePath, device: D) {
-        self.block_devices
-            .push((path, Box::new(DynBlockDeviceWrapper(device))));
-    }
-
-    /// Adds a network device to the set.
-    ///
-    /// The concrete `NetworkDevice` is automatically wrapped in a
-    /// [`DynNetDeviceWrapper`] for type-erased storage.
-    pub fn add_net_device<D: NetworkDevice + 'static>(&mut self, path: DevicePath, device: D) {
-        self.net_devices
-            .push((path, Box::new(DynNetDeviceWrapper(device))));
-    }
-
-    /// Adds a framebuffer device to the set.
-    pub fn add_framebuffer(&mut self, path: DevicePath, fb: Arc<dyn Framebuffer>) {
-        self.framebuffers.push((path, fb));
-    }
-
-    /// Adds a watchdog device to the set.
-    pub fn add_watchdog(&mut self, path: DevicePath, wd: Arc<dyn Watchdog>) {
-        self.watchdogs.push((path, wd));
-    }
-}
-
-impl Default for DeviceSet {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Filesystem entries (unchanged from previous design)
+// Filesystem entries (depend on kernel's fs module)
 // ---------------------------------------------------------------------------
 
 /// Block-device filesystem entry placed in the `.hadron_block_fs` linker section.
@@ -175,7 +88,7 @@ pub struct BlockFsEntry {
     pub name: &'static str,
     /// Mount function: takes a type-erased block device and returns a filesystem.
     pub mount: fn(
-        alloc::boxed::Box<dyn crate::driver_api::dyn_dispatch::DynBlockDevice>,
+        alloc::boxed::Box<dyn hadron_driver_api::dyn_dispatch::DynBlockDevice>,
     ) -> Result<Arc<dyn crate::fs::FileSystem>, crate::fs::FsError>,
 }
 

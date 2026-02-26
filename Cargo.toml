@@ -6,6 +6,10 @@ members = [
     "kernel/fs",
     "kernel/sched",
     "kernel/hadron-kernel",
+    "kernel/hadron-net",
+    "kernel/hadron-ipc",
+    "kernel/hadron-pci",
+    "kernel/hadron-tty",
     "kernel/hadron-drivers",
     "tools/gluon",
 ]
@@ -32,12 +36,17 @@ hadron-fdt = { path = "crates/parse/fdt" }
 hadron-core = { path = "crates/core/hadron-core" }
 hadron-binparse = { path = "crates/parse/binparse" }
 hadron-binparse-macros = { path = "crates/parse/binparse-macros" }
+hadron-driver-api = { path = "crates/driver/hadron-driver-api" }
 hadron-mmio = { path = "crates/driver/hadron-mmio" }
 hadron-mmio-macros = { path = "crates/driver/hadron-mmio-macros" }
 hadron-codegen = { path = "crates/tools/hadron-codegen" }
 hadron-drivers = { path = "kernel/hadron-drivers" }
 hadron-fs = { path = "kernel/fs" }
+hadron-ipc = { path = "kernel/hadron-ipc" }
+hadron-pci = { path = "kernel/hadron-pci" }
+hadron-tty = { path = "kernel/hadron-tty" }
 hadron-mm = { path = "kernel/mm" }
+hadron-net = { path = "kernel/hadron-net" }
 hadron-sched = { path = "kernel/sched" }
 hadron-dwarf = { path = "crates/parse/dwarf" }
 hadron-elf = { path = "crates/parse/elf" }

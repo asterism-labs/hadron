@@ -341,3 +341,94 @@ mod loom_tests {
         });
     }
 }
+
+#[cfg(shuttle)]
+mod shuttle_tests {
+    use shuttle::sync::Arc;
+    use shuttle::thread;
+
+    use super::IrqSpinLockInner;
+    use crate::sync::backend::ShuttleBackend;
+
+    type ShuttleIrqSpinLock<T> = IrqSpinLockInner<T, ShuttleBackend>;
+
+    #[test]
+    fn shuttle_three_thread_mutual_exclusion() {
+        shuttle::check_random(
+            || {
+                let lock = Arc::new(ShuttleIrqSpinLock::new_with_backend(0usize));
+
+                let threads: Vec<_> = (0..3)
+                    .map(|_| {
+                        let lock = lock.clone();
+                        thread::spawn(move || {
+                            for _ in 0..5 {
+                                let mut guard = lock.lock();
+                                *guard += 1;
+                            }
+                        })
+                    })
+                    .collect();
+
+                for t in threads {
+                    t.join().unwrap();
+                }
+
+                assert_eq!(*lock.lock(), 15);
+            },
+            100,
+        );
+    }
+
+    #[test]
+    fn shuttle_irq_state_preserved() {
+        shuttle::check_random(
+            || {
+                use crate::sync::shuttle_mock;
+                let lock = Arc::new(ShuttleIrqSpinLock::new_with_backend(42usize));
+
+                assert!(shuttle_mock::mock_irq_enabled());
+
+                {
+                    let guard = lock.lock();
+                    assert!(!shuttle_mock::mock_irq_enabled());
+                    assert_eq!(*guard, 42);
+                }
+
+                assert!(shuttle_mock::mock_irq_enabled());
+            },
+            100,
+        );
+    }
+}
+
+#[cfg(kani)]
+mod kani_proofs {
+    use super::*;
+
+    /// Verify that `try_lock` returns `None` when the lock is already held.
+    #[kani::proof]
+    fn irq_spinlock_try_lock_semantics() {
+        let lock = IrqSpinLock::new(0u32);
+        let guard = lock.try_lock();
+        assert!(guard.is_some());
+        // While held, a second try_lock must fail.
+        assert!(lock.try_lock().is_none());
+        drop(guard);
+        // After release, try_lock must succeed again.
+        assert!(lock.try_lock().is_some());
+    }
+
+    /// Verify that data written under the lock is visible after re-acquisition.
+    #[kani::proof]
+    fn irq_spinlock_protects_data() {
+        let val: u32 = kani::any();
+        let lock = IrqSpinLock::new(0u32);
+        {
+            let mut guard = lock.lock();
+            *guard = val;
+        }
+        let guard = lock.lock();
+        assert_eq!(*guard, val);
+    }
+}

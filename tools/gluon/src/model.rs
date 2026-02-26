@@ -34,6 +34,14 @@ pub struct BuildModel {
     pub benchmarks: BenchmarksDef,
     /// External dependency declarations from `dependency()` calls in gluon.rhai.
     pub dependencies: BTreeMap<String, ExternalDepDef>,
+    /// Relative path to the root Kconfig file (e.g. `"Kconfig"`).
+    ///
+    /// Stored so that `menuconfig` can call [`load_kconfig_tree`] to obtain
+    /// the fully-expanded AST for hierarchical navigation.
+    ///
+    /// [`load_kconfig_tree`]: crate::kconfig::load_kconfig_tree
+    #[serde(default)]
+    pub kconfig_path: Option<String>,
     /// Paths to input files discovered during evaluation (Kconfig files, etc.).
     /// Used by model caching to track invalidation inputs.
     #[serde(default)]
@@ -386,6 +394,8 @@ pub struct ImageDef {
 pub struct TestsDef {
     pub host_testable: Vec<String>,
     pub kani_verifiable: Vec<String>,
+    #[serde(default)]
+    pub shuttle_testable: Vec<String>,
     pub kernel_tests_dir: Option<String>,
     /// Which crate owns the kernel integration tests.
     pub kernel_tests_crate: Option<String>,

@@ -9,7 +9,7 @@ use hadron_ktest::kernel_test;
 
 #[kernel_test(stage = "before_executor", timeout = 5)]
 fn test_pci_enumerate_finds_devices() {
-    let devices = crate::pci::enumerate::enumerate();
+    let devices = crate::pci::enumerate();
     assert!(
         !devices.is_empty(),
         "QEMU q35 should have at least one PCI device"
@@ -18,7 +18,7 @@ fn test_pci_enumerate_finds_devices() {
 
 #[kernel_test(stage = "before_executor", timeout = 5)]
 fn test_pci_host_bridge_present() {
-    let devices = crate::pci::enumerate::enumerate();
+    let devices = crate::pci::enumerate();
     let has_host_bridge = devices
         .iter()
         .any(|d| d.class == 0x06 && d.subclass == 0x00);
@@ -30,7 +30,7 @@ fn test_pci_host_bridge_present() {
 
 #[kernel_test(stage = "before_executor", timeout = 5)]
 fn test_pci_isa_bridge_present() {
-    let devices = crate::pci::enumerate::enumerate();
+    let devices = crate::pci::enumerate();
     let has_isa_bridge = devices
         .iter()
         .any(|d| d.class == 0x06 && d.subclass == 0x01);
@@ -42,7 +42,7 @@ fn test_pci_isa_bridge_present() {
 
 #[kernel_test(stage = "before_executor", timeout = 5)]
 fn test_pci_device_ids_valid() {
-    let devices = crate::pci::enumerate::enumerate();
+    let devices = crate::pci::enumerate();
     for dev in &devices {
         assert_ne!(
             dev.vendor_id, 0xFFFF,
@@ -54,7 +54,7 @@ fn test_pci_device_ids_valid() {
 
 #[kernel_test(stage = "before_executor", timeout = 5)]
 fn test_pci_bar_alignment() {
-    let devices = crate::pci::enumerate::enumerate();
+    let devices = crate::pci::enumerate();
     for dev in &devices {
         for (i, bar) in dev.bars.iter().enumerate() {
             if let PciBar::Memory { base, size, .. } = bar {

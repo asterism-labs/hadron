@@ -14,8 +14,8 @@ use core::future::Future;
 use core::pin::Pin;
 use hadron_core::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::fs::{DirEntry, FsError, Inode, InodeType, Permissions};
-use crate::sync::{HeapWaitQueue, SpinLock};
+use hadron_core::sync::{HeapWaitQueue, SpinLock};
+use hadron_fs::{DirEntry, FsError, Inode, InodeType, Permissions};
 
 /// Default pipe buffer size: 64 KiB.
 const PIPE_BUF_SIZE: usize = 64 * 1024;
@@ -48,7 +48,7 @@ struct PipeInner {
     writers: AtomicUsize,
 }
 
-use super::circular_buffer::CircularBuffer;
+use crate::circular_buffer::CircularBuffer;
 
 /// Reader half of a pipe.
 pub struct PipeReader(Arc<PipeInner>);
