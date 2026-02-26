@@ -278,6 +278,7 @@ fn compile_crate_cross(
     let crate_type = match krate.crate_type {
         CrateType::ProcMacro => "proc-macro",
         CrateType::Bin => if is_check { "lib" } else { "bin" },
+        CrateType::StaticLib => if is_check { "rlib" } else { "staticlib" },
         CrateType::Lib => "rlib",
     };
 
@@ -441,6 +442,11 @@ fn compile_crate_cross(
     // Determine output artifact path.
     let artifact = if !is_check && krate.crate_type == CrateType::Bin {
         out_dir.join(crate_name_sanitized(&krate.name))
+    } else if !is_check && krate.crate_type == CrateType::StaticLib {
+        out_dir.join(format!(
+            "lib{}.a",
+            crate_name_sanitized(&krate.name)
+        ))
     } else if is_check {
         out_dir.join(format!(
             "lib{}.rmeta",
@@ -470,6 +476,7 @@ fn compile_crate_host(
 
     let crate_type = match krate.crate_type {
         CrateType::ProcMacro => "proc-macro",
+        CrateType::StaticLib => "staticlib",
         _ => "lib",
     };
 
@@ -615,6 +622,8 @@ pub fn crate_artifact_path(
         }
     } else if !is_check && krate.crate_type == CrateType::Bin {
         out_dir.join(&sanitized)
+    } else if !is_check && krate.crate_type == CrateType::StaticLib {
+        out_dir.join(format!("lib{sanitized}.a"))
     } else if is_check {
         out_dir.join(format!("lib{sanitized}.rmeta"))
     } else {

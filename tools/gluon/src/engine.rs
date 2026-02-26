@@ -74,6 +74,7 @@ pub fn evaluate_script(root: &Path) -> Result<BuildModel> {
     scope.push_constant("LIB", 10_i64);
     scope.push_constant("BIN", 11_i64);
     scope.push_constant("PROC_MACRO", 12_i64);
+    scope.push_constant("STATICLIB", 13_i64);
 
     // Register all API functions.
     register_project_api(&mut engine, model.clone());
@@ -127,6 +128,7 @@ fn crate_type_from_i64(val: i64) -> CrateType {
     match val {
         11 => CrateType::Bin,
         12 => CrateType::ProcMacro,
+        13 => CrateType::StaticLib,
         _ => CrateType::Lib,
     }
 }

@@ -12,6 +12,7 @@ members = [
     "kernel/hadron-tty",
     "kernel/hadron-drivers",
     "tools/gluon",
+    "userspace/hadron-libc/core",
 ]
 exclude = [ "userspace", "kernel/boot" ]
 default-members = [

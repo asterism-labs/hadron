@@ -69,6 +69,7 @@ pub enum CrateType {
     Lib,
     Bin,
     ProcMacro,
+    StaticLib,
 }
 
 impl Default for CrateType {
@@ -83,6 +84,7 @@ impl CrateType {
             Self::Lib => "lib",
             Self::Bin => "bin",
             Self::ProcMacro => "proc-macro",
+            Self::StaticLib => "staticlib",
         }
     }
 }

@@ -317,19 +317,25 @@ fn map_sigreturn_trampoline<
 
 /// Writes argv and envp data onto the child's user stack via HHDM translation.
 ///
-/// Stack layout (Rust-native `&str` = `(ptr, len)` in memory):
+/// Stack layout (standard C ABI with null-terminated strings):
 /// ```text
 /// HIGH ADDRESS (USER_STACK_TOP = 0x7FFF_FFFF_F000)
 ///   ┌────────────────────────────────┐
-///   │ env string bytes (contiguous)  │
-///   │ arg string bytes (contiguous)  │  ← packed UTF-8, NOT NUL-terminated
+///   │ env string bytes (NUL-term)    │
+///   │ arg string bytes (NUL-term)    │  ← packed, each NUL-terminated
 ///   ├────────────────────────────────┤
-///   │ envp (ptr, len) pairs          │
-///   │ argv (ptr, len) pairs          │  ← directly castable to &[&str]
+///   │ padding (align to 16 bytes)    │
 ///   ├────────────────────────────────┤
-///   │ envc: usize                    │
-///   │ argc: usize                    │  ← RSP points here
-///   └────────────────────────────────┘    (16-byte aligned)
+///   │ NULL                           │  ← envp terminator
+///   │ envp[envc-1]: *const c_char    │
+///   │ ...                            │
+///   │ envp[0]: *const c_char         │
+///   │ NULL                           │  ← argv terminator
+///   │ argv[argc-1]: *const c_char    │
+///   │ ...                            │
+///   │ argv[0]: *const c_char         │
+///   │ argc: usize                    │  ← RSP (16-byte aligned)
+///   └────────────────────────────────┘
 /// ```
 ///
 /// Returns the adjusted RSP value, or `BinaryError` if translation fails.
@@ -343,92 +349,62 @@ fn write_startup_data<M: PageMapper<Size4KiB> + PageTranslator>(
     envs: &[&str],
     hhdm_offset: crate::addr::VirtAddr,
 ) -> Result<u64, BinaryError> {
-    if args.is_empty() && envs.is_empty() {
-        // Write argc=0, envc=0 at the top of the stack, 16-byte aligned.
-        let base = USER_STACK_TOP - 16; // 16-byte aligned
-        write_usize_to_user(address_space, base, 0, hhdm_offset)?; // argc
-        write_usize_to_user(
-            address_space,
-            base + core::mem::size_of::<usize>() as u64,
-            0,
-            hhdm_offset,
-        )?; // envc
-        return Ok(base);
-    }
-
     let mut cursor = USER_STACK_TOP;
 
-    // Maximum combined entries for strings.
     const MAX_STRINGS: usize = 96; // 32 args + 64 envs
     if args.len() + envs.len() > MAX_STRINGS {
         return Err(BinaryError::ParseError("too many args + envs"));
     }
-    let mut string_addrs = [(0u64, 0usize); MAX_STRINGS];
+    let mut string_addrs = [0u64; MAX_STRINGS];
 
-    // 1. Write env string bytes first (higher addresses).
+    // 1. Write env string bytes first (higher addresses), NUL-terminated.
+    //    Pages are zeroed by map_user_stack, so reserving len+1 bytes per
+    //    string ensures a NUL terminator after each string's content.
     for (i, env) in envs.iter().enumerate().rev() {
         let idx = args.len() + i;
-        cursor -= env.len() as u64;
-        let str_vaddr = cursor;
-        write_string_bytes(address_space, str_vaddr, env, hhdm_offset)?;
-        string_addrs[idx] = (str_vaddr, env.len());
+        cursor -= (env.len() as u64) + 1; // +1 for NUL terminator
+        write_string_bytes(address_space, cursor, env, hhdm_offset)?;
+        string_addrs[idx] = cursor;
     }
 
-    // 2. Write arg string bytes.
+    // 2. Write arg string bytes, NUL-terminated.
     for (i, arg) in args.iter().enumerate().rev() {
-        cursor -= arg.len() as u64;
-        let str_vaddr = cursor;
-        write_string_bytes(address_space, str_vaddr, arg, hhdm_offset)?;
-        string_addrs[i] = (str_vaddr, arg.len());
+        cursor -= (arg.len() as u64) + 1; // +1 for NUL terminator
+        write_string_bytes(address_space, cursor, arg, hhdm_offset)?;
+        string_addrs[i] = cursor;
     }
 
-    // 3. Compute layout:
-    //    [RSP]      = argc (8 bytes)
-    //    [RSP + 8]  = envc (8 bytes)
-    //    [RSP + 16] = argv (ptr, len) pairs
-    //    [RSP + 16 + argc * 16] = envp (ptr, len) pairs
-    let pair_size = 2 * core::mem::size_of::<usize>() as u64; // 16 bytes on x86_64
-    let header_size = 2 * core::mem::size_of::<usize>() as u64; // argc + envc
-    let total_below = header_size + pair_size * args.len() as u64 + pair_size * envs.len() as u64;
+    // 3. Align cursor to 16 bytes.
+    cursor &= !0xF;
+
+    // 4. Compute layout: argc, argv[0..argc], NULL, envp[0..envc], NULL
+    let ptr_size = core::mem::size_of::<usize>() as u64;
+    let total_below = ptr_size                      // argc
+        + ptr_size * (args.len() as u64)            // argv pointers
+        + ptr_size                                  // argv NULL terminator
+        + ptr_size * (envs.len() as u64)            // envp pointers
+        + ptr_size; // envp NULL terminator
     let rsp = (cursor - total_below) & !0xF; // 16-byte aligned
 
-    // 4. Write argc and envc.
-    write_usize_to_user(address_space, rsp, args.len(), hhdm_offset)?;
-    write_usize_to_user(
-        address_space,
-        rsp + core::mem::size_of::<usize>() as u64,
-        envs.len(),
-        hhdm_offset,
-    )?;
+    // 5. Write argc.
+    let mut pos = rsp;
+    write_usize_to_user(address_space, pos, args.len(), hhdm_offset)?;
+    pos += ptr_size;
 
-    // 5. Write argv (ptr, len) pairs.
-    let argv_base = rsp + header_size;
-    for (i, &(vaddr, len)) in string_addrs[..args.len()].iter().enumerate() {
-        let pair_addr = argv_base + (i as u64) * pair_size;
-        write_usize_to_user(address_space, pair_addr, vaddr as usize, hhdm_offset)?;
-        write_usize_to_user(
-            address_space,
-            pair_addr + core::mem::size_of::<usize>() as u64,
-            len,
-            hhdm_offset,
-        )?;
+    // 6. Write argv pointers, then NULL terminator.
+    for &addr in &string_addrs[..args.len()] {
+        write_usize_to_user(address_space, pos, addr as usize, hhdm_offset)?;
+        pos += ptr_size;
     }
+    write_usize_to_user(address_space, pos, 0, hhdm_offset)?;
+    pos += ptr_size;
 
-    // 6. Write envp (ptr, len) pairs.
-    let envp_base = argv_base + pair_size * args.len() as u64;
-    for (i, &(vaddr, len)) in string_addrs[args.len()..args.len() + envs.len()]
-        .iter()
-        .enumerate()
-    {
-        let pair_addr = envp_base + (i as u64) * pair_size;
-        write_usize_to_user(address_space, pair_addr, vaddr as usize, hhdm_offset)?;
-        write_usize_to_user(
-            address_space,
-            pair_addr + core::mem::size_of::<usize>() as u64,
-            len,
-            hhdm_offset,
-        )?;
+    // 7. Write envp pointers, then NULL terminator.
+    for &addr in &string_addrs[args.len()..args.len() + envs.len()] {
+        write_usize_to_user(address_space, pos, addr as usize, hhdm_offset)?;
+        pos += ptr_size;
     }
+    write_usize_to_user(address_space, pos, 0, hhdm_offset)?;
 
     Ok(rsp)
 }

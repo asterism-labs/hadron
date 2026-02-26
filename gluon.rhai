@@ -325,6 +325,14 @@ userspace.add("hadron-syscall-user", "crates/syscall/hadron-syscall")
     .features(["userspace"])
     .deps(#{ hadron_syscall_macros: #{ "crate": "hadron-syscall-macros", proc_macro: true } });
 
+userspace.add("hadron-libc-core", "userspace/hadron-libc/core")
+    .features(["userspace"])
+    .deps(#{ hadron_syscall: "hadron-syscall-user" });
+
+userspace.add("hadron-libc", "userspace/hadron-libc")
+    .crate_type(STATICLIB)
+    .deps(#{ hadron_libc_core: "hadron-libc-core", hadron_syscall: "hadron-syscall-user" });
+
 userspace.add("lepton-syslib", "userspace/lepton-syslib")
     .deps(#{ hadron_syscall: "hadron-syscall-user" });
 
@@ -467,7 +475,8 @@ tests()
         "hadron-pci",
         "hadron-tty",
         "hadron-drivers",
-        "hadron-kernel"
+        "hadron-kernel",
+        "hadron-libc-core"
     ])
     .kani_verifiable(["hadron-core"])
     .shuttle_testable(["hadron-core"])

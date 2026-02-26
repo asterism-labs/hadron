@@ -1,0 +1,12 @@
+[package]
+name = "hadron-libc-core"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[features]
+default = []
+userspace = ["hadron-syscall/userspace"]
+
+[dependencies]
+hadron-syscall = { path = "../../../crates/syscall/hadron-syscall", default-features = false }
