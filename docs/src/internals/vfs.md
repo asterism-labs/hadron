@@ -5,8 +5,8 @@ different filesystem implementations behind a uniform set of traits. All file
 I/O -- whether targeting an in-memory ramfs, a device node in devfs, or a
 block-device-backed FAT or ISO 9660 volume -- passes through the VFS.
 
-The implementation lives in `kernel/hadron-kernel/src/fs/`, with filesystem
-drivers in `kernel/hadron-drivers/src/fs/`.
+The implementation lives in `kernel/kernel/src/fs/`, with filesystem
+drivers in `kernel/drivers/src/fs/`.
 
 ## Architecture overview
 

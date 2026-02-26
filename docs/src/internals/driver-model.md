@@ -4,7 +4,7 @@ Hadron uses a layered driver model that separates API definition (in `hadron-ker
 
 ## Architecture Overview
 
-The driver API is defined in `kernel/hadron-kernel/src/driver_api/` and consists of four layers plus supporting infrastructure:
+The driver API is defined in `kernel/kernel/src/driver_api/` and consists of four layers plus supporting infrastructure:
 
 ```
 Layer 3 -- Interface traits       SerialPort, Framebuffer, BlockDevice, KeyboardDevice, ...
@@ -79,7 +79,7 @@ The kernel's internal `pci_probe_context()` and `platform_probe_context()` funct
 
 ## The `#[hadron_driver]` Proc Macro
 
-The `hadron-driver-macros` crate (at `crates/driver/hadron-driver-macros/`) provides the `#[hadron_driver(...)]` attribute macro that generates all boilerplate for driver registration. Drivers declare their capabilities, and the macro generates:
+The `hadron-driver-macros` crate (at `kernel/driver-macros/`) provides the `#[hadron_driver(...)]` attribute macro that generates all boilerplate for driver registration. Drivers declare their capabilities, and the macro generates:
 
 1. A per-driver context struct containing only the declared capability fields
 2. `HasCapability<T>` impls for each declared capability
@@ -107,7 +107,7 @@ impl DriverStruct {
 
 ### PCI Driver Example (AHCI)
 
-From `kernel/hadron-drivers/src/ahci/mod.rs`:
+From `kernel/drivers/src/ahci/mod.rs`:
 
 ```rust
 static ID_TABLE: [PciDeviceId; 2] = [
@@ -251,7 +251,7 @@ On a match, the kernel calls `probe_context::pci_probe_context()` to mint a fres
 
 ## PCI Enumeration
 
-PCI bus management is kernel infrastructure, located in `kernel/hadron-kernel/src/pci/`.
+PCI bus management is kernel infrastructure, located in `kernel/kernel/src/pci/`.
 
 ### Configuration Access Mechanism (`pci/cam.rs`)
 

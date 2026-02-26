@@ -4,7 +4,7 @@
 
 Hadron supports thread creation within a single process via the `task_clone` syscall, enabling multiple threads to share a single address space, file descriptors, and other process resources while maintaining independent execution contexts.
 
-Source: [`kernel/hadron-kernel/src/proc/mod.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/hadron-kernel/src/proc/mod.rs), specifically the `Process::clone_thread()` method and [`kernel/hadron-kernel/src/syscall/process.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/hadron-kernel/src/syscall/process.rs)
+Source: [`kernel/kernel/src/proc/mod.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/kernel/src/proc/mod.rs), specifically the `Process::clone_thread()` method and [`kernel/kernel/src/syscall/process.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/kernel/src/syscall/process.rs)
 
 ## Thread Model
 
@@ -132,9 +132,9 @@ Thread-safe signal delivery
 
 ## Files to Modify
 
-- `kernel/hadron-kernel/src/proc/mod.rs` -- Process and thread management
-- `kernel/hadron-kernel/src/syscall/process.rs` -- `sys_task_clone` syscall handler
-- `kernel/hadron-kernel/src/syscall/userptr.rs` -- User pointer validation for stack/TLS
+- `kernel/kernel/src/proc/mod.rs` -- Process and thread management
+- `kernel/kernel/src/syscall/process.rs` -- `sys_task_clone` syscall handler
+- `kernel/kernel/src/syscall/userptr.rs` -- User pointer validation for stack/TLS
 
 ## References
 

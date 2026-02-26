@@ -4,12 +4,12 @@
 
 Hadron implements a minimal network stack supporting IPv4 address resolution (ARP) and ICMP echo (ping). The implementation is hand-written, zero-copy, and integrated with the kernel's async executor for non-blocking packet reception.
 
-Source: [`kernel/hadron-kernel/src/net/`](https://github.com/anomalyco/hadron/blob/main/kernel/hadron-kernel/src/net/), specifically:
-- [`net/mod.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/hadron-kernel/src/net/mod.rs) -- Network config
-- [`net/ipv4.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/hadron-kernel/src/net/ipv4.rs) -- IPv4 parsing
-- [`net/arp.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/hadron-kernel/src/net/arp.rs) -- ARP table and resolution
-- [`net/icmp.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/hadron-kernel/src/net/icmp.rs) -- ICMP echo request/reply
-- [`net/task.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/hadron-kernel/src/net/task.rs) -- Async RX loop
+Source: [`kernel/kernel/src/net/`](https://github.com/anomalyco/hadron/blob/main/kernel/kernel/src/net/), specifically:
+- [`net/mod.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/kernel/src/net/mod.rs) -- Network config
+- [`net/ipv4.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/kernel/src/net/ipv4.rs) -- IPv4 parsing
+- [`net/arp.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/kernel/src/net/arp.rs) -- ARP table and resolution
+- [`net/icmp.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/kernel/src/net/icmp.rs) -- ICMP echo request/reply
+- [`net/task.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/kernel/src/net/task.rs) -- Async RX loop
 
 ## Architecture
 
@@ -147,12 +147,12 @@ Routing and multi-subnet support
 
 ## Files to Modify
 
-- `kernel/hadron-kernel/src/net/mod.rs` -- Network configuration and initialization
-- `kernel/hadron-kernel/src/net/ipv4.rs` -- IPv4 header parsing and dispatch
-- `kernel/hadron-kernel/src/net/arp.rs` -- ARP table and resolution
-- `kernel/hadron-kernel/src/net/icmp.rs` -- ICMP echo request/reply handling
-- `kernel/hadron-kernel/src/net/task.rs` -- Async RX loop task
-- `kernel/hadron-drivers/src/net/` -- NIC driver implementations (VirtIO, e1000e, Bochs)
+- `kernel/kernel/src/net/mod.rs` -- Network configuration and initialization
+- `kernel/kernel/src/net/ipv4.rs` -- IPv4 header parsing and dispatch
+- `kernel/kernel/src/net/arp.rs` -- ARP table and resolution
+- `kernel/kernel/src/net/icmp.rs` -- ICMP echo request/reply handling
+- `kernel/kernel/src/net/task.rs` -- Async RX loop task
+- `kernel/drivers/src/net/` -- NIC driver implementations (VirtIO, e1000e, Bochs)
 
 ## References
 

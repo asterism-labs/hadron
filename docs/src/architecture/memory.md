@@ -2,7 +2,7 @@
 
 Hadron's memory subsystem spans two layers: the **Physical Memory Manager (PMM)** handles allocation of physical page frames, and the **Virtual Memory Manager (VMM)** provides page table management and virtual address space layout. Both are designed to work early in boot before the heap allocator is available.
 
-Source: [`kernel/mm/src/`](https://github.com/anomalyco/hadron/blob/main/kernel/mm/src/), [`kernel/hadron-kernel/src/mm/`](https://github.com/anomalyco/hadron/blob/main/kernel/hadron-kernel/src/mm/)
+Source: [`kernel/mm/src/`](https://github.com/anomalyco/hadron/blob/main/kernel/mm/src/), [`kernel/kernel/src/mm/`](https://github.com/anomalyco/hadron/blob/main/kernel/kernel/src/mm/)
 
 ## Physical Memory Manager (PMM)
 

@@ -117,19 +117,24 @@ Hadron is an x86_64 kernel written in Rust. It uses an async-native, cooperative
 ```
 hadron/
 ├── kernel/
-│   ├── hadron-kernel/       # Monolithic kernel core
-│   ├── hadron-drivers/      # Pluggable hardware drivers
+│   ├── kernel/              # Monolithic kernel core
+│   ├── drivers/             # Pluggable hardware drivers
+│   ├── core/                # Core abstractions (sync, sched)
+│   ├── intrinsics/          # Arch intrinsics (SSE, etc.)
+│   ├── driver-api/          # Driver framework traits
+│   ├── driver-macros/       # Driver registration macros
+│   ├── mmio/                # MMIO register abstraction
+│   ├── syscall/             # Syscall definitions & macros
+│   ├── ipc/ net/ pci/ tty/  # Subsystem crates
+│   ├── mm/ fs/ sched/       # Memory, filesystem, scheduler
 │   └── boot/limine/         # Limine boot stub
 ├── crates/
 │   ├── parse/               # ACPI, ELF, DWARF, FDT, binary parsers
 │   ├── boot/                # Limine & UEFI protocol bindings
-│   ├── core/                # Core abstractions & linkset
-│   ├── driver/              # Driver framework & MMIO macros
-│   ├── syscall/             # Syscall definitions & macros
+│   ├── core/                # Linkset macro
 │   ├── test/                # Test & benchmark harnesses
-│   └── tools/               # Host-side codegen & profiling
+│   └── tools/               # Build system (gluon), codegen, profiling
 ├── userspace/               # Init, shell, syslib, coreutils
-├── tools/gluon/             # Build system
 ├── targets/                 # Custom target specs
 └── docs/                    # mdbook documentation
 ```

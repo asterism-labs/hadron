@@ -6,8 +6,8 @@ as `Future<Output = ()> + Send + 'static` tasks that yield at `.await`
 points. Each CPU runs its own executor instance, and tasks are organized
 into three strict priority tiers.
 
-The implementation lives under `kernel/hadron-kernel/src/sched/`, with
-supporting types in `kernel/hadron-kernel/src/task.rs`.
+The implementation lives under `kernel/kernel/src/sched/`, with
+supporting types in `kernel/kernel/src/task.rs`.
 
 ## Key Types
 

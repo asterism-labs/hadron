@@ -4,7 +4,7 @@
 
 Hadron provides a comprehensive virtual terminal (TTY) subsystem with cooked-mode line editing, multi-VT support (6 virtual terminals), and signal dispatch to foreground process groups. The TTY layer integrates with the VFS to provide `/dev/console` and `/dev/ttyN` character device nodes.
 
-Source: [`kernel/hadron-kernel/src/tty/`](https://github.com/anomalyco/hadron/blob/main/kernel/hadron-kernel/src/tty/), [`kernel/hadron-kernel/src/tty/ldisc.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/hadron-kernel/src/tty/ldisc.rs)
+Source: [`kernel/kernel/src/tty/`](https://github.com/anomalyco/hadron/blob/main/kernel/kernel/src/tty/), [`kernel/kernel/src/tty/ldisc.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/kernel/src/tty/ldisc.rs)
 
 ## Architecture
 
@@ -113,10 +113,10 @@ Flow control (Ctrl+S / Ctrl+Q)
 
 ## Files to Modify
 
-- `kernel/hadron-kernel/src/tty/mod.rs` -- TTY and VT management
-- `kernel/hadron-kernel/src/tty/ldisc.rs` -- Line discipline implementation
-- `kernel/hadron-kernel/src/tty/device.rs` -- VFS inode implementations for `/dev/console` and `/dev/ttyN`
-- `kernel/hadron-kernel/src/fs/devfs.rs` -- Registration of TTY device nodes in devfs
+- `kernel/kernel/src/tty/mod.rs` -- TTY and VT management
+- `kernel/kernel/src/tty/ldisc.rs` -- Line discipline implementation
+- `kernel/kernel/src/tty/device.rs` -- VFS inode implementations for `/dev/console` and `/dev/ttyN`
+- `kernel/kernel/src/fs/devfs.rs` -- Registration of TTY device nodes in devfs
 
 ## References
 

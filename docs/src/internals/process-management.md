@@ -7,7 +7,7 @@ setjmp/longjmp mechanism built on `iretq` and saved kernel stack pointers,
 with timer-driven preemption providing fair scheduling between processes.
 
 Source locations referenced in this chapter live under
-`kernel/hadron-kernel/src/`.
+`kernel/kernel/src/`.
 
 ## Process struct
 

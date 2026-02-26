@@ -238,7 +238,7 @@ Use UEFI Boot Services to allocate page table frames and gather system info **be
 
 ## BootInfo Interface Design
 
-The `BootInfo` trait (defined in `kernel/hadron-kernel/src/boot.rs`) divides boot-time setup into two categories:
+The `BootInfo` trait (defined in `kernel/kernel/src/boot.rs`) divides boot-time setup into two categories:
 
 ### Pre-Configured by the Boot Stub
 

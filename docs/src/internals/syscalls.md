@@ -272,7 +272,7 @@ When compiled with the `userspace` feature, `hadron-syscall` generates:
 
 ## Testing
 
-Integration tests in `kernel/hadron-kernel/tests/syscall_test.rs` invoke
+Integration tests in `kernel/kernel/tests/syscall_test.rs` invoke
 syscalls from kernel space using inline `syscall` instructions. Since these run
 before userspace exists, the addresses have bit 63 set, and handlers use
 `is_kernel_caller` to skip user-pointer validation. Tests cover:

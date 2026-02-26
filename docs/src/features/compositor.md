@@ -183,7 +183,7 @@ Alpha blending and transparency
 - `userspace/lepton-compositor/src/render.rs` -- Rendering and compositing logic
 - `userspace/lepton-display-protocol/src/lib.rs` -- Display protocol definition
 - `userspace/lepton-display-client/src/lib.rs` -- Client library for applications
-- `kernel/hadron-kernel/src/fs/devfs.rs` -- Framebuffer device integration
+- `kernel/kernel/src/fs/devfs.rs` -- Framebuffer device integration
 
 ## References
 

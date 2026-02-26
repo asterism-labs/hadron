@@ -1,7 +1,7 @@
 # Synchronization Primitives
 
 Hadron provides a layered set of synchronization primitives in the
-`hadron_kernel::sync` module (`kernel/hadron-kernel/src/sync/`). Every
+`hadron_kernel::sync` module (`kernel/kernel/src/sync/`). Every
 primitive is `const`-constructable so it can live in a `static` item and is
 usable before the heap allocator or async executor is available.
 

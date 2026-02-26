@@ -10,7 +10,7 @@ hadron/
 ├── justfile                # Primary build interface
 │
 ├── kernel/
-│   ├── hadron-kernel/      # Monolithic kernel: arch, driver API, mm, sched, VFS, PCI
+│   ├── kernel/             # Monolithic kernel: arch, driver API, mm, sched, VFS, PCI
 │   │   └── src/
 │   │       ├── lib.rs
 │   │       ├── addr.rs         # PhysAddr, VirtAddr, PhysFrame newtypes
@@ -30,7 +30,7 @@ hadron/
 │   │       ├── drivers/        # Device registry
 │   │       └── pci/            # PCI enumeration, BAR decoding, capabilities
 │   │
-│   ├── hadron-drivers/     # Pluggable hardware drivers
+│   ├── drivers/            # Pluggable hardware drivers
 │   │   └── src/
 │   │       ├── lib.rs
 │   │       ├── ahci/           # AHCI (SATA) driver
@@ -41,6 +41,22 @@ hadron/
 │   │       ├── block/          # Ramdisk
 │   │       └── fs/             # FAT, ISO9660, ramfs, initramfs
 │   │
+│   ├── core/               # Core kernel abstractions (hadron-core)
+│   ├── intrinsics/         # Arch intrinsics — SSE, etc. (hadron-intrinsics)
+│   ├── driver-api/         # Driver framework traits (hadron-driver-api)
+│   ├── driver-macros/      # #[hadron_driver] proc-macro
+│   ├── mmio/               # MMIO register abstraction (hadron-mmio)
+│   ├── mmio-macros/        # Companion proc-macro
+│   ├── syscall/            # Syscall numbers and ABI definitions (hadron-syscall)
+│   ├── syscall-macros/     # Companion proc-macro
+│   ├── ipc/                # IPC subsystem (hadron-ipc)
+│   ├── net/                # Networking subsystem (hadron-net)
+│   ├── pci/                # PCI subsystem (hadron-pci)
+│   ├── tty/                # TTY subsystem (hadron-tty)
+│   ├── mm/                 # Memory management (hadron-mm)
+│   ├── fs/                 # Filesystem types (hadron-fs)
+│   ├── sched/              # Scheduler types (hadron-sched)
+│   │
 │   └── boot/
 │       └── limine/         # Limine boot stub binary (hadron-boot-limine)
 │
@@ -48,26 +64,20 @@ hadron/
 │   ├── parse/
 │   │   ├── acpi/                     # ACPI table parsing (hadron-acpi)
 │   │   ├── binparse/                 # Binary format parser (hadron-binparse)
-│   │   ├── binparse-macros/           # Companion proc-macro
+│   │   ├── binparse-macros/          # Companion proc-macro
 │   │   ├── dwarf/                    # DWARF debug info (hadron-dwarf)
-│   │   └── elf/                      # ELF64 parser (hadron-elf)
+│   │   ├── elf/                      # ELF64 parser (hadron-elf)
+│   │   └── fdt/                      # FDT parser (hadron-fdt)
 │   ├── boot/
 │   │   ├── limine/                   # Limine boot protocol bindings
 │   │   └── uefi/                     # UEFI bindings
 │   ├── core/
-│   │   ├── hadron-core/              # Core kernel abstractions
 │   │   └── linkset/                  # Linker-section set collections (hadron-linkset)
-│   ├── driver/
-│   │   ├── hadron-driver-macros/     # #[hadron_driver] proc-macro
-│   │   ├── hadron-mmio/              # MMIO register abstraction
-│   │   └── hadron-mmio-macros/       # Companion proc-macro
-│   ├── syscall/
-│   │   ├── hadron-syscall/           # Syscall numbers and ABI definitions
-│   │   └── hadron-syscall-macros/    # Companion proc-macro
 │   ├── test/
 │   │   ├── hadron-test/              # Test framework (QEMU isa-debug-exit)
 │   │   └── hadron-bench/             # Benchmark framework
 │   └── tools/
+│       ├── gluon/                    # Custom build system
 │       ├── hadron-codegen/           # Code generation utilities
 │       └── hadron-perf/              # Performance analysis tools
 │
@@ -77,9 +87,6 @@ hadron/
 │   ├── shell/              # Interactive shell (lsh)
 │   └── coreutils/          # Core utilities (lepton-coreutils)
 │
-├── tools/
-│   └── gluon/              # Custom build system
-│
 ├── vendor/                 # Vendored external dependencies
 ├── targets/                # Custom target specs (x86_64-unknown-hadron.json)
 └── docs/                   # This mdbook
@@ -88,17 +95,17 @@ hadron/
 ## Crate Dependency Graph
 
 ```
-kernel/boot/limine ──┬──> kernel/hadron-kernel
-                     ├──> kernel/hadron-drivers
+kernel/boot/limine ──┬──> kernel/kernel
+                     ├──> kernel/drivers
                      ├──> crates/boot/limine
                      └──> planck-noalloc (external)
 
-kernel/hadron-drivers ──┬──> kernel/hadron-kernel
+kernel/drivers ──┬──> kernel/kernel
                         ├──> bitflags
                         ├──> hadris-cpio, hadris-fat, hadris-io, hadris-iso
                         └──> (registers via linker-section macros)
 
-kernel/hadron-kernel ──┬──> bitflags
+kernel/kernel ──┬──> bitflags
                        ├──> hadris-io
                        ├──> hadron-acpi, hadron-elf, hadron-syscall
                        └──> planck-noalloc (external)
@@ -111,7 +118,7 @@ Key design principle: **`crates/*/*` are standalone, no_std libraries** that can
 
 ## Crate Responsibilities
 
-### `kernel/hadron-kernel` — Monolithic Kernel
+### `kernel/kernel` — Monolithic Kernel
 
 Contains both the unsafe frame (arch-specific, hardware-touching code) and safe services (subsystems built on safe abstractions). The framekernel safety boundary is enforced at the module level within this crate.
 
@@ -139,7 +146,7 @@ Contains both the unsafe frame (arch-specific, hardware-touching code) and safe 
 | `drivers/` | Device registry |
 | `pci/` | PCI enumeration, BAR decoding, capabilities parsing |
 
-### `kernel/hadron-drivers` — Pluggable Drivers
+### `kernel/drivers` — Pluggable Drivers
 
 Hardware driver implementations registered via linker-section macros (`pci_driver_entry!`, `platform_driver_entry!`, `block_fs_entry!`). Depends on `hadron-kernel` for the driver API traits.
 

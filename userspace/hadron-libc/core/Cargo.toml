@@ -9,4 +9,4 @@ default = []
 userspace = ["hadron-syscall/userspace"]
 
 [dependencies]
-hadron-syscall = { path = "../../../crates/syscall/hadron-syscall", default-features = false }
+hadron-syscall = { path = "../../../kernel/syscall", default-features = false }

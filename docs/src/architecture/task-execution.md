@@ -2,11 +2,11 @@
 
 Hadron models each user process as an async task on the kernel's cooperative executor. Instead of a traditional preemptive thread scheduler, all kernel work runs as `Future<Output = ()> + Send + 'static` tasks that yield at `.await` points. Each CPU runs its own executor instance with three strict priority tiers, and processes are driven by an async event loop that handles syscalls, preemption, and I/O through a trap-and-longjmp mechanism.
 
-The implementation lives under `kernel/hadron-kernel/src/sched/` (executor), `kernel/hadron-kernel/src/task.rs` (task types), and `kernel/hadron-kernel/src/proc/` (process management).
+The implementation lives under `kernel/kernel/src/sched/` (executor), `kernel/kernel/src/task.rs` (task types), and `kernel/kernel/src/proc/` (process management).
 
 ## Async Executor Architecture
 
-Source: [`kernel/hadron-kernel/src/sched/executor.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/hadron-kernel/src/sched/executor.rs)
+Source: [`kernel/kernel/src/sched/executor.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/kernel/src/sched/executor.rs)
 
 Hadron uses a cooperative async executor as its core scheduling mechanism. Each CPU's `Executor` owns the per-CPU task storage, ready queues organized by priority, and the main polling loop.
 
@@ -34,7 +34,7 @@ This design ensures that latency-sensitive work (interrupt bottom-halves) always
 
 ### Waker Encoding
 
-Source: [`kernel/hadron-kernel/src/sched/waker.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/hadron-kernel/src/sched/waker.rs)
+Source: [`kernel/kernel/src/sched/waker.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/kernel/src/sched/waker.rs)
 
 Hadron uses a zero-allocation waker scheme. The `RawWaker` data pointer is not a heap pointer but a packed 64-bit integer encoding three fields:
 
@@ -87,7 +87,7 @@ This ensures that no single task can monopolize the CPU across a timer tick boun
 
 ## Process Model
 
-Source: [`kernel/hadron-kernel/src/proc/mod.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/hadron-kernel/src/proc/mod.rs)
+Source: [`kernel/kernel/src/proc/mod.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/kernel/src/proc/mod.rs)
 
 Each user process is modeled as an async task wrapping a `Process` struct that owns the process's address space, file descriptor table, and identity (PID, parent PID, exit status).
 
@@ -176,7 +176,7 @@ For blocking traps (`TRAP_WAIT`, `TRAP_IO`), the task snapshots the per-CPU stat
 
 ## Syscall Interface
 
-Source: [`kernel/hadron-kernel/src/syscall/`](https://github.com/anomalyco/hadron/blob/main/kernel/hadron-kernel/src/syscall/)
+Source: [`kernel/kernel/src/syscall/`](https://github.com/anomalyco/hadron/blob/main/kernel/kernel/src/syscall/)
 
 Hadron uses the x86_64 `SYSCALL`/`SYSRET` fast-path for all userspace-to-kernel transitions. Syscall definitions are centralized in the `hadron-syscall` crate using a custom DSL macro (`define_syscalls!`), which generates constants, dispatch logic, and userspace stubs from a single source of truth.
 
@@ -227,7 +227,7 @@ All user-supplied pointers pass through validation types in `syscall/userptr.rs`
 
 ## Async Primitives
 
-Source: [`kernel/hadron-kernel/src/sched/primitives.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/hadron-kernel/src/sched/primitives.rs)
+Source: [`kernel/kernel/src/sched/primitives.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/kernel/src/sched/primitives.rs)
 
 ### yield_now
 

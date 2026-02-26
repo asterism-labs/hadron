@@ -49,9 +49,9 @@ The `FbDeviceInode` holds only an immutable reference to the physical framebuffe
 
 ## Files to Reference
 
-- **Framebuffer driver**: [`kernel/hadron-kernel/src/drivers/bochs_vga.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/hadron-kernel/src/drivers/bochs_vga.rs) — MMIO framebuffer setup and resolution queries
-- **devfs registration**: [`kernel/hadron-kernel/src/fs/devfs.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/hadron-kernel/src/fs/devfs.rs) — `/dev/fb0` device node
-- **VFS inode trait**: [`kernel/hadron-kernel/src/fs/inode.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/hadron-kernel/src/fs/inode.rs) — `mmap()` and `ioctl()` method signatures
+- **Framebuffer driver**: [`kernel/kernel/src/drivers/bochs_vga.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/kernel/src/drivers/bochs_vga.rs) — MMIO framebuffer setup and resolution queries
+- **devfs registration**: [`kernel/kernel/src/fs/devfs.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/kernel/src/fs/devfs.rs) — `/dev/fb0` device node
+- **VFS inode trait**: [`kernel/kernel/src/fs/inode.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/kernel/src/fs/inode.rs) — `mmap()` and `ioctl()` method signatures
 
 ## Example Usage
 

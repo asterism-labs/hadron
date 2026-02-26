@@ -69,18 +69,18 @@ order — acquire higher levels first):
 | Level | Lock                  | Type         | Location                     |
 |------:|-----------------------|--------------|------------------------------|
 |    14 | `Executor.tasks`      | IrqSpinLock  | `kernel/sched/src/executor.rs` |
-|    13 | `Executor.ready_queues` | IrqSpinLock | `crates/core/hadron-core/src/sched.rs` |
-|    10 | `TTY_LDISC`           | IrqSpinLock  | `kernel/hadron-kernel/src/tty/mod.rs` |
-|    10 | `SCANCODE_BUF`        | IrqSpinLock  | `kernel/hadron-kernel/src/tty/mod.rs` |
-|     4 | `PROCESS_TABLE`       | SpinLock     | `kernel/hadron-kernel/src/proc/mod.rs` |
-|     4 | `fd_table`            | SpinLock (Arc) | `kernel/hadron-kernel/src/proc/mod.rs` |
-|     4 | `address_space`       | SpinLock (Arc) | `kernel/hadron-kernel/src/proc/mod.rs` |
-|     2 | `FUTEX_TABLE`         | SpinLock     | `kernel/hadron-kernel/src/ipc/futex.rs` |
-|     2 | `PTY_SLAVES`          | SpinLock     | `kernel/hadron-kernel/src/tty/pty.rs` |
+|    13 | `Executor.ready_queues` | IrqSpinLock | `kernel/core/src/sched.rs` |
+|    10 | `TTY_LDISC`           | IrqSpinLock  | `kernel/kernel/src/tty/mod.rs` |
+|    10 | `SCANCODE_BUF`        | IrqSpinLock  | `kernel/kernel/src/tty/mod.rs` |
+|     4 | `PROCESS_TABLE`       | SpinLock     | `kernel/kernel/src/proc/mod.rs` |
+|     4 | `fd_table`            | SpinLock (Arc) | `kernel/kernel/src/proc/mod.rs` |
+|     4 | `address_space`       | SpinLock (Arc) | `kernel/kernel/src/proc/mod.rs` |
+|     2 | `FUTEX_TABLE`         | SpinLock     | `kernel/kernel/src/ipc/futex.rs` |
+|     2 | `PTY_SLAVES`          | SpinLock     | `kernel/kernel/src/tty/pty.rs` |
 |     1 | `HEAP`                | SpinLock     | `kernel/mm/src/heap.rs`      |
-|     0 | `LOGGER`              | SpinLock     | `kernel/hadron-kernel/src/log.rs` |
-|     0 | `TTY_WAKER`           | IrqSpinLock  | `kernel/hadron-kernel/src/tty/mod.rs` |
-|     0 | `FBCON`               | SpinLock     | `kernel/hadron-kernel/src/drivers/fbcon/mod.rs` |
+|     0 | `LOGGER`              | SpinLock     | `kernel/kernel/src/log.rs` |
+|     0 | `TTY_WAKER`           | IrqSpinLock  | `kernel/kernel/src/tty/mod.rs` |
+|     0 | `FBCON`               | SpinLock     | `kernel/kernel/src/drivers/fbcon/mod.rs` |
 
 **Key rules:**
 - Never call `waker.wake()` while holding a lock — it acquires

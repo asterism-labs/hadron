@@ -1,7 +1,7 @@
 # Memory Management
 
 The Hadron kernel's memory management subsystem lives primarily in
-`kernel/hadron-kernel/src/mm/` with supporting types in `addr.rs` and
+`kernel/kernel/src/mm/` with supporting types in `addr.rs` and
 `paging.rs`. It covers physical frame allocation, virtual address space
 management, the kernel heap, per-process address spaces, and a zone allocator
 for high-frequency small allocations.

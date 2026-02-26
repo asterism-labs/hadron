@@ -16,7 +16,7 @@ bench = false
 doctest = false
 
 [dependencies]
-hadron-drivers = { path = "../../hadron-drivers" }
-hadron-kernel = { path = "../../hadron-kernel" }
+hadron-drivers = { path = "../../drivers" }
+hadron-kernel = { path = "../../kernel" }
 limine = { path = "../../../crates/boot/limine" }
 planck-noalloc = { version = "0.1.1", default-features = false }

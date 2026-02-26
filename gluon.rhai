@@ -129,12 +129,12 @@ dependency("hadris-iso").version("1.0.1")
 
 let host = group("host").target("host").edition("2021").project(false);
 
-host.add("hadron-syscall-macros", "crates/syscall/hadron-syscall-macros")
+host.add("hadron-syscall-macros", "kernel/syscall-macros")
     .edition("2024")
     .crate_type(PROC_MACRO)
     .deps(#{ syn: "syn", quote: "quote", proc_macro2: "proc-macro2" });
 
-host.add("hadron-driver-macros", "crates/driver/hadron-driver-macros")
+host.add("hadron-driver-macros", "kernel/driver-macros")
     .edition("2024")
     .crate_type(PROC_MACRO)
     .deps(#{ syn: "syn", quote: "quote", proc_macro2: "proc-macro2" });
@@ -144,7 +144,7 @@ host.add("hadron-binparse-macros", "crates/parse/binparse-macros")
     .crate_type(PROC_MACRO)
     .deps(#{ syn: "syn", quote: "quote", proc_macro2: "proc-macro2" });
 
-host.add("hadron-mmio-macros", "crates/driver/hadron-mmio-macros")
+host.add("hadron-mmio-macros", "kernel/mmio-macros")
     .edition("2024")
     .crate_type(PROC_MACRO)
     .deps(#{ syn: "syn", quote: "quote", proc_macro2: "proc-macro2" });
@@ -160,30 +160,30 @@ host.add("hadron-ktest-macros", "crates/test/hadron-ktest-macros")
 
 let kernel_libs = group("kernel-libs").target("x86_64-unknown-hadron").edition("2024").config(true);
 
-kernel_libs.add("hadron-core", "crates/core/hadron-core")
+kernel_libs.add("hadron-core", "kernel/core")
     .deps(#{ bitflags: "bitflags", hadron_linkset: "hadron-linkset", planck_noalloc: "planck-noalloc" });
 kernel_libs.add("hadron-linkset", "crates/core/linkset");
-kernel_libs.add("hadron-intrinsics", "crates/core/hadron-intrinsics")
+kernel_libs.add("hadron-intrinsics", "kernel/intrinsics")
     .rustc_flags(["-Ctarget-feature=+sse,+sse2,-soft-float"]);
 kernel_libs.add("hadron-binparse", "crates/parse/binparse")
     .deps(#{ hadron_binparse_macros: #{ "crate": "hadron-binparse-macros", proc_macro: true } });
 kernel_libs.add("hadron-elf", "crates/parse/elf");
 kernel_libs.add("hadron-dwarf", "crates/parse/dwarf");
-kernel_libs.add("hadron-mmio", "crates/driver/hadron-mmio")
+kernel_libs.add("hadron-mmio", "kernel/mmio")
     .deps(#{ hadron_mmio_macros: #{ "crate": "hadron-mmio-macros", proc_macro: true } });
-kernel_libs.add("hadron-driver-api", "crates/driver/hadron-driver-api")
+kernel_libs.add("hadron-driver-api", "kernel/driver-api")
     .deps(#{ hadron_core: "hadron-core", hadron_acpi: "hadron-acpi" });
 
-kernel_libs.add("hadron-net", "kernel/hadron-net")
+kernel_libs.add("hadron-net", "kernel/net")
     .deps(#{ hadron_driver_api: "hadron-driver-api" });
 
-kernel_libs.add("hadron-ipc", "kernel/hadron-ipc")
+kernel_libs.add("hadron-ipc", "kernel/ipc")
     .deps(#{ hadron_core: "hadron-core", hadron_fs: "hadron-fs", hadron_syscall: "hadron-syscall" });
 
-kernel_libs.add("hadron-pci", "kernel/hadron-pci")
+kernel_libs.add("hadron-pci", "kernel/pci")
     .deps(#{ hadron_driver_api: "hadron-driver-api" });
 
-kernel_libs.add("hadron-tty", "kernel/hadron-tty")
+kernel_libs.add("hadron-tty", "kernel/tty")
     .deps(#{ hadron_driver_api: "hadron-driver-api", planck_noalloc: "planck-noalloc" });
 
 kernel_libs.add("hadron-mm", "kernel/mm")
@@ -219,7 +219,7 @@ kernel_libs.add("limine", "crates/boot/limine")
 kernel_libs.add("uefi", "crates/boot/uefi")
     .deps(#{ bitflags: "bitflags" });
 
-kernel_libs.add("hadron-syscall", "crates/syscall/hadron-syscall")
+kernel_libs.add("hadron-syscall", "kernel/syscall")
     .features(["kernel"])
     .deps(#{ hadron_syscall_macros: #{ "crate": "hadron-syscall-macros", proc_macro: true } });
 
@@ -236,7 +236,7 @@ kernel_libs.add("hadron-ktest", "crates/test/hadron-ktest")
 
 let kernel_drivers = group("kernel-drivers").target("x86_64-unknown-hadron").edition("2024").config(true);
 
-kernel_drivers.add("hadron-drivers", "kernel/hadron-drivers")
+kernel_drivers.add("hadron-drivers", "kernel/drivers")
     .deps(#{
         bitflags: "bitflags",
         hadris_cpio: "hadris-cpio",
@@ -276,7 +276,7 @@ bench_deps.add("hadron-bench", "crates/test/hadron-bench")
 
 let kernel_main = group("kernel-main").target("x86_64-unknown-hadron").edition("2024").config(true);
 
-kernel_main.add("hadron-kernel", "kernel/hadron-kernel")
+kernel_main.add("hadron-kernel", "kernel/kernel")
     .deps(#{
         bitflags: "bitflags",
         hadris_io: "hadris-io",
@@ -321,7 +321,7 @@ kernel_main.add("hadron-boot-limine", "kernel/boot/limine")
 
 let userspace = group("userspace").target("x86_64-unknown-hadron-user").edition("2024");
 
-userspace.add("hadron-syscall-user", "crates/syscall/hadron-syscall")
+userspace.add("hadron-syscall-user", "kernel/syscall")
     .features(["userspace"])
     .deps(#{ hadron_syscall_macros: #{ "crate": "hadron-syscall-macros", proc_macro: true } });
 
@@ -362,10 +362,6 @@ userspace.add("lepton-display-client", "userspace/lepton-display-client")
         lepton_gfx: "lepton-gfx"
     });
 
-userspace.add("lepton-fbdemo", "userspace/fbdemo")
-    .crate_type(BIN).root("src/main.rs")
-    .deps(#{ lepton_syslib: "lepton-syslib", lepton_gfx: "lepton-gfx" });
-
 userspace.add("lepton-compositor", "userspace/lepton-compositor")
     .crate_type(BIN).root("src/main.rs")
     .deps(#{
@@ -400,7 +396,7 @@ rule("hkif")
     .handler("hkif");
 
 rule("initrd")
-    .inputs(["lepton-init", "lsh", "lepton-coreutils", "lepton-fbdemo", "lepton-sysmon", "lepton-compositor", "lepton-terminal"])
+    .inputs(["lepton-init", "lsh", "lepton-coreutils", "lepton-sysmon", "lepton-compositor", "lepton-terminal"])
     .output("build/initrd.cpio")
     .handler("initrd");
 
@@ -454,7 +450,7 @@ image()
 // ===========================================================================
 
 benchmarks()
-    .benches_dir("kernel/hadron-kernel/benches")
+    .benches_dir("kernel/kernel/benches")
     .benches_crate("hadron-kernel")
     .benches_linker_script("targets/x86_64-unknown-hadron.ld");
 
@@ -480,6 +476,6 @@ tests()
     ])
     .kani_verifiable(["hadron-core"])
     .shuttle_testable(["hadron-core"])
-    .kernel_tests_dir("kernel/hadron-kernel/tests")
+    .kernel_tests_dir("kernel/kernel/tests")
     .kernel_tests_crate("hadron-kernel")
     .kernel_tests_linker_script("targets/x86_64-unknown-hadron.ld");

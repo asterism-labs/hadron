@@ -4,7 +4,7 @@
 
 Hadron provides two mechanisms for inter-process communication beyond pipes: typed async message channels for bounded message exchange, and shared memory regions for low-latency data sharing between processes.
 
-Source: [`kernel/hadron-kernel/src/ipc/channel.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/hadron-kernel/src/ipc/channel.rs), [`kernel/hadron-kernel/src/ipc/shm.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/hadron-kernel/src/ipc/shm.rs)
+Source: [`kernel/kernel/src/ipc/channel.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/kernel/src/ipc/channel.rs), [`kernel/kernel/src/ipc/shm.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/kernel/src/ipc/shm.rs)
 
 ## Channels
 
@@ -85,10 +85,10 @@ Both channels and shared memory integrate with Hadron's cooperative async execut
 
 The following files implement this feature:
 
-- `kernel/hadron-kernel/src/ipc/channel.rs` -- Channel creation, send/recv logic
-- `kernel/hadron-kernel/src/ipc/shm.rs` -- Shared memory region management
-- `kernel/hadron-kernel/src/syscall/ipc.rs` -- Syscall handlers for channel and SHM operations
-- `kernel/hadron-syscall/src/lib.rs` -- Syscall DSL definitions for channel and memory syscalls
+- `kernel/kernel/src/ipc/channel.rs` -- Channel creation, send/recv logic
+- `kernel/kernel/src/ipc/shm.rs` -- Shared memory region management
+- `kernel/kernel/src/syscall/ipc.rs` -- Syscall handlers for channel and SHM operations
+- `kernel/syscall/src/lib.rs` -- Syscall DSL definitions for channel and memory syscalls
 
 ## References
 

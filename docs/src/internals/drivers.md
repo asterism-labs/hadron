@@ -8,7 +8,7 @@ into the same kernel binary.
 
 ## Organization
 
-Drivers are organized by subsystem under `kernel/hadron-drivers/src/`:
+Drivers are organized by subsystem under `kernel/drivers/src/`:
 
 | Module        | Purpose                                        |
 |---------------|------------------------------------------------|

@@ -2,22 +2,12 @@
 resolver = "2"
 members = [
     "crates/*/*",
-    "kernel/mm",
-    "kernel/fs",
-    "kernel/sched",
-    "kernel/hadron-kernel",
-    "kernel/hadron-net",
-    "kernel/hadron-ipc",
-    "kernel/hadron-pci",
-    "kernel/hadron-tty",
-    "kernel/hadron-drivers",
-    "tools/gluon",
+    "kernel/*",
     "userspace/hadron-libc/core",
 ]
 exclude = [ "userspace", "kernel/boot" ]
 default-members = [
     "crates/*/*",
-    "tools/gluon",
 ]
 
 [workspace.package]
@@ -34,28 +24,28 @@ publish = false
 # Internal crates
 hadron-acpi = { path = "crates/parse/acpi" }
 hadron-fdt = { path = "crates/parse/fdt" }
-hadron-core = { path = "crates/core/hadron-core" }
+hadron-core = { path = "kernel/core" }
 hadron-binparse = { path = "crates/parse/binparse" }
 hadron-binparse-macros = { path = "crates/parse/binparse-macros" }
-hadron-driver-api = { path = "crates/driver/hadron-driver-api" }
-hadron-mmio = { path = "crates/driver/hadron-mmio" }
-hadron-mmio-macros = { path = "crates/driver/hadron-mmio-macros" }
+hadron-driver-api = { path = "kernel/driver-api" }
+hadron-mmio = { path = "kernel/mmio" }
+hadron-mmio-macros = { path = "kernel/mmio-macros" }
 hadron-codegen = { path = "crates/tools/hadron-codegen" }
-hadron-drivers = { path = "kernel/hadron-drivers" }
+hadron-drivers = { path = "kernel/drivers" }
 hadron-fs = { path = "kernel/fs" }
-hadron-ipc = { path = "kernel/hadron-ipc" }
-hadron-pci = { path = "kernel/hadron-pci" }
-hadron-tty = { path = "kernel/hadron-tty" }
+hadron-ipc = { path = "kernel/ipc" }
+hadron-pci = { path = "kernel/pci" }
+hadron-tty = { path = "kernel/tty" }
 hadron-mm = { path = "kernel/mm" }
-hadron-net = { path = "kernel/hadron-net" }
+hadron-net = { path = "kernel/net" }
 hadron-sched = { path = "kernel/sched" }
 hadron-dwarf = { path = "crates/parse/dwarf" }
 hadron-elf = { path = "crates/parse/elf" }
-hadron-kernel = { path = "kernel/hadron-kernel" }
-hadron-intrinsics = { path = "crates/core/hadron-intrinsics" }
+hadron-kernel = { path = "kernel/kernel" }
+hadron-intrinsics = { path = "kernel/intrinsics" }
 hadron-linkset = { path = "crates/core/linkset" }
-hadron-syscall = { path = "crates/syscall/hadron-syscall" }
-hadron-syscall-macros = { path = "crates/syscall/hadron-syscall-macros" }
+hadron-syscall = { path = "kernel/syscall" }
+hadron-syscall-macros = { path = "kernel/syscall-macros" }
 hadron-bench = { path = "crates/test/hadron-bench", default-features = false }
 hadron-ktest = { path = "crates/test/hadron-ktest" }
 hadron-ktest-macros = { path = "crates/test/hadron-ktest-macros" }

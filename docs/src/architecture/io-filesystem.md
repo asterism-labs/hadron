@@ -2,7 +2,7 @@
 
 The Hadron kernel provides a Virtual Filesystem (VFS) layer that abstracts over different filesystem implementations behind a uniform set of traits. All file I/O -- whether targeting an in-memory ramfs, a device node in devfs, or a block-device-backed filesystem -- passes through the VFS. File descriptor management integrates with the VFS to provide standard POSIX-like file operations.
 
-Source: [`kernel/hadron-kernel/src/fs/`](https://github.com/anomalyco/hadron/blob/main/kernel/hadron-kernel/src/fs/), [`kernel/hadron-drivers/src/fs/`](https://github.com/anomalyco/hadron/blob/main/kernel/hadron-drivers/src/fs/)
+Source: [`kernel/kernel/src/fs/`](https://github.com/anomalyco/hadron/blob/main/kernel/kernel/src/fs/), [`kernel/drivers/src/fs/`](https://github.com/anomalyco/hadron/blob/main/kernel/drivers/src/fs/)
 
 ## VFS Architecture
 

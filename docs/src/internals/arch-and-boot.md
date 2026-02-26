@@ -6,7 +6,7 @@ online.
 
 ## Overview
 
-The architecture layer lives under `kernel/hadron-kernel/src/arch/`. A thin
+The architecture layer lives under `kernel/kernel/src/arch/`. A thin
 facade in `arch/mod.rs` re-exports a uniform API from the active architecture
 module (`arch/x86_64/` or `arch/aarch64/`). Three functions make up the
 facade:
@@ -344,7 +344,7 @@ wrapping `rdmsr`/`wrmsr`. Pre-defined constants: `IA32_EFER`, `IA32_PAT`,
 
 ## Per-CPU State
 
-**File:** `kernel/hadron-kernel/src/percpu.rs`
+**File:** `kernel/kernel/src/percpu.rs`
 
 ### PerCpu Struct
 
@@ -393,7 +393,7 @@ syscall resume).
 
 ### BootInfo Trait
 
-**File:** `kernel/hadron-kernel/src/boot.rs`
+**File:** `kernel/kernel/src/boot.rs`
 
 The `BootInfo` trait abstracts over different bootloaders. Each boot stub
 converts its native data structures into kernel-canonical types and calls

@@ -1,6 +1,7 @@
 [default]
 extend-ignore-re = [
-    "\\b[0-9a-fA-F]{8,}\\b", # hex literals
+    "\\b[0-9a-fA-F]{8,}\\b",  # hex literals
+    "commit [0-9a-fA-F]{7,}", # git commit hashes
 ]
 
 [default.extend-words]
@@ -34,6 +35,12 @@ thr = "thr"       # Transmitter Holding Register (UART)
 fre = "fre"       # FIS Receive Enable (AHCI)
 rela = "rela"     # ELF relocation section (.rela.dyn)
 ba = "ba"         # as in BAR (Base Address Register)
+tha = "tha"       # Target Hardware Address (ARP)
+clen = "clen"     # completion length (shell)
+abd = "abd"       # test data in TTY tests
+ratatui = "ratatui" # TUI library name
+rto = "rto"       # Retransmission Timeout (TCP)
+thre = "thre"     # Transmitter Holding Register Empty (UART)
 
 [files]
-extend-exclude = [ "*.elf", "*.o", "*.iso", "*.img", "targets/*.json", "docs/book/" ]
+extend-exclude = [ "*.elf", "*.o", "*.iso", "*.img", "targets/*.json", "docs/book/", "docs/*.js" ]

@@ -91,10 +91,10 @@ This pattern allows the driver to expose raw async behavior while users see stan
 
 ## Files to Reference
 
-- **PS/2 keyboard driver**: [`kernel/hadron-kernel/src/drivers/ps2_keyboard.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/hadron-kernel/src/drivers/ps2_keyboard.rs)
-- **PS/2 mouse driver**: [`kernel/hadron-kernel/src/drivers/ps2_mouse.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/hadron-kernel/src/drivers/ps2_mouse.rs)
-- **devfs integration**: [`kernel/hadron-kernel/src/fs/devfs.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/hadron-kernel/src/fs/devfs.rs)
-- **Input event types**: [`kernel/hadron-kernel/src/syscall/input.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/hadron-kernel/src/syscall/input.rs)
+- **PS/2 keyboard driver**: [`kernel/kernel/src/drivers/ps2_keyboard.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/kernel/src/drivers/ps2_keyboard.rs)
+- **PS/2 mouse driver**: [`kernel/kernel/src/drivers/ps2_mouse.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/kernel/src/drivers/ps2_mouse.rs)
+- **devfs integration**: [`kernel/kernel/src/fs/devfs.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/kernel/src/fs/devfs.rs)
+- **Input event types**: [`kernel/kernel/src/syscall/input.rs`](https://github.com/anomalyco/hadron/blob/main/kernel/kernel/src/syscall/input.rs)
 
 ## Example Usage
 

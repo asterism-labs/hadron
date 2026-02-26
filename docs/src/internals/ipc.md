@@ -4,7 +4,7 @@ Hadron provides byte-oriented **pipes** as its current IPC primitive. Pipes are
 implemented as VFS-integrated circular buffers with async read/write semantics,
 allowing processes to exchange data through ordinary file descriptors.
 
-The implementation lives in `kernel/hadron-kernel/src/ipc/`, which currently
+The implementation lives in `kernel/kernel/src/ipc/`, which currently
 exposes a single submodule:
 
 - `ipc/mod.rs` -- module root
