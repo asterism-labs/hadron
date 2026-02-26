@@ -28,12 +28,32 @@ This chapter provides rough estimates for lines of code, unsafe percentages, and
 | vDSO & Performance | ~700 | ~15% | vDSO, seqlock, TSC, futex |
 | **Total remaining** | | **~3,200** | **~8%** | |
 
+## Graphics Stack
+
+| Feature | Approx LOC | Unsafe % | Key Learning |
+|---------|-----------|----------|--------------|
+| `mprotect` syscall | ~100 | ~20% | Page table flag updates on existing mappings |
+| Dynamic devfs | ~100 | ~0% | Runtime inode insertion into existing BTreeMap |
+| sysfs | ~600 | ~0% | Virtual filesystem, PCI attribute formatting |
+| `sys_query` extensions (VMAPS, CPU_INFO) | ~200 | ~5% | Process memory map iteration, CPUID parsing |
+| `poll()` + pthreads (libc) | ~500 | ~10% | POSIX threading model, futex-based synchronization |
+| Unix Domain Sockets | ~1,200 | ~5% | Socket lifecycle, fd-passing, VFS integration |
+| Wayland compositor | ~2,000 | ~0% | Wayland wire protocol, window management, compositing |
+| VirtIO GPU 3D extension | ~800 | ~5% | VirtIO GPU 3D command types, context management |
+| DRM device node + ioctls | ~600 | ~5% | DRM ioctl dispatch, GPU resource mapping |
+| Minimal DMA-buf | ~400 | ~5% | Buffer object lifecycle, fd export/import |
+| **Hadron-side total** | **~6,500** | **~4%** | |
+
+Mesa itself is ~4M LOC but is ported, not written. The patching effort is
+estimated at ~500-1,000 changed lines across OS abstractions, DRM loader, and
+procfs callsite replacements.
+
 ## Deferred
 
 | Item | Approx LOC | Notes |
 |------|-----------|-------|
 | ext2 Filesystem | ~1,500 | Deferred — pick up when persistent storage is needed |
-| OpenGL/Vulkan | N/A | Requires Mesa port (~4M LOC) — long-term aspiration |
+| Real GPU (AMD/Intel) | ~10,000+ | IOMMU, GEM/TTM, KMS, firmware loading — after VirtIO Vulkan |
 | USB HID | ~1,500 | USB keyboard/mouse — deferred until USB host controller work |
 
 ## Unsafe Distribution

@@ -39,6 +39,13 @@
 - [vDSO & Performance](features/vdso.md)
 - [VirtIO GPU 2D Driver](features/virtio-gpu.md)
 
+# Graphics Stack
+
+- [sysfs Virtual Filesystem](features/sysfs.md)
+- [Unix Domain Sockets](features/unix-domain-sockets.md)
+- [Mesa & Vulkan](features/mesa-vulkan.md)
+- [Wayland Minimal Subset](features/wayland-wsi.md)
+
 # Deferred
 
 - [ext2 Filesystem](features/deferred-ext2.md)
@@ -53,6 +60,7 @@
 - [Kernel Architecture Comparison](design/kernel-comparison.md)
 - [Memory Layout](design/memory-layout.md)
 - [Boot Procedure](design/boot-procedure.md)
+- [Graphics Stack](design/graphics-stack.md)
 
 # Reference
 

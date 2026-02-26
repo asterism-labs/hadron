@@ -110,15 +110,26 @@ not yet implemented.
 |---------|-------------|--------|
 | TTY raw mode | Line discipline honors `~ICANON` for byte-at-a-time input | Medium |
 | `timer_create` / `setitimer` | Periodic timers (can be shimmed with nanosleep) | Medium |
-| `mprotect` | Change page permissions on existing mappings | Medium |
 | File locking (`F_SETLK`) | Advisory locking via fcntl | Medium |
 | `CLOCK_REALTIME` in nanosleep | Absolute-time sleep for condition variable timeouts | Easy |
+
+### Elevated Priority — Needed for graphics stack
+
+These features were previously lower priority but are required by the Mesa/Vulkan
+port. See [Graphics Stack Design](graphics-stack.md) and [Mesa & Vulkan](../features/mesa-vulkan.md).
+
+| Feature | Description | Effort |
+|---------|-------------|--------|
+| `mprotect` | Change page permissions on existing mappings (shader JIT) | Medium |
+| Unix domain sockets | `AF_UNIX` `SOCK_STREAM` with `SCM_RIGHTS` fd-passing (Wayland transport) | Large |
+| `poll()` in libc | Wrapper around `event_wait_many` (Mesa threading) | Easy |
+| pthreads in libc | `pthread_create`/`join`/`mutex`/`cond` via `task_clone` + `futex` | Medium |
 
 ### Low Priority — Deferred
 
 | Feature | Description | Effort |
 |---------|-------------|--------|
-| Socket subsystem | `socket`/`bind`/`listen`/`accept`/`connect`/`send`/`recv` | Very Large |
+| Network sockets (`AF_INET`) | TCP/UDP sockets (separate from AF_UNIX) | Very Large |
 | `select()` / `epoll` | Can be shimmed on top of `event_wait_many` | Medium |
 | Shared memory (`shmget`) | SysV shared memory segments | Medium |
 | Real-time signals | Queued signals with `SA_SIGINFO` | Medium |

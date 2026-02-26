@@ -59,6 +59,20 @@ There is no networking stack. All socket-related syscalls (`socket`,
 are unimplemented. This blocks `curl`, `wget`, DNS resolution, and any
 network-aware program.
 
+**Planned**: `AF_UNIX` stream sockets with `SCM_RIGHTS` fd-passing are planned
+as a prerequisite for Wayland transport in the graphics stack. See
+[Unix Domain Sockets](../features/unix-domain-sockets.md). Network sockets
+(`AF_INET`) remain deferred.
+
+### No `mprotect`
+
+Page permissions cannot be changed after mapping. `mprotect()` returns `ENOSYS`.
+This blocks Mesa's shader JIT (which mmaps RW pages, writes shader code, then
+mprotects to RX) and other JIT-based runtimes.
+
+**Planned**: `sys_mem_protect` syscall as part of the graphics stack prerequisites.
+See [Mesa & Vulkan](../features/mesa-vulkan.md).
+
 ## Locking Discipline
 
 ### Lock ordering reference
