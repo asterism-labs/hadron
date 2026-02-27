@@ -1,9 +1,11 @@
-//! Minimal network stack: ARP resolution/reply and ICMP echo (ping).
+//! Network subsystem: ethernet stack and AF_UNIX domain sockets.
 //!
-//! Protocol logic lives in the `hadron-net` crate.  This module provides
-//! the kernel glue: device registry lookup and task spawning.
+//! - [`unix`] — AF_UNIX domain socket implementation
+//! - The Ethernet/IP stack uses the `hadron-net` crate for protocol logic.
 
 extern crate alloc;
+
+pub mod unix;
 
 use alloc::string::String;
 

@@ -106,6 +106,8 @@ pub enum TrapReason {
     Exec = 6,
     /// Syscall requested futex wait (sleep on address).
     Futex = 7,
+    /// Syscall requested blocking `accept()` on a Unix socket.
+    Accept = 8,
 }
 
 impl TrapReason {
@@ -119,6 +121,7 @@ impl TrapReason {
             5 => Self::Sleep,
             6 => Self::Exec,
             7 => Self::Futex,
+            8 => Self::Accept,
             _ => Self::Exit,
         }
     }
@@ -268,6 +271,15 @@ static IO_BUF_LEN: CpuLocal<AtomicU64> = CpuLocal::new([const { AtomicU64::new(0
 /// Per-CPU I/O direction for TRAP_IO: 0 = read, 1 = write.
 static IO_IS_WRITE: CpuLocal<AtomicU8> = CpuLocal::new([const { AtomicU8::new(0) }; MAX_CPUS]);
 
+/// Per-CPU user pointer to the cmsg buffer for `recvmsg`. `0` = not a recvmsg.
+static IO_CMSG_PTR: CpuLocal<AtomicU64> = CpuLocal::new([const { AtomicU64::new(0) }; MAX_CPUS]);
+
+/// Per-CPU length of the cmsg buffer for `recvmsg`.
+static IO_CMSG_LEN: CpuLocal<AtomicU64> = CpuLocal::new([const { AtomicU64::new(0) }; MAX_CPUS]);
+
+/// Per-CPU user pointer to the `struct msghdr` for `recvmsg` (to update `msg_controllen`).
+static IO_MSG_PTR: CpuLocal<AtomicU64> = CpuLocal::new([const { AtomicU64::new(0) }; MAX_CPUS]);
+
 /// Per-CPU sleep duration in milliseconds for TRAP_SLEEP.
 static SLEEP_MS: CpuLocal<AtomicU64> = CpuLocal::new([const { AtomicU64::new(0) }; MAX_CPUS]);
 
@@ -280,6 +292,9 @@ static EXEC_INFO_LEN: CpuLocal<AtomicU64> = CpuLocal::new([const { AtomicU64::ne
 static FUTEX_ADDR: CpuLocal<AtomicU64> = CpuLocal::new([const { AtomicU64::new(0) }; MAX_CPUS]);
 /// Per-CPU futex expected value for TRAP_FUTEX.
 static FUTEX_VAL: CpuLocal<AtomicU64> = CpuLocal::new([const { AtomicU64::new(0) }; MAX_CPUS]);
+
+/// Per-CPU listening socket fd for TRAP_ACCEPT.
+static ACCEPT_FD: CpuLocal<AtomicU64> = CpuLocal::new([const { AtomicU64::new(0) }; MAX_CPUS]);
 
 /// Send a signal to all processes in a process group.
 ///
@@ -891,6 +906,9 @@ pub struct IoState;
 
 impl IoState {
     /// Sets the I/O parameters for a `TRAP_IO` syscall.
+    ///
+    /// Also clears the recvmsg cmsg parameters so that non-socket reads do
+    /// not accidentally trigger fd dequeue in `process_task`.
     pub fn set_params(fd: Fd, buf_ptr: usize, buf_len: usize, is_write: bool) {
         IO_FD.get().store(fd.as_u32() as u64, Ordering::Release);
         IO_BUF_PTR.get().store(buf_ptr as u64, Ordering::Release);
@@ -898,6 +916,34 @@ impl IoState {
         IO_IS_WRITE
             .get()
             .store(u8::from(is_write), Ordering::Release);
+        // Clear recvmsg params — overridden by set_recvmsg_params if needed.
+        IO_CMSG_PTR.get().store(0, Ordering::Release);
+        IO_CMSG_LEN.get().store(0, Ordering::Release);
+        IO_MSG_PTR.get().store(0, Ordering::Release);
+    }
+
+    /// Extends a `TRAP_IO` read with `recvmsg` ancillary-data parameters.
+    ///
+    /// Must be called **after** `set_params` (which would otherwise clear these).
+    /// When `cmsg_ptr != 0`, `process_task` dequeues pending `SCM_RIGHTS` fds
+    /// from the socket inode after the read completes and writes them into the
+    /// cmsg buffer, then updates `msg_controllen` at `msg_ptr + 40`.
+    pub fn set_recvmsg_params(cmsg_ptr: usize, cmsg_len: usize, msg_ptr: usize) {
+        IO_CMSG_PTR.get().store(cmsg_ptr as u64, Ordering::Release);
+        IO_CMSG_LEN.get().store(cmsg_len as u64, Ordering::Release);
+        IO_MSG_PTR.get().store(msg_ptr as u64, Ordering::Release);
+    }
+}
+
+// ── AcceptState facade ─────────────────────────────────────────────
+
+/// Zero-sized facade for socket accept syscall parameters.
+pub struct AcceptState;
+
+impl AcceptState {
+    /// Sets the listening socket fd for a `TRAP_ACCEPT`.
+    pub fn set_fd(fd: Fd) {
+        ACCEPT_FD.get().store(fd.as_u32() as u64, Ordering::Release);
     }
 }
 
@@ -1410,6 +1456,73 @@ async fn process_task_inner(process: Arc<Process>, first_entry_args: Option<(u64
                                     if let Some(f) = fd_table.get_mut(io_fd) {
                                         f.offset += n;
                                     }
+                                    drop(fd_table);
+
+                                    // Dequeue SCM_RIGHTS fds if this is a recvmsg call.
+                                    let cmsg_ptr =
+                                        IO_CMSG_PTR.get().load(Ordering::Acquire) as usize;
+                                    let cmsg_len =
+                                        IO_CMSG_LEN.get().load(Ordering::Acquire) as usize;
+                                    let msg_ptr = IO_MSG_PTR.get().load(Ordering::Acquire) as usize;
+                                    if cmsg_ptr != 0 && cmsg_len >= 24 {
+                                        // CMSG_SPACE(sizeof(int)) = 24 bytes per fd.
+                                        let mut written: usize = 0;
+                                        while written + 24 <= cmsg_len {
+                                            let Some(recv_inode) = inode.dequeue_recv_fd() else {
+                                                break;
+                                            };
+                                            let new_fd = process.fd_table.lock().open(
+                                                recv_inode,
+                                                crate::fs::file::OpenFlags::READ
+                                                    | crate::fs::file::OpenFlags::WRITE,
+                                            );
+                                            // Write cmsg header + fd under user CR3.
+                                            // SAFETY: Switching to user CR3.
+                                            unsafe {
+                                                Cr3::write(process.user_cr3());
+                                            }
+                                            let cmsg_offset = cmsg_ptr + written;
+                                            // Each cmsg is: [cmsg_len:u64=20][level:i32=1][type:i32=1][fd:i32]
+                                            if let Ok(sl) = crate::syscall::userptr::UserSlice::new(
+                                                cmsg_offset,
+                                                20,
+                                            ) {
+                                                let buf = unsafe { sl.as_mut_slice() };
+                                                buf[0..8].copy_from_slice(&20u64.to_le_bytes());
+                                                buf[8..12].copy_from_slice(&1i32.to_le_bytes());
+                                                buf[12..16].copy_from_slice(&1i32.to_le_bytes());
+                                                buf[16..20].copy_from_slice(
+                                                    &(new_fd.as_u32() as i32).to_le_bytes(),
+                                                );
+                                            }
+                                            // SAFETY: Restore kernel CR3.
+                                            unsafe {
+                                                Cr3::write(TrapContext::kernel_cr3());
+                                            }
+                                            written += 24; // CMSG_SPACE(4)
+                                        }
+                                        // Update msg_controllen at byte offset 40 of the msghdr.
+                                        if msg_ptr != 0 {
+                                            // SAFETY: Switching to user CR3.
+                                            unsafe {
+                                                Cr3::write(process.user_cr3());
+                                            }
+                                            if let Ok(sl) = crate::syscall::userptr::UserSlice::new(
+                                                msg_ptr + 40,
+                                                8,
+                                            ) {
+                                                let buf = unsafe { sl.as_mut_slice() };
+                                                buf.copy_from_slice(
+                                                    &(written as u64).to_le_bytes(),
+                                                );
+                                            }
+                                            // SAFETY: Restore kernel CR3.
+                                            unsafe {
+                                                Cr3::write(TrapContext::kernel_cr3());
+                                            }
+                                        }
+                                    }
+
                                     #[expect(
                                         clippy::cast_possible_wrap,
                                         reason = "byte counts are small"
@@ -1462,6 +1575,110 @@ async fn process_task_inner(process: Arc<Process>, first_entry_args: Option<(u64
                 }
 
                 // Check for pending signals after I/O completes.
+                match check_signals(&process) {
+                    SignalCheckResult::Terminate(exit_code) => {
+                        kinfo!("Process {} killed by signal (exit {})", pid, exit_code);
+                        *process.exit_status.lock() = Some(exit_code);
+                        process.exit_notify.wake_all();
+                        break;
+                    }
+                    SignalCheckResult::Delivered | SignalCheckResult::None => {}
+                }
+                continue;
+            }
+            TrapReason::Accept => {
+                let listen_fd = Fd::new(ACCEPT_FD.get().load(Ordering::Acquire) as u32);
+
+                // Snapshot saved user registers (same pattern as TRAP_IO).
+                // SAFETY: SYSCALL_SAVED_REGS is only written by syscall entry
+                // assembly with interrupts masked, and we haven't yielded yet.
+                let (
+                    saved_rip,
+                    saved_rflags,
+                    saved_rbx,
+                    saved_rbp,
+                    saved_r12,
+                    saved_r13,
+                    saved_r14,
+                    saved_r15,
+                    saved_user_rsp,
+                ) = unsafe {
+                    let saved = &*crate::arch::x86_64::syscall::SYSCALL_SAVED_REGS.get().get();
+                    (
+                        saved.user_rip,
+                        saved.user_rflags,
+                        saved.rbx,
+                        saved.rbp,
+                        saved.r12,
+                        saved.r13,
+                        saved.r14,
+                        saved.r15,
+                        crate::percpu::PerCpuState::current().user_rsp,
+                    )
+                };
+
+                // Snapshot user FPU state before any .await.
+                unsafe {
+                    let fpu_ptr = USER_FPU_CONTEXT.get().get() as *mut u8;
+                    core::arch::asm!("fxsave64 [{}]", in(reg) fpu_ptr, options(nostack));
+                }
+                let saved_fpu = unsafe { (*USER_FPU_CONTEXT.get().get()).clone() };
+
+                // Get the listening socket inode.
+                let listen_inode = {
+                    let fd_table = process.fd_table.lock();
+                    fd_table.get(listen_fd).map(|f| f.inode.clone())
+                };
+
+                #[expect(
+                    clippy::cast_possible_wrap,
+                    reason = "fd numbers are small, wrap is impossible"
+                )]
+                let result: isize = if let Some(listen_inode) = listen_inode {
+                    match listen_inode.accept_connection().await {
+                        Ok(new_inode) => {
+                            let new_fd = process.fd_table.lock().open(
+                                new_inode,
+                                crate::fs::file::OpenFlags::READ
+                                    | crate::fs::file::OpenFlags::WRITE,
+                            );
+                            new_fd.as_u32() as isize
+                        }
+                        Err(e) => -e.to_errno(),
+                    }
+                } else {
+                    -crate::syscall::EBADF
+                };
+
+                // Restore FPU state after accept await.
+                unsafe {
+                    *USER_FPU_CONTEXT.get().get() = saved_fpu;
+                }
+
+                // Restore user registers and set result in rax.
+                unsafe {
+                    let ctx = &mut *USER_CONTEXT.get().get();
+                    ctx.rip = saved_rip;
+                    ctx.rflags = saved_rflags;
+                    ctx.rsp = saved_user_rsp;
+                    ctx.rbx = saved_rbx;
+                    ctx.rbp = saved_rbp;
+                    ctx.r12 = saved_r12;
+                    ctx.r13 = saved_r13;
+                    ctx.r14 = saved_r14;
+                    ctx.r15 = saved_r15;
+                    ctx.rax = result as u64;
+                    ctx.rcx = 0;
+                    ctx.rdx = 0;
+                    ctx.rsi = 0;
+                    ctx.rdi = 0;
+                    ctx.r8 = 0;
+                    ctx.r9 = 0;
+                    ctx.r10 = 0;
+                    ctx.r11 = 0;
+                }
+
+                // Check for pending signals.
                 match check_signals(&process) {
                     SignalCheckResult::Terminate(exit_code) => {
                         kinfo!("Process {} killed by signal (exit {})", pid, exit_code);

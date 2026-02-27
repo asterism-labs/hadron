@@ -25,9 +25,15 @@ pub mod locale;
 #[cfg(feature = "userspace")]
 pub mod mman;
 #[cfg(feature = "userspace")]
+pub mod poll;
+#[cfg(feature = "userspace")]
 pub mod process;
 #[cfg(feature = "userspace")]
+pub mod pthread;
+#[cfg(feature = "userspace")]
 pub mod signal;
+#[cfg(feature = "userspace")]
+pub mod socket;
 #[cfg(feature = "userspace")]
 pub mod start;
 #[cfg(feature = "userspace")]

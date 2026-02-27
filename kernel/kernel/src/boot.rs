@@ -635,6 +635,22 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
         fs::vfs::with_vfs_mut(|vfs| vfs.mount("/proc", procfs));
         crate::kinfo!("VFS: Mounted {} at /proc", procfs_name);
 
+        // Mount sysfs at /sys (Mesa DRM loader scans /sys/bus/pci/devices/).
+        let sysfs = Arc::new(crate::fs::sysfs::SysFs::new());
+        let sysfs_root = sysfs.root_dir();
+        crate::fs::sysfs_registry::set_root(sysfs_root);
+        let sysfs_name = sysfs.name();
+        fs::vfs::with_vfs_mut(|vfs| vfs.mount("/sys", sysfs));
+        crate::kinfo!("VFS: Mounted {} at /sys", sysfs_name);
+
+        // Populate /sys/bus/pci/devices/ with PCI devices enumerated during
+        // platform_init (cached because VFS was not yet ready at that point).
+        #[cfg(target_arch = "x86_64")]
+        {
+            let pci_devs = crate::pci::cached_devices();
+            crate::fs::sysfs_registry::populate_pci(&pci_devs);
+        }
+
         // Mount block-device-backed filesystems discovered from the registry.
         // Each block device is passed to registered block FS drivers until one succeeds.
         let block_fs_entries = crate::drivers::registry::block_fs_entries();

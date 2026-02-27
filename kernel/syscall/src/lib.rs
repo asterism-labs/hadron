@@ -49,6 +49,20 @@ hadron_syscall_macros::define_syscalls! {
         ENOSYS = 38;
         /// `ELOOP` — too many levels of symbolic links.
         ELOOP = 40;
+        /// `EAGAIN` — resource temporarily unavailable / try again.
+        EAGAIN = 11;
+        /// `ENOTSOCK` — socket operation on non-socket file descriptor.
+        ENOTSOCK = 88;
+        /// `EADDRINUSE` — address already in use (bind to occupied path).
+        EADDRINUSE = 98;
+        /// `ENOTCONN` — transport endpoint is not connected.
+        ENOTCONN = 107;
+        /// `EISCONN` — transport endpoint is already connected.
+        EISCONN = 106;
+        /// `ECONNREFUSED` — connection refused (target not listening).
+        ECONNREFUSED = 111;
+        /// `EMSGSIZE` — message too long.
+        EMSGSIZE = 90;
     }
 
     types {
@@ -104,6 +118,36 @@ hadron_syscall_macros::define_syscalls! {
             count: u32,
             /// Padding for alignment.
             _pad: u32,
+        }
+
+        /// One entry in the [`QUERY_VMAPS`] response array.
+        ///
+        /// Describes one virtual memory mapping for the calling process.
+        #[derive(Debug, Clone, Copy)]
+        struct VmapEntry {
+            /// Start virtual address (inclusive).
+            start: u64,
+            /// End virtual address (exclusive).
+            end: u64,
+            /// Protection flags: `PROT_READ` | `PROT_WRITE` | `PROT_EXEC`.
+            prot: u32,
+            /// Padding for alignment.
+            _pad: u32,
+            /// Human-readable name, NUL-padded (e.g. `b"anon\0"`).
+            name: [u8; 16],
+        }
+
+        /// Response for [`QUERY_CPU_INFO`]: CPU capabilities.
+        #[derive(Debug, Clone, Copy)]
+        struct CpuInfo {
+            /// Number of online logical CPUs.
+            core_count: u32,
+            /// Padding for alignment.
+            _pad: u32,
+            /// Feature bitfield matching `hadron_core::cpu_features::CpuFeatures`.
+            feature_flags: u64,
+            /// CPUID brand string (up to 48 bytes, NUL-padded).
+            model: [u8; 48],
         }
 
         /// Stat information for a vnode.
@@ -292,6 +336,10 @@ hadron_syscall_macros::define_syscalls! {
         QUERY_KERNEL_VERSION: u64 = 2;
         /// Query topic: process table statistics.
         QUERY_PROCESSES: u64 = 3;
+        /// Query topic: virtual memory map for the calling process.
+        QUERY_VMAPS: u64 = 4;
+        /// Query topic: CPU capabilities (core count + feature flags + model string).
+        QUERY_CPU_INFO: u64 = 5;
         /// Monotonic clock: nanoseconds since boot, never adjusted.
         CLOCK_MONOTONIC: usize = 0;
         /// Real-time clock: Unix epoch seconds (wall-clock time).
@@ -306,6 +354,22 @@ hadron_syscall_macros::define_syscalls! {
         INODE_TYPE_SYMLINK: u8 = 3;
         /// Inode type: block device.
         INODE_TYPE_BLOCKDEV: u8 = 4;
+        /// Inode type: Unix domain socket.
+        INODE_TYPE_SOCKET: u8 = 5;
+        /// Socket address family: Unix domain sockets.
+        AF_UNIX: usize = 1;
+        /// Socket type: stream (reliable, connection-oriented byte stream).
+        SOCK_STREAM: usize = 1;
+        /// Socket option level: socket level (for `SCM_RIGHTS`).
+        SOL_SOCKET: usize = 1;
+        /// Control message type: file descriptor passing.
+        SCM_RIGHTS: usize = 1;
+        /// Shutdown direction: shut down the receive side.
+        SHUT_RD: usize = 0;
+        /// Shutdown direction: shut down the transmit side.
+        SHUT_WR: usize = 1;
+        /// Shutdown direction: shut down both sides.
+        SHUT_RDWR: usize = 2;
         /// Memory protection: allow reads.
         PROT_READ: usize = 0x1;
         /// Memory protection: allow writes.
@@ -797,6 +861,17 @@ hadron_syscall_macros::define_syscalls! {
         /// bitmask of `PROT_READ`/`PROT_WRITE`.
         /// Returns the mapped virtual address on success, or negated errno.
         fn mem_map_shared(fd: usize, size: usize, prot: usize) = 0x04;
+
+        /// Change protection flags on a mapped memory region.
+        ///
+        /// `addr` must be page-aligned. `length` is the region size in bytes
+        /// (rounded up to page alignment). `prot` is a bitmask of
+        /// `PROT_READ`/`PROT_WRITE`/`PROT_EXEC`.
+        ///
+        /// Returns 0 on success, or negated errno. Returns `ENOMEM` if any
+        /// page in the range is not currently mapped. Returns `EINVAL` if
+        /// `addr` is not page-aligned.
+        fn mem_protect(addr: usize, length: usize, prot: usize) = 0x05;
     }
 
     /// Events and time.
@@ -844,6 +919,59 @@ hadron_syscall_macros::define_syscalls! {
         /// FUTEX_WAIT: if `*addr == val`, sleep until woken or timeout.
         /// FUTEX_WAKE: wake up to `val` threads sleeping on `addr`.
         fn futex(addr: usize, op: usize, val: usize, timeout_ms: usize) = 0x06;
+    }
+
+    /// AF_UNIX socket operations.
+    group net(0x60..0x70) {
+        /// Create a socket.
+        ///
+        /// `domain` must be `AF_UNIX` (1). `type_` must be `SOCK_STREAM` (1).
+        /// `protocol` is reserved and must be 0.
+        ///
+        /// Returns a file descriptor on success, or negated errno on failure.
+        fn socket(domain: usize, type_: usize, protocol: usize) = 0x00;
+
+        /// Bind a socket to a filesystem path.
+        ///
+        /// `addr_ptr` points to a `struct sockaddr_un`. `addr_len` is its length.
+        /// Returns 0 on success, or negated errno on failure.
+        fn bind(fd: usize, addr_ptr: usize, addr_len: usize) = 0x01;
+
+        /// Mark a bound socket as listening for connections.
+        ///
+        /// `backlog` is the maximum number of pending connections.
+        /// Returns 0 on success, or negated errno on failure.
+        fn listen(fd: usize, backlog: usize) = 0x02;
+
+        /// Accept a connection on a listening socket.
+        ///
+        /// Blocks until a connection is available. `addr_ptr` and
+        /// `addr_len_ptr` may be null. Returns a new fd on success.
+        fn accept(fd: usize, addr_ptr: usize, addr_len_ptr: usize) = 0x03;
+
+        /// Connect a socket to a listening peer.
+        ///
+        /// `addr_ptr` points to a `struct sockaddr_un`. `addr_len` is its size.
+        /// Returns 0 on success, or negated errno on failure.
+        fn connect(fd: usize, addr_ptr: usize, addr_len: usize) = 0x04;
+
+        /// Send a message on a connected socket.
+        ///
+        /// `msg_ptr` points to a POSIX `struct msghdr`. `flags` is reserved (0).
+        /// Returns bytes sent on success, or negated errno on failure.
+        fn sendmsg(fd: usize, msg_ptr: usize, flags: usize) = 0x05;
+
+        /// Receive a message from a connected socket.
+        ///
+        /// `msg_ptr` points to a POSIX `struct msghdr` to fill. `flags` reserved.
+        /// Blocks if no data is available. Returns bytes received.
+        fn recvmsg(fd: usize, msg_ptr: usize, flags: usize) = 0x06;
+
+        /// Shut down part of a full-duplex connection.
+        ///
+        /// `how` is `SHUT_RD` (0), `SHUT_WR` (1), or `SHUT_RDWR` (2).
+        /// Returns 0 on success, or negated errno on failure.
+        fn shutdown(fd: usize, how: usize) = 0x07;
     }
 
     /// System services.

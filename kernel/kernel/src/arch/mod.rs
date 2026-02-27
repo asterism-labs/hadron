@@ -65,6 +65,9 @@ pub fn platform_init(boot_info: &impl crate::boot::BootInfo) {
 
             crate::drivers::registry::match_pci_drivers(&pci_devices);
             crate::drivers::registry::match_platform_drivers(&acpi_devices);
+
+            // Cache PCI devices for later sysfs population (VFS not yet ready).
+            crate::pci::cache_devices(&pci_devices);
         }
 
         // Platform-only drivers when PCI is off but ACPI is on.

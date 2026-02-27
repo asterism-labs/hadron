@@ -295,6 +295,7 @@ pub(super) fn sys_vnode_stat(fd: usize, buf_ptr: usize, buf_len: usize) -> isize
         crate::fs::InodeType::CharDevice => crate::syscall::INODE_TYPE_CHARDEV,
         crate::fs::InodeType::Symlink => crate::syscall::INODE_TYPE_SYMLINK,
         crate::fs::InodeType::BlockDevice => crate::syscall::INODE_TYPE_BLOCKDEV,
+        crate::fs::InodeType::Socket => crate::syscall::INODE_TYPE_SOCKET,
     };
 
     let perms = inode.permissions();
@@ -407,6 +408,7 @@ pub(super) fn sys_vnode_readdir(fd: usize, buf_ptr: usize, buf_len: usize) -> is
             crate::fs::InodeType::CharDevice => crate::syscall::INODE_TYPE_CHARDEV,
             crate::fs::InodeType::Symlink => crate::syscall::INODE_TYPE_SYMLINK,
             crate::fs::InodeType::BlockDevice => crate::syscall::INODE_TYPE_BLOCKDEV,
+            crate::fs::InodeType::Socket => crate::syscall::INODE_TYPE_SOCKET,
         };
 
         let name_bytes = entry.name.as_bytes();
@@ -1036,6 +1038,7 @@ pub(super) fn sys_vnode_fstatat(
         crate::fs::InodeType::CharDevice => crate::syscall::INODE_TYPE_CHARDEV,
         crate::fs::InodeType::Symlink => crate::syscall::INODE_TYPE_SYMLINK,
         crate::fs::InodeType::BlockDevice => crate::syscall::INODE_TYPE_BLOCKDEV,
+        crate::fs::InodeType::Socket => crate::syscall::INODE_TYPE_SOCKET,
     };
 
     let perms = inode.permissions();
@@ -1087,7 +1090,7 @@ pub(super) fn sys_handle_tcgetpgrp(_fd: usize) -> isize {
 ///
 /// Sets the I/O parameters, restores kernel CR3 and GS bases, then
 /// calls `restore_kernel_context` — never returns.
-pub(super) fn trap_io(fd: Fd, buf_ptr: usize, buf_len: usize, is_write: bool) -> ! {
+pub(crate) fn trap_io(fd: Fd, buf_ptr: usize, buf_len: usize, is_write: bool) -> ! {
     use crate::arch::x86_64::registers::control::Cr3;
     use crate::arch::x86_64::registers::model_specific::{IA32_GS_BASE, IA32_KERNEL_GS_BASE};
     use crate::arch::x86_64::userspace::restore_kernel_context;

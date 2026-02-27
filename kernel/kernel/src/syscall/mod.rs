@@ -8,6 +8,7 @@ mod event;
 mod io;
 mod ioctl;
 mod memory;
+mod net;
 mod process;
 mod query;
 mod time;
@@ -274,6 +275,10 @@ impl SyscallHandler for HadronDispatch {
         memory::sys_mem_map_shared(fd, size, prot)
     }
 
+    fn sys_mem_protect(&self, addr: usize, length: usize, prot: usize) -> isize {
+        memory::sys_mem_protect(addr, length, prot)
+    }
+
     fn sys_clock_gettime(&self, clock_id: usize, tp: usize) -> isize {
         time::sys_clock_gettime(clock_id, tp)
     }
@@ -306,6 +311,38 @@ impl SyscallHandler for HadronDispatch {
 
     fn sys_debug_log(&self, buf: usize, len: usize) -> isize {
         io::sys_debug_log(buf, len)
+    }
+
+    fn sys_socket(&self, domain: usize, type_: usize, protocol: usize) -> isize {
+        net::sys_socket(domain, type_, protocol)
+    }
+
+    fn sys_bind(&self, fd: usize, addr_ptr: usize, addr_len: usize) -> isize {
+        net::sys_bind(fd, addr_ptr, addr_len)
+    }
+
+    fn sys_listen(&self, fd: usize, backlog: usize) -> isize {
+        net::sys_listen(fd, backlog)
+    }
+
+    fn sys_accept(&self, fd: usize, addr_ptr: usize, addr_len_ptr: usize) -> isize {
+        net::sys_accept(fd, addr_ptr, addr_len_ptr)
+    }
+
+    fn sys_connect(&self, fd: usize, addr_ptr: usize, addr_len: usize) -> isize {
+        net::sys_connect(fd, addr_ptr, addr_len)
+    }
+
+    fn sys_sendmsg(&self, fd: usize, msg_ptr: usize, flags: usize) -> isize {
+        net::sys_sendmsg(fd, msg_ptr, flags)
+    }
+
+    fn sys_recvmsg(&self, fd: usize, msg_ptr: usize, flags: usize) -> isize {
+        net::sys_recvmsg(fd, msg_ptr, flags)
+    }
+
+    fn sys_shutdown(&self, fd: usize, how: usize) -> isize {
+        net::sys_shutdown(fd, how)
     }
 }
 

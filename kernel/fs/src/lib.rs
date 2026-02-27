@@ -38,6 +38,8 @@ pub enum InodeType {
     Symlink,
     /// Block device.
     BlockDevice,
+    /// Unix domain socket.
+    Socket,
 }
 
 /// File permissions.
@@ -354,6 +356,73 @@ pub trait Inode: Send + Sync {
     fn as_devfs_dir(&self) -> Option<&devfs::DevFsDir> {
         None
     }
+
+    /// Accept an incoming connection on a listening socket.
+    ///
+    /// Returns a future that resolves to the accepted socket's inode, or an
+    /// error if this inode is not a listening socket (`FsError::NotSupported`)
+    /// or no connections are pending.
+    ///
+    /// Default: returns `FsError::NotSupported`.
+    fn accept_connection(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<Arc<dyn Inode>, FsError>> + Send + '_>> {
+        Box::pin(async { Err(FsError::NotSupported) })
+    }
+
+    /// Dequeue the next received file descriptor from an ancillary data queue.
+    ///
+    /// Called after `recvmsg` to retrieve file descriptors passed via
+    /// `SCM_RIGHTS`. Returns `None` if no file descriptors are queued.
+    ///
+    /// Default: `None`.
+    fn dequeue_recv_fd(&self) -> Option<Arc<dyn Inode>> {
+        None
+    }
+
+    /// Enqueue a file descriptor to send via ancillary data.
+    ///
+    /// Called by `sendmsg` for each `SCM_RIGHTS` fd. The fd's inode is
+    /// cloned and attached to the next outgoing message.
+    ///
+    /// Default: does nothing.
+    fn enqueue_send_fd(&self, _inode: Arc<dyn Inode>) {}
+
+    /// Bind a Unix domain socket to a filesystem path.
+    ///
+    /// Updates the socket state to `Bound(path)`. Registration in the global
+    /// path registry is deferred until `unix_listen()`.
+    ///
+    /// Default: returns [`FsError::NotSupported`].
+    fn unix_bind(&self, _path: &str) -> Result<(), FsError> {
+        Err(FsError::NotSupported)
+    }
+
+    /// Mark a bound Unix domain socket as listening for connections.
+    ///
+    /// Registers the socket in the global path registry so that `connect()`
+    /// can find it. Must be called after `unix_bind()`.
+    ///
+    /// Default: returns [`FsError::NotSupported`].
+    fn unix_listen(&self, _backlog: usize) -> Result<(), FsError> {
+        Err(FsError::NotSupported)
+    }
+
+    /// Connect a Unix domain socket to the peer listening at `path`.
+    ///
+    /// Creates a connected socket pair and enqueues the server-side socket
+    /// in the listener's accept queue.
+    ///
+    /// Default: returns [`FsError::NotSupported`].
+    fn unix_connect(&self, _path: &str) -> Result<(), FsError> {
+        Err(FsError::NotSupported)
+    }
+
+    /// Shut down part or all of a Unix domain socket connection.
+    ///
+    /// `how`: `0` = read half, `1` = write half, `2` = both halves.
+    /// Default: no-op.
+    fn unix_shutdown(&self, _how: u8) {}
 }
 
 /// A mounted filesystem.

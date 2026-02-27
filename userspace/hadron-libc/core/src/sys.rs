@@ -226,8 +226,61 @@ pub fn sys_munmap(addr: *mut u8, len: usize) -> Result<(), Errno> {
     check_unit(hadron_syscall::wrappers::sys_mem_unmap(addr as usize, len))
 }
 
+pub fn sys_mprotect(addr: *mut u8, len: usize, prot: usize) -> Result<(), Errno> {
+    check_unit(hadron_syscall::wrappers::sys_mem_protect(
+        addr as usize,
+        len,
+        prot,
+    ))
+}
+
 pub fn sys_brk(addr: usize) -> Result<usize, Errno> {
     check(hadron_syscall::wrappers::sys_mem_brk(addr))
+}
+
+/// Clone the current task (create a thread).
+///
+/// Returns the child TID in the parent and 0 in the child.
+///
+/// # Safety
+///
+/// `stack_ptr` must be a valid top-of-stack pointer. `tls_ptr` must point to
+/// a valid Thread Control Block whose first field is a self-pointer.
+pub unsafe fn sys_task_clone(
+    flags: usize,
+    stack_ptr: usize,
+    tls_ptr: usize,
+) -> Result<usize, Errno> {
+    check(hadron_syscall::wrappers::sys_task_clone(
+        flags, stack_ptr, tls_ptr,
+    ))
+}
+
+// ---- Query extensions -------------------------------------------------------
+
+/// `QUERY_VMAPS`: returns the number of bytes written into `buf` on success.
+///
+/// `buf` must be a pointer to an array large enough to hold all `VmapEntry`
+/// structs. Use a generous size (e.g. 4096 bytes = ~128 entries).
+pub fn sys_query_vmaps(buf: *mut u8, buf_len: usize) -> Result<usize, Errno> {
+    let n = hadron_syscall::wrappers::sys_query(
+        hadron_syscall::QUERY_VMAPS as usize,
+        0,
+        buf as usize,
+        buf_len,
+    );
+    check(n)
+}
+
+/// `QUERY_CPU_INFO`: fills `buf` with a `CpuInfo` struct.
+pub fn sys_query_cpu_info(buf: *mut u8, buf_len: usize) -> Result<usize, Errno> {
+    let n = hadron_syscall::wrappers::sys_query(
+        hadron_syscall::QUERY_CPU_INFO as usize,
+        0,
+        buf as usize,
+        buf_len,
+    );
+    check(n)
 }
 
 // ---- Time / Events -----------------------------------------------------------
@@ -269,4 +322,54 @@ pub fn sys_poll(fds: *mut u8, nfds: usize, timeout_ms: isize) -> Result<usize, E
         nfds,
         timeout_ms as usize,
     ))
+}
+
+// ---- Socket ------------------------------------------------------------------
+
+/// Create a new socket. Returns new fd on success.
+pub fn sys_socket(domain: usize, type_: usize, protocol: usize) -> Result<usize, Errno> {
+    check(hadron_syscall::wrappers::sys_socket(
+        domain, type_, protocol,
+    ))
+}
+
+/// Bind a socket to an address.
+pub fn sys_bind(fd: usize, addr_ptr: usize, addr_len: usize) -> Result<(), Errno> {
+    check_unit(hadron_syscall::wrappers::sys_bind(fd, addr_ptr, addr_len))
+}
+
+/// Mark a bound socket as listening.
+pub fn sys_listen(fd: usize, backlog: usize) -> Result<(), Errno> {
+    check_unit(hadron_syscall::wrappers::sys_listen(fd, backlog))
+}
+
+/// Accept a connection on a listening socket. Returns new fd on success.
+pub fn sys_accept(fd: usize, addr_ptr: usize, addr_len_ptr: usize) -> Result<usize, Errno> {
+    check(hadron_syscall::wrappers::sys_accept(
+        fd,
+        addr_ptr,
+        addr_len_ptr,
+    ))
+}
+
+/// Connect a socket to a peer.
+pub fn sys_connect(fd: usize, addr_ptr: usize, addr_len: usize) -> Result<(), Errno> {
+    check_unit(hadron_syscall::wrappers::sys_connect(
+        fd, addr_ptr, addr_len,
+    ))
+}
+
+/// Send a message on a connected socket. Returns bytes sent on success.
+pub fn sys_sendmsg(fd: usize, msg_ptr: usize, flags: usize) -> Result<usize, Errno> {
+    check(hadron_syscall::wrappers::sys_sendmsg(fd, msg_ptr, flags))
+}
+
+/// Receive a message from a connected socket. Returns bytes received on success.
+pub fn sys_recvmsg(fd: usize, msg_ptr: usize, flags: usize) -> Result<usize, Errno> {
+    check(hadron_syscall::wrappers::sys_recvmsg(fd, msg_ptr, flags))
+}
+
+/// Shut down part or all of a socket connection.
+pub fn sys_shutdown(fd: usize, how: usize) -> Result<(), Errno> {
+    check_unit(hadron_syscall::wrappers::sys_shutdown(fd, how))
 }

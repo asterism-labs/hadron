@@ -1,6 +1,6 @@
 //! Memory mapping functions.
 //!
-//! POSIX functions: `mmap`, `munmap`.
+//! POSIX functions: `mmap`, `munmap`, `mprotect`.
 
 use crate::errno;
 use crate::flags;
@@ -47,6 +47,23 @@ pub unsafe extern "C" fn mmap(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn munmap(addr: *mut u8, len: usize) -> i32 {
     match sys::sys_munmap(addr, len) {
+        Ok(()) => 0,
+        Err(e) => {
+            errno::set_errno(e);
+            -1
+        }
+    }
+}
+
+/// Change the protection on a region of memory.
+///
+/// # Safety
+///
+/// `addr` must be page-aligned and point into a mapped region of length `len`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mprotect(addr: *mut u8, len: usize, prot: i32) -> i32 {
+    let hadron_prot = flags::posix_prot_to_hadron(prot as u32);
+    match sys::sys_mprotect(addr, len, hadron_prot) {
         Ok(()) => 0,
         Err(e) => {
             errno::set_errno(e);

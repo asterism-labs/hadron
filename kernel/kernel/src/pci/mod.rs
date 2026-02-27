@@ -16,6 +16,33 @@ pub use hadron_pci::enumerate as enumerate_mod;
 pub use hadron_pci::regs;
 pub use hadron_pci::{PciConfigAccess, class_name};
 
+// ── PCI device cache ─────────────────────────────────────────────────────────
+
+/// Cached list of enumerated PCI devices.
+///
+/// Populated by [`cache_devices`] during `platform_init` (before VFS init) and
+/// consumed by [`crate::fs::sysfs_registry::populate_pci`] after VFS is ready.
+#[cfg(target_arch = "x86_64")]
+static PCI_DEVICE_CACHE: hadron_core::sync::SpinLock<
+    alloc::vec::Vec<hadron_driver_api::pci::PciDeviceInfo>,
+> = hadron_core::sync::SpinLock::leveled("pci_device_cache", 3, alloc::vec::Vec::new());
+
+/// Store a copy of the enumerated PCI devices for later sysfs population.
+///
+/// Called from `arch::platform_init` after enumeration but before VFS is ready.
+#[cfg(target_arch = "x86_64")]
+pub fn cache_devices(devices: &[hadron_driver_api::pci::PciDeviceInfo]) {
+    *PCI_DEVICE_CACHE.lock() = devices.to_vec();
+}
+
+/// Return the cached PCI device list (cloned).
+///
+/// Called from `boot.rs` after VFS and sysfs are mounted.
+#[cfg(target_arch = "x86_64")]
+pub fn cached_devices() -> alloc::vec::Vec<hadron_driver_api::pci::PciDeviceInfo> {
+    PCI_DEVICE_CACHE.lock().clone()
+}
+
 /// Enumerates all PCI devices using legacy CAM I/O ports.
 #[cfg(target_arch = "x86_64")]
 pub fn enumerate() -> alloc::vec::Vec<hadron_driver_api::pci::PciDeviceInfo> {

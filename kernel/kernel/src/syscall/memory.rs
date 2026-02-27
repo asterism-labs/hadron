@@ -1,4 +1,5 @@
-//! Memory syscall handlers: mem_map, mem_unmap, mem_brk, mem_create_shared, mem_map_shared.
+//! Memory syscall handlers: mem_map, mem_unmap, mem_brk, mem_create_shared, mem_map_shared,
+//! mem_protect.
 //!
 //! Implements anonymous, device-backed, and shared memory mapping for userspace
 //! processes. Each process owns a
@@ -522,4 +523,52 @@ pub(super) fn sys_mem_map_shared(fd: usize, size: usize, prot: usize) -> isize {
     });
 
     base_vaddr.as_u64() as isize
+}
+
+/// `sys_mem_protect` — change protection flags on a mapped memory region.
+///
+/// `addr` must be page-aligned. `length` is rounded up to page alignment.
+/// `prot` is a bitmask of `PROT_READ`/`PROT_WRITE`/`PROT_EXEC`.
+///
+/// Only modifies flags on already-mapped pages; returns `ENOMEM` if any page
+/// in the range is not currently mapped. Returns `EINVAL` if `addr` is not
+/// page-aligned or `length` is zero.
+pub(super) fn sys_mem_protect(addr: usize, length: usize, prot: usize) -> isize {
+    use hadron_syscall::{PROT_EXEC, PROT_READ, PROT_WRITE};
+
+    if length == 0 || addr == 0 {
+        return -EINVAL;
+    }
+
+    // addr must be page-aligned.
+    if addr & (PAGE_SIZE - 1) != 0 {
+        return -EINVAL;
+    }
+
+    let aligned_length = page_align_up(length);
+    let page_count = aligned_length / PAGE_SIZE;
+
+    // Build new MapFlags from prot. USER is always set (preserved by protect_range).
+    let mut map_flags = MapFlags::empty();
+    if prot & PROT_WRITE != 0 {
+        map_flags |= MapFlags::WRITABLE;
+    }
+    if prot & PROT_EXEC != 0 {
+        map_flags |= MapFlags::EXECUTABLE;
+    }
+    // PROT_READ is implicit on x86_64 (all user pages are readable).
+    let _ = prot & PROT_READ;
+
+    let base = VirtAddr::new(addr as u64);
+
+    let result = ProcessTable::with_current(|process| {
+        process
+            .address_space()
+            .protect_range(base, page_count, map_flags)
+    });
+
+    match result {
+        Ok(()) => 0,
+        Err(()) => -ENOMEM,
+    }
 }

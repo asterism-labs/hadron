@@ -19,4 +19,6 @@ pub mod block_adapter;
 pub mod devfs;
 pub mod devfs_registry;
 pub mod procfs;
+pub mod sysfs;
+pub mod sysfs_registry;
 pub mod vfs;

@@ -133,6 +133,36 @@ impl<M: PageMapper<Size4KiB> + PageTranslator> AddressSpace<M> {
     pub fn translate(&self, virt: VirtAddr) -> Option<PhysAddr> {
         unsafe { <M as PageTranslator>::translate_addr(&self.mapper, self.root_phys, virt) }
     }
+
+    /// Updates the protection flags for a page-aligned range of pages.
+    ///
+    /// `base` must be page-aligned. `page_count` is the number of 4 KiB pages
+    /// to update. `flags` replaces the flags on every page in the range; the
+    /// `USER` flag is always preserved.
+    ///
+    /// Returns `Ok(())` if all pages were updated, or `Err(())` if any page
+    /// in the range is not currently mapped.
+    pub fn protect_range(
+        &self,
+        base: VirtAddr,
+        page_count: usize,
+        flags: MapFlags,
+    ) -> Result<(), ()> {
+        let flags = flags | MapFlags::USER;
+        for i in 0..page_count {
+            let vaddr = base + (i as u64) * 0x1000;
+            let page = Page::<Size4KiB>::containing_address(vaddr);
+            // SAFETY: The AddressSpace owns its root page table; `root_phys`
+            // is valid. We only update flags on pages that are already mapped.
+            let flush = unsafe {
+                self.mapper
+                    .update_flags(self.root_phys, page, flags)
+                    .map_err(|_| ())?
+            };
+            flush.flush();
+        }
+        Ok(())
+    }
 }
 
 impl<M: PageMapper<Size4KiB> + PageTranslator> Drop for AddressSpace<M> {

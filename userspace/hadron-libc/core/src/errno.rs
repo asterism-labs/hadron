@@ -62,8 +62,12 @@ pub const ENOSYS: Errno = Errno(38);
 pub const ENOTEMPTY: Errno = Errno(39);
 pub const ELOOP: Errno = Errno(40);
 pub const EWOULDBLOCK: Errno = EAGAIN;
+pub const EMSGSIZE: Errno = Errno(90);
 pub const ENOTSOCK: Errno = Errno(88);
 pub const EAFNOSUPPORT: Errno = Errno(97);
+pub const EADDRINUSE: Errno = Errno(98);
+pub const ENOTCONN: Errno = Errno(107);
+pub const EISCONN: Errno = Errno(106);
 pub const ECONNREFUSED: Errno = Errno(111);
 
 /// C ABI: `int *__errno_location(void)` — returns pointer to errno storage.
