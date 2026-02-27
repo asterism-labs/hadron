@@ -1,10 +1,19 @@
-//! Minimal userspace compositor for Hadron.
+//! Lepton compositor — Wayland WSI backend for Mesa lavapipe.
 //!
-//! Owns `/dev/fb0`, manages client surfaces via channels + shared memory,
-//! composites all surfaces into a back buffer, and flips to the framebuffer.
-//! Keyboard input is forwarded to the focused client.
+//! Listens on `/run/wayland-0` (UNIX stream socket) and implements the minimal
+//! Wayland protocol subset needed for Mesa lavapipe (software Vulkan):
 //!
-//! Clients are spawned with fd 3 = channel endpoint, fd 4 = shared memory fd.
+//! - `wl_display` (implicit, id=1)
+//! - `wl_registry` (client-created)
+//! - `wl_compositor` v4  (global name 1)
+//! - `wl_shm` v1          (global name 2)
+//! - `xdg_wm_base` v2     (global name 3)
+//! - `wl_surface`, `wl_shm_pool`, `wl_buffer`, `wl_callback`
+//! - `xdg_surface`, `xdg_toplevel`
+//!
+//! Surfaces are blitted from wl_shm buffers to `/dev/fb0` at ~60 fps.
+//! Three display targets are supported via the single `/dev/fb0` interface:
+//! VBox VGA, Bochs BGA, and QEMU VirtIO-GPU (all expose the same fb ioctl API).
 
 #![no_std]
 #![no_main]
@@ -12,1044 +21,509 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use lepton_display_protocol::{self as proto, MESSAGE_SIZE, OP_COMMIT, OP_CREATE_WINDOW};
-use lepton_gfx::Surface;
 use lepton_syslib::hadron_syscall::{
-    self as hsc, ECHO, FBIOBLANK, FBIODIRTY, FBIOGET_INFO, FbDirtyRect, FbInfo, ICANON, TCGETS,
-    TCSETS, Termios,
+    CLOCK_MONOTONIC, FBIOBLANK, FBIODIRTY, FBIOGET_INFO, FbDirtyRect, FbInfo, POLLIN, PollFd,
+    Timespec,
 };
 use lepton_syslib::{io, println, sys};
 
-/// Bytes per pixel (32-bit color).
-const BPP: usize = 4;
+mod net;
+mod proto;
 
-/// Frame interval in milliseconds (~60 fps).
+// ── Constants ────────────────────────────────────────────────────────────────
+
+/// Socket path for the Wayland compositor.
+const WAYLAND_SOCKET_PATH: &[u8] = b"/run/wayland-0";
+
+/// Target frame time in milliseconds (~60 fps).
 const FRAME_MS: u64 = 16;
 
-/// Background color for uncovered framebuffer regions.
+/// wl_shm pixel format: 32-bit ARGB little-endian.
+const WL_SHM_FORMAT_ARGB8888: u32 = 0;
+/// wl_shm pixel format: 32-bit XRGB (opaque) little-endian.
+const WL_SHM_FORMAT_XRGB8888: u32 = 1;
+
+/// xdg_toplevel state: window has keyboard focus.
+const XDG_TOPLEVEL_STATE_ACTIVATED: u32 = 4;
+
+/// Background fill colour for uncovered framebuffer regions.
 const BG_COLOR: u32 = 0x0020_2020;
 
-/// Border color for the focused surface.
-const FOCUS_BORDER: u32 = 0x00FF_FFFF; // white
+// ── Pixel buffer ─────────────────────────────────────────────────────────────
 
-/// Height of the server-side titlebar in pixels.
-const TITLEBAR_HEIGHT: u32 = 20;
-
-/// Width of the close button region in the titlebar.
-const CLOSE_BTN_WIDTH: u32 = 20;
-
-/// Titlebar background color for the focused window.
-const TITLEBAR_FOCUSED: u32 = 0x0040_6080;
-
-/// Titlebar background color for unfocused windows.
-const TITLEBAR_UNFOCUSED: u32 = 0x0040_4040;
-
-/// Titlebar text color.
-const TITLEBAR_TEXT: u32 = 0x00FF_FFFF;
-
-/// Close button text color.
-const CLOSE_BTN_COLOR: u32 = 0x00FF_6060;
-
-// ── Client state ─────────────────────────────────────────────────────
-
-/// Per-client state tracked by the compositor.
-// ── PixelBuffer ────────────────────────────────────────────────────
-
-/// Safe wrapper around an mmap'd pixel buffer.
-///
-/// Validates bounds once at construction, then provides safe `pixels_mut()`
-/// access without per-call unsafe. The backing memory must remain mapped
-/// for the lifetime of this struct.
+/// Thin safe wrapper around an mmap'd pixel buffer.
 struct PixelBuffer {
     ptr: *mut u8,
-    /// Total size in bytes.
     size: usize,
 }
 
 impl PixelBuffer {
-    /// Wraps a raw mmap pointer and size.
-    ///
     /// # Safety
-    ///
-    /// - `ptr` must point to a valid, writable mapping of at least `size` bytes.
-    /// - The mapping must remain valid for the lifetime of this `PixelBuffer`.
+    /// `ptr` must be a valid, writable mapping of at least `size` bytes that
+    /// remains valid for the lifetime of this `PixelBuffer`.
     unsafe fn new(ptr: *mut u8, size: usize) -> Self {
-        debug_assert!(!ptr.is_null());
-        debug_assert!(size > 0);
         Self { ptr, size }
     }
 
-    /// Returns a mutable slice of ARGB pixels.
-    ///
-    /// `pixel_count` must not exceed `self.size / 4`.
-    ///
-    /// Takes `&self` rather than `&mut self` because the backing mmap region
-    /// is not aliased by other struct fields — only one mutable slice is
-    /// created at a time by caller convention.
     fn pixels_mut(&self, pixel_count: usize) -> &mut [u32] {
-        assert!(
-            pixel_count * 4 <= self.size,
-            "pixel_count exceeds buffer capacity"
-        );
-        // SAFETY: Bounds checked above; ptr is a valid mapping (invariant from `new`).
-        // The caller ensures no overlapping mutable slices exist.
+        assert!(pixel_count * 4 <= self.size, "pixel buffer overflow");
+        // SAFETY: see constructor invariant; only one mutable slice at a time.
         unsafe { core::slice::from_raw_parts_mut(self.ptr as *mut u32, pixel_count) }
     }
 
-    /// Returns the raw pointer (for `copy_nonoverlapping` etc.).
     fn as_ptr(&self) -> *mut u8 {
         self.ptr
     }
 }
 
-// ── Client state ───────────────────────────────────────────────────
+// ── Wayland object table ─────────────────────────────────────────────────────
 
-struct ClientState {
-    /// Child process PID (used by `close_client` to SIGKILL the process).
-    pid: u32,
-    /// Compositor's channel endpoint fd (reads Commit, writes Configure/Key).
-    channel_fd: usize,
-    /// Compositor's mapping of the client's shared pixel buffer.
-    shm_buf: PixelBuffer,
-    /// Shared-memory fd (kept open so the mapping stays valid).
-    shm_fd: usize,
-    /// Surface placement and dimensions.
-    x: u32,
-    y: u32,
-    width: u32,
-    height: u32,
-    /// Whether the client committed at least once since last composite.
-    dirty: bool,
-    /// Window title (extracted from the executable path).
-    title: [u8; 32],
-    /// Number of valid bytes in `title`.
-    title_len: usize,
+/// Discriminant for entries in a client's object table.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ObjKind {
+    Display,
+    Registry,
+    Compositor,
+    Surface,
+    Shm,
+    ShmPool,
+    Buffer,
+    Callback,
+    Region,
+    XdgWmBase,
+    XdgSurface,
+    XdgToplevel,
+    Deleted,
 }
 
-// ── Drag state ──────────────────────────────────────────────────────
-
-/// Tracks an active titlebar drag operation.
-struct DragState {
-    /// Index of the client being dragged.
-    client_idx: usize,
-    /// Cursor offset from the window's top-left corner at drag start.
-    offset_x: i32,
-    /// Cursor offset from the window's top-left corner at drag start.
-    offset_y: i32,
+/// Per-surface compositor state.
+struct SurfaceData {
+    /// wl_buffer object ID currently attached but not yet committed.
+    pending_buffer: Option<u32>,
+    /// wl_buffer object ID from the last commit (what we're currently displaying).
+    current_buffer: Option<u32>,
+    /// wl_callback IDs waiting for the next frame.
+    frame_callbacks: Vec<u32>,
+    /// Whether we have already sent the initial xdg configure.
+    xdg_configured: bool,
+    /// Whether the client has ack'd the configure.
+    xdg_acked: bool,
+    /// x/y position on screen (compositor-assigned).
+    x: i32,
+    y: i32,
 }
 
-// ── Dirty rectangle tracking ────────────────────────────────────────
-
-/// Axis-aligned rectangle for dirty region tracking.
-#[derive(Clone, Copy)]
-struct Rect {
-    x: u32,
-    y: u32,
-    w: u32,
-    h: u32,
-}
-
-impl Rect {
-    /// Returns true if this rectangle overlaps or touches `other`.
-    fn touches(&self, other: &Rect) -> bool {
-        self.x <= other.x + other.w
-            && other.x <= self.x + self.w
-            && self.y <= other.y + other.h
-            && other.y <= self.y + self.h
-    }
-
-    /// Merge `other` into `self`, producing the bounding box of both.
-    fn merge(&mut self, other: &Rect) {
-        let x1 = self.x.min(other.x);
-        let y1 = self.y.min(other.y);
-        let x2 = (self.x + self.w).max(other.x + other.w);
-        let y2 = (self.y + self.h).max(other.y + other.h);
-        self.x = x1;
-        self.y = y1;
-        self.w = x2 - x1;
-        self.h = y2 - y1;
-    }
-}
-
-/// Maximum number of tracked dirty rectangles before falling back to full redraw.
-const MAX_DIRTY_RECTS: usize = 8;
-
-/// Tracks dirty regions of the screen that need to be flushed to the framebuffer.
-struct DirtyRegion {
-    rects: [Rect; MAX_DIRTY_RECTS],
-    count: usize,
-    full_redraw: bool,
-}
-
-impl DirtyRegion {
-    /// Create a new dirty region in "full redraw" state.
+impl SurfaceData {
     fn new() -> Self {
-        DirtyRegion {
-            rects: [Rect {
-                x: 0,
-                y: 0,
-                w: 0,
-                h: 0,
-            }; MAX_DIRTY_RECTS],
-            count: 0,
-            full_redraw: true,
+        SurfaceData {
+            pending_buffer: None,
+            current_buffer: None,
+            frame_callbacks: Vec::new(),
+            xdg_configured: false,
+            xdg_acked: false,
+            x: 0,
+            y: 0,
         }
     }
+}
 
-    /// Mark a rectangle as dirty.
-    fn add(&mut self, rect: Rect) {
-        if self.full_redraw {
-            return;
+/// Per-shm-pool compositor state.
+struct ShmPoolData {
+    /// Mapped pointer (from sys_mem_map_shared).
+    ptr: *mut u8,
+    /// Mapped size in bytes.
+    size: usize,
+    /// Original fd (kept open so the mapping stays valid).
+    fd: i32,
+}
+
+/// Per-buffer compositor state.
+#[derive(Clone)]
+struct BufferData {
+    /// Which ShmPool object ID this buffer is in.
+    pool_id: u32,
+    /// Byte offset into the pool.
+    offset: usize,
+    /// Width in pixels.
+    width: u32,
+    /// Height in pixels.
+    height: u32,
+    /// Bytes per row.
+    stride: u32,
+    /// Pixel format (WL_SHM_FORMAT_*).
+    format: u32,
+}
+
+/// One entry in a client's object table.
+struct ObjEntry {
+    id: u32,
+    kind: ObjKind,
+    // Inline per-kind payloads:
+    surface: Option<SurfaceData>,
+    shm_pool: Option<ShmPoolData>,
+    buffer: Option<BufferData>,
+    /// For XdgSurface: which wl_surface object ID it wraps.
+    xdg_surface_surface_id: u32,
+    /// For XdgToplevel: which xdg_surface object ID it wraps.
+    xdg_toplevel_xdg_surface_id: u32,
+}
+
+impl ObjEntry {
+    fn new(id: u32, kind: ObjKind) -> Self {
+        ObjEntry {
+            id,
+            kind,
+            surface: None,
+            shm_pool: None,
+            buffer: None,
+            xdg_surface_surface_id: 0,
+            xdg_toplevel_xdg_surface_id: 0,
         }
+    }
+}
 
-        // Try to merge with an existing rect.
-        for i in 0..self.count {
-            if self.rects[i].touches(&rect) {
-                self.rects[i].merge(&rect);
+// ── Client state ─────────────────────────────────────────────────────────────
+
+/// Maximum Wayland read-buffer size (4 KiB covers most bursts).
+const READ_BUF_CAP: usize = 4096;
+
+/// Per-connected-client state.
+struct Client {
+    /// Connected socket file descriptor.
+    fd: usize,
+    /// Partially-received Wayland messages.
+    read_buf: Vec<u8>,
+    /// Outgoing event bytes not yet sent.
+    write_buf: Vec<u8>,
+    /// Flat object table (linear-searched; typical size < 20 entries).
+    objects: Vec<ObjEntry>,
+    /// Serial counter for configure events.
+    next_serial: u32,
+}
+
+impl Client {
+    fn new(fd: usize) -> Self {
+        let mut c = Client {
+            fd,
+            read_buf: Vec::new(),
+            write_buf: Vec::new(),
+            objects: Vec::new(),
+            next_serial: 1,
+        };
+        // wl_display is always object 1.
+        c.objects.push(ObjEntry::new(1, ObjKind::Display));
+        c
+    }
+
+    /// Look up the kind for an object ID. Returns Deleted if not found.
+    fn obj_kind(&self, id: u32) -> ObjKind {
+        for e in &self.objects {
+            if e.id == id {
+                return e.kind;
+            }
+        }
+        ObjKind::Deleted
+    }
+
+    /// Register a new object with the given ID and kind.
+    fn register(&mut self, id: u32, kind: ObjKind) -> &mut ObjEntry {
+        // Index-based search avoids borrow-checker conflict between the loop
+        // borrow and the subsequent push/index-mutate.
+        let mut found: Option<usize> = None;
+        for i in 0..self.objects.len() {
+            if self.objects[i].id == id && self.objects[i].kind == ObjKind::Deleted {
+                found = Some(i);
+                break;
+            }
+        }
+        if let Some(idx) = found {
+            self.objects[idx] = ObjEntry::new(id, kind);
+            return &mut self.objects[idx];
+        }
+        self.objects.push(ObjEntry::new(id, kind));
+        self.objects.last_mut().unwrap()
+    }
+
+    fn destroy_obj(&mut self, id: u32) {
+        for e in &mut self.objects {
+            if e.id == id {
+                // Clean up ShmPool mapping.
+                if let Some(p) = e.shm_pool.take() {
+                    sys::mem_unmap(p.ptr, p.size);
+                    sys::close(p.fd as usize);
+                }
+                e.kind = ObjKind::Deleted;
+                e.surface = None;
+                e.buffer = None;
                 return;
             }
         }
+    }
 
-        // Append if space remains.
-        if self.count < MAX_DIRTY_RECTS {
-            self.rects[self.count] = rect;
-            self.count += 1;
-        } else {
-            self.full_redraw = true;
+    /// Allocate and return the next configure serial.
+    fn next_serial(&mut self) -> u32 {
+        let s = self.next_serial;
+        self.next_serial = self.next_serial.wrapping_add(1);
+        s
+    }
+
+    // ── Event helpers ────────────────────────────────────────────────────────
+
+    /// Queue `wl_registry.global(name, interface, version)` on `registry_id`.
+    fn send_registry_global(&mut self, reg_id: u32, name: u32, iface: &[u8], version: u32) {
+        let start = proto::begin_msg(&mut self.write_buf, reg_id, 0 /* global */);
+        proto::push_u32(&mut self.write_buf, name);
+        proto::push_str(&mut self.write_buf, iface);
+        proto::push_u32(&mut self.write_buf, version);
+        proto::end_msg(&mut self.write_buf, start, 0);
+    }
+
+    /// Queue `wl_shm.format(fmt)` on `shm_id`.
+    fn send_shm_format(&mut self, shm_id: u32, fmt: u32) {
+        let start = proto::begin_msg(&mut self.write_buf, shm_id, 0 /* format */);
+        proto::push_u32(&mut self.write_buf, fmt);
+        proto::end_msg(&mut self.write_buf, start, 0);
+    }
+
+    /// Queue `xdg_toplevel.configure(width, height, states[])` on `toplevel_id`.
+    fn send_xdg_toplevel_configure(
+        &mut self,
+        toplevel_id: u32,
+        width: i32,
+        height: i32,
+        states: &[u32],
+    ) {
+        let start = proto::begin_msg(&mut self.write_buf, toplevel_id, 0 /* configure */);
+        proto::push_i32(&mut self.write_buf, width);
+        proto::push_i32(&mut self.write_buf, height);
+        // states as wl_array of u32 values
+        let state_bytes: &[u8] =
+            unsafe { core::slice::from_raw_parts(states.as_ptr() as *const u8, states.len() * 4) };
+        proto::push_array(&mut self.write_buf, state_bytes);
+        proto::end_msg(&mut self.write_buf, start, 0);
+    }
+
+    /// Queue `xdg_surface.configure(serial)` on `xdg_surface_id`.
+    fn send_xdg_surface_configure(&mut self, xdg_surface_id: u32, serial: u32) {
+        let start = proto::begin_msg(&mut self.write_buf, xdg_surface_id, 0 /* configure */);
+        proto::push_u32(&mut self.write_buf, serial);
+        proto::end_msg(&mut self.write_buf, start, 0);
+    }
+
+    /// Queue `xdg_wm_base.ping(serial)` on `wm_base_id`.
+    fn send_xdg_wm_base_ping(&mut self, wm_base_id: u32, serial: u32) {
+        let start = proto::begin_msg(&mut self.write_buf, wm_base_id, 0 /* ping */);
+        proto::push_u32(&mut self.write_buf, serial);
+        proto::end_msg(&mut self.write_buf, start, 0);
+    }
+
+    /// Queue `wl_callback.done(time_ms)` on `callback_id`.
+    fn send_callback_done(&mut self, cb_id: u32, time_ms: u32) {
+        let start = proto::begin_msg(&mut self.write_buf, cb_id, 0 /* done */);
+        proto::push_u32(&mut self.write_buf, time_ms);
+        proto::end_msg(&mut self.write_buf, start, 0);
+    }
+
+    /// Queue `wl_display.delete_id(id)` on the display (object 1).
+    fn send_delete_id(&mut self, del_id: u32) {
+        let start = proto::begin_msg(&mut self.write_buf, 1, 1 /* delete_id */);
+        proto::push_u32(&mut self.write_buf, del_id);
+        proto::end_msg(&mut self.write_buf, start, 1);
+    }
+
+    /// Queue `wl_buffer.release()` on `buf_id`.
+    fn send_buffer_release(&mut self, buf_id: u32) {
+        let start = proto::begin_msg(&mut self.write_buf, buf_id, 0 /* release */);
+        proto::end_msg(&mut self.write_buf, start, 0);
+    }
+
+    /// Queue a `wl_display.error(obj, code, msg)` and mark client for removal.
+    fn send_error(&mut self, obj_id: u32, code: u32, msg: &[u8]) {
+        let start = proto::begin_msg(&mut self.write_buf, 1, 0 /* error */);
+        proto::push_u32(&mut self.write_buf, obj_id);
+        proto::push_u32(&mut self.write_buf, code);
+        proto::push_str(&mut self.write_buf, msg);
+        proto::end_msg(&mut self.write_buf, start, 0);
+    }
+
+    /// Flush `write_buf` to the socket. Returns false if the peer disconnected.
+    fn flush(&mut self) -> bool {
+        if self.write_buf.is_empty() {
+            return true;
         }
-    }
-
-    /// Mark the entire screen as dirty.
-    fn mark_full(&mut self) {
-        self.full_redraw = true;
-    }
-
-    /// Returns true if any region is dirty.
-    fn is_dirty(&self) -> bool {
-        self.full_redraw || self.count > 0
-    }
-
-    /// Reset after a frame flip.
-    fn clear(&mut self) {
-        self.count = 0;
-        self.full_redraw = false;
+        let ok = net::send_all(self.fd, &self.write_buf);
+        self.write_buf.clear();
+        ok
     }
 }
 
-// ── Cursor sprite ───────────────────────────────────────────────────
+// ── Compositor ───────────────────────────────────────────────────────────────
 
-/// 12x19 arrow cursor bitmap: 0 = transparent, 1 = white outline, 2 = black fill.
-const CURSOR_W: u32 = 12;
-const CURSOR_H: u32 = 19;
-#[rustfmt::skip]
-const CURSOR_BITMAP: [u8; (CURSOR_W * CURSOR_H) as usize] = [
-    1,0,0,0,0,0,0,0,0,0,0,0,
-    1,1,0,0,0,0,0,0,0,0,0,0,
-    1,2,1,0,0,0,0,0,0,0,0,0,
-    1,2,2,1,0,0,0,0,0,0,0,0,
-    1,2,2,2,1,0,0,0,0,0,0,0,
-    1,2,2,2,2,1,0,0,0,0,0,0,
-    1,2,2,2,2,2,1,0,0,0,0,0,
-    1,2,2,2,2,2,2,1,0,0,0,0,
-    1,2,2,2,2,2,2,2,1,0,0,0,
-    1,2,2,2,2,2,2,2,2,1,0,0,
-    1,2,2,2,2,2,2,2,2,2,1,0,
-    1,2,2,2,2,2,1,1,1,1,1,1,
-    1,2,2,2,2,2,1,0,0,0,0,0,
-    1,2,2,1,2,2,1,0,0,0,0,0,
-    1,2,1,0,1,2,2,1,0,0,0,0,
-    1,1,0,0,1,2,2,1,0,0,0,0,
-    1,0,0,0,0,1,2,2,1,0,0,0,
-    0,0,0,0,0,1,2,2,1,0,0,0,
-    0,0,0,0,0,0,1,1,0,0,0,0,
-];
-
-// ── Compositor ───────────────────────────────────────────────────────
-
-/// Top-level compositor state.
+/// Root compositor state.
 struct Compositor {
-    /// Framebuffer pixel buffer (mmap of `/dev/fb0`).
-    fb_buf: PixelBuffer,
-    /// Framebuffer dimensions.
+    /// `/dev/fb0` file descriptor.
+    fb_fd: usize,
     fb_width: u32,
     fb_height: u32,
-    /// Framebuffer stride in pixels (pitch / 4).
-    fb_stride: u32,
-    /// Total framebuffer size in bytes.
-    fb_size: usize,
-    /// Framebuffer file descriptor.
-    fb_fd: usize,
-    /// Back buffer (anonymous mmap, same layout as fb).
+    /// Bytes per row.
+    fb_pitch: u32,
+    /// Memory-mapped framebuffer.
+    fb_buf: PixelBuffer,
+    /// Back buffer for compositing (anonymous mmap, same size as fb).
     back_buf: PixelBuffer,
-    /// Connected clients (Z-order: last = topmost).
-    clients: Vec<ClientState>,
-    /// Index of the focused client, if any.
-    focused: Option<usize>,
-    /// Dirty region tracker — replaces the old `needs_composite` bool.
-    dirty: DirtyRegion,
-    /// File descriptor for `/dev/mouse`, if opened successfully.
-    mouse_fd: Option<usize>,
-    /// Absolute cursor X position.
-    cursor_x: i32,
-    /// Absolute cursor Y position.
-    cursor_y: i32,
-    /// Current mouse button state.
-    buttons: u8,
-    /// Previous frame's button state (for click detection).
-    prev_buttons: u8,
-    /// Active titlebar drag operation.
-    dragging: Option<DragState>,
-    /// Listener fd for dynamic window creation (`/dev/compositor_listen`).
-    listener_fd: Option<usize>,
+    /// Listening Unix socket.
+    server_fd: usize,
+    /// Connected Wayland clients.
+    clients: Vec<Client>,
 }
 
 impl Compositor {
-    /// Open the framebuffer and allocate the back buffer.
+    /// Open `/dev/fb0`, mmap it, create the server socket.
     fn init() -> Option<Self> {
-        let fd = io::open("/dev/fb0", 0);
-        if fd < 0 {
-            println!("compositor: failed to open /dev/fb0");
+        // Open framebuffer.
+        let fb_fd_r = io::open("/dev/fb0", 0);
+        if fb_fd_r < 0 {
+            println!("[compositor] failed to open /dev/fb0: {}", fb_fd_r);
             return None;
         }
-        let fb_fd = fd as usize;
+        let fb_fd = fb_fd_r as usize;
 
-        let mut info = FbInfo {
-            width: 0,
-            height: 0,
-            pitch: 0,
-            bpp: 0,
-            pixel_format: 0,
-        };
-        if io::ioctl(
-            fb_fd,
-            FBIOGET_INFO as usize,
-            &mut info as *mut FbInfo as usize,
-        ) < 0
-        {
-            println!("compositor: ioctl FBIOGET_INFO failed");
-            io::close(fb_fd);
+        // Query framebuffer geometry.
+        let mut info = core::mem::MaybeUninit::<FbInfo>::uninit();
+        if io::ioctl(fb_fd, FBIOGET_INFO as usize, info.as_mut_ptr() as usize) < 0 {
+            println!("[compositor] FBIOGET_INFO failed");
+            sys::close(fb_fd);
             return None;
         }
+        // SAFETY: kernel wrote a valid FbInfo on success.
+        let info = unsafe { info.assume_init() };
+        let fb_width = info.width;
+        let fb_height = info.height;
+        let fb_pitch = info.pitch;
+        let fb_size = (fb_pitch * fb_height) as usize;
+        println!(
+            "[compositor] fb0: {}x{} pitch={}",
+            fb_width, fb_height, fb_pitch
+        );
 
-        // Disable kernel fbcon output — the compositor owns the framebuffer now.
+        // Disable kernel fbcon so we own the screen.
         io::ioctl(fb_fd, FBIOBLANK as usize, 1);
 
-        let fb_size = info.pitch as usize * info.height as usize;
+        // Map framebuffer MMIO.
         let fb_ptr = sys::mem_map_device(fb_fd, fb_size)?;
-
-        // Allocate back buffer via anonymous mmap.
-        let back_ptr = sys::mem_map(fb_size)?;
-
-        // SAFETY: fb_ptr and back_ptr are valid mappings of fb_size bytes from mmap.
+        // SAFETY: valid mapping of fb_size bytes.
         let fb_buf = unsafe { PixelBuffer::new(fb_ptr, fb_size) };
+
+        // Back buffer (anonymous writable memory, same size).
+        let back_ptr = sys::mem_map(fb_size)?;
+        // SAFETY: valid anonymous mapping.
         let back_buf = unsafe { PixelBuffer::new(back_ptr, fb_size) };
 
-        // Try to open /dev/mouse for cursor input.
-        let mouse_fd = {
-            let fd = io::open("/dev/mouse", 1); // READ
-            if fd >= 0 { Some(fd as usize) } else { None }
-        };
+        // Create Wayland server socket.
+        let sfd = net::socket_create();
+        if sfd < 0 {
+            println!("[compositor] socket() failed: {}", sfd);
+            return None;
+        }
+        let server_fd = sfd as usize;
 
-        // Open the service listener for dynamic window creation.
-        let listener_fd = {
-            let fd = io::open("/dev/compositor_listen", 1); // READ
-            if fd >= 0 { Some(fd as usize) } else { None }
-        };
+        // Unlink any stale socket file.
+        lepton_syslib::hadron_syscall::wrappers::sys_vnode_unlink(
+            WAYLAND_SOCKET_PATH.as_ptr() as usize,
+            WAYLAND_SOCKET_PATH.len(),
+        );
 
+        let r = net::socket_bind(server_fd, WAYLAND_SOCKET_PATH);
+        if r < 0 {
+            println!("[compositor] bind() failed: {}", r);
+            return None;
+        }
+        let r = net::socket_listen(server_fd, 16);
+        if r < 0 {
+            println!("[compositor] listen() failed: {}", r);
+            return None;
+        }
+
+        println!("[compositor] listening on /run/wayland-0");
         Some(Compositor {
-            fb_buf,
-            fb_width: info.width,
-            fb_height: info.height,
-            fb_stride: info.pitch / 4,
-            fb_size,
             fb_fd,
+            fb_width,
+            fb_height,
+            fb_pitch,
+            fb_buf,
             back_buf,
+            server_fd,
             clients: Vec::new(),
-            focused: None,
-            dirty: DirtyRegion::new(),
-            mouse_fd,
-            cursor_x: (info.width / 2) as i32,
-            cursor_y: (info.height / 2) as i32,
-            buttons: 0,
-            prev_buttons: 0,
-            dragging: None,
-            listener_fd,
         })
     }
 
-    /// Spawn a client application at the given window position and size.
-    fn spawn_client(&mut self, path: &str, x: u32, y: u32, w: u32, h: u32) {
-        // Create channel pair.
-        let (ch_compositor, ch_client) = match sys::channel_create() {
-            Ok(pair) => pair,
-            Err(e) => {
-                println!("compositor: channel_create failed: {}", e);
-                return;
-            }
-        };
-
-        // Create shared memory for the pixel buffer.
-        let shm_size = w as usize * h as usize * BPP;
-        let shm_fd = match sys::mem_create_shared(shm_size) {
-            Ok(fd) => fd,
-            Err(e) => {
-                println!("compositor: mem_create_shared failed: {}", e);
-                sys::close(ch_compositor);
-                sys::close(ch_client);
-                return;
-            }
-        };
-
-        // Compositor maps the shm to read client pixels.
-        let shm_ptr = match sys::mem_map_shared(shm_fd, shm_size) {
-            Some(p) => p,
-            None => {
-                println!("compositor: mem_map_shared failed");
-                sys::close(ch_compositor);
-                sys::close(ch_client);
-                sys::close(shm_fd);
-                return;
-            }
-        };
-
-        // Spawn the child with fd 3 = channel, fd 4 = shm.
-        let pid = sys::spawn_with_fds(
-            path,
-            &[path],
-            &[
-                (0, 0), // stdin
-                (1, 1), // stdout
-                (2, 2), // stderr
-                (3, ch_client as u32),
-                (4, shm_fd as u32),
-            ],
-        );
-
-        // Close the child's channel end in the compositor.
-        sys::close(ch_client);
-
-        if pid < 0 {
-            println!("compositor: spawn {} failed: {}", path, pid);
-            sys::close(ch_compositor);
-            sys::mem_unmap(shm_ptr, shm_size);
-            sys::close(shm_fd);
-            return;
-        }
-
-        // Extract filename from path as the window title.
-        let mut title = [0u8; 32];
-        let mut title_len = 0;
-        let name = path.rsplit('/').next().unwrap_or(path);
-        for (i, &b) in name.as_bytes().iter().enumerate() {
-            if i >= title.len() {
-                break;
-            }
-            title[i] = b;
-            title_len = i + 1;
-        }
-
-        let client_idx = self.clients.len();
-        // SAFETY: shm_ptr is a valid mapping of shm_size bytes from mem_map_shared.
-        let shm_buf = unsafe { PixelBuffer::new(shm_ptr, shm_size) };
-
-        self.clients.push(ClientState {
-            pid: pid as u32,
-            channel_fd: ch_compositor,
-            shm_buf,
-            shm_fd,
-            x,
-            y,
-            width: w,
-            height: h,
-            dirty: false,
-            title,
-            title_len,
-        });
-
-        // Focus the new client.
-        self.focused = Some(client_idx);
-        self.dirty.mark_full();
-
-        // Send Configure message.
-        let cfg = proto::configure(0, w, h);
-        let mut buf = [0u8; MESSAGE_SIZE];
-        proto::encode_msg(&cfg, &mut buf);
-        let _ = sys::channel_send(ch_compositor, &buf);
-
-        // Send FocusGained to the new client.
-        let fg = proto::focus_gained(0);
-        proto::encode_msg(&fg, &mut buf);
-        let _ = sys::channel_send(ch_compositor, &buf);
-    }
-
-    /// Poll all clients for Commit messages.
-    fn poll_clients(&mut self) {
-        for client in &mut self.clients {
-            if sys::poll_fd_read(client.channel_fd) {
-                let mut buf = [0u8; MESSAGE_SIZE];
-                if let Ok(n) = sys::channel_recv(client.channel_fd, &mut buf) {
-                    if n >= MESSAGE_SIZE && proto::peek_opcode(&buf) == OP_COMMIT {
-                        client.dirty = true;
-                    }
-                }
-            }
-        }
-
-        for client in &self.clients {
-            if client.dirty {
-                // Mark the window's bounding box (including titlebar + 2px border).
-                self.dirty.add(Rect {
-                    x: client.x.saturating_sub(2),
-                    y: client.y.saturating_sub(2),
-                    w: client.width + 4,
-                    h: TITLEBAR_HEIGHT + client.height + 4,
-                });
-            }
-        }
-    }
-
-    /// Accept dynamic client connections from `/dev/compositor_listen`.
-    fn poll_connections(&mut self) {
-        let Some(listener_fd) = self.listener_fd else {
-            return;
-        };
-
-        while sys::poll_fd_read(listener_fd) {
-            let ch_fd = match sys::channel_accept(listener_fd) {
-                Ok(fd) => fd,
-                Err(_) => break,
-            };
-
-            // Read the CreateWindow request from the new client.
-            let mut buf = [0u8; MESSAGE_SIZE];
-            if sys::channel_recv(ch_fd, &mut buf).is_err() {
-                sys::close(ch_fd);
-                continue;
-            }
-
-            if proto::peek_opcode(&buf) != OP_CREATE_WINDOW {
-                sys::close(ch_fd);
-                continue;
-            }
-
-            let req = proto::decode_msg::<proto::CreateWindow>(&buf);
-            let w = if req.width == 0 {
-                self.fb_width.min(640)
-            } else {
-                req.width.min(self.fb_width)
-            };
-            let h = if req.height == 0 {
-                self.fb_height.min(400)
-            } else {
-                req.height.min(self.fb_height)
-            };
-
-            // Create shared memory for the pixel buffer.
-            let shm_size = w as usize * h as usize * BPP;
-            let shm_fd = match sys::mem_create_shared(shm_size) {
-                Ok(fd) => fd,
-                Err(_) => {
-                    sys::close(ch_fd);
-                    continue;
-                }
-            };
-
-            // Map shm so the compositor can read client pixels.
-            let shm_ptr = match sys::mem_map_shared(shm_fd, shm_size) {
-                Some(p) => p,
-                None => {
-                    sys::close(ch_fd);
-                    sys::close(shm_fd);
-                    continue;
-                }
-            };
-
-            // Send Configure + shm fd to the client.
-            let cfg = proto::configure(0, w, h);
-            let mut cfg_buf = [0u8; MESSAGE_SIZE];
-            proto::encode_msg(&cfg, &mut cfg_buf);
-            if sys::channel_send_fd(ch_fd, shm_fd, &cfg_buf).is_err() {
-                sys::close(ch_fd);
-                sys::mem_unmap(shm_ptr, shm_size);
-                sys::close(shm_fd);
-                continue;
-            }
-
-            // Place the new window with a cascading offset.
-            let cascade = (self.clients.len() as u32 % 8) * 30;
-            let x = 60 + cascade;
-            let y = 60 + cascade;
-
-            let mut title = [0u8; 32];
-            let label = b"dynamic";
-            title[..label.len()].copy_from_slice(label);
-
-            let client_idx = self.clients.len();
-            // SAFETY: shm_ptr is a valid mapping of shm_size bytes.
-            let shm_buf = unsafe { PixelBuffer::new(shm_ptr, shm_size) };
-            self.clients.push(ClientState {
-                pid: 0, // dynamic clients aren't spawned by us
-                channel_fd: ch_fd,
-                shm_buf,
-                shm_fd,
-                x,
-                y,
-                width: w,
-                height: h,
-                dirty: false,
-                title,
-                title_len: label.len(),
-            });
-
-            // Focus the new client.
-            self.focused = Some(client_idx);
-            self.dirty.mark_full();
-
-            // Send FocusGained.
-            let fg = proto::focus_gained(0);
-            proto::encode_msg(&fg, &mut cfg_buf);
-            let _ = sys::channel_send(ch_fd, &cfg_buf);
-        }
-    }
-
-    /// Handle keyboard input from stdin.
-    fn poll_keyboard(&mut self) {
-        while sys::poll_stdin() {
-            let mut byte = [0u8; 1];
-            let n = io::read(0, &mut byte);
-            if n <= 0 {
-                break;
-            }
-
-            // ESC (0x1B) followed by TAB (0x09) = Alt+Tab / focus cycle.
-            if byte[0] == 0x1B {
-                // Check if a second byte follows immediately.
-                if sys::poll_stdin() {
-                    let mut next = [0u8; 1];
-                    let n2 = io::read(0, &mut next);
-                    if n2 > 0 && next[0] == 0x09 {
-                        self.cycle_focus();
-                        continue;
-                    }
-                    // Not TAB — forward ESC then the next byte.
-                    self.forward_key(0x1B);
-                    self.forward_key(next[0]);
-                    continue;
-                }
-                // Lone ESC — forward it.
-            }
-
-            self.forward_key(byte[0]);
-        }
-    }
-
-    /// Forward a keyboard byte to the focused client.
-    fn forward_key(&self, character: u8) {
-        let Some(idx) = self.focused else { return };
-        let client = &self.clients[idx];
-
-        let msg = proto::keyboard_input(0, u32::from(character), true, character);
-        let mut buf = [0u8; MESSAGE_SIZE];
-        proto::encode_msg(&msg, &mut buf);
-        let _ = sys::channel_send(client.channel_fd, &buf);
-    }
-
-    /// Cycle keyboard focus to the next client.
-    fn cycle_focus(&mut self) {
-        if self.clients.is_empty() {
-            return;
-        }
-
-        let old = self.focused;
-        let new_idx = match old {
-            Some(i) => (i + 1) % self.clients.len(),
-            None => 0,
-        };
-
-        // Send FocusLost to old client.
-        if let Some(old_idx) = old {
-            let msg = proto::focus_lost(0);
-            let mut buf = [0u8; MESSAGE_SIZE];
-            proto::encode_msg(&msg, &mut buf);
-            let _ = sys::channel_send(self.clients[old_idx].channel_fd, &buf);
-        }
-
-        // Send FocusGained to new client.
-        let msg = proto::focus_gained(0);
-        let mut buf = [0u8; MESSAGE_SIZE];
-        proto::encode_msg(&msg, &mut buf);
-        let _ = sys::channel_send(self.clients[new_idx].channel_fd, &buf);
-
-        // Move focused surface to top of Z-order.
-        let client = self.clients.remove(new_idx);
-        self.clients.push(client);
-        self.focused = Some(self.clients.len() - 1);
-
-        self.dirty.mark_full();
-    }
-
-    /// Focus a specific client by index, sending focus lost/gained messages.
-    fn focus_client(&mut self, idx: usize) {
-        if self.focused == Some(idx) {
-            return;
-        }
-
-        // Send FocusLost to old.
-        if let Some(old_idx) = self.focused {
-            let msg = proto::focus_lost(0);
-            let mut buf = [0u8; MESSAGE_SIZE];
-            proto::encode_msg(&msg, &mut buf);
-            let _ = sys::channel_send(self.clients[old_idx].channel_fd, &buf);
-        }
-
-        // Send FocusGained to new.
-        let msg = proto::focus_gained(0);
-        let mut buf = [0u8; MESSAGE_SIZE];
-        proto::encode_msg(&msg, &mut buf);
-        let _ = sys::channel_send(self.clients[idx].channel_fd, &buf);
-
-        // Move to top of Z-order.
-        let client = self.clients.remove(idx);
-        self.clients.push(client);
-        self.focused = Some(self.clients.len() - 1);
-
-        self.dirty.mark_full();
-    }
-
-    /// Close a client window: kill the process and clean up resources.
-    fn close_client(&mut self, idx: usize) {
-        let client = self.clients.remove(idx);
-        sys::kill(client.pid, 9); // SIGKILL
-        sys::close(client.channel_fd);
-        sys::mem_unmap(client.shm_buf.as_ptr(), client.shm_buf.size);
-        sys::close(client.shm_fd);
-
-        // Update focused index after removal.
-        if let Some(foc) = self.focused {
-            if foc == idx {
-                // Focused window was closed — focus the new topmost.
-                self.focused = if self.clients.is_empty() {
-                    None
-                } else {
-                    let new_top = self.clients.len() - 1;
-                    let msg = proto::focus_gained(0);
-                    let mut buf = [0u8; MESSAGE_SIZE];
-                    proto::encode_msg(&msg, &mut buf);
-                    let _ = sys::channel_send(self.clients[new_top].channel_fd, &buf);
-                    Some(new_top)
-                };
-            } else if foc > idx {
-                self.focused = Some(foc - 1);
-            }
-        }
-
-        self.dirty.mark_full();
-    }
-
-    /// Read all pending mouse events from /dev/mouse and process them.
-    fn poll_mouse(&mut self) {
-        let Some(mouse_fd) = self.mouse_fd else {
-            return;
-        };
-
-        // Read mouse event packets (8 bytes each).
-        let mut raw = [0u8; 128]; // up to 16 events
-        while sys::poll_fd_read(mouse_fd) {
-            let n = io::read(mouse_fd, &mut raw);
-            if n <= 0 {
-                break;
-            }
-            let n = n as usize;
-            let packet_size = core::mem::size_of::<hsc::MouseEventPacket>();
-            let count = n / packet_size;
-
-            // Mark old cursor position dirty before processing movement.
-            let old_cx = self.cursor_x as u32;
-            let old_cy = self.cursor_y as u32;
-
-            for i in 0..count {
-                let offset = i * packet_size;
-                let pkt: hsc::MouseEventPacket =
-                    // SAFETY: MouseEventPacket is repr(C), 8 bytes, and buffer has that many.
-                    unsafe { core::ptr::read_unaligned(raw.as_ptr().add(offset).cast()) };
-                // Accumulate movement (negate dy for screen coordinates).
-                self.cursor_x += i32::from(pkt.dx);
-                self.cursor_y -= i32::from(pkt.dy);
-                // Clamp to screen bounds.
-                self.cursor_x = self.cursor_x.clamp(0, self.fb_width as i32 - 1);
-                self.cursor_y = self.cursor_y.clamp(0, self.fb_height as i32 - 1);
-                self.prev_buttons = self.buttons;
-                self.buttons = pkt.buttons;
-            }
-
-            // Dirty old and new cursor positions.
-            self.dirty.add(Rect {
-                x: old_cx,
-                y: old_cy,
-                w: CURSOR_W,
-                h: CURSOR_H,
-            });
-            self.dirty.add(Rect {
-                x: self.cursor_x as u32,
-                y: self.cursor_y as u32,
-                w: CURSOR_W,
-                h: CURSOR_H,
-            });
-        }
-
-        self.handle_mouse_buttons();
-    }
-
-    /// Process mouse button state changes (click, drag, release).
-    fn handle_mouse_buttons(&mut self) {
-        let left_pressed = self.buttons & 0x01 != 0;
-        let left_was_pressed = self.prev_buttons & 0x01 != 0;
-
-        // Left button just pressed.
-        if left_pressed && !left_was_pressed {
-            let cx = self.cursor_x;
-            let cy = self.cursor_y;
-
-            // Hit test windows top-to-bottom (reverse Z-order = highest index first).
-            let mut hit = None;
-            for i in (0..self.clients.len()).rev() {
-                let c = &self.clients[i];
-                let total_h = TITLEBAR_HEIGHT + c.height;
-                if cx >= c.x as i32
-                    && cx < (c.x + c.width) as i32
-                    && cy >= c.y as i32
-                    && cy < (c.y + total_h) as i32
-                {
-                    hit = Some(i);
-                    break;
-                }
-            }
-
-            if let Some(idx) = hit {
-                let c = &self.clients[idx];
-                let in_titlebar = cy < (c.y + TITLEBAR_HEIGHT) as i32;
-                let in_close_btn = in_titlebar
-                    && c.width >= CLOSE_BTN_WIDTH
-                    && cx >= (c.x + c.width - CLOSE_BTN_WIDTH) as i32;
-
-                if in_close_btn {
-                    self.close_client(idx);
-                } else if in_titlebar {
-                    self.focus_client(idx);
-                    // After focus_client, the window is at the end of the vec.
-                    let new_idx = self.clients.len() - 1;
-                    self.dragging = Some(DragState {
-                        client_idx: new_idx,
-                        offset_x: cx - self.clients[new_idx].x as i32,
-                        offset_y: cy - self.clients[new_idx].y as i32,
-                    });
-                } else {
-                    // Click in client area.
-                    self.focus_client(idx);
-                    let new_idx = self.clients.len() - 1;
-                    self.forward_mouse_to_client(new_idx);
-                }
-            }
-        }
-
-        // Left button released.
-        if !left_pressed && left_was_pressed {
-            self.dragging = None;
-        }
-
-        // Update drag position while held.
-        if left_pressed {
-            if let Some(ref drag) = self.dragging {
-                let idx = drag.client_idx;
-                let c = &self.clients[idx];
-                let total_h = TITLEBAR_HEIGHT + c.height;
-                // Mark old window position dirty.
-                self.dirty.add(Rect {
-                    x: c.x.saturating_sub(2),
-                    y: c.y.saturating_sub(2),
-                    w: c.width + 4,
-                    h: total_h + 4,
-                });
-                let new_x = (self.cursor_x - drag.offset_x).max(0) as u32;
-                let new_y = (self.cursor_y - drag.offset_y).max(0) as u32;
-                self.clients[idx].x = new_x;
-                self.clients[idx].y = new_y;
-                // Mark new window position dirty.
-                self.dirty.add(Rect {
-                    x: new_x.saturating_sub(2),
-                    y: new_y.saturating_sub(2),
-                    w: self.clients[idx].width + 4,
-                    h: total_h + 4,
-                });
-            }
-        }
-    }
-
-    /// Forward a mouse event to the given client.
-    fn forward_mouse_to_client(&self, idx: usize) {
-        let c = &self.clients[idx];
-        let rel_x = self.cursor_x - c.x as i32;
-        let rel_y = self.cursor_y - (c.y + TITLEBAR_HEIGHT) as i32;
-        let msg = proto::mouse_input(
-            0,
-            rel_x,
-            rel_y,
-            u32::from(self.buttons),
-            u32::from(self.prev_buttons),
-        );
-        let mut buf = [0u8; MESSAGE_SIZE];
-        proto::encode_msg(&msg, &mut buf);
-        let _ = sys::channel_send(c.channel_fd, &buf);
-    }
-
-    /// Draw the mouse cursor sprite at the current position.
-    fn draw_cursor(&self, back: &mut Surface<'_>) {
-        for row in 0..CURSOR_H {
-            for col in 0..CURSOR_W {
-                let val = CURSOR_BITMAP[(row * CURSOR_W + col) as usize];
-                let color = match val {
-                    1 => 0x00FF_FFFF, // white outline
-                    2 => 0x0010_1010, // near-black fill
-                    _ => continue,    // transparent
-                };
-                back.put_pixel(
-                    (self.cursor_x as u32).wrapping_add(col),
-                    (self.cursor_y as u32).wrapping_add(row),
-                    color,
-                );
-            }
-        }
-    }
-
-    /// Composite all client surfaces into the back buffer, then flip.
-    ///
-    /// Full compositing into the back buffer runs every dirty frame (fast,
-    /// in-memory). The expensive framebuffer MMIO copy is limited to dirty
-    /// row-spans when possible.
-    fn composite(&mut self) {
-        if !self.dirty.is_dirty() {
-            return;
-        }
-
-        let pixel_count = (self.fb_stride * self.fb_height) as usize;
-        let back_pixels = self.back_buf.pixels_mut(pixel_count);
-        let mut back =
-            Surface::from_raw(back_pixels, self.fb_width, self.fb_height, self.fb_stride);
+    /// Fill the back-buffer and blit all committed client surfaces, then flip
+    /// to the framebuffer. Also fires queued frame callbacks.
+    fn composite(&mut self, time_ms: u32) {
+        let pixels = (self.fb_pitch / 4) as usize * self.fb_height as usize;
+        let back = self.back_buf.pixels_mut(pixels);
 
         // Clear background.
         back.fill(BG_COLOR);
 
-        // Blit each client surface (back-to-front) with server-side decorations.
-        for (i, client) in self.clients.iter_mut().enumerate() {
-            let focused = self.focused == Some(i);
-            let x = client.x;
-            let y = client.y;
-            let w = client.width;
-
-            // 1. Draw titlebar rectangle.
-            let tb_color = if focused {
-                TITLEBAR_FOCUSED
-            } else {
-                TITLEBAR_UNFOCUSED
-            };
-            back.fill_rect(x, y, w, TITLEBAR_HEIGHT, tb_color);
-
-            // 2. Draw title text left-aligned (with 4px left margin, 2px top margin).
-            let title_str = core::str::from_utf8(&client.title[..client.title_len]).unwrap_or("?");
-            back.draw_str(x + 4, y + 2, title_str, TITLEBAR_TEXT, tb_color);
-
-            // 3. Draw close [X] button right-aligned in titlebar.
-            if w >= CLOSE_BTN_WIDTH {
-                let close_x = x + w - CLOSE_BTN_WIDTH + 4;
-                back.draw_str(close_x, y + 2, "X", CLOSE_BTN_COLOR, tb_color);
-            }
-
-            // 4. Blit client surface below the titlebar.
-            let surface_y = y + TITLEBAR_HEIGHT;
-            let src_pixel_count = client.width as usize * client.height as usize;
-            let src_pixels = client.shm_buf.pixels_mut(src_pixel_count);
-            let src = Surface::from_raw(src_pixels, client.width, client.height, client.width);
-            back.blit(&src, x as i32, surface_y as i32);
-
-            // 5. Draw 2px border around entire window (titlebar + client area).
-            let total_h = TITLEBAR_HEIGHT + client.height;
-            let border_color = if focused {
-                FOCUS_BORDER
-            } else {
-                TITLEBAR_UNFOCUSED
-            };
-            // Top edge (2 lines).
-            if y >= 2 {
-                back.hline(x.saturating_sub(2), y - 2, w + 4, border_color);
-                back.hline(x.saturating_sub(2), y - 1, w + 4, border_color);
-            } else if y >= 1 {
-                back.hline(x.saturating_sub(2), y - 1, w + 4, border_color);
-            }
-            // Bottom edge (2 lines).
-            back.hline(x.saturating_sub(2), y + total_h, w + 4, border_color);
-            back.hline(x.saturating_sub(2), y + total_h + 1, w + 4, border_color);
-            // Left edge (2 columns).
-            if x >= 2 {
-                back.vline(x - 2, y, total_h, border_color);
-                back.vline(x - 1, y, total_h, border_color);
-            } else if x >= 1 {
-                back.vline(x - 1, y, total_h, border_color);
-            }
-            // Right edge (2 columns).
-            back.vline(x + w, y, total_h, border_color);
-            back.vline(x + w + 1, y, total_h, border_color);
-
-            client.dirty = false;
-        }
-
-        // Draw mouse cursor on top of everything.
-        if self.mouse_fd.is_some() {
-            self.draw_cursor(&mut back);
-        }
-
-        // Flip: copy only dirty regions from back buffer to framebuffer MMIO.
-        if self.dirty.full_redraw {
-            // SAFETY: Both pointers are valid mappings of fb_size bytes.
-            unsafe {
-                core::ptr::copy_nonoverlapping(
-                    self.back_buf.as_ptr(),
-                    self.fb_buf.as_ptr(),
-                    self.fb_size,
-                );
-            }
-        } else {
-            let stride = self.fb_stride as usize;
-            let fb_w = self.fb_width;
-            let fb_h = self.fb_height;
-            for i in 0..self.dirty.count {
-                let r = &self.dirty.rects[i];
-                // Clamp rect to framebuffer bounds.
-                let x_start = (r.x as usize).min(fb_w as usize);
-                let x_end = ((r.x + r.w) as usize).min(fb_w as usize);
-                let y_start = (r.y as usize).min(fb_h as usize);
-                let y_end = ((r.y + r.h) as usize).min(fb_h as usize);
-                let row_bytes = (x_end - x_start) * BPP;
-                if row_bytes == 0 {
+        // Blit each client's committed surface.
+        for client in &self.clients {
+            for entry in &client.objects {
+                if entry.kind != ObjKind::Surface {
                     continue;
                 }
-                for row in y_start..y_end {
-                    let offset = (row * stride + x_start) * BPP;
-                    // SAFETY: offset + row_bytes is within both mappings
-                    // (clamped to fb bounds, both buffers are fb_size bytes).
-                    unsafe {
-                        core::ptr::copy_nonoverlapping(
-                            self.back_buf.as_ptr().add(offset),
-                            self.fb_buf.as_ptr().add(offset),
-                            row_bytes,
-                        );
-                    }
-                }
+                let sd = match &entry.surface {
+                    Some(s) if s.current_buffer.is_some() => s,
+                    _ => continue,
+                };
+                let buf_id = sd.current_buffer.unwrap();
+
+                // Find the buffer entry.
+                let buf_data = client
+                    .objects
+                    .iter()
+                    .find(|e| e.id == buf_id && e.kind == ObjKind::Buffer)
+                    .and_then(|e| e.buffer.as_ref());
+                let buf = match buf_data {
+                    Some(b) => b,
+                    None => continue,
+                };
+
+                // Find the shm pool.
+                let pool = client
+                    .objects
+                    .iter()
+                    .find(|e| e.id == buf.pool_id && e.kind == ObjKind::ShmPool)
+                    .and_then(|e| e.shm_pool.as_ref());
+                let pool = match pool {
+                    Some(p) => p,
+                    None => continue,
+                };
+
+                // Blit the surface to the back-buffer.
+                blit(
+                    back,
+                    self.fb_pitch,
+                    self.fb_height,
+                    pool.ptr,
+                    pool.size,
+                    buf.offset,
+                    buf.width,
+                    buf.height,
+                    buf.stride,
+                    sd.x,
+                    sd.y,
+                );
             }
         }
 
-        // Notify the framebuffer driver that the entire screen is dirty.
-        // For RAM-backed framebuffers (VirtIO GPU) this triggers the host
-        // display update; for MMIO-backed ones (Bochs VGA) it's a no-op.
+        // Copy back-buffer → framebuffer MMIO.
+        let byte_size = (self.fb_pitch * self.fb_height) as usize;
+        unsafe {
+            core::ptr::copy_nonoverlapping(self.back_buf.as_ptr(), self.fb_buf.as_ptr(), byte_size);
+        }
+
+        // Notify VirtIO-GPU driver that the full screen is dirty.
         let dirty = FbDirtyRect {
             x: 0,
             y: 0,
@@ -1062,81 +536,626 @@ impl Compositor {
             &dirty as *const FbDirtyRect as usize,
         );
 
-        self.dirty.clear();
+        // Fire frame callbacks on every surface that requested one.
+        // Two-pass to avoid simultaneous mutable borrow of client.objects and
+        // client.write_buf (send_callback_done / destroy_obj).
+        for client in &mut self.clients {
+            // Pass 1: drain callback IDs from all surfaces.
+            let mut cbs_to_fire: Vec<u32> = Vec::new();
+            for entry in &mut client.objects {
+                if entry.kind == ObjKind::Surface {
+                    if let Some(sd) = &mut entry.surface {
+                        cbs_to_fire.extend(sd.frame_callbacks.drain(..));
+                    }
+                }
+            }
+            // Pass 2: send events and clean up objects.
+            for cb_id in cbs_to_fire {
+                client.send_callback_done(cb_id, time_ms);
+                client.send_delete_id(cb_id);
+                client.destroy_obj(cb_id);
+            }
+        }
     }
 
-    /// Clean up resources.
-    fn shutdown(&mut self) {
-        // Clear framebuffer.
-        let pixel_count = (self.fb_stride * self.fb_height) as usize;
-        let pixels = self.fb_buf.pixels_mut(pixel_count);
-        let mut s = Surface::from_raw(pixels, self.fb_width, self.fb_height, self.fb_stride);
-        s.fill(0);
-
-        // Unmap and close client resources.
-        for client in &self.clients {
-            sys::close(client.channel_fd);
-            sys::mem_unmap(client.shm_buf.as_ptr(), client.shm_buf.size);
-            sys::close(client.shm_fd);
+    /// Process one frame: accept connections, read client messages, composite,
+    /// flush outputs.
+    fn frame(&mut self) {
+        // ── poll all fds ────────────────────────────────────────────────────
+        let mut poll_fds: Vec<PollFd> = Vec::with_capacity(1 + self.clients.len());
+        poll_fds.push(PollFd {
+            fd: self.server_fd as u32,
+            events: POLLIN as u16,
+            revents: 0,
+        });
+        for c in &self.clients {
+            poll_fds.push(PollFd {
+                fd: c.fd as u32,
+                events: POLLIN as u16,
+                revents: 0,
+            });
         }
 
-        // Unmap back buffer and framebuffer.
-        sys::mem_unmap(self.back_buf.as_ptr(), self.fb_size);
-        sys::mem_unmap(self.fb_buf.as_ptr(), self.fb_size);
-        io::close(self.fb_fd);
+        lepton_syslib::hadron_syscall::wrappers::sys_event_wait_many(
+            poll_fds.as_mut_ptr() as usize,
+            poll_fds.len(),
+            FRAME_MS as usize,
+        );
+
+        // ── accept new connections ───────────────────────────────────────────
+        if poll_fds[0].revents & POLLIN as u16 != 0 {
+            let new_fd = net::socket_accept(self.server_fd);
+            if new_fd >= 0 {
+                println!("[compositor] client {} connected", new_fd);
+                self.clients.push(Client::new(new_fd as usize));
+            }
+        }
+
+        // ── read + dispatch client messages ─────────────────────────────────
+        let mut disconnected: Vec<usize> = Vec::new();
+        for (i, pfd) in poll_fds[1..].iter().enumerate() {
+            if pfd.revents & POLLIN as u16 == 0 {
+                continue;
+            }
+            let client = &mut self.clients[i];
+            let mut tmp = [0u8; READ_BUF_CAP];
+            let (n, recv_fd) = net::recv_with_fd(client.fd, &mut tmp);
+            if n <= 0 {
+                disconnected.push(i);
+                continue;
+            }
+            client.read_buf.extend_from_slice(&tmp[..n as usize]);
+
+            // Dispatch all complete messages in the read buffer.
+            let recv_fd_opt = if recv_fd >= 0 {
+                Some(recv_fd as usize)
+            } else {
+                None
+            };
+            // We hand the fd to the first message that consumes it.
+            let mut fd_taken = false;
+            let mut consumed = 0usize;
+            let buf_snapshot: Vec<u8> = client.read_buf.clone();
+            while let Some((obj_id, opcode, msg_size)) =
+                proto::parse_header(&buf_snapshot[consumed..])
+            {
+                let args = &buf_snapshot[consumed + 8..consumed + msg_size];
+                let fd_for_this = if !fd_taken {
+                    fd_taken = true;
+                    recv_fd_opt
+                } else {
+                    None
+                };
+                dispatch(client, obj_id, opcode, args, fd_for_this);
+                consumed += msg_size;
+            }
+            // Discard the bytes we processed.
+            {
+                let remaining = client.read_buf.len().saturating_sub(consumed);
+                let new_len = client.read_buf.len() - consumed;
+                client.read_buf.copy_within(consumed.., 0);
+                client.read_buf.truncate(new_len);
+                let _ = remaining;
+            }
+        }
+
+        // Remove disconnected clients (iterate in reverse to preserve indices).
+        for i in disconnected.into_iter().rev() {
+            let c = self.clients.remove(i);
+            println!("[compositor] client {} disconnected", c.fd);
+            sys::close(c.fd);
+        }
+
+        // ── composite and flush ──────────────────────────────────────────────
+        let now_ms = monotonic_ms();
+        self.composite(now_ms as u32);
+
+        for client in &mut self.clients {
+            client.flush();
+        }
     }
 }
 
-// ── Entry point ──────────────────────────────────────────────────────
+// ── Blit helper ──────────────────────────────────────────────────────────────
 
-#[unsafe(no_mangle)]
-pub extern "C" fn main(_args: &[&str]) -> i32 {
-    let mut comp = match Compositor::init() {
-        Some(c) => c,
-        None => return 1,
+/// Blit pixels from a SHM pool slice onto the back-buffer at `(dst_x, dst_y)`.
+///
+/// Clips to the framebuffer dimensions. Supports ARGB8888 and XRGB8888.
+fn blit(
+    back: &mut [u32],
+    fb_pitch: u32,
+    fb_height: u32,
+    pool_ptr: *mut u8,
+    pool_size: usize,
+    src_offset: usize,
+    src_width: u32,
+    src_height: u32,
+    src_stride: u32,
+    dst_x: i32,
+    dst_y: i32,
+) {
+    let fb_stride = (fb_pitch / 4) as i32; // pixels per row
+    let fb_h = fb_height as i32;
+    for row in 0..src_height as i32 {
+        let dy = dst_y + row;
+        if dy < 0 || dy >= fb_h {
+            continue;
+        }
+        let dy = dy as usize;
+        for col in 0..src_width as i32 {
+            let dx = dst_x + col;
+            if dx < 0 || dx >= fb_stride {
+                continue;
+            }
+            let dx = dx as usize;
+            let src_byte = src_offset + (row as usize) * (src_stride as usize) + col as usize * 4;
+            if src_byte + 4 > pool_size {
+                continue;
+            }
+            // SAFETY: bounds checked above; pool_ptr is a valid SHM mapping.
+            let px = unsafe {
+                u32::from_le_bytes([
+                    *pool_ptr.add(src_byte),
+                    *pool_ptr.add(src_byte + 1),
+                    *pool_ptr.add(src_byte + 2),
+                    *pool_ptr.add(src_byte + 3),
+                ])
+            };
+            back[dy * fb_stride as usize + dx] = px;
+        }
+    }
+}
+
+// ── Message dispatcher ───────────────────────────────────────────────────────
+
+/// Dispatch one parsed Wayland request to the appropriate handler.
+fn dispatch(client: &mut Client, obj_id: u32, opcode: u16, args: &[u8], recv_fd: Option<usize>) {
+    let kind = client.obj_kind(obj_id);
+    match (kind, opcode) {
+        // wl_display
+        (ObjKind::Display, 0) => handle_display_sync(client, args),
+        (ObjKind::Display, 1) => handle_display_get_registry(client, args),
+        // wl_registry
+        (ObjKind::Registry, 0) => handle_registry_bind(client, obj_id, args),
+        // wl_compositor
+        (ObjKind::Compositor, 0) => handle_compositor_create_surface(client, args),
+        (ObjKind::Compositor, 1) => handle_compositor_create_region(client, args),
+        // wl_surface
+        (ObjKind::Surface, 0) => handle_surface_destroy(client, obj_id),
+        (ObjKind::Surface, 1) => handle_surface_attach(client, obj_id, args),
+        (ObjKind::Surface, 2) => { /* damage — no-op for software path */ }
+        (ObjKind::Surface, 3) => handle_surface_frame(client, obj_id, args),
+        (ObjKind::Surface, 4) | (ObjKind::Surface, 5) => { /* set_opaque/input_region — no-op */ }
+        (ObjKind::Surface, 6) => handle_surface_commit(client, obj_id),
+        (ObjKind::Surface, 9) => { /* damage_buffer — no-op */ }
+        // wl_shm
+        (ObjKind::Shm, 0) => handle_shm_create_pool(client, args, recv_fd),
+        // wl_shm_pool
+        (ObjKind::ShmPool, 0) => handle_shm_pool_create_buffer(client, obj_id, args),
+        (ObjKind::ShmPool, 1) => handle_shm_pool_destroy(client, obj_id),
+        (ObjKind::ShmPool, 2) => handle_shm_pool_resize(client, obj_id, args),
+        // wl_buffer
+        (ObjKind::Buffer, 0) => handle_buffer_destroy(client, obj_id),
+        // wl_region — stub; accept and ignore all requests
+        (ObjKind::Region, _) => {}
+        // xdg_wm_base
+        (ObjKind::XdgWmBase, 0) => { /* destroy */ }
+        (ObjKind::XdgWmBase, 1) => { /* create_positioner — stub */ }
+        (ObjKind::XdgWmBase, 2) => handle_xdg_wm_base_get_xdg_surface(client, args),
+        (ObjKind::XdgWmBase, 3) => { /* pong — discard */ }
+        // xdg_surface
+        (ObjKind::XdgSurface, 0) => handle_xdg_surface_destroy(client, obj_id),
+        (ObjKind::XdgSurface, 1) => handle_xdg_surface_get_toplevel(client, obj_id, args),
+        (ObjKind::XdgSurface, 2) => { /* get_popup — stub */ }
+        (ObjKind::XdgSurface, 3) => { /* set_window_geometry — no-op */ }
+        (ObjKind::XdgSurface, 4) => handle_xdg_surface_ack_configure(client, obj_id, args),
+        // xdg_toplevel
+        (ObjKind::XdgToplevel, 0) => handle_xdg_toplevel_destroy(client, obj_id),
+        (ObjKind::XdgToplevel, 1) => { /* set_parent — no-op */ }
+        (ObjKind::XdgToplevel, 2) => { /* set_title — no-op */ }
+        (ObjKind::XdgToplevel, 3) => { /* set_app_id — no-op */ }
+        (ObjKind::XdgToplevel, 4..=12) => { /* misc hints — no-op */ }
+        // Ignore unknown
+        _ => {}
+    }
+}
+
+// ── Handler implementations ──────────────────────────────────────────────────
+
+/// `wl_display.sync(callback_id)` — immediately complete the callback.
+fn handle_display_sync(client: &mut Client, args: &[u8]) {
+    let (cb_id, _) = match proto::read_u32(args, 0) {
+        Some(v) => v,
+        None => return,
+    };
+    client.register(cb_id, ObjKind::Callback);
+    client.send_callback_done(cb_id, 0);
+    client.send_delete_id(cb_id);
+    client.destroy_obj(cb_id);
+}
+
+/// `wl_display.get_registry(registry_id)` — announce all globals.
+fn handle_display_get_registry(client: &mut Client, args: &[u8]) {
+    let (reg_id, _) = match proto::read_u32(args, 0) {
+        Some(v) => v,
+        None => return,
+    };
+    client.register(reg_id, ObjKind::Registry);
+    // Announce the three globals in order.
+    client.send_registry_global(reg_id, 1, b"wl_compositor", 4);
+    client.send_registry_global(reg_id, 2, b"wl_shm", 1);
+    client.send_registry_global(reg_id, 3, b"xdg_wm_base", 2);
+}
+
+/// `wl_registry.bind(name, interface, version, new_id)`.
+///
+/// Wire format: uint32 name, string interface, uint32 version, uint32 new_id.
+fn handle_registry_bind(client: &mut Client, _reg_id: u32, args: &[u8]) {
+    let (name, off) = match proto::read_u32(args, 0) {
+        Some(v) => v,
+        None => return,
+    };
+    let (_iface, off) = match proto::read_str(args, off) {
+        Some(v) => v,
+        None => return,
+    };
+    let (_version, off) = match proto::read_u32(args, off) {
+        Some(v) => v,
+        None => return,
+    };
+    let (new_id, _) = match proto::read_u32(args, off) {
+        Some(v) => v,
+        None => return,
     };
 
-    // Set stdin to raw mode.
-    let mut orig_termios = Termios {
-        iflag: 0,
-        oflag: 0,
-        cflag: 0,
-        lflag: 0,
-        cc: [0; 32],
+    match name {
+        1 => {
+            // wl_compositor
+            client.register(new_id, ObjKind::Compositor);
+        }
+        2 => {
+            // wl_shm — also send format announcements
+            client.register(new_id, ObjKind::Shm);
+            client.send_shm_format(new_id, WL_SHM_FORMAT_ARGB8888);
+            client.send_shm_format(new_id, WL_SHM_FORMAT_XRGB8888);
+        }
+        3 => {
+            // xdg_wm_base — send a ping immediately so client is alive
+            client.register(new_id, ObjKind::XdgWmBase);
+            let serial = client.next_serial();
+            client.send_xdg_wm_base_ping(new_id, serial);
+        }
+        _ => {}
+    }
+}
+
+/// `wl_compositor.create_surface(id)`.
+fn handle_compositor_create_surface(client: &mut Client, args: &[u8]) {
+    let (id, _) = match proto::read_u32(args, 0) {
+        Some(v) => v,
+        None => return,
     };
-    io::ioctl(
-        0,
-        TCGETS as usize,
-        &mut orig_termios as *mut Termios as usize,
-    );
-    let mut raw = orig_termios;
-    raw.lflag &= !(ICANON | ECHO);
-    io::ioctl(0, TCSETS as usize, &raw as *const Termios as usize);
+    let e = client.register(id, ObjKind::Surface);
+    e.surface = Some(SurfaceData::new());
+}
 
-    // Spawn initial clients.
-    // Sysmon: top-left corner, 400x300.
-    let sysmon_w = comp.fb_width.min(400);
-    let sysmon_h = comp.fb_height.min(300);
-    comp.spawn_client("/bin/sysmon", 20, 40, sysmon_w, sysmon_h);
+/// `wl_compositor.create_region(id)` — stub: just register.
+fn handle_compositor_create_region(client: &mut Client, args: &[u8]) {
+    let (id, _) = match proto::read_u32(args, 0) {
+        Some(v) => v,
+        None => return,
+    };
+    client.register(id, ObjKind::Region);
+}
 
-    // Terminal: offset from sysmon, 640x400.
-    let term_w = comp.fb_width.min(640);
-    let term_h = comp.fb_height.min(400);
-    comp.spawn_client("/bin/terminal", 440, 40, term_w, term_h);
+/// `wl_surface.destroy()`.
+fn handle_surface_destroy(client: &mut Client, id: u32) {
+    client.destroy_obj(id);
+}
 
-    // Main loop.
-    loop {
-        comp.poll_keyboard();
-        comp.poll_mouse();
-        comp.poll_connections();
-        comp.poll_clients();
-        comp.composite();
-        sys::sleep_ms(FRAME_MS);
+/// `wl_surface.attach(buffer_id, x, y)`.
+fn handle_surface_attach(client: &mut Client, surf_id: u32, args: &[u8]) {
+    let (buf_id, _) = match proto::read_u32(args, 0) {
+        Some(v) => v,
+        None => return,
+    };
+    for e in &mut client.objects {
+        if e.id == surf_id && e.kind == ObjKind::Surface {
+            if let Some(sd) = &mut e.surface {
+                sd.pending_buffer = if buf_id == 0 { None } else { Some(buf_id) };
+            }
+            break;
+        }
+    }
+}
+
+/// `wl_surface.frame(callback_id)`.
+fn handle_surface_frame(client: &mut Client, surf_id: u32, args: &[u8]) {
+    let (cb_id, _) = match proto::read_u32(args, 0) {
+        Some(v) => v,
+        None => return,
+    };
+    client.register(cb_id, ObjKind::Callback);
+    // Queue it on the surface's frame-callback list.
+    for e in &mut client.objects {
+        if e.id == surf_id && e.kind == ObjKind::Surface {
+            if let Some(sd) = &mut e.surface {
+                sd.frame_callbacks.push(cb_id);
+            }
+            break;
+        }
+    }
+}
+
+/// `wl_surface.commit()` — move pending state to current.
+fn handle_surface_commit(client: &mut Client, surf_id: u32) {
+    let mut prev_buf: Option<u32> = None;
+    let mut new_buf: Option<u32> = None;
+
+    for e in &mut client.objects {
+        if e.id == surf_id && e.kind == ObjKind::Surface {
+            if let Some(sd) = &mut e.surface {
+                prev_buf = sd.current_buffer;
+                new_buf = sd.pending_buffer;
+                sd.current_buffer = sd.pending_buffer.take();
+            }
+            break;
+        }
     }
 
-    // Note: in practice, the compositor runs until the system shuts down.
-    // If we ever add a quit mechanism:
-    // io::ioctl(0, TCSETS as usize, &orig_termios as *const Termios as usize);
-    // comp.shutdown();
-    // 0
+    // Release the previous buffer if it changed.
+    if let (Some(p), Some(n)) = (prev_buf, new_buf) {
+        if p != n {
+            client.send_buffer_release(p);
+        }
+    } else if let Some(p) = prev_buf {
+        if new_buf.is_none() {
+            client.send_buffer_release(p);
+        }
+    }
+}
+
+/// `wl_shm.create_pool(id, fd, size)`.
+///
+/// The fd arrives as SCM_RIGHTS in `recv_fd`. Wire args: [uint32 id][int32 size].
+fn handle_shm_create_pool(client: &mut Client, args: &[u8], recv_fd: Option<usize>) {
+    let (id, off) = match proto::read_u32(args, 0) {
+        Some(v) => v,
+        None => return,
+    };
+    let (size_i32, _) = match proto::read_i32(args, off) {
+        Some(v) => v,
+        None => return,
+    };
+    let size = size_i32.max(0) as usize;
+    let fd = match recv_fd {
+        Some(f) => f,
+        None => return, // fd is required
+    };
+
+    // Map the shared memory from the client.
+    let ptr = match sys::mem_map_shared(fd, size) {
+        Some(p) => p,
+        None => {
+            sys::close(fd);
+            client.send_error(id, 0, b"shm_pool: failed to map shared memory");
+            return;
+        }
+    };
+
+    let e = client.register(id, ObjKind::ShmPool);
+    e.shm_pool = Some(ShmPoolData {
+        ptr,
+        size,
+        fd: fd as i32,
+    });
+}
+
+/// `wl_shm_pool.create_buffer(id, offset, width, height, stride, format)`.
+fn handle_shm_pool_create_buffer(client: &mut Client, pool_id: u32, args: &[u8]) {
+    let (id, off) = match proto::read_u32(args, 0) {
+        Some(v) => v,
+        None => return,
+    };
+    let (offset, off) = match proto::read_i32(args, off) {
+        Some(v) => v,
+        None => return,
+    };
+    let (width, off) = match proto::read_i32(args, off) {
+        Some(v) => v,
+        None => return,
+    };
+    let (height, off) = match proto::read_i32(args, off) {
+        Some(v) => v,
+        None => return,
+    };
+    let (stride, off) = match proto::read_i32(args, off) {
+        Some(v) => v,
+        None => return,
+    };
+    let (format, _) = match proto::read_u32(args, off) {
+        Some(v) => v,
+        None => return,
+    };
+    let e = client.register(id, ObjKind::Buffer);
+    e.buffer = Some(BufferData {
+        pool_id,
+        offset: offset.max(0) as usize,
+        width: width.max(0) as u32,
+        height: height.max(0) as u32,
+        stride: stride.max(0) as u32,
+        format,
+    });
+}
+
+/// `wl_shm_pool.destroy()`.
+fn handle_shm_pool_destroy(client: &mut Client, id: u32) {
+    client.destroy_obj(id);
+}
+
+/// `wl_shm_pool.resize(new_size)` — remap the pool.
+fn handle_shm_pool_resize(client: &mut Client, id: u32, args: &[u8]) {
+    let (new_size_i32, _) = match proto::read_i32(args, 0) {
+        Some(v) => v,
+        None => return,
+    };
+    let new_size = new_size_i32.max(0) as usize;
+    let (old_ptr, old_size, fd) = {
+        let e = client
+            .objects
+            .iter()
+            .find(|e| e.id == id && e.kind == ObjKind::ShmPool);
+        match e.and_then(|e| e.shm_pool.as_ref()) {
+            Some(p) => (p.ptr, p.size, p.fd),
+            None => return,
+        }
+    };
+    sys::mem_unmap(old_ptr, old_size);
+    let new_ptr = sys::mem_map_shared(fd as usize, new_size);
+    for e in &mut client.objects {
+        if e.id == id && e.kind == ObjKind::ShmPool {
+            if let Some(p) = &mut e.shm_pool {
+                match new_ptr {
+                    Some(ptr) => {
+                        p.ptr = ptr;
+                        p.size = new_size;
+                    }
+                    None => {
+                        // Mapping failed; mark pool as zero-size.
+                        p.size = 0;
+                    }
+                }
+            }
+            break;
+        }
+    }
+}
+
+/// `wl_buffer.destroy()`.
+fn handle_buffer_destroy(client: &mut Client, id: u32) {
+    client.destroy_obj(id);
+}
+
+/// `xdg_wm_base.get_xdg_surface(id, surface_id)`.
+fn handle_xdg_wm_base_get_xdg_surface(client: &mut Client, args: &[u8]) {
+    let (id, off) = match proto::read_u32(args, 0) {
+        Some(v) => v,
+        None => return,
+    };
+    let (surface_id, _) = match proto::read_u32(args, off) {
+        Some(v) => v,
+        None => return,
+    };
+    let e = client.register(id, ObjKind::XdgSurface);
+    e.xdg_surface_surface_id = surface_id;
+}
+
+/// `xdg_surface.destroy()`.
+fn handle_xdg_surface_destroy(client: &mut Client, id: u32) {
+    client.destroy_obj(id);
+}
+
+/// `xdg_surface.get_toplevel(id)`.
+///
+/// Registers the toplevel and immediately sends the initial configure sequence:
+/// `xdg_toplevel.configure(0,0,[ACTIVATED])` + `xdg_surface.configure(serial)`.
+fn handle_xdg_surface_get_toplevel(client: &mut Client, xdg_surface_id: u32, args: &[u8]) {
+    let (id, _) = match proto::read_u32(args, 0) {
+        Some(v) => v,
+        None => return,
+    };
+    let e = client.register(id, ObjKind::XdgToplevel);
+    e.xdg_toplevel_xdg_surface_id = xdg_surface_id;
+
+    // Send initial configure: let client pick its own size (0x0).
+    let states = [XDG_TOPLEVEL_STATE_ACTIVATED];
+    client.send_xdg_toplevel_configure(id, 0, 0, &states);
+
+    let serial = client.next_serial();
+    client.send_xdg_surface_configure(xdg_surface_id, serial);
+
+    // Mark surface as having received a configure.
+    let surface_id = client
+        .objects
+        .iter()
+        .find(|e| e.id == xdg_surface_id && e.kind == ObjKind::XdgSurface)
+        .map(|e| e.xdg_surface_surface_id)
+        .unwrap_or(0);
+    if surface_id != 0 {
+        for e in &mut client.objects {
+            if e.id == surface_id && e.kind == ObjKind::Surface {
+                if let Some(sd) = &mut e.surface {
+                    sd.xdg_configured = true;
+                }
+                break;
+            }
+        }
+    }
+}
+
+/// `xdg_surface.ack_configure(serial)`.
+fn handle_xdg_surface_ack_configure(client: &mut Client, xdg_surface_id: u32, args: &[u8]) {
+    let (_serial, _) = match proto::read_u32(args, 0) {
+        Some(v) => v,
+        None => return,
+    };
+    // Mark the underlying wl_surface as configured.
+    let surface_id = client
+        .objects
+        .iter()
+        .find(|e| e.id == xdg_surface_id && e.kind == ObjKind::XdgSurface)
+        .map(|e| e.xdg_surface_surface_id)
+        .unwrap_or(0);
+    if surface_id != 0 {
+        for e in &mut client.objects {
+            if e.id == surface_id && e.kind == ObjKind::Surface {
+                if let Some(sd) = &mut e.surface {
+                    sd.xdg_acked = true;
+                }
+                break;
+            }
+        }
+    }
+}
+
+/// `xdg_toplevel.destroy()`.
+fn handle_xdg_toplevel_destroy(client: &mut Client, id: u32) {
+    client.destroy_obj(id);
+}
+
+// ── Utilities ─────────────────────────────────────────────────────────────────
+
+/// Return the current monotonic clock time in milliseconds.
+fn monotonic_ms() -> u64 {
+    let mut ts = core::mem::MaybeUninit::<Timespec>::uninit();
+    let ret = lepton_syslib::hadron_syscall::wrappers::sys_clock_gettime(
+        CLOCK_MONOTONIC,
+        ts.as_mut_ptr() as usize,
+    );
+    if ret < 0 {
+        return 0;
+    }
+    // SAFETY: kernel wrote a valid Timespec on success.
+    let ts = unsafe { ts.assume_init() };
+    ts.tv_sec * 1000 + ts.tv_nsec / 1_000_000
+}
+
+// ── Entry point ──────────────────────────────────────────────────────────────
+
+#[unsafe(no_mangle)]
+extern "C" fn main(_argc: isize, _argv: *const *const u8) -> isize {
+    println!("[compositor] Lepton Wayland compositor starting");
+
+    let mut comp = match Compositor::init() {
+        Some(c) => c,
+        None => {
+            println!("[compositor] init failed");
+            return 1;
+        }
+    };
+
+    println!("[compositor] running");
+    loop {
+        comp.frame();
+    }
 }
