@@ -23,6 +23,8 @@ use core::pin::Pin;
 
 use hadron_core::addr::PhysAddr;
 
+pub use devfs::DevNumber;
+
 /// File type of an inode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InodeType {
@@ -34,6 +36,8 @@ pub enum InodeType {
     CharDevice,
     /// Symbolic link.
     Symlink,
+    /// Block device.
+    BlockDevice,
 }
 
 /// File permissions.
@@ -335,6 +339,20 @@ pub trait Inode: Send + Sync {
     /// Default: returns `None` (use this inode directly).
     fn on_open(&self) -> Result<Option<Arc<dyn Inode>>, FsError> {
         Ok(None)
+    }
+
+    /// Device number for character or block devices (Linux `makedev` encoding).
+    ///
+    /// Default: `DevNumber(0)` (not a device).
+    fn dev_number(&self) -> DevNumber {
+        DevNumber(0)
+    }
+
+    /// Downcast to [`DevFsDir`](devfs::DevFsDir) for dynamic devfs directory access.
+    ///
+    /// Default: `None`. Overridden by `DevFsDir` to enable `get_or_create_dir`.
+    fn as_devfs_dir(&self) -> Option<&devfs::DevFsDir> {
+        None
     }
 }
 

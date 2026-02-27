@@ -41,6 +41,10 @@ impl Inode for DevFramebuffer {
         Permissions::read_write()
     }
 
+    fn dev_number(&self) -> hadron_fs::DevNumber {
+        hadron_fs::DevNumber::fb(0)
+    }
+
     fn read<'a>(
         &'a self,
         _offset: usize,

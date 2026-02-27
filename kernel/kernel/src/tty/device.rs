@@ -21,12 +21,19 @@ use super::Tty;
 pub struct DevTty {
     /// The backing TTY instance.
     tty: &'static Tty,
+    /// Virtual terminal index (0-based) for device numbering.
+    index: u32,
 }
 
 impl DevTty {
     /// Create a new DevTty backed by the given TTY.
     pub const fn new(tty: &'static Tty) -> Self {
-        Self { tty }
+        Self { tty, index: 0 }
+    }
+
+    /// Create a new DevTty with the given VT index for proper device numbering.
+    pub const fn new_indexed(tty: &'static Tty, index: u32) -> Self {
+        Self { tty, index }
     }
 }
 
@@ -109,6 +116,10 @@ impl Inode for DevTty {
 
     fn permissions(&self) -> Permissions {
         Permissions::read_write()
+    }
+
+    fn dev_number(&self) -> hadron_fs::DevNumber {
+        hadron_fs::DevNumber::tty_vt(self.index)
     }
 
     fn read<'a>(

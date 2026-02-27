@@ -259,6 +259,11 @@ impl Inode for DevMouse {
         Permissions::read_only()
     }
 
+    fn dev_number(&self) -> hadron_fs::DevNumber {
+        // Major 13 (input devices), minor 63 (mice).
+        hadron_fs::DevNumber::new(13, 63)
+    }
+
     fn read<'a>(
         &'a self,
         _offset: usize,

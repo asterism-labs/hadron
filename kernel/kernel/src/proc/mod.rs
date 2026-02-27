@@ -407,6 +407,11 @@ impl ProcessTable {
     pub fn count() -> usize {
         PROCESS_TABLE.lock().len()
     }
+
+    /// Returns all PIDs currently in the process table.
+    pub fn all_pids() -> Vec<Pid> {
+        PROCESS_TABLE.lock().keys().copied().collect()
+    }
 }
 
 // ── User mmap region ────────────────────────────────────────────────
@@ -424,7 +429,7 @@ const MMAP_FREE_LIST_CAPACITY: usize = 64;
 
 /// Describes how a memory mapping was created, for correct cleanup on unmap.
 #[derive(Debug, Clone, Copy)]
-pub(crate) enum MappingKind {
+pub enum MappingKind {
     /// Anonymous mapping: pages were allocated from PMM and must be freed.
     Anonymous { page_count: usize },
     /// Device-backed mapping: physical pages belong to hardware and must NOT be freed.
@@ -464,7 +469,7 @@ pub struct Process {
     pub(crate) mmap_alloc: Arc<SpinLock<FreeRegionAllocator<MMAP_FREE_LIST_CAPACITY>>>,
     /// Tracks mapping kind (anonymous vs device) for each mmap virtual address.
     /// Shared with address space (`CLONE_VM`).
-    pub(crate) mmap_mappings: Arc<SpinLock<BTreeMap<u64, MappingKind>>>,
+    pub mmap_mappings: Arc<SpinLock<BTreeMap<u64, MappingKind>>>,
     /// Pending signals for this process (per-thread).
     pub signals: signal::SignalState,
     /// Exit status, set when the process terminates.
@@ -479,6 +484,8 @@ pub struct Process {
     /// PIDs of child processes spawned by this process.
     /// Updated on spawn (push) and reap (remove).
     pub(crate) children: SpinLock<Vec<Pid>>,
+    /// Path to the executable image (set after exec/spawn; `"<unknown>"` initially).
+    pub exe_path: SpinLock<String>,
 }
 
 impl Process {
@@ -543,6 +550,7 @@ impl Process {
             cwd: SpinLock::leveled("cwd", 4, String::from("/")),
             program_break: Arc::new(SpinLock::leveled("program_break", 4, 0)),
             children: SpinLock::leveled("children", 4, Vec::new()),
+            exe_path: SpinLock::leveled("exe_path", 4, String::from("<unknown>")),
         }
     }
 
@@ -600,6 +608,7 @@ impl Process {
             cwd: SpinLock::leveled("cwd", 4, parent.cwd.lock().clone()),
             program_break,
             children: SpinLock::leveled("children", 4, Vec::new()),
+            exe_path: SpinLock::leveled("exe_path", 4, parent.exe_path.lock().clone()),
         }
     }
 }

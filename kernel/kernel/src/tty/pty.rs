@@ -559,6 +559,10 @@ impl Inode for DevPtmx {
         Permissions::read_write()
     }
 
+    fn dev_number(&self) -> hadron_fs::DevNumber {
+        hadron_fs::DevNumber::PTMX
+    }
+
     fn read<'a>(
         &'a self,
         _offset: usize,

@@ -294,6 +294,7 @@ pub(super) fn sys_vnode_stat(fd: usize, buf_ptr: usize, buf_len: usize) -> isize
         crate::fs::InodeType::Directory => crate::syscall::INODE_TYPE_DIR,
         crate::fs::InodeType::CharDevice => crate::syscall::INODE_TYPE_CHARDEV,
         crate::fs::InodeType::Symlink => crate::syscall::INODE_TYPE_SYMLINK,
+        crate::fs::InodeType::BlockDevice => crate::syscall::INODE_TYPE_BLOCKDEV,
     };
 
     let perms = inode.permissions();
@@ -302,9 +303,11 @@ pub(super) fn sys_vnode_stat(fd: usize, buf_ptr: usize, buf_len: usize) -> isize
 
     let info = StatInfo {
         inode_type,
-        _pad: [0; 3],
+        _pad: [0; 7],
         size: inode.size() as u64,
         permissions,
+        _pad2: 0,
+        rdev: inode.dev_number().0,
     };
 
     // SAFETY: UserSlice validated the pointer range is in user space,
@@ -403,6 +406,7 @@ pub(super) fn sys_vnode_readdir(fd: usize, buf_ptr: usize, buf_len: usize) -> is
             crate::fs::InodeType::Directory => crate::syscall::INODE_TYPE_DIR,
             crate::fs::InodeType::CharDevice => crate::syscall::INODE_TYPE_CHARDEV,
             crate::fs::InodeType::Symlink => crate::syscall::INODE_TYPE_SYMLINK,
+            crate::fs::InodeType::BlockDevice => crate::syscall::INODE_TYPE_BLOCKDEV,
         };
 
         let name_bytes = entry.name.as_bytes();
@@ -1031,6 +1035,7 @@ pub(super) fn sys_vnode_fstatat(
         crate::fs::InodeType::Directory => crate::syscall::INODE_TYPE_DIR,
         crate::fs::InodeType::CharDevice => crate::syscall::INODE_TYPE_CHARDEV,
         crate::fs::InodeType::Symlink => crate::syscall::INODE_TYPE_SYMLINK,
+        crate::fs::InodeType::BlockDevice => crate::syscall::INODE_TYPE_BLOCKDEV,
     };
 
     let perms = inode.permissions();
@@ -1039,9 +1044,11 @@ pub(super) fn sys_vnode_fstatat(
 
     let info = StatInfo {
         inode_type,
-        _pad: [0; 3],
+        _pad: [0; 7],
         size: inode.size() as u64,
         permissions,
+        _pad2: 0,
+        rdev: inode.dev_number().0,
     };
 
     let out = unsafe { user_slice.as_mut_slice() };

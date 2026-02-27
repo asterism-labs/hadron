@@ -4,24 +4,111 @@
 //! - `/dev/null` -- reads return 0 bytes, writes are discarded
 //! - `/dev/zero` -- reads fill buffer with zeros, writes are discarded
 //!
-//! Additional devices (e.g. `/dev/console`) can be registered via
-//! [`DevFs::with_extra_devices`].
+//! Additional devices are registered at runtime via [`DevFsDir::insert`] or the
+//! kernel-side `devfs_registry` module.
 
 extern crate alloc;
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
-use alloc::string::ToString;
+use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::future::Future;
 use core::pin::Pin;
 
+use hadron_core::sync::SpinLock;
+
 use crate::{DirEntry, FileSystem, FsError, Inode, InodeType, Permissions};
+
+// ── DevNumber ───────────────────────────────────────────────────────────
+
+/// Linux-compatible device number (major:minor) encoded as a single `u64`.
+///
+/// Encoding follows Linux `makedev(major, minor)`:
+/// - bits 7..0    — minor bits 7..0
+/// - bits 19..8   — major bits 11..0
+/// - bits 31..20  — minor bits 19..8
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DevNumber(pub u64);
+
+impl DevNumber {
+    /// Create a device number from `major` and `minor`.
+    #[must_use]
+    pub const fn new(major: u32, minor: u32) -> Self {
+        let lo = (minor & 0xff) as u64;
+        let hi = ((minor >> 8) as u64) << 20;
+        let maj = ((major & 0xfff) as u64) << 8;
+        Self(lo | maj | hi)
+    }
+
+    /// Extract the major number.
+    #[must_use]
+    pub const fn major(self) -> u32 {
+        ((self.0 >> 8) & 0xfff) as u32
+    }
+
+    /// Extract the minor number.
+    #[must_use]
+    pub const fn minor(self) -> u32 {
+        let lo = (self.0 & 0xff) as u32;
+        let hi = ((self.0 >> 20) & 0xfff) as u32;
+        lo | (hi << 8)
+    }
+
+    // ── Named constants ──
+
+    /// `/dev/null` — major 1, minor 3.
+    pub const NULL: Self = Self::new(1, 3);
+    /// `/dev/zero` — major 1, minor 5.
+    pub const ZERO: Self = Self::new(1, 5);
+    /// `/dev/console` — major 5, minor 1.
+    pub const CONSOLE: Self = Self::new(5, 1);
+    /// `/dev/ptmx` — major 5, minor 2.
+    pub const PTMX: Self = Self::new(5, 2);
+
+    /// `/dev/ttyN` — major 4, minor N.
+    #[must_use]
+    pub const fn tty_vt(n: u32) -> Self {
+        Self::new(4, n)
+    }
+
+    /// `/dev/pts/N` — major 136, minor N.
+    #[must_use]
+    pub const fn pts(n: u32) -> Self {
+        Self::new(136, n)
+    }
+
+    /// `/dev/fbN` — major 29, minor N.
+    #[must_use]
+    pub const fn fb(n: u32) -> Self {
+        Self::new(29, n)
+    }
+
+    /// `/dev/dri/cardN` — major 226, minor N.
+    #[must_use]
+    pub const fn drm_card(n: u32) -> Self {
+        Self::new(226, n)
+    }
+
+    /// `/dev/dri/renderDN` — major 226, minor 128 + N.
+    #[must_use]
+    pub const fn drm_render(n: u32) -> Self {
+        Self::new(226, 128 + n)
+    }
+
+    /// `/dev/sdX` (SCSI block device) — major 8, minor N.
+    #[must_use]
+    pub const fn block_scsi(n: u32) -> Self {
+        Self::new(8, n)
+    }
+}
+
+// ── DevFs ───────────────────────────────────────────────────────────────
 
 /// The devfs filesystem.
 pub struct DevFs {
-    /// Root directory containing device entries.
+    /// Root directory.
     root: Arc<DevFsDir>,
 }
 
@@ -32,41 +119,18 @@ impl Default for DevFs {
 }
 
 impl DevFs {
-    /// Creates a new devfs with standard device entries (null, zero).
+    /// Creates a new devfs with standard device entries (`null`, `zero`).
     #[must_use]
     pub fn new() -> Self {
-        use alloc::collections::BTreeMap;
-        use alloc::sync::Arc;
-
-        let mut entries: BTreeMap<&'static str, Arc<dyn Inode>> = BTreeMap::new();
-        entries.insert("null", Arc::new(DevNull));
-        entries.insert("zero", Arc::new(DevZero));
-
-        Self {
-            root: Arc::new(DevFsDir { entries }),
-        }
+        let root = DevFsDir::new();
+        root.insert("null".into(), Arc::new(DevNull));
+        root.insert("zero".into(), Arc::new(DevZero));
+        Self { root }
     }
 
-    /// Creates a new devfs with standard devices plus additional entries.
-    ///
-    /// Use this to register kernel-specific devices like `/dev/console`.
-    #[must_use]
-    pub fn with_extra_devices(
-        devices: impl IntoIterator<Item = (&'static str, Arc<dyn Inode>)>,
-    ) -> Self {
-        use alloc::collections::BTreeMap;
-        use alloc::sync::Arc;
-
-        let mut entries: BTreeMap<&'static str, Arc<dyn Inode>> = BTreeMap::new();
-        entries.insert("null", Arc::new(DevNull));
-        entries.insert("zero", Arc::new(DevZero));
-        for (name, inode) in devices {
-            entries.insert(name, inode);
-        }
-
-        Self {
-            root: Arc::new(DevFsDir { entries }),
-        }
+    /// Returns a clone of the root [`DevFsDir`] for dynamic device registration.
+    pub fn root_dir(&self) -> Arc<DevFsDir> {
+        self.root.clone()
     }
 }
 
@@ -80,10 +144,73 @@ impl FileSystem for DevFs {
     }
 }
 
-/// The devfs root directory.
-struct DevFsDir {
-    /// Fixed device entries.
-    entries: BTreeMap<&'static str, Arc<dyn Inode>>,
+// ── DevFsDirInner ───────────────────────────────────────────────────────
+
+/// Interior state of a devfs directory.
+struct DevFsDirInner {
+    /// Non-directory device entries.
+    devices: BTreeMap<String, Arc<dyn Inode>>,
+    /// Subdirectory entries (kept separately for safe `get_or_create_dir`).
+    subdirs: BTreeMap<String, Arc<DevFsDir>>,
+}
+
+impl DevFsDirInner {
+    const fn new() -> Self {
+        Self {
+            devices: BTreeMap::new(),
+            subdirs: BTreeMap::new(),
+        }
+    }
+}
+
+// ── DevFsDir ────────────────────────────────────────────────────────────
+
+/// A devfs directory with runtime-mutable entries.
+///
+/// Uses a [`SpinLock`] for interior mutability so devices can be registered
+/// after the filesystem is mounted.
+pub struct DevFsDir {
+    inner: SpinLock<DevFsDirInner>,
+}
+
+impl DevFsDir {
+    /// Creates an empty devfs directory.
+    #[must_use]
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            inner: SpinLock::leveled("devfs_dir", 5, DevFsDirInner::new()),
+        })
+    }
+
+    /// Insert (or replace) a device entry. Returns the previous inode, if any.
+    ///
+    /// If `inode` is itself a [`DevFsDir`], use [`get_or_create_dir`] instead
+    /// for proper subdirectory tracking.
+    pub fn insert(&self, name: String, inode: Arc<dyn Inode>) -> Option<Arc<dyn Inode>> {
+        self.inner.lock().devices.insert(name, inode)
+    }
+
+    /// Remove a device entry. Returns the removed inode, if any.
+    pub fn remove(&self, name: &str) -> Option<Arc<dyn Inode>> {
+        let mut inner = self.inner.lock();
+        // Check both maps.
+        if let removed @ Some(_) = inner.devices.remove(name) {
+            return removed;
+        }
+        inner.subdirs.remove(name).map(|arc| arc as Arc<dyn Inode>)
+    }
+
+    /// Return the existing subdirectory named `name`, or create a new empty
+    /// [`DevFsDir`] and insert it, then return it.
+    pub fn get_or_create_dir(&self, name: &str) -> Arc<DevFsDir> {
+        let mut inner = self.inner.lock();
+        if let Some(existing) = inner.subdirs.get(name) {
+            return existing.clone();
+        }
+        let dir = DevFsDir::new();
+        inner.subdirs.insert(name.to_string(), dir.clone());
+        dir
+    }
 }
 
 impl Inode for DevFsDir {
@@ -119,19 +246,33 @@ impl Inode for DevFsDir {
         &'a self,
         name: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<Arc<dyn Inode>, FsError>> + Send + 'a>> {
-        Box::pin(async move { self.entries.get(name).cloned().ok_or(FsError::NotFound) })
+        Box::pin(async move {
+            let inner = self.inner.lock();
+            // Check subdirs first, then devices.
+            if let Some(dir) = inner.subdirs.get(name) {
+                return Ok(dir.clone() as Arc<dyn Inode>);
+            }
+            inner.devices.get(name).cloned().ok_or(FsError::NotFound)
+        })
     }
 
     fn readdir(&self) -> Pin<Box<dyn Future<Output = Result<Vec<DirEntry>, FsError>> + Send + '_>> {
         Box::pin(async move {
-            Ok(self
-                .entries
-                .iter()
-                .map(|(name, inode)| DirEntry {
-                    name: (*name).to_string(),
+            let inner = self.inner.lock();
+            let mut entries = Vec::with_capacity(inner.devices.len() + inner.subdirs.len());
+            for name in inner.subdirs.keys() {
+                entries.push(DirEntry {
+                    name: name.clone(),
+                    inode_type: InodeType::Directory,
+                });
+            }
+            for (name, inode) in &inner.devices {
+                entries.push(DirEntry {
+                    name: name.clone(),
                     inode_type: inode.inode_type(),
-                })
-                .collect())
+                });
+            }
+            Ok(entries)
         })
     }
 
@@ -146,9 +287,22 @@ impl Inode for DevFsDir {
 
     fn unlink<'a>(
         &'a self,
-        _name: &'a str,
+        name: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), FsError>> + Send + 'a>> {
-        Box::pin(async { Err(FsError::NotSupported) })
+        Box::pin(async move {
+            let mut inner = self.inner.lock();
+            if inner.devices.remove(name).is_some() {
+                return Ok(());
+            }
+            if inner.subdirs.remove(name).is_some() {
+                return Ok(());
+            }
+            Err(FsError::NotFound)
+        })
+    }
+
+    fn as_devfs_dir(&self) -> Option<&DevFsDir> {
+        Some(self)
     }
 }
 
@@ -168,6 +322,10 @@ impl Inode for DevNull {
 
     fn permissions(&self) -> Permissions {
         Permissions::read_write()
+    }
+
+    fn dev_number(&self) -> crate::DevNumber {
+        crate::DevNumber::NULL
     }
 
     fn read<'a>(
@@ -230,6 +388,10 @@ impl Inode for DevZero {
 
     fn permissions(&self) -> Permissions {
         Permissions::read_write()
+    }
+
+    fn dev_number(&self) -> crate::DevNumber {
+        crate::DevNumber::ZERO
     }
 
     fn read<'a>(

@@ -109,14 +109,18 @@ hadron_syscall_macros::define_syscalls! {
         /// Stat information for a vnode.
         #[derive(Debug, Clone, Copy)]
         struct StatInfo {
-            /// Inode type: 0=file, 1=directory, 2=chardev.
+            /// Inode type: 0=file, 1=directory, 2=chardev, 3=symlink, 4=blockdev.
             inode_type: u8,
             /// Padding for alignment.
-            _pad: [u8; 3],
+            _pad: [u8; 7],
             /// File size in bytes (0 for directories and devices).
             size: u64,
             /// Permissions: bit 0=read, bit 1=write, bit 2=exec.
             permissions: u32,
+            /// Padding to align rdev.
+            _pad2: u32,
+            /// Device number (makedev encoding) for char/block devices; 0 for others.
+            rdev: u64,
         }
 
         /// Framebuffer information returned by `FBIOGET_INFO` ioctl.
@@ -300,6 +304,8 @@ hadron_syscall_macros::define_syscalls! {
         INODE_TYPE_CHARDEV: u8 = 2;
         /// Inode type: symbolic link.
         INODE_TYPE_SYMLINK: u8 = 3;
+        /// Inode type: block device.
+        INODE_TYPE_BLOCKDEV: u8 = 4;
         /// Memory protection: allow reads.
         PROT_READ: usize = 0x1;
         /// Memory protection: allow writes.

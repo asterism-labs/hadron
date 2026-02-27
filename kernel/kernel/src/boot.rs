@@ -556,50 +556,65 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
             }
         }
 
-        // Mount devfs at /dev (kernel-internal, not from driver registry).
-        // Register /dev/console (active-VT alias) and /dev/tty0..5 (per-VT).
-        let mut dev_devices: alloc::vec::Vec<(&str, Arc<dyn fs::Inode>)> =
-            alloc::vec::Vec::with_capacity(8);
-        dev_devices.push((
+        // Mount devfs at /dev with dynamic registration.
+        let devfs = Arc::new(fs::devfs::DevFs::new());
+        let devfs_root = devfs.root_dir();
+        fs::devfs_registry::set_root(devfs_root);
+        let devfs_name = devfs.name();
+        fs::vfs::with_vfs_mut(|vfs| vfs.mount("/dev", devfs));
+        crate::kinfo!("VFS: Mounted {} at /dev", devfs_name);
+
+        // Register /dev/console (active-VT alias).
+        fs::devfs_registry::register_device(
             "console",
             Arc::new(fs::devfs::DevConsole) as Arc<dyn fs::Inode>,
-        ));
+        );
+
+        // Register /dev/tty0..5 (per-VT).
         const TTY_NAMES: [&str; crate::tty::MAX_TTYS] =
             ["tty0", "tty1", "tty2", "tty3", "tty4", "tty5"];
         for i in 0..crate::tty::MAX_TTYS {
             if let Some(tty_ref) = crate::tty::tty(i) {
-                dev_devices.push((
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "MAX_TTYS is small (6), truncation impossible"
+                )]
+                fs::devfs_registry::register_device(
                     TTY_NAMES[i],
-                    Arc::new(crate::tty::device::DevTty::new(tty_ref)) as Arc<dyn fs::Inode>,
-                ));
+                    Arc::new(crate::tty::device::DevTty::new_indexed(tty_ref, i as u32))
+                        as Arc<dyn fs::Inode>,
+                );
             }
         }
+
         // Register /dev/ptmx and /dev/pts for pseudoterminals.
-        dev_devices.push((
+        fs::devfs_registry::register_device(
             "ptmx",
             Arc::new(crate::tty::pty::DevPtmx) as Arc<dyn fs::Inode>,
-        ));
-        dev_devices.push((
+        );
+        fs::devfs_registry::register_device(
             "pts",
             Arc::new(crate::tty::pty::DevPtsDir) as Arc<dyn fs::Inode>,
-        ));
+        );
 
         // Register /dev/mouse for PS/2 mouse input.
         crate::drivers::dev_mouse::init();
-        dev_devices.push((
+        fs::devfs_registry::register_device(
             "mouse",
             Arc::new(crate::drivers::dev_mouse::DevMouse::global()) as Arc<dyn fs::Inode>,
-        ));
+        );
 
         // Register /dev/compositor and /dev/compositor_listen for dynamic
-        // window creation. Clients open /dev/compositor; the compositor
-        // accepts connections via /dev/compositor_listen.
+        // window creation.
         let (compositor_listener, compositor_connector) = crate::ipc::service::create_service();
-        dev_devices.push(("compositor", compositor_connector as Arc<dyn fs::Inode>));
-        dev_devices.push((
+        fs::devfs_registry::register_device(
+            "compositor",
+            compositor_connector as Arc<dyn fs::Inode>,
+        );
+        fs::devfs_registry::register_device(
             "compositor_listen",
             compositor_listener as Arc<dyn fs::Inode>,
-        ));
+        );
 
         // Register /dev/fb0 if a framebuffer device is available.
         // Prefer virtio-gpu, fall back to bochs-vga.
@@ -607,17 +622,18 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
             dr.take_framebuffer("virtio-gpu-0")
                 .or_else(|| dr.take_framebuffer("bochs-vga-0"))
         }) {
-            dev_devices.push((
+            fs::devfs_registry::register_device(
                 "fb0",
                 Arc::new(crate::drivers::dev_fb::DevFramebuffer::new(fb)) as Arc<dyn fs::Inode>,
-            ));
+            );
             crate::kinfo!("DevFs: Registered /dev/fb0");
         }
 
-        let devfs = Arc::new(fs::devfs::DevFs::with_extra_devices(dev_devices));
-        let devfs_name = devfs.name();
-        fs::vfs::with_vfs_mut(|vfs| vfs.mount("/dev", devfs));
-        crate::kinfo!("VFS: Mounted {} at /dev", devfs_name);
+        // Mount procfs at /proc for process introspection (Mesa, musl compatibility).
+        let procfs = Arc::new(crate::fs::procfs::ProcFs::new());
+        let procfs_name = procfs.name();
+        fs::vfs::with_vfs_mut(|vfs| vfs.mount("/proc", procfs));
+        crate::kinfo!("VFS: Mounted {} at /proc", procfs_name);
 
         // Mount block-device-backed filesystems discovered from the registry.
         // Each block device is passed to registered block FS drivers until one succeeds.

@@ -6,8 +6,8 @@
 
 // Re-export everything from hadron-fs root.
 pub use hadron_fs::{
-    DirEntry, FileSystem, FsError, Inode, InodeType, Permissions, noop_waker, poll_immediate,
-    try_poll_immediate,
+    DevNumber, DirEntry, FileSystem, FsError, Inode, InodeType, Permissions, noop_waker,
+    poll_immediate, try_poll_immediate,
 };
 
 // Re-export submodules that don't need kernel extension.
@@ -17,4 +17,6 @@ pub use hadron_fs::path;
 // Kernel-extended modules.
 pub mod block_adapter;
 pub mod devfs;
+pub mod devfs_registry;
+pub mod procfs;
 pub mod vfs;

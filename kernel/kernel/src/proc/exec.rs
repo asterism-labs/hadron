@@ -567,6 +567,9 @@ pub fn spawn_process(
         *process.cwd.lock() = parent.cwd.lock().clone();
     }
 
+    // Record the executable path for /proc/<pid>/exe.
+    *process.exe_path.lock() = path.into();
+
     let process = Arc::new(process);
     super::ProcessTable::register(&process);
 
@@ -653,6 +656,9 @@ pub fn handle_execve(
 
     // Replace the process's address space (drops the old one).
     let _old_space = process.replace_address_space(new_space);
+
+    // Update the executable path for /proc/<pid>/exe.
+    *process.exe_path.lock() = String::from(path);
 
     // Switch to the new user CR3 for subsequent operations.
     unsafe {
