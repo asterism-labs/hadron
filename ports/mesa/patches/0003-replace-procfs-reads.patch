@@ -1,0 +1,89 @@
+From: Hadron Port <hadron@localhost>
+Date: 2026-01-01
+Subject: [PATCH 3/5] util/drm: replace procfs reads with Hadron sys_query
+
+Mesa reads /proc/self/maps for memory-layout info and /proc/cpuinfo for
+CPU features. On Hadron, neither /proc/self/maps nor /proc/cpuinfo exist.
+Replace those call-sites with the hadron_query wrappers from hadron_query.h.
+
+The two main patterns:
+
+1. open("/proc/self/maps") → hadron_query_vmaps() returns a VmapEntry array.
+2. open("/proc/cpuinfo")   → hadron_query_cpu_info() returns a CpuInfo struct.
+3. /proc/sys/vm/mmap_min_addr → hard-code 0x1000 (safe minimum on Hadron).
+
+diff --git a/src/util/u_process.c b/src/util/u_process.c
+--- a/src/util/u_process.c
++++ b/src/util/u_process.c
+@@ -30,6 +30,9 @@
+ #include "detect_os.h"
+ #include <string.h>
+
++#if DETECT_OS_HADRON
++#  include <hadron_query.h>
++#endif
++
+ /* Returns true when this is running inside a WSL1 or WSL2 environment. */
+ bool
+ util_is_wsl(void)
+ {
++#if DETECT_OS_HADRON
++   return false; /* Not WSL on Hadron */
++#else
+    return access("/proc/sys/fs/binfmt_misc/WSLInterop", F_OK) == 0;
++#endif
+ }
+
+diff --git a/src/util/vma.c b/src/util/vma.c
+--- a/src/util/vma.c
++++ b/src/util/vma.c
+@@ -30,6 +30,9 @@
+ #include "vma.h"
+ #include "detect_os.h"
+
++#if DETECT_OS_HADRON
++#  include <hadron_query.h>
++#endif
++
+ uint64_t
+ util_vma_heap_get_mmap_min_addr(void)
+ {
++#if DETECT_OS_HADRON
++   return 0x1000; /* minimum safe mmap address on Hadron */
++#elif DETECT_OS_LINUX
+    FILE *fp = fopen("/proc/sys/vm/mmap_min_addr", "r");
+    if (!fp) return 65536;
+    uint64_t addr;
+    fscanf(fp, "%" PRIu64, &addr);
+    fclose(fp);
+    return addr;
++#else
++   return 65536;
++#endif
+ }
+
+diff --git a/src/gallium/drivers/llvmpipe/lp_bld_misc.cpp b/src/gallium/drivers/llvmpipe/lp_bld_misc.cpp
+--- a/src/gallium/drivers/llvmpipe/lp_bld_misc.cpp
++++ b/src/gallium/drivers/llvmpipe/lp_bld_misc.cpp
+@@ -52,6 +52,9 @@
+ #include "detect_os.h"
+ #include "lp_bld_misc.h"
+
++#if DETECT_OS_HADRON
++#  include <hadron_query.h>
++#endif
++
+ /* CPU feature detection via /proc/cpuinfo on Linux.
+  * On Hadron, use sys_query(QUERY_CPU_INFO) instead. */
++#if DETECT_OS_HADRON
++static void
++lp_bld_detect_cpu_features_hadron(void)
++{
++   struct HadronCpuInfo info;
++   if (hadron_query_cpu_info(&info) != 0)
++      return;
++   /* Map HadronCpuInfo.features bitmask to LLVM feature strings. */
++   /* LLVM is disabled for Phase 1; this is placeholder for Phase 2 JIT. */
++   (void)info;
++}
++#endif

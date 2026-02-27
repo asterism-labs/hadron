@@ -1,0 +1,52 @@
+From: Hadron Port <hadron@localhost>
+Date: 2026-01-01
+Subject: [PATCH 6/6] loader: handle absent /sys/class/drm on Hadron
+
+On Hadron, lavapipe is loaded via VK_ICD_FILENAMES rather than through
+/dev/dri node enumeration.  The DRM loader's sysfs scan runs regardless
+and crashes if /sys/class/drm does not exist (opendir returns NULL and
+the code dereferences it without checking).
+
+Make the scan a no-op on Hadron: log a debug message and return an empty
+device list.  The Vulkan ICD loading path is unaffected.
+
+diff --git a/src/loader/loader.c b/src/loader/loader.c
+--- a/src/loader/loader.c
++++ b/src/loader/loader.c
+@@ -48,6 +48,7 @@
+ #include "util/os_misc.h"
+ #include "util/u_debug.h"
+ #include "detect_os.h"
++#include "util/log.h"
+
+ #ifdef HAVE_LIBDRM
+ #include <xf86drm.h>
+@@ -66,6 +67,18 @@ loader_open_device(const char *device_name)
+    return fd;
+ }
+
++#if DETECT_OS_HADRON
++/* On Hadron, hardware DRM nodes are not used for lavapipe (software ICD).
++ * Return an empty list so the loader does not crash on an absent sysfs. */
++char **
++loader_get_render_node_siblings(const char *dev_path, int *num_siblings)
++{
++   (void)dev_path;
++   mesa_logd("loader: DRM sysfs scan skipped on Hadron (using VK_ICD_FILENAMES)");
++   *num_siblings = 0;
++   return NULL;
++}
++#else /* !DETECT_OS_HADRON */
++
+ static char *
+ sysfs_get_value(const char *sysfs_path, const char *attribute)
+ {
+@@ -172,6 +185,8 @@ loader_get_render_node_siblings(const char *dev_path, int *num_siblings)
+    return siblings;
+ }
+
++#endif /* DETECT_OS_HADRON */
++
+ int
+ loader_open_render_node(const char *name)
+ {

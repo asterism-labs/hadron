@@ -1,0 +1,33 @@
+From: Hadron Port <hadron@localhost>
+Date: 2026-01-01
+Subject: [PATCH 1/5] util: add DETECT_OS_HADRON platform branch
+
+Adds Hadron to Mesa's OS detection header so that platform-specific code
+paths can distinguish Hadron from generic Linux/POSIX builds.
+
+diff --git a/src/util/detect_os.h b/src/util/detect_os.h
+--- a/src/util/detect_os.h
++++ b/src/util/detect_os.h
+@@ -34,6 +34,10 @@
+ #define DETECT_OS_APPLE 0
+ #endif
+
++#if defined(__hadron__)
++#define DETECT_OS_HADRON 1
++#else
++#define DETECT_OS_HADRON 0
++#endif
++
+ #if defined(__linux__)
+ #define DETECT_OS_LINUX 1
+ #else
+@@ -88,7 +92,7 @@ extern "C" {
+  */
+ #define DETECT_OS_POSIX (DETECT_OS_ANDROID || DETECT_OS_APPLE || \
+                          DETECT_OS_BSD || \
+-                         DETECT_OS_LINUX || DETECT_OS_SOLARIS || DETECT_OS_HAIKU)
++                         DETECT_OS_LINUX || DETECT_OS_HADRON || \
++                         DETECT_OS_SOLARIS || DETECT_OS_HAIKU)
+
+ #if DETECT_OS_POSIX
+ #define DETECT_OS_UNIX 1

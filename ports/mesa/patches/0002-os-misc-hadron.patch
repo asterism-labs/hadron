@@ -1,0 +1,50 @@
+From: Hadron Port <hadron@localhost>
+Date: 2026-01-01
+Subject: [PATCH 2/5] util: implement os_misc sysconf for Hadron
+
+On Hadron, sysconf(_SC_NPROCESSORS_ONLN) uses sys_query(QUERY_CPU_INFO)
+rather than reading /proc/cpuinfo or calling a Linux-specific syscall.
+
+diff --git a/src/util/os_misc.c b/src/util/os_misc.c
+--- a/src/util/os_misc.c
++++ b/src/util/os_misc.c
+@@ -28,6 +28,7 @@
+ #include "os_misc.h"
+ #include "detect_os.h"
+
++#if DETECT_OS_HADRON
++#  include <hadron_query.h>
++#endif
++
+ #if DETECT_OS_UNIX
+ #include <unistd.h>
+ #endif
+@@ -55,6 +59,13 @@ os_get_num_cpu(void)
+ {
++#if DETECT_OS_HADRON
++   struct HadronCpuInfo info;
++   if (hadron_query_cpu_info(&info) == 0)
++      return (int)info.core_count;
++   return 1; /* safe fallback */
++
++#elif defined(__linux__)
+    long nproc = sysconf(_SC_NPROCESSORS_ONLN);
+    return nproc > 0 ? (int)nproc : 1;
++#else
++   return 1;
++#endif
+ }
+
+diff --git a/src/util/os_misc.h b/src/util/os_misc.h
+--- a/src/util/os_misc.h
++++ b/src/util/os_misc.h
+@@ -38,6 +38,10 @@ extern "C" {
+
+ #endif
+
++#if DETECT_OS_HADRON
++/* On Hadron, sysconf is not provided by libc; use hadron_query_cpu_info. */
++long sysconf(int name);  /* stub — returns -1 for unsupported names */
++#endif
++
+ int os_get_num_cpu(void);

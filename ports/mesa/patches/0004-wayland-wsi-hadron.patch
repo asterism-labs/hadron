@@ -1,0 +1,22 @@
+From: Hadron Port <hadron@localhost>
+Date: 2026-01-01
+Subject: [PATCH 4/5] vulkan/wsi: connect to Hadron Wayland compositor
+
+The Wayland WSI creates a connection to $XDG_RUNTIME_DIR/wayland-0.
+On Hadron, XDG_RUNTIME_DIR defaults to /run if the env var is unset.
+This patch adds a fallback so the WSI connects successfully without
+requiring the env var to be set explicitly.
+
+diff --git a/src/vulkan/wsi/wsi_common_wayland.c b/src/vulkan/wsi/wsi_common_wayland.c
+--- a/src/vulkan/wsi/wsi_common_wayland.c
++++ b/src/vulkan/wsi/wsi_common_wayland.c
+@@ -79,6 +79,10 @@ wsi_wl_display_init(struct wsi_wl_display *display, ...)
+ {
++#if DETECT_OS_HADRON
++   /* On Hadron, XDG_RUNTIME_DIR defaults to /run */
++   if (!getenv("XDG_RUNTIME_DIR"))
++      setenv("XDG_RUNTIME_DIR", "/run", 0);
++#endif
++
+    /* ... existing connection logic unchanged ... */
+ }

@@ -1,0 +1,81 @@
+# Meson cross-compilation file for x86_64-unknown-hadron.
+#
+# DO NOT edit SYSROOT_PATH — it is replaced by sysroot-setup.sh.
+#
+# Usage (automated):
+#   ./ports/mesa/sysroot-setup.sh   # sets SYSROOT_PATH
+#   ./ports/mesa/build-mesa.sh      # clones Mesa, applies patches, builds
+#
+# Manual usage:
+#   SYSROOT=<abs-path-to-sysroot>
+#   sed -i "s|SYSROOT_PATH|$SYSROOT|g" ports/mesa/hadron.cross
+#   meson setup build-hadron --cross-file ports/mesa/hadron.cross \
+#     -Dvulkan-drivers=swrast -Dgallium-drivers= -Dplatforms=wayland \
+#     -Dshared-glapi=disabled -Dllvm=disabled -Dgles1=disabled \
+#     -Dgles2=disabled -Dopengl=false -Degl=disabled -Dglx=disabled
+
+[binaries]
+c               = 'clang'
+cpp             = 'clang++'
+ar              = 'llvm-ar'
+strip           = 'llvm-strip'
+pkgconfig       = 'pkg-config'
+# wayland-scanner runs on the build host (generates protocol C code):
+wayland_scanner = 'wayland-scanner'
+
+[built-in options]
+c_args = [
+  '--target=x86_64-unknown-linux-musl',
+  '-D__hadron__=1',
+  '-DHAVE_HADRON',
+  '-DDETECT_OS_HADRON=1',
+  '-D_GNU_SOURCE',
+  '-fPIC',
+  '-fno-stack-protector',
+  '-nostdinc',
+  '-isystem', 'SYSROOT_PATH/usr/include',
+]
+cpp_args = [
+  '--target=x86_64-unknown-linux-musl',
+  '-D__hadron__=1',
+  '-DHAVE_HADRON',
+  '-DDETECT_OS_HADRON=1',
+  '-D_GNU_SOURCE',
+  '-fPIC',
+  '-fno-stack-protector',
+  '-nostdinc',
+  '-nostdinc++',
+  '-isystem', 'SYSROOT_PATH/usr/include',
+]
+c_link_args = [
+  '--target=x86_64-unknown-linux-musl',
+  '-fuse-ld=lld',
+  '-L', 'SYSROOT_PATH/usr/lib',
+  '-lhadron_libc',
+  '-lcompiler_rt',
+  '-nostdlib',
+  '-shared',
+]
+cpp_link_args = [
+  '--target=x86_64-unknown-linux-musl',
+  '-fuse-ld=lld',
+  '-L', 'SYSROOT_PATH/usr/lib',
+  '-lhadron_libc',
+  '-lcompiler_rt',
+  '-nostdlib',
+  '-shared',
+]
+
+[host_machine]
+system     = 'hadron'
+cpu_family = 'x86_64'
+cpu        = 'x86_64'
+endian     = 'little'
+
+[properties]
+# Absolute path to the assembled hadron-libc sysroot (headers + libs).
+# Replaced by sysroot-setup.sh before the first build.
+sys_root = 'SYSROOT_PATH'
+
+# Prevent Meson from running cross-compiled test binaries on the build host.
+needs_exe_wrapper = true

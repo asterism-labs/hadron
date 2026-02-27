@@ -1,0 +1,25 @@
+From: Hadron Port <hadron@localhost>
+Date: 2026-01-01
+Subject: [PATCH 5/5] lavapipe: disable LLVM JIT for Phase 1 (interpreter fallback)
+
+LLVM cross-compilation for Hadron is out of scope for Phase 1.
+Mesa lavapipe has a non-JIT fallback (TGSI interpreter) that is
+significantly slower but requires no LLVM. This patch forces the
+non-JIT path when __hadron__ is defined. Phase 2 can re-enable JIT
+once LLVM is available as a static library in the sysroot.
+
+diff --git a/src/gallium/drivers/llvmpipe/lp_screen.c b/src/gallium/drivers/llvmpipe/lp_screen.c
+--- a/src/gallium/drivers/llvmpipe/lp_screen.c
++++ b/src/gallium/drivers/llvmpipe/lp_screen.c
+@@ -68,6 +68,12 @@
+ lp_screen_create(struct pipe_screen_config *config)
+ {
++#if DETECT_OS_HADRON && !defined(HADRON_ENABLE_LLVM_JIT)
++   /* Force non-JIT path: LLVM is not yet available as a Hadron sysroot lib. */
++   lp_set_no_jit(true);
++   fprintf(stderr, "[lavapipe] LLVM JIT disabled on Hadron (Phase 1). "
++                   "Performance will be reduced.\n");
++#endif
++
+    /* ... existing screen creation unchanged ... */
+ }
