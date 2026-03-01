@@ -55,7 +55,17 @@ fn build_runner_config(config: &ResolvedConfig, is_test: bool) -> cargo_image_ru
     }
     // The runner adds -serial mon:stdio internally; strip any -serial from
     // the user-provided args to avoid duplicate stdio device errors.
-    let qemu_extra_args = strip_runner_managed_args(&qemu_extra_args);
+    let mut qemu_extra_args = strip_runner_managed_args(&qemu_extra_args);
+
+    // Enable hardware-accelerated virtualization on macOS. QEMU 7.0+ falls
+    // back to TCG automatically when HVF is unavailable (e.g. inside a VM).
+    if cfg!(target_os = "macos") {
+        qemu_extra_args.extend(["-accel".into(), "hvf".into()]);
+    }
+
+    // Expose the maximum CPU feature set to the guest so userspace SSE/SSE4.2
+    // code runs natively instead of being trapped by TCG.
+    qemu_extra_args.extend(["-cpu".into(), "max".into()]);
 
     let mut cfg = cargo_image_runner::Config::default();
     cfg.boot.boot_type = BootType::Bios;
