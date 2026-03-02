@@ -1291,6 +1291,15 @@ fn register_tests_api(engine: &mut Engine, model: SharedModel) {
             model.tests.kernel_tests_linker_script = Some(path.into());
         }
     );
+
+    builder_method!(
+        engine,
+        "userspace_tests_dir",
+        TestsBuilder,
+        |builder, model, dir: &str| {
+            model.tests.userspace_tests_dir = Some(dir.into());
+        }
+    );
 }
 
 #[derive(Debug, Clone)]

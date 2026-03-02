@@ -609,3 +609,253 @@ pub fn run_ktest_kernel(
     println!("\nRunning ktest kernel...");
     run::run_kernel_tests(config, kernel_binary, extra_args)
 }
+
+// ===========================================================================
+// Userspace tests
+// ===========================================================================
+
+/// Compile userspace test binaries from `userspace/tests/*.rs`.
+///
+/// Resolves the `utest-deps` group (which provides `hadron-utest`), then
+/// compiles each `.rs` file in the configured tests directory as a standalone
+/// ELF targeting `x86_64-unknown-hadron-user`.
+///
+/// Returns `[(test_name, binary_path)]` pairs.
+pub fn compile_userspace_tests(
+    model: &BuildModel,
+    state: &mut PipelineState,
+) -> Result<Vec<(String, PathBuf)>> {
+    let tests_dir = match &state.config.tests.userspace_tests_dir {
+        Some(dir) => dir.clone(),
+        None => bail!("userspace_tests_dir not configured"),
+    };
+
+    let utest_target = "x86_64-unknown-hadron-user";
+
+    let target_spec = state
+        .target_specs
+        .get(utest_target)
+        .ok_or_else(|| {
+            anyhow::anyhow!("target spec for '{utest_target}' not resolved (run build first)")
+        })?
+        .clone();
+    let sysroot_dir = state
+        .sysroots
+        .get(utest_target)
+        .ok_or_else(|| anyhow::anyhow!("sysroot for '{utest_target}' not built (run build first)"))?
+        .clone();
+
+    // Compile utest-deps group (hadron-utest, etc.) if not already compiled.
+    if model.groups.contains_key("utest-deps") {
+        println!("\nCompiling utest dependencies...");
+        let sysroot_src = sysroot::sysroot_src_dir()?;
+        let resolved_utest_deps = crate_graph::resolve_group_from_model(
+            model,
+            "utest-deps",
+            &state.config.root,
+            &sysroot_src,
+        )?;
+
+        for krate in &resolved_utest_deps {
+            if state.artifacts.get(&krate.name).is_some() {
+                println!("  Skipping {} (already compiled)", krate.name);
+                continue;
+            }
+            println!("  Compiling {}...", krate.name);
+            let artifact = compile::compile_crate(
+                krate,
+                &state.config,
+                Some(&target_spec),
+                Some(&sysroot_dir),
+                &state.artifacts,
+                None,
+                None,
+                CompileMode::Build,
+                &[],
+            )?;
+            state.artifacts.insert(&krate.name, artifact);
+        }
+    }
+
+    // Discover test files.
+    let tests_path = state.config.root.join(&tests_dir);
+    let mut test_files: Vec<PathBuf> = Vec::new();
+    if tests_path.is_dir() {
+        for entry in std::fs::read_dir(&tests_path)
+            .with_context(|| format!("reading test dir {}", tests_path.display()))?
+        {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().is_some_and(|ext| ext == "rs") {
+                test_files.push(path);
+            }
+        }
+    }
+    test_files.sort();
+
+    if test_files.is_empty() {
+        println!("No userspace test files found in {tests_dir}");
+        return Ok(Vec::new());
+    }
+
+    println!(
+        "\nCompiling {} userspace test binaries...",
+        test_files.len()
+    );
+
+    let out_dir = state.config.root.join("build/utests");
+    std::fs::create_dir_all(&out_dir)?;
+
+    // Library search path for userspace rlibs.
+    let lib_dir = state
+        .config
+        .root
+        .join("build/kernel")
+        .join(utest_target)
+        .join("debug");
+
+    let mut test_binaries = Vec::new();
+    for test_file in &test_files {
+        let test_name = test_file.file_stem().unwrap().to_string_lossy().to_string();
+        println!("  Compiling userspace test {test_name}...");
+
+        let binary = compile_utest_binary(
+            test_file,
+            &test_name,
+            &state.config,
+            &target_spec,
+            &sysroot_dir,
+            &lib_dir,
+            &out_dir,
+        )?;
+        test_binaries.push((test_name, binary));
+    }
+
+    println!(
+        "All {} userspace test binaries compiled.",
+        test_binaries.len()
+    );
+    Ok(test_binaries)
+}
+
+/// Compile a single userspace test binary.
+fn compile_utest_binary(
+    test_file: &Path,
+    test_name: &str,
+    config: &ResolvedConfig,
+    target_spec: &str,
+    sysroot_dir: &Path,
+    lib_dir: &Path,
+    out_dir: &Path,
+) -> Result<PathBuf> {
+    let mut cmd = Command::new("rustc");
+    cmd.arg("--edition=2024");
+    cmd.arg("-Zunstable-options"); // required for custom target spec JSON
+    cmd.arg("-Cpanic=abort");
+    cmd.arg(format!("-Copt-level={}", config.profile.opt_level));
+
+    if config.profile.debug_info {
+        cmd.arg("-Cdebuginfo=2");
+    }
+
+    // Target and sysroot.
+    cmd.arg("--target").arg(target_spec);
+    cmd.arg("--sysroot").arg(sysroot_dir);
+
+    // Search path for target-side transitive deps.
+    cmd.arg("-L").arg(lib_dir);
+    // Proc-macro dylibs (e.g. hadron_syscall_macros) live in the host dir.
+    cmd.arg("-L").arg(config.root.join("build/host"));
+
+    // Extern rlibs directly from the lib_dir — more robust than artifact map
+    // lookups since gluon crate names and Rust crate names can differ.
+    let utest_rlib = lib_dir.join("libhadron_utest.rlib");
+    if utest_rlib.exists() {
+        cmd.arg("--extern")
+            .arg(format!("hadron_utest={}", utest_rlib.display()));
+    }
+
+    // The syscall crate is built by gluon as crate name "hadron_syscall_user"
+    // (sanitized from "hadron-syscall-user"). hadron_utest's rlib records the
+    // dep under that same crate name, so we must use it as the extern alias.
+    let syscall_rlib = lib_dir.join("libhadron_syscall_user.rlib");
+    if syscall_rlib.exists() {
+        cmd.arg("--extern")
+            .arg(format!("hadron_syscall_user={}", syscall_rlib.display()));
+    }
+
+    // Output directory.
+    cmd.arg("--out-dir").arg(out_dir);
+
+    // Source file.
+    cmd.arg(test_file);
+
+    let output = cmd
+        .output()
+        .with_context(|| format!("failed to run rustc for utest {test_name}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("failed to compile utest '{test_name}':\n{stderr}");
+    }
+
+    let binary = out_dir.join(test_name);
+    if !binary.exists() {
+        bail!("expected utest binary not found: {}", binary.display());
+    }
+
+    Ok(binary)
+}
+
+/// Run compiled userspace test binaries in QEMU.
+///
+/// For each binary, builds a minimal CPIO (binary as `/bin/init`) and boots
+/// the standard kernel with `--utest` on the cmdline. QEMU exits 33 on pass
+/// (PID 1 exits 0) or 35 on fail.
+pub fn run_userspace_test_binaries(
+    config: &ResolvedConfig,
+    kernel_binary: &Path,
+    binaries: &[(String, PathBuf)],
+    extra_args: &[String],
+) -> Result<()> {
+    if binaries.is_empty() {
+        println!("No userspace test binaries to run.");
+        return Ok(());
+    }
+
+    println!("\nRunning {} userspace tests...", binaries.len());
+
+    let mut passed = 0;
+    let mut failed = Vec::new();
+
+    for (name, binary) in binaries {
+        println!("  Running userspace test {name}...");
+        let cpio = crate::artifact::utest_cpio::build_utest_cpio(&config.root, name, binary)?;
+        match run::run_userspace_test(config, kernel_binary, name, &cpio, extra_args) {
+            Ok(()) => {
+                println!("  {name}: ok");
+                passed += 1;
+            }
+            Err(e) => {
+                println!("  {name}: FAILED ({e:#})");
+                failed.push(name.clone());
+            }
+        }
+    }
+
+    println!(
+        "\nUserspace test results: {} passed, {} failed",
+        passed,
+        failed.len()
+    );
+
+    if !failed.is_empty() {
+        println!("Failed tests:");
+        for name in &failed {
+            println!("  - {name}");
+        }
+        bail!("{} userspace test(s) failed", failed.len());
+    }
+
+    Ok(())
+}

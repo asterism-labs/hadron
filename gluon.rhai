@@ -260,6 +260,12 @@ test_deps.add("hadron-test", "crates/test/hadron-test")
     .features(["limine"])
     .deps(#{ limine: "limine" });
 
+// Userspace test dependency crates (compiled on-demand during utest).
+let utest_deps = group("utest-deps").target("x86_64-unknown-hadron-user").edition("2024").project(false);
+
+utest_deps.add("hadron-utest", "crates/test/hadron-utest")
+    .deps(#{ hadron_syscall: "hadron-syscall-user" });
+
 // ===========================================================================
 // Benchmark dependency crates (compiled on-demand during benchmarks)
 // ===========================================================================
@@ -478,4 +484,5 @@ tests()
     .shuttle_testable(["hadron-core"])
     .kernel_tests_dir("kernel/kernel/tests")
     .kernel_tests_crate("hadron-kernel")
-    .kernel_tests_linker_script("targets/x86_64-unknown-hadron.ld");
+    .kernel_tests_linker_script("targets/x86_64-unknown-hadron.ld")
+    .userspace_tests_dir("userspace/tests");

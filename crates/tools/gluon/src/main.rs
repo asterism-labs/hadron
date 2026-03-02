@@ -256,17 +256,24 @@ fn cmd_clippy(cli: &cli::Cli) -> Result<()> {
 
 /// Run tests.
 fn cmd_test(cli: &cli::Cli, args: &cli::TestArgs) -> Result<()> {
-    let run_host = !args.kernel_only && !args.crash_only && !args.ktest_only;
-    let run_kernel = !args.host_only && !args.crash_only && !args.ktest_only;
-    let run_ktest = !args.host_only && !args.kernel_only && !args.crash_only || args.ktest_only;
+    let any_exclusive = args.host_only
+        || args.kernel_only
+        || args.crash_only
+        || args.ktest_only
+        || args.userspace_only;
+
+    let run_host = (args.host_only) || (!any_exclusive);
+    let run_kernel = (args.kernel_only) || (!any_exclusive);
+    let run_ktest = (args.ktest_only) || (!any_exclusive);
+    let run_userspace = (args.userspace_only) || (!any_exclusive);
 
     if run_host {
         let (resolved, _model) = resolve_config(cli)?;
         test::run_host_tests(&resolved, cli.jobs.unwrap_or(0))?;
     }
 
-    // Both kernel integration tests and ktest share the build step.
-    if run_kernel || run_ktest {
+    // Kernel integration tests, ktest, and userspace tests all share the build step.
+    if run_kernel || run_ktest || run_userspace {
         let (mut state, model) = do_build(cli)?;
 
         if run_kernel {
@@ -277,6 +284,21 @@ fn cmd_test(cli: &cli::Cli, args: &cli::TestArgs) -> Result<()> {
         if run_ktest {
             let ktest_binary = test::compile_ktest_kernel(&model, &mut state)?;
             test::run_ktest_kernel(&state.config, &ktest_binary, &args.extra_args)?;
+        }
+
+        if run_userspace {
+            let kernel_binary = state
+                .kernel_binary
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("kernel binary not found after build"))?
+                .to_path_buf();
+            let utest_binaries = test::compile_userspace_tests(&model, &mut state)?;
+            test::run_userspace_test_binaries(
+                &state.config,
+                &kernel_binary,
+                &utest_binaries,
+                &args.extra_args,
+            )?;
         }
     }
 

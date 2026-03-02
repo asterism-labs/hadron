@@ -18,7 +18,24 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::cell::UnsafeCell;
-use hadron_core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
+use hadron_core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
+
+/// When set, PID 1's exit code is forwarded to the `isa-debug-exit` device.
+///
+/// Enabled by passing `--utest` on the kernel command line. Allows userspace
+/// test binaries running as init to signal QEMU pass/fail without ring-0
+/// access to the I/O port.
+static UTEST_MODE: AtomicBool = AtomicBool::new(false);
+
+/// Enable utest mode — called from boot.rs when `--utest` is on the cmdline.
+pub fn enable_utest_mode() {
+    UTEST_MODE.store(true, Ordering::Release);
+}
+
+/// Returns `true` if utest mode is active.
+fn utest_mode() -> bool {
+    UTEST_MODE.load(Ordering::Acquire)
+}
 
 use crate::addr::{PhysAddr, VirtAddr};
 use crate::arch::x86_64::paging::PageTableMapper;
@@ -1159,6 +1176,15 @@ async fn process_task_inner(process: Arc<Process>, first_entry_args: Option<(u64
                 // Store exit status and notify waiters.
                 *process.exit_status.lock() = Some(status);
                 process.exit_notify.wake_all();
+
+                // In utest mode, translate PID 1's exit into a QEMU signal.
+                if process.pid.as_u32() == 1 && utest_mode() {
+                    if status == 0 {
+                        hadron_ktest::qemu::exit_qemu(hadron_ktest::qemu::SUCCESS);
+                    } else {
+                        hadron_ktest::qemu::exit_qemu(hadron_ktest::qemu::FAILURE);
+                    }
+                }
                 break;
             }
             TrapReason::Preempted => {

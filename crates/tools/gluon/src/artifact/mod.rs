@@ -4,3 +4,4 @@ pub mod hbtf;
 pub mod hkif;
 pub mod initrd;
 pub mod iso;
+pub mod utest_cpio;

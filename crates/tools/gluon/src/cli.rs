@@ -103,6 +103,10 @@ pub struct TestArgs {
     #[arg(long)]
     pub ktest_only: bool,
 
+    /// Only run userspace tests.
+    #[arg(long)]
+    pub userspace_only: bool,
+
     /// Extra arguments passed to the test harness after `--`.
     #[arg(last = true)]
     pub extra_args: Vec<String>,

@@ -403,6 +403,8 @@ pub struct TestsDef {
     pub kernel_tests_crate: Option<String>,
     /// Linker script for kernel test binaries.
     pub kernel_tests_linker_script: Option<String>,
+    /// Directory containing userspace test `.rs` files.
+    pub userspace_tests_dir: Option<String>,
     pub crash_tests: Vec<CrashTestDef>,
 }
 

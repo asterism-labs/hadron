@@ -57,12 +57,6 @@ fn build_runner_config(config: &ResolvedConfig, is_test: bool) -> cargo_image_ru
     // the user-provided args to avoid duplicate stdio device errors.
     let mut qemu_extra_args = strip_runner_managed_args(&qemu_extra_args);
 
-    // Enable hardware-accelerated virtualization on macOS. QEMU 7.0+ falls
-    // back to TCG automatically when HVF is unavailable (e.g. inside a VM).
-    if cfg!(target_os = "macos") {
-        qemu_extra_args.extend(["-accel".into(), "hvf".into()]);
-    }
-
     // Expose the maximum CPU feature set to the guest so userspace SSE/SSE4.2
     // code runs natively instead of being trapped by TCG.
     qemu_extra_args.extend(["-cpu".into(), "max".into()]);
@@ -194,6 +188,110 @@ pub fn run_kernel_tests(
     }
     if !result.success {
         bail!("kernel test failed (exit code {})", result.exit_code);
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Userspace test runner
+// ---------------------------------------------------------------------------
+
+/// Write a Limine config for a userspace test.
+///
+/// Reads `limine.conf` from the project root and substitutes:
+/// - `cmdline: {{ARGS}}` → `cmdline: --utest`
+/// - `module_path: boot():/boot/initrd.cpio` → `module_path: boot():/boot/utest.cpio`
+///
+/// The result is written to `build/utests/limine-<test_name>.conf`.
+pub fn write_utest_limine_conf(root: &Path, test_name: &str) -> Result<PathBuf> {
+    let src = root.join("limine.conf");
+    let contents =
+        std::fs::read_to_string(&src).with_context(|| format!("reading {}", src.display()))?;
+
+    let patched = contents
+        .replace("cmdline: {{ARGS}}", "cmdline: --utest")
+        .replace(
+            "module_path: boot():/boot/initrd.cpio",
+            "module_path: boot():/boot/utest.cpio",
+        );
+
+    let out_dir = root.join("build/utests");
+    std::fs::create_dir_all(&out_dir)?;
+    let out_path = out_dir.join(format!("limine-{test_name}.conf"));
+    std::fs::write(&out_path, patched)
+        .with_context(|| format!("writing {}", out_path.display()))?;
+    Ok(out_path)
+}
+
+/// Run a single userspace test binary in QEMU.
+///
+/// Builds a minimal ISO containing the utest CPIO (as `boot/utest.cpio`)
+/// and a patched Limine config that passes `--utest` on the kernel cmdline.
+/// QEMU exits 33 on success (PID 1 exits 0) or 35 on failure.
+pub fn run_userspace_test(
+    config: &ResolvedConfig,
+    kernel_binary: &Path,
+    test_name: &str,
+    cpio_path: &Path,
+    extra_args: &[String],
+) -> Result<()> {
+    // Write a patched limine.conf for this test.
+    let limine_conf = write_utest_limine_conf(&config.root, test_name)?;
+
+    // Build runner config (test mode: success exit code, timeout).
+    let mut cfg = build_runner_config(config, true);
+
+    // Override the Limine config to use the patched one.
+    cfg.bootloader.config_file = Some(limine_conf.into());
+
+    // Provide the per-test CPIO as `boot/utest.cpio`.
+    cfg.extra_files.insert(
+        "boot/utest.cpio".into(),
+        cpio_path.to_string_lossy().into_owned(),
+    );
+
+    // Extend QEMU extra args with caller-supplied args.
+    cfg.runner
+        .qemu
+        .extra_args
+        .extend(extra_args.iter().cloned());
+
+    // Build the ISO.
+    let runner = cargo_image_runner::builder()
+        .with_config(cfg.clone())
+        .workspace_root(config.root.clone())
+        .executable(kernel_binary.to_path_buf())
+        .limine()
+        .iso_image()
+        .qemu()
+        .build()
+        .context("failed to build utest ISO")?;
+    let image_path = runner
+        .build_image()
+        .context("failed to build utest ISO image")?;
+
+    // Run QEMU in test mode.
+    let mut ctx = cargo_image_runner::core::Context::new(
+        cfg,
+        config.root.clone(),
+        kernel_binary.to_path_buf(),
+    )
+    .context("failed to create utest runner context")?;
+    ctx.is_test = true;
+
+    use cargo_image_runner::runner::Runner;
+    let result = cargo_image_runner::runner::qemu::QemuRunner::new()
+        .run(&ctx, &image_path)
+        .context("failed to run utest QEMU")?;
+
+    if result.timed_out {
+        bail!("userspace test '{test_name}' timed out");
+    }
+    if !result.success {
+        bail!(
+            "userspace test '{test_name}' failed (exit code {})",
+            result.exit_code
+        );
     }
     Ok(())
 }

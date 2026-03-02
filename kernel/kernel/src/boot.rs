@@ -703,6 +703,16 @@ pub fn kernel_init(boot_info: &impl BootInfo) -> ! {
         crate::sched::spawn_background("ktest", crate::ktest::run_async_stages());
     }
 
+    // If the kernel was booted with --utest, PID 1's exit code will be
+    // forwarded to the isa-debug-exit device so QEMU can report pass/fail.
+    #[cfg(not(ktest))]
+    if boot_info
+        .command_line()
+        .is_some_and(|c| c.split_whitespace().any(|t| t == "--utest"))
+    {
+        crate::proc::enable_utest_mode();
+    }
+
     #[cfg(not(ktest))]
     crate::proc::spawn_init();
 

@@ -70,6 +70,8 @@ pub struct TestsConfig {
     pub kernel_tests_crate: Option<String>,
     /// Linker script for kernel test binaries.
     pub kernel_tests_linker_script: Option<String>,
+    /// Directory containing userspace test `.rs` files.
+    pub userspace_tests_dir: Option<String>,
     #[allow(dead_code)] // future: crash test execution
     pub crash: Vec<CrashTest>,
 }
@@ -253,6 +255,7 @@ pub fn resolve_from_model(
         kernel_tests_dir: model.tests.kernel_tests_dir.clone(),
         kernel_tests_crate: model.tests.kernel_tests_crate.clone(),
         kernel_tests_linker_script: model.tests.kernel_tests_linker_script.clone(),
+        userspace_tests_dir: model.tests.userspace_tests_dir.clone(),
         crash: model
             .tests
             .crash_tests
