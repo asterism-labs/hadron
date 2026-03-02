@@ -104,6 +104,11 @@ order — acquire higher levels first):
   the result **after** releasing `fd_table`. `Drop for UnixSocket` acquires
   `unix_socket` (level 3), which is lower than `fd_table` (level 4), so
   dropping inside the lock violates ordering.
+- When calling `Inode::poll_readiness()` on fds obtained from `fd_table`,
+  clone the `Arc<dyn Inode>` handles while holding `fd_table`, release the
+  lock, then call `poll_readiness()` on the clones. `UnixSocket::poll_readiness`
+  acquires `unix_socket` (level 3); calling it while `fd_table` (level 4)
+  is held violates lock ordering.
 - `SpinLock::lock()` panics (with `hadron_lock_debug`) if called while any
   `IrqSpinLock` is held (`irq_lock_depth != 0`). The heap allocator uses
   `lock_unchecked()` to bypass this, since allocations may occur inside
