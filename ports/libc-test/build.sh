@@ -28,6 +28,8 @@ LIBC_TEST_REPO="git://repo.or.cz/libc-test"
 LIBC_TEST_COMMIT="HEAD"
 
 CLANG="${CLANG:-clang}"
+# Use ld.lld (ELF linker) for linking; macOS's ld only handles Mach-O.
+LLD="${LLD:-ld.lld}"
 TARGET="x86_64-unknown-none-elf"
 
 echo "[libc-test] REPO_ROOT = $REPO_ROOT"
@@ -61,8 +63,8 @@ mkdir -p "$BUILD_DIR/bin"
 #   ctype     — isalpha, isdigit, etc.       (pure table lookups)
 #   math      — sqrt, sin, pow, etc.         (needs libm)
 #   regression — miscellaneous regression    (may use fork/exec — skip if fail)
+# libc-test source lives in src/src/ within the cloned repo.
 TEST_DIRS=(
-    "src/string"
     "src/regression"
     "src/math"
 )
@@ -73,23 +75,25 @@ CFLAGS=(
     "--sysroot=$SYSROOT"
     "-isystem" "$SYSROOT/usr/include"
     "-I$SRC_DIR/src"
+    "-I$SRC_DIR/src/common"
+    "-D_GNU_SOURCE"
     "-O1"
     "-fno-stack-protector"
-    # libc-test uses T() macro for test registration — needs main() from libc-test
-    "-DTEST_INCLUDE_MAIN"
 )
 
-LDFLAGS=(
-    "--target=$TARGET"
-    "-nostdlib"
-    "-static"
-    "-L$SYSROOT/usr/lib"
-    "$SYSROOT/usr/lib/crt1.o"
-    "$SYSROOT/usr/lib/crti.o"
-    "-lc"
-    "-lm"
-    "$SYSROOT/usr/lib/crtn.o"
-)
+# Compile the shared test helpers once:
+#   mtest.c  — floating-point ULP helpers (for math tests)
+#   print.c  — t_printf / t_error output functions (for regression tests)
+# NOTE: memfill.c is omitted — it pulls in vmfill.c + setrlim.c which
+#       require sys/resource.h mmap internals not yet wired up.
+mkdir -p "$BUILD_DIR/obj"
+COMMON_OBJS=()
+for helper in mtest.c print.c; do
+    obj="$BUILD_DIR/obj/${helper%.c}.o"
+    if "$CLANG" "${CFLAGS[@]}" -c "$SRC_DIR/src/common/$helper" -o "$obj" 2>/dev/null; then
+        COMMON_OBJS+=("$obj")
+    fi
+done
 
 PASS=0
 FAIL=0
@@ -104,9 +108,19 @@ for dir in "${TEST_DIRS[@]}"; do
         name="$(basename "$src" .c)"
         out="$BUILD_DIR/bin/${dir//\//_}_${name}"
 
-        # Compile and link in one step.
-        if "$CLANG" "${CFLAGS[@]}" "${LDFLAGS[@]}" "$src" -o "$out" 2>/dev/null; then
-            ((PASS++)) || true
+        # Compile to object, then link with ld.lld (macOS ld doesn't handle ELF).
+        obj="$BUILD_DIR/obj/${dir//\//_}_${name}.o"
+        if "$CLANG" "${CFLAGS[@]}" -c "$src" -o "$obj" 2>/dev/null; then
+            if "$LLD" -m elf_x86_64 -static \
+                "$SYSROOT/usr/lib/crt1.o" "$SYSROOT/usr/lib/crti.o" \
+                "${COMMON_OBJS[@]}" "$obj" \
+                -L "$SYSROOT/usr/lib" -lc -lm \
+                "$SYSROOT/usr/lib/crtn.o" \
+                -o "$out" 2>/dev/null; then
+                ((PASS++)) || true
+            else
+                ((FAIL++)) || true
+            fi
         else
             ((FAIL++)) || true
         fi

@@ -52,7 +52,8 @@ cp -r "$LIBC_INCLUDE"/* "$SYSROOT/usr/include/"
 CLANG_RESOURCE_DIR="$("$CLANG" -print-resource-dir)/include"
 if [[ -d "$CLANG_RESOURCE_DIR" ]]; then
     echo "    Copying clang builtin headers from $CLANG_RESOURCE_DIR..."
-    cp -rn "$CLANG_RESOURCE_DIR"/* "$SYSROOT/usr/include/"
+    # macOS cp -rn exits 1 when any files are skipped due to -n; suppress that.
+    cp -rn "$CLANG_RESOURCE_DIR"/* "$SYSROOT/usr/include/" || true
 fi
 
 # ---------------------------------------------------------------------------

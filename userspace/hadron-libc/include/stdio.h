@@ -118,12 +118,39 @@ ssize_t getline(char **lineptr, size_t *n, FILE *stream);
 ssize_t getdelim(char **lineptr, size_t *n, int delim, FILE *stream);
 #endif
 
+/* ---- POSIX.1-2001 thread-safe I/O ----------------------------------------- */
+
+#if defined(_HADRON_POSIX_2001) || defined(_HADRON_DEFAULT)
+void flockfile(FILE *stream);
+int  ftrylockfile(FILE *stream);
+void funlockfile(FILE *stream);
+#endif
+
 /* ---- GNU extensions -------------------------------------------------------- */
 
 #ifdef _HADRON_GNU_EXTENSIONS
 int asprintf(char **strp, const char *fmt, ...);
 int vasprintf(char **strp, const char *fmt, va_list ap);
 #endif
+
+/* ---- Memory streams (POSIX.1-2008) ----------------------------------------- */
+
+#if defined(_HADRON_POSIX_2008) || defined(_HADRON_GNU_EXTENSIONS) || defined(_HADRON_DEFAULT)
+FILE *fmemopen(void *buf, size_t size, const char *mode);
+FILE *open_memstream(char **ptr, size_t *sizeloc);
+#endif
+
+/* ---- Wide character I/O ---------------------------------------------------- */
+
+#include <wchar.h>
+wint_t fgetwc(FILE *stream);
+wint_t getwc(FILE *stream);
+wint_t getwchar(void);
+wint_t fputwc(wchar_t wc, FILE *stream);
+wint_t putwc(wchar_t wc, FILE *stream);
+wint_t putwchar(wchar_t wc);
+wchar_t *fgetws(wchar_t *s, int n, FILE *stream);
+int fputs_w(const wchar_t *s, FILE *stream);
 
 /* ---- Temporary files ------------------------------------------------------- */
 

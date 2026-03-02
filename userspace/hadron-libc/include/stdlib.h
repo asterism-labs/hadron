@@ -20,6 +20,7 @@ void  free(void *ptr);
 
 void exit(int status) __attribute__((noreturn));
 void _exit(int status) __attribute__((noreturn));
+void _Exit(int status) __attribute__((noreturn));
 void abort(void) __attribute__((noreturn));
 int  atexit(void (*func)(void));
 
@@ -56,6 +57,19 @@ void  qsort(void *base, size_t nmemb, size_t size,
 #define RAND_MAX 2147483647
 int  rand(void);
 void srand(unsigned int seed);
+
+/* ---- drand48 / lrand48 family (POSIX.1-2001 XSI extension) ---------------- */
+
+#if defined(_HADRON_POSIX_2001) || defined(_HADRON_GNU_EXTENSIONS) || defined(_HADRON_DEFAULT)
+double drand48(void);
+long   lrand48(void);
+long   mrand48(void);
+void   srand48(long seedval);
+long   nrand48(unsigned short xsubi[3]);
+long   jrand48(unsigned short xsubi[3]);
+void   lcong48(unsigned short param[7]);
+unsigned short *seed48(unsigned short seed16v[3]);
+#endif
 
 /* ---- Multibyte / wide character (C89) -------------------------------------- */
 
@@ -110,7 +124,11 @@ int mkstemps(char *tmpl, int suffixlen);
 int mkostemps(char *tmpl, int suffixlen, int flags);
 #endif
 
-/* ---- GNU extensions -------------------------------------------------------- */
+/* ---- GNU/BSD extensions ---------------------------------------------------- */
+
+#if defined(_HADRON_GNU_EXTENSIONS) || defined(_HADRON_DEFAULT)
+char *mktemp(char *tmpl);
+#endif
 
 #ifdef _HADRON_GNU_EXTENSIONS
 int putenv(char *string);

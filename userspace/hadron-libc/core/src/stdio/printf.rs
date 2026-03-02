@@ -433,6 +433,115 @@ pub unsafe extern "C" fn sprintf(buf: *mut u8, fmt: *const u8, mut args: ...) ->
     pos as i32
 }
 
+/// `vsnprintf(buf, size, fmt, ap)` — formatted print to buffer with va_list.
+///
+/// # Safety
+///
+/// `buf` must be valid for `size` bytes. `fmt` must be NUL-terminated.
+/// `args` must be a valid va_list matching the format specifiers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn vsnprintf(
+    buf: *mut u8,
+    size: usize,
+    fmt: *const u8,
+    mut args: core::ffi::VaList<'_>,
+) -> i32 {
+    let mut pos: usize = 0;
+    let mut total: usize = 0;
+
+    let mut writer = |bytes: &[u8]| {
+        total += bytes.len();
+        if !buf.is_null() && size > 0 {
+            for &b in bytes {
+                if pos < size - 1 {
+                    // SAFETY: pos < size - 1, buf valid for size bytes.
+                    unsafe { *buf.add(pos) = b };
+                    pos += 1;
+                }
+            }
+        }
+    };
+
+    // SAFETY: Caller guarantees args match format specifiers.
+    let mut next_arg = || -> usize { unsafe { args.arg::<usize>() } };
+    format_to(&mut writer, fmt, &mut next_arg);
+
+    if !buf.is_null() && size > 0 {
+        let term_pos = pos.min(size - 1);
+        // SAFETY: term_pos < size, buf valid for size bytes.
+        unsafe { *buf.add(term_pos) = 0 };
+    }
+    total as i32
+}
+
+/// `vsprintf(buf, fmt, ap)` — formatted print to buffer (no size limit) with va_list.
+///
+/// # Safety
+///
+/// `buf` must have sufficient space. `fmt` must be NUL-terminated.
+/// `args` must be a valid va_list.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn vsprintf(
+    buf: *mut u8,
+    fmt: *const u8,
+    mut args: core::ffi::VaList<'_>,
+) -> i32 {
+    let mut pos: usize = 0;
+    let mut writer = |bytes: &[u8]| {
+        if !buf.is_null() {
+            for &b in bytes {
+                // SAFETY: Caller guarantees sufficient space.
+                unsafe { *buf.add(pos) = b };
+                pos += 1;
+            }
+        }
+    };
+    // SAFETY: Caller guarantees args match format specifiers.
+    let mut next_arg = || -> usize { unsafe { args.arg::<usize>() } };
+    format_to(&mut writer, fmt, &mut next_arg);
+    if !buf.is_null() {
+        // SAFETY: Caller guarantees sufficient space.
+        unsafe { *buf.add(pos) = 0 };
+    }
+    pos as i32
+}
+
+/// `vfprintf(stream, fmt, ap)` — formatted print to stream with va_list.
+///
+/// # Safety
+///
+/// `stream` must be a valid FILE pointer. `fmt` must be NUL-terminated.
+/// `args` must be a valid va_list.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn vfprintf(
+    stream: *mut FILE,
+    fmt: *const u8,
+    mut args: core::ffi::VaList<'_>,
+) -> i32 {
+    let mut count: i32 = 0;
+    let mut writer = |bytes: &[u8]| {
+        // SAFETY: Caller guarantees stream is valid.
+        unsafe { fwrite(bytes.as_ptr(), 1, bytes.len(), stream) };
+        count += bytes.len() as i32;
+    };
+    // SAFETY: Caller guarantees args match format specifiers.
+    let mut next_arg = || -> usize { unsafe { args.arg::<usize>() } };
+    format_to(&mut writer, fmt, &mut next_arg);
+    count
+}
+
+/// `vprintf(fmt, ap)` — formatted print to stdout with va_list.
+///
+/// # Safety
+///
+/// `fmt` must be NUL-terminated. `args` must be a valid va_list.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn vprintf(fmt: *const u8, args: core::ffi::VaList<'_>) -> i32 {
+    let stdout = super::__stdout();
+    // SAFETY: stdout is always valid; fmt is NUL-terminated (caller guarantee).
+    unsafe { vfprintf(stdout, fmt, args) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

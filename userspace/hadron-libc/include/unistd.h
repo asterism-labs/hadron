@@ -108,6 +108,23 @@ int  chmod(const char *path, unsigned int mode);
 int  fchmod(int fd, unsigned int mode);
 #endif
 
+/* ---- exec family ----------------------------------------------------------- */
+
+#if defined(_HADRON_POSIX_2001) || defined(_HADRON_DEFAULT)
+int execv(const char *path, char *const argv[]);
+int execve(const char *path, char *const argv[], char *const envp[]);
+int execvp(const char *file, char *const argv[]);
+int execl(const char *path, const char *arg, ...);
+int execlp(const char *file, const char *arg, ...);
+int execle(const char *path, const char *arg, ...);
+#endif
+
+/* ---- syscall --------------------------------------------------------------- */
+
+#ifdef _HADRON_GNU_EXTENSIONS
+long syscall(long number, ...);
+#endif
+
 /* ---- GNU extensions -------------------------------------------------------- */
 
 #ifdef _HADRON_GNU_EXTENSIONS

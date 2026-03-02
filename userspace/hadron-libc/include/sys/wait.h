@@ -18,6 +18,7 @@
 #define WNOHANG   1
 #define WUNTRACED 2
 
+pid_t wait(int *status);
 pid_t waitpid(pid_t pid, int *status, int options);
 
 #endif /* _SYS_WAIT_H */

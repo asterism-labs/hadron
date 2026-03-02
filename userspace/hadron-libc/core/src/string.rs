@@ -621,6 +621,43 @@ pub unsafe extern "C" fn mempcpy(dest: *mut u8, src: *const u8, n: usize) -> *mu
     unsafe { dest.add(n) }
 }
 
+/// Search for `needle` within `haystack`.
+///
+/// GNU extension. Returns a pointer to the first occurrence of `needle` inside
+/// `haystack`, or null if not found.
+///
+/// # Safety
+///
+/// `haystack` must be valid for `haystacklen` bytes; `needle` for `needlelen`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn memmem(
+    haystack: *const u8,
+    haystacklen: usize,
+    needle: *const u8,
+    needlelen: usize,
+) -> *mut u8 {
+    if needlelen == 0 {
+        return haystack as *mut u8;
+    }
+    if needlelen > haystacklen {
+        return core::ptr::null_mut();
+    }
+    let limit = haystacklen - needlelen;
+    let mut i = 0;
+    while i <= limit {
+        // SAFETY: i + needlelen <= haystacklen, both pointers valid per contract.
+        let matches = unsafe {
+            core::slice::from_raw_parts(haystack.add(i), needlelen)
+                == core::slice::from_raw_parts(needle, needlelen)
+        };
+        if matches {
+            return unsafe { haystack.add(i) as *mut u8 };
+        }
+        i += 1;
+    }
+    core::ptr::null_mut()
+}
+
 /// BSD-style safe `strcpy`: copy at most `size-1` bytes, always NUL-terminate.
 ///
 /// Returns the length of `src` (not truncated), allowing truncation detection.

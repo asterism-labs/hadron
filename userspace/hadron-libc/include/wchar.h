@@ -37,6 +37,17 @@ size_t  mbstowcs(wchar_t *dst, const char *src, size_t n);
 int     wctomb(char *s, wchar_t wc);
 int     mbtowc(wchar_t *pwc, const char *s, size_t n);
 size_t  mbrtowc(wchar_t *pwc, const char *s, size_t n, mbstate_t *ps);
+size_t  mbsrtowcs(wchar_t *dst, const char **src, size_t len, mbstate_t *ps);
+size_t  wcrtomb(char *s, wchar_t wc, mbstate_t *ps);
+wchar_t *wcsstr(const wchar_t *haystack, const wchar_t *needle);
+wchar_t *wcsncat(wchar_t *dst, const wchar_t *src, size_t n);
+int      wcscoll(const wchar_t *s1, const wchar_t *s2);
+wchar_t *wcspbrk(const wchar_t *s, const wchar_t *accept);
+size_t   wcsspn(const wchar_t *s, const wchar_t *accept);
+size_t   wcscspn(const wchar_t *s, const wchar_t *reject);
+wchar_t *wcstok(wchar_t *s, const wchar_t *delim, wchar_t **ptr);
+int      swprintf(wchar_t *wcs, size_t maxlen, const wchar_t *fmt, ...);
+int      swscanf(const wchar_t *wcs, const wchar_t *fmt, ...);
 
 #ifdef __cplusplus
 }

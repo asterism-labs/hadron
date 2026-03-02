@@ -43,6 +43,8 @@ CFLAGS=(
     "-DOPENLIBM"
     "-D__ELF__"
     "-D__x86_64__"
+    # Enable BSD/XSI extensions in openlibm_math.h (needed for M_PI_4, signgam, etc.)
+    "-D__BSD_VISIBLE=1"
 )
 
 ASFLAGS=(

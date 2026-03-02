@@ -70,8 +70,11 @@ int strncasecmp(const char *s1, const char *s2, size_t n);
 char  *strsignal(int sig);
 char  *strchrnul(const char *s, int c);
 void  *mempcpy(void *dest, const void *src, size_t n);
+void  *memmem(const void *haystack, size_t haystacklen,
+              const void *needle, size_t needlelen);
 size_t strlcpy(char *dest, const char *src, size_t size);
 size_t strlcat(char *dest, const char *src, size_t size);
+int    strverscmp(const char *s1, const char *s2);
 #endif
 
 #ifdef __cplusplus

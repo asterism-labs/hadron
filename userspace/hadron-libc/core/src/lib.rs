@@ -18,6 +18,8 @@ pub mod dirent;
 #[cfg(feature = "userspace")]
 pub mod env;
 pub mod errno;
+#[cfg(feature = "userspace")]
+pub mod fenv;
 pub mod flags;
 #[cfg(feature = "userspace")]
 pub mod io;

@@ -5,6 +5,7 @@
 //! POSIX interfaces. The staticlib crate type ensures all symbols end up
 //! in the final `libc.a` archive.
 #![no_std]
+#![feature(c_variadic)]
 
 extern crate hadron_libc_core;
 
