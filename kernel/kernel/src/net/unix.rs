@@ -304,7 +304,7 @@ impl UnixSocket {
                 _ => return Err(FsError::NotFound), // not listening
             }
         }
-        listener.wq.wake_one(); // wake blocked accept()
+        listener.wq.wake_all(); // wake all blocked accept()s (stale-waker safe)
 
         // Set the client side to Connected (is_a = true).
         {
