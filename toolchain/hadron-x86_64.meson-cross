@@ -1,0 +1,45 @@
+# Meson cross file for building Mesa against Hadron sysroot.
+#
+# Usage:
+#   meson setup build/mesa --cross-file toolchain/hadron-x86_64.meson-cross
+#
+# The sysroot must be assembled first via:
+#   ./toolchain/sysroot-assemble.sh
+
+[binaries]
+c = 'clang'
+cpp = 'clang++'
+ar = 'llvm-ar'
+strip = 'llvm-strip'
+ranlib = 'llvm-ranlib'
+nm = 'llvm-nm'
+objcopy = 'llvm-objcopy'
+pkg-config = '/usr/bin/false'
+
+[built-in options]
+# Static linking, no shared libraries on Hadron (no dynamic linker yet).
+default_library = 'static'
+b_staticpic = false
+
+# Force-include hadron_compat.h — compiler-assisted patching.
+# Pre-defines DETECT_OS_HADRON, DETECT_OS_POSIX, and HAVE_* feature macros
+# so Mesa detects Hadron without modifying detect_os.h.
+c_args = ['--target=x86_64-unknown-none-elf', '-nostdinc', '-isystem', '@SYSROOT@/usr/include', '-fno-exceptions', '-msse2', '-D__hadron__=1', '-D_GNU_SOURCE', '-include', '@COMPAT_HEADER@', '-Wno-unused-function', '-Wno-unused-variable']
+c_link_args = ['--target=x86_64-unknown-none-elf', '-nostdlib', '-static', '-fuse-ld=lld', '-L@SYSROOT@/usr/lib']
+cpp_args = ['--target=x86_64-unknown-none-elf', '-nostdinc', '-isystem', '@SYSROOT@/usr/include', '-fno-exceptions', '-fno-rtti', '-msse2', '-D__hadron__=1', '-D_GNU_SOURCE', '-include', '@COMPAT_HEADER@', '-Wno-unused-function', '-Wno-unused-variable']
+cpp_link_args = ['--target=x86_64-unknown-none-elf', '-nostdlib', '-static', '-fuse-ld=lld', '-L@SYSROOT@/usr/lib']
+
+[properties]
+# Point to assembled sysroot (relative paths resolved from build dir).
+sys_root = '@SYSROOT@'
+# Disable pkg-config — we have no .pc files.
+pkg_config_libdir = ''
+needs_exe_wrapper = true
+# Mesa-specific: tell it we cannot run host binaries during cross-compile.
+skip_sanity_check = true
+
+[host_machine]
+system = 'hadron'
+cpu_family = 'x86_64'
+cpu = 'x86_64'
+endian = 'little'
