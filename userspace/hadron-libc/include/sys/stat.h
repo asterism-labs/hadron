@@ -2,6 +2,8 @@
 #ifndef _SYS_STAT_H
 #define _SYS_STAT_H
 
+#include <bits/features.h>
+
 #include <sys/types.h>
 #include <time.h>
 

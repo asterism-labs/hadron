@@ -2,6 +2,8 @@
 #ifndef _TERMIOS_H
 #define _TERMIOS_H
 
+#include <bits/features.h>
+
 typedef unsigned int tcflag_t;
 typedef unsigned char cc_t;
 typedef unsigned int speed_t;

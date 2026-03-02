@@ -2,6 +2,8 @@
 #ifndef _LIBGEN_H
 #define _LIBGEN_H
 
+#include <bits/features.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif

@@ -2,6 +2,8 @@
 #ifndef _SIGNAL_H
 #define _SIGNAL_H
 
+#include <bits/features.h>
+
 #include <sys/types.h>
 
 #define SIG_DFL ((void (*)(int))0)

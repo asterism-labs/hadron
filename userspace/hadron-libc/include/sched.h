@@ -2,6 +2,8 @@
 #ifndef _SCHED_H
 #define _SCHED_H
 
+#include <bits/features.h>
+
 #include <sys/types.h>
 
 #ifdef __cplusplus

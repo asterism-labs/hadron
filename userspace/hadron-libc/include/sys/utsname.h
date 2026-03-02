@@ -2,6 +2,8 @@
 #ifndef _SYS_UTSNAME_H
 #define _SYS_UTSNAME_H
 
+#include <bits/features.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif

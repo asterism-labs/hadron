@@ -2,6 +2,8 @@
 #ifndef _ERRNO_H
 #define _ERRNO_H
 
+#include <bits/features.h>
+
 /* errno is accessed via __errno_location() for future thread-safety. */
 int *__errno_location(void);
 #define errno (*__errno_location())
@@ -41,5 +43,35 @@ int *__errno_location(void);
 #define ELOOP          40
 #define EWOULDBLOCK    EAGAIN
 #define ETIMEDOUT     110
+#define EADDRNOTAVAIL 99
+#define EADDRINUSE    98
+#define ECONNREFUSED 111
+#define ECONNRESET   104
+#define ECONNABORTED 103
+#define ENETDOWN     100
+#define ENETUNREACH  101
+#define EHOSTUNREACH 113
+#define ENOTSUP       95
+#define EOPNOTSUPP    95
+#define EOVERFLOW     75
+#define ENOBUFS      105
+#define ENOLINK      126
+#define EMSGSIZE      90
+#define EPROTOTYPE    91
+#define ENOPROTOOPT   92
+#define EPROTONOSUPPORT 93
+#define ESOCKTNOSUPPORT 94
+#define EALREADY     114
+#define EINPROGRESS  115
+#define EDESTADDRREQ  89
+#define EAFNOSUPPORT  97
+#define EILSEQ        84
+#define ENOMSG        42
+#define EIDRM         43
+#define EDEADLK       35
+#define ENOLCK        37
+#define ECANCELED    125
+#define EOWNERDEAD   130
+#define ENOTRECOVERABLE 131
 
 #endif /* _ERRNO_H */

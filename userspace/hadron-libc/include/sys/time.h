@@ -2,6 +2,8 @@
 #ifndef _SYS_TIME_H
 #define _SYS_TIME_H
 
+#include <bits/features.h>
+
 #include <time.h>
 
 struct timeval {

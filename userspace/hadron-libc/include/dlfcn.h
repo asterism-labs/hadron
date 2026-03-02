@@ -7,6 +7,8 @@
 #ifndef _DLFCN_H
 #define _DLFCN_H
 
+#include <bits/features.h>
+
 #define RTLD_LAZY   0x0001
 #define RTLD_NOW    0x0002
 #define RTLD_GLOBAL 0x0100

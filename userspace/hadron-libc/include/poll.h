@@ -2,6 +2,8 @@
 #ifndef _POLL_H
 #define _POLL_H
 
+#include <bits/features.h>
+
 struct pollfd {
     int   fd;
     short events;

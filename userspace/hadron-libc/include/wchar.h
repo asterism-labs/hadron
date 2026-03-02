@@ -2,6 +2,8 @@
 #ifndef _WCHAR_H
 #define _WCHAR_H
 
+#include <bits/features.h>
+
 #include <stddef.h>
 #include <stdint.h>
 

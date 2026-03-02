@@ -2,6 +2,8 @@
 #ifndef _GETOPT_H
 #define _GETOPT_H
 
+#include <bits/features.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif

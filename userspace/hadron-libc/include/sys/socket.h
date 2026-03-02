@@ -2,6 +2,8 @@
 #ifndef _SYS_SOCKET_H
 #define _SYS_SOCKET_H
 
+#include <bits/features.h>
+
 #include <stddef.h>
 #include <sys/types.h>
 

@@ -2,6 +2,8 @@
 #ifndef _SYS_SELECT_H
 #define _SYS_SELECT_H
 
+#include <bits/features.h>
+
 #include <time.h>
 
 #define FD_SETSIZE 1024

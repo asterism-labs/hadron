@@ -2,6 +2,8 @@
 #ifndef _BYTESWAP_H
 #define _BYTESWAP_H
 
+#include <bits/features.h>
+
 #include <endian.h>
 
 #define bswap_16(x)  __bswap16(x)

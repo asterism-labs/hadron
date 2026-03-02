@@ -2,6 +2,8 @@
 #ifndef _SYS_MMAN_H
 #define _SYS_MMAN_H
 
+#include <bits/features.h>
+
 #include <stddef.h>
 
 #define PROT_NONE  0x0

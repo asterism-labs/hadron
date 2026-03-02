@@ -2,6 +2,8 @@
 #ifndef _DIRENT_H
 #define _DIRENT_H
 
+#include <bits/features.h>
+
 #include <stdint.h>
 
 #define NAME_MAX 255

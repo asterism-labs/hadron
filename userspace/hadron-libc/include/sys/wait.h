@@ -2,6 +2,8 @@
 #ifndef _SYS_WAIT_H
 #define _SYS_WAIT_H
 
+#include <bits/features.h>
+
 #include <sys/types.h>
 
 /* Wait status macros (Linux-compatible encoding) */

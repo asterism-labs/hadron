@@ -7,11 +7,11 @@
 #![allow(internal_features)]
 #![feature(lang_items)]
 #![feature(c_variadic)]
-#![feature(naked_functions)]
 
 #[cfg(feature = "userspace")]
 pub mod alloc;
 pub mod atexit;
+pub mod conv;
 pub mod ctype;
 #[cfg(feature = "userspace")]
 pub mod dirent;
@@ -30,6 +30,7 @@ pub mod poll;
 pub mod process;
 #[cfg(feature = "userspace")]
 pub mod pthread;
+pub mod search;
 #[cfg(feature = "userspace")]
 pub mod signal;
 #[cfg(feature = "userspace")]
