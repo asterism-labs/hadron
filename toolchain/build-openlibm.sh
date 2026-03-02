@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # build-openlibm.sh — Cross-compile OpenLibm for the Hadron sysroot.
 #
+# Auto-fetches OpenLibm from GitHub if vendor/openlibm/ does not exist.
+#
 # Prerequisites:
-#   - OpenLibm source at vendor/openlibm/ (or OPENLIBM_SRC env var)
-#   - Clang + llvm-ar on PATH
+#   - git, clang, llvm-ar on PATH
 #
 # Usage:
 #   ./toolchain/build-openlibm.sh
@@ -18,38 +19,49 @@ BUILD_DIR="$REPO_ROOT/build/openlibm"
 
 CLANG="${CLANG:-clang}"
 AR="${AR:-llvm-ar}"
+# Use the Hadron user ELF target; close enough to none-elf for a C-only build.
 TARGET="x86_64-unknown-none-elf"
-SYSROOT="$REPO_ROOT/build/mesa-sysroot"
+# Use the libc include directory directly — no dependency on the assembled sysroot.
+LIBC_INCLUDE="$REPO_ROOT/userspace/hadron-libc/include"
 
 CFLAGS=(
     "--target=$TARGET"
     "-nostdinc"
     "-fno-exceptions"
-    "-msse2"
+    "-msse4.2"
     "-O2"
     "-ffunction-sections"
     "-fdata-sections"
-    # OpenLibm internal include path
+    # OpenLibm internal include paths
     "-I$OPENLIBM_SRC/include"
     "-I$OPENLIBM_SRC/src"
     "-I$OPENLIBM_SRC/ld80"
     "-I$OPENLIBM_SRC"
-    # Hadron sysroot headers (for stdint.h, etc.)
-    "-isystem" "$SYSROOT/usr/include"
-    # Tell OpenLibm we're freestanding
+    # Hadron libc headers (for stdint.h, float.h, etc.)
+    "-isystem" "$LIBC_INCLUDE"
+    # Mark this as a standalone openlibm build (not wrapping system libm)
+    "-DOPENLIBM"
     "-D__ELF__"
-    "-DASSEMBLER"
+    "-D__x86_64__"
+)
+
+ASFLAGS=(
+    "--target=$TARGET"
+    "-msse4.2"
+    "-I$OPENLIBM_SRC/include"
+    "-I$OPENLIBM_SRC/src"
+    "-I$OPENLIBM_SRC/amd64"
+    "-D__ELF__"
     "-D__x86_64__"
 )
 
 # ---------------------------------------------------------------------------
-# Validate prerequisites
+# Auto-fetch OpenLibm if missing
 # ---------------------------------------------------------------------------
 if [[ ! -d "$OPENLIBM_SRC/src" ]]; then
-    echo "ERROR: OpenLibm source not found at $OPENLIBM_SRC" >&2
-    echo "       Fetch it with:" >&2
-    echo "         git clone --depth 1 https://github.com/JuliaMath/openlibm.git vendor/openlibm" >&2
-    exit 1
+    echo "==> OpenLibm source not found — fetching from GitHub..."
+    mkdir -p "$(dirname "$OPENLIBM_SRC")"
+    git clone --depth 1 https://github.com/JuliaMath/openlibm.git "$OPENLIBM_SRC"
 fi
 
 # ---------------------------------------------------------------------------
@@ -59,7 +71,7 @@ echo "==> Building OpenLibm..."
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR/obj"
 
-# Collect all .c files from src/ (common) and amd64/ (x86_64-specific).
+# Collect .c files from src/ (portable) and ld80/ (80-bit long double).
 SOURCES=()
 for dir in "$OPENLIBM_SRC/src" "$OPENLIBM_SRC/ld80"; do
     if [[ -d "$dir" ]]; then
@@ -69,15 +81,23 @@ for dir in "$OPENLIBM_SRC/src" "$OPENLIBM_SRC/ld80"; do
     fi
 done
 
+# Collect x86_64 assembly optimisations from amd64/ (.S files).
+ASM_SOURCES=()
+if [[ -d "$OPENLIBM_SRC/amd64" ]]; then
+    while IFS= read -r -d '' f; do
+        ASM_SOURCES+=("$f")
+    done < <(find "$OPENLIBM_SRC/amd64" -maxdepth 1 -name '*.S' -print0 2>/dev/null)
+fi
+
 if [[ ${#SOURCES[@]} -eq 0 ]]; then
     echo "ERROR: No source files found in $OPENLIBM_SRC" >&2
     exit 1
 fi
 
-echo "    Found ${#SOURCES[@]} source files."
+echo "    Found ${#SOURCES[@]} C files, ${#ASM_SOURCES[@]} assembly files."
 
 # ---------------------------------------------------------------------------
-# Compile each file
+# Compile C files
 # ---------------------------------------------------------------------------
 OBJECTS=()
 FAILED=0
@@ -89,7 +109,18 @@ for src in "${SOURCES[@]}"; do
     if "$CLANG" "${CFLAGS[@]}" -c "$src" -o "$obj" 2>/dev/null; then
         OBJECTS+=("$obj")
     else
-        # Some files may not compile freestanding — skip them.
+        # Some files may not compile freestanding — skip them with a note.
+        ((FAILED++)) || true
+    fi
+done
+
+# Compile assembly files (override C function with SSE-optimized version).
+for src in "${ASM_SOURCES[@]}"; do
+    base="$(basename "$src" .S)"
+    obj="$BUILD_DIR/obj/amd64_${base}.o"
+    if "$CLANG" "${ASFLAGS[@]}" -c "$src" -o "$obj" 2>/dev/null; then
+        OBJECTS+=("$obj")
+    else
         ((FAILED++)) || true
     fi
 done

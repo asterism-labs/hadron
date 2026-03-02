@@ -142,15 +142,17 @@ if [[ -f "$CXXABI_SRC" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Step 7: Build OpenLibm (libm.a) if vendored
+# Step 7: Build OpenLibm (libm.a)
+#
+# build-openlibm.sh auto-fetches from GitHub if vendor/openlibm/ is absent.
 # ---------------------------------------------------------------------------
-OPENLIBM_DIR="$REPO_ROOT/vendor/openlibm"
-if [[ -d "$OPENLIBM_DIR" ]]; then
-    echo "    Building OpenLibm..."
-    "$REPO_ROOT/toolchain/build-openlibm.sh"
-    if [[ -f "$REPO_ROOT/build/openlibm/libm.a" ]]; then
-        cp "$REPO_ROOT/build/openlibm/libm.a" "$SYSROOT/usr/lib/libm.a"
-    fi
+echo "    Building OpenLibm (auto-fetches if needed)..."
+"$REPO_ROOT/toolchain/build-openlibm.sh"
+if [[ -f "$REPO_ROOT/build/openlibm/libm.a" ]]; then
+    # Overwrite the empty stub archive created in Step 4.
+    cp "$REPO_ROOT/build/openlibm/libm.a" "$SYSROOT/usr/lib/libm.a"
+else
+    echo "WARNING: build-openlibm.sh did not produce libm.a — using empty stub." >&2
 fi
 
 # ---------------------------------------------------------------------------
