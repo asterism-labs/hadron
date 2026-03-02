@@ -224,12 +224,24 @@ pub(super) fn sys_vnode_write(fd: usize, buf_ptr: usize, buf_len: usize) -> isiz
 /// Returns 0 on success, or a negative errno on failure.
 pub(super) fn sys_handle_close(fd: usize) -> isize {
     let fd = Fd::new(fd as u32);
+    crate::ktrace_subsys!(vfs, "sys_handle_close: fd={}", fd.as_u32());
     // close_take extracts the FileDescriptor without dropping it while the
     // fd_table lock is held. This avoids a lockdep violation: Drop for
     // UnixSocket acquires unix_socket (level 3) which is lower than fd_table
     // (level 4). The extracted entry is dropped here, after both locks release.
-    let removed =
-        crate::proc::ProcessTable::with_current(|process| process.fd_table.lock().close_take(fd));
+    let removed = crate::proc::ProcessTable::with_current(|process| {
+        let mut table = process.fd_table.lock();
+        let entry = table.close_take(fd);
+        drop(table); // explicit: release fd_table before any Arc drop
+        entry
+    });
+    // fd_table and CURRENT_PROCESS released; _dropped (if any) drops here.
+    crate::ktrace_subsys!(
+        vfs,
+        "sys_handle_close: fd={} removed={}",
+        fd.as_u32(),
+        removed.is_some()
+    );
     match removed {
         Some(_dropped) => 0,
         None => -(crate::syscall::EBADF),
@@ -250,6 +262,12 @@ pub(super) fn sys_handle_close(fd: usize) -> isize {
 pub(super) fn sys_handle_dup(old_fd: usize, new_fd: usize) -> isize {
     let old_fd = Fd::new(old_fd as u32);
     let new_fd = Fd::new(new_fd as u32);
+    crate::ktrace_subsys!(
+        vfs,
+        "sys_handle_dup: old_fd={} new_fd={}",
+        old_fd.as_u32(),
+        new_fd.as_u32()
+    );
     // close_take extracts the displaced entry without dropping it inside the
     // lock. This avoids the lockdep violation that fires when Drop for
     // UnixSocket (level 3) runs while fd_table (level 4) is held.
@@ -264,6 +282,8 @@ pub(super) fn sys_handle_dup(old_fd: usize, new_fd: usize) -> isize {
         // If new_fd is already open, take the entry out without dropping it.
         let displaced = fd_table.close_take(new_fd);
         fd_table.insert_at(new_fd, inode, flags);
+        // Explicit drop: release fd_table before any displaced Arc drops.
+        drop(fd_table);
         Ok((new_fd.as_u32() as isize, displaced))
     });
     // fd_table and CURRENT_PROCESS released above; displaced (if any) drops here.

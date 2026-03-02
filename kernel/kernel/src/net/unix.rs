@@ -374,12 +374,20 @@ impl Default for UnixSocket {
 impl Drop for UnixSocket {
     fn drop(&mut self) {
         // Unregister from global path registry and signal peer.
+        // NOTE: self.inner (unix_socket, level 3) must not be acquired while
+        // any level-4+ lock (e.g. fd_table) is held. Callers that close an fd
+        // containing a UnixSocket must use close_take() to defer the drop until
+        // after releasing fd_table. See docs/src/reference/known-issues.md.
+        crate::ktrace_subsys!(net, "UnixSocket::drop: acquiring inner lock");
         let guard = self.inner.lock();
+        crate::ktrace_subsys!(net, "UnixSocket::drop: inner locked, processing state");
         match &*guard {
             SocketState::Bound(p) | SocketState::Listening { path: p, .. } => {
+                crate::ktrace_subsys!(net, "UnixSocket::drop: unbinding path {}", p);
                 registry_unbind(p);
             }
             SocketState::Connected { pair, is_a } => {
+                crate::ktrace_subsys!(net, "UnixSocket::drop: signalling peer (is_a={})", is_a);
                 if *is_a {
                     pair.closed_a.store(true, Ordering::Release);
                     pair.wq_b.wake_all(); // peer sees EOF

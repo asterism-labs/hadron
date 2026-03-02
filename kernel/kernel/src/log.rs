@@ -229,145 +229,166 @@ macro_rules! ktrace {
 
 /// Logs a subsystem-specific error message.
 ///
+/// Each arm is gated behind `hadron_trace_<subsys>` — the single Kconfig
+/// bool for that subsystem. When the flag is off the call compiles away.
+///
 /// Output format: `[secs.micros] ERROR [subsys] message`
 #[macro_export]
 macro_rules! kerr_subsys {
     (mm, $($arg:tt)*) => {
-        if cfg!(hadron_trace_mm_error) {
+        if cfg!(hadron_trace_mm) {
             $crate::log::_log_subsys($crate::log::LogLevel::Error, "mm", format_args!($($arg)*))
         }
     };
     (vfs, $($arg:tt)*) => {
-        if cfg!(hadron_trace_vfs_error) {
+        if cfg!(hadron_trace_vfs) {
             $crate::log::_log_subsys($crate::log::LogLevel::Error, "vfs", format_args!($($arg)*))
         }
     };
     (sched, $($arg:tt)*) => {
-        if cfg!(hadron_trace_sched_error) {
+        if cfg!(hadron_trace_sched) {
             $crate::log::_log_subsys($crate::log::LogLevel::Error, "sched", format_args!($($arg)*))
         }
     };
     (pci, $($arg:tt)*) => {
-        if cfg!(hadron_trace_pci_error) {
+        if cfg!(hadron_trace_pci) {
             $crate::log::_log_subsys($crate::log::LogLevel::Error, "pci", format_args!($($arg)*))
         }
     };
     (acpi, $($arg:tt)*) => {
-        if cfg!(hadron_trace_acpi_error) {
+        if cfg!(hadron_trace_acpi) {
             $crate::log::_log_subsys($crate::log::LogLevel::Error, "acpi", format_args!($($arg)*))
         }
     };
     (irq, $($arg:tt)*) => {
-        if cfg!(hadron_trace_irq_error) {
+        if cfg!(hadron_trace_irq) {
             $crate::log::_log_subsys($crate::log::LogLevel::Error, "irq", format_args!($($arg)*))
         }
     };
     (syscall, $($arg:tt)*) => {
-        if cfg!(hadron_trace_syscall_error) {
+        if cfg!(hadron_trace_syscall) {
             $crate::log::_log_subsys($crate::log::LogLevel::Error, "syscall", format_args!($($arg)*))
         }
     };
     (drivers, $($arg:tt)*) => {
-        if cfg!(hadron_trace_drivers_error) {
+        if cfg!(hadron_trace_drivers) {
             $crate::log::_log_subsys($crate::log::LogLevel::Error, "drivers", format_args!($($arg)*))
+        }
+    };
+    (net, $($arg:tt)*) => {
+        if cfg!(hadron_trace_net) {
+            $crate::log::_log_subsys($crate::log::LogLevel::Error, "net", format_args!($($arg)*))
         }
     };
 }
 
 /// Logs a subsystem-specific info message.
 ///
+/// Each arm is gated behind `hadron_trace_<subsys>` — the single Kconfig
+/// bool for that subsystem. When the flag is off the call compiles away.
+///
 /// Output format: `[secs.micros] INFO  [subsys] message`
 #[macro_export]
 macro_rules! kinfo_subsys {
     (mm, $($arg:tt)*) => {
-        if cfg!(hadron_trace_mm_info) {
+        if cfg!(hadron_trace_mm) {
             $crate::log::_log_subsys($crate::log::LogLevel::Info, "mm", format_args!($($arg)*))
         }
     };
     (vfs, $($arg:tt)*) => {
-        if cfg!(hadron_trace_vfs_info) {
+        if cfg!(hadron_trace_vfs) {
             $crate::log::_log_subsys($crate::log::LogLevel::Info, "vfs", format_args!($($arg)*))
         }
     };
     (sched, $($arg:tt)*) => {
-        if cfg!(hadron_trace_sched_info) {
+        if cfg!(hadron_trace_sched) {
             $crate::log::_log_subsys($crate::log::LogLevel::Info, "sched", format_args!($($arg)*))
         }
     };
     (pci, $($arg:tt)*) => {
-        if cfg!(hadron_trace_pci_info) {
+        if cfg!(hadron_trace_pci) {
             $crate::log::_log_subsys($crate::log::LogLevel::Info, "pci", format_args!($($arg)*))
         }
     };
     (acpi, $($arg:tt)*) => {
-        if cfg!(hadron_trace_acpi_info) {
+        if cfg!(hadron_trace_acpi) {
             $crate::log::_log_subsys($crate::log::LogLevel::Info, "acpi", format_args!($($arg)*))
         }
     };
     (irq, $($arg:tt)*) => {
-        if cfg!(hadron_trace_irq_info) {
+        if cfg!(hadron_trace_irq) {
             $crate::log::_log_subsys($crate::log::LogLevel::Info, "irq", format_args!($($arg)*))
         }
     };
     (syscall, $($arg:tt)*) => {
-        if cfg!(hadron_trace_syscall_info) {
+        if cfg!(hadron_trace_syscall) {
             $crate::log::_log_subsys($crate::log::LogLevel::Info, "syscall", format_args!($($arg)*))
         }
     };
     (drivers, $($arg:tt)*) => {
-        if cfg!(hadron_trace_drivers_info) {
+        if cfg!(hadron_trace_drivers) {
             $crate::log::_log_subsys($crate::log::LogLevel::Info, "drivers", format_args!($($arg)*))
+        }
+    };
+    (net, $($arg:tt)*) => {
+        if cfg!(hadron_trace_net) {
+            $crate::log::_log_subsys($crate::log::LogLevel::Info, "net", format_args!($($arg)*))
         }
     };
 }
 
 /// Logs a subsystem-specific trace message.
 ///
-/// Each arm is gated behind its own `hadron_trace_<subsys>_trace` cfg flag,
-/// independent of the global `LOG_LEVEL`. When the flag is off, the
-/// entire macro body compiles away (zero-cost).
+/// Each arm is gated behind `hadron_trace_<subsys>` — the single Kconfig
+/// bool for that subsystem. When the flag is off, the entire macro body
+/// compiles away (zero-cost). Enable via `menuconfig → Tracing`.
 ///
 /// Output format: `[secs.micros] TRACE [subsys] message`
 #[macro_export]
 macro_rules! ktrace_subsys {
     (mm, $($arg:tt)*) => {
-        if cfg!(hadron_trace_mm_trace) {
+        if cfg!(hadron_trace_mm) {
             $crate::log::_log_subsys($crate::log::LogLevel::Trace, "mm", format_args!($($arg)*))
         }
     };
     (vfs, $($arg:tt)*) => {
-        if cfg!(hadron_trace_vfs_trace) {
+        if cfg!(hadron_trace_vfs) {
             $crate::log::_log_subsys($crate::log::LogLevel::Trace, "vfs", format_args!($($arg)*))
         }
     };
     (sched, $($arg:tt)*) => {
-        if cfg!(hadron_trace_sched_trace) {
+        if cfg!(hadron_trace_sched) {
             $crate::log::_log_subsys($crate::log::LogLevel::Trace, "sched", format_args!($($arg)*))
         }
     };
     (pci, $($arg:tt)*) => {
-        if cfg!(hadron_trace_pci_trace) {
+        if cfg!(hadron_trace_pci) {
             $crate::log::_log_subsys($crate::log::LogLevel::Trace, "pci", format_args!($($arg)*))
         }
     };
     (acpi, $($arg:tt)*) => {
-        if cfg!(hadron_trace_acpi_trace) {
+        if cfg!(hadron_trace_acpi) {
             $crate::log::_log_subsys($crate::log::LogLevel::Trace, "acpi", format_args!($($arg)*))
         }
     };
     (irq, $($arg:tt)*) => {
-        if cfg!(hadron_trace_irq_trace) {
+        if cfg!(hadron_trace_irq) {
             $crate::log::_log_subsys($crate::log::LogLevel::Trace, "irq", format_args!($($arg)*))
         }
     };
     (syscall, $($arg:tt)*) => {
-        if cfg!(hadron_trace_syscall_trace) {
+        if cfg!(hadron_trace_syscall) {
             $crate::log::_log_subsys($crate::log::LogLevel::Trace, "syscall", format_args!($($arg)*))
         }
     };
     (drivers, $($arg:tt)*) => {
-        if cfg!(hadron_trace_drivers_trace) {
+        if cfg!(hadron_trace_drivers) {
             $crate::log::_log_subsys($crate::log::LogLevel::Trace, "drivers", format_args!($($arg)*))
+        }
+    };
+    (net, $($arg:tt)*) => {
+        if cfg!(hadron_trace_net) {
+            $crate::log::_log_subsys($crate::log::LogLevel::Trace, "net", format_args!($($arg)*))
         }
     };
 }

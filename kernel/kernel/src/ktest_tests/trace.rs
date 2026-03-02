@@ -42,3 +42,8 @@ fn test_ktrace_subsys_syscall() {
 fn test_ktrace_subsys_drivers() {
     crate::ktrace_subsys!(drivers, "test");
 }
+
+#[kernel_test(stage = "early_boot", timeout = 5)]
+fn test_ktrace_subsys_net() {
+    crate::ktrace_subsys!(net, "test");
+}

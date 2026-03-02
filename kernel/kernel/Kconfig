@@ -194,6 +194,11 @@ config trace_drivers
     default n
     binding cfg
 
+config trace_net
+    bool "Network (AF_UNIX socket) tracing"
+    default n
+    binding cfg
+
 endmenu
 
 menu "Sanitizers"
