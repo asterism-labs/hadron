@@ -1,5 +1,9 @@
 //! Event syscall handlers: `event_wait_many` (poll) and `futex`.
 
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+
+use crate::fs::Inode;
 use crate::id::Fd;
 use crate::proc::ProcessTable;
 use crate::syscall::userptr::UserSlice;
@@ -45,33 +49,44 @@ pub(super) fn sys_event_wait_many(fds_ptr: usize, nfds: usize, timeout_ms: usize
     // SAFETY: UserSlice validated the pointer is in user space and properly sized.
     let poll_fds = unsafe { core::slice::from_raw_parts_mut(fds_ptr as *mut PollFd, nfds) };
 
-    let mut ready_count: isize = 0;
-
-    ProcessTable::with_current(|process| {
+    // Phase 1: clone all inodes while holding fd_table.
+    //
+    // poll_readiness() on unix sockets acquires unix_socket (SpinLock, level 3).
+    // fd_table is level 4, so calling poll_readiness() while fd_table is locked
+    // would violate lock ordering.  We collect Arc clones here — cheap and safe
+    // inside the lock — then call poll_readiness() after releasing it.
+    // None means the fd was not found (→ POLLNVAL).
+    let inodes: Vec<Option<Arc<dyn Inode>>> = ProcessTable::with_current(|process| {
         let fd_table = process.fd_table.lock();
+        poll_fds
+            .iter()
+            .map(|pfd| fd_table.get(Fd::new(pfd.fd)).map(|f| f.inode.clone()))
+            .collect()
+    });
+    // fd_table and CURRENT_PROCESS are released above.
 
-        for pfd in poll_fds.iter_mut() {
-            pfd.revents = 0;
-
-            let fd = Fd::new(pfd.fd);
-            let Some(file_desc) = fd_table.get(fd) else {
+    // Phase 2: call poll_readiness() outside all locks.
+    let mut ready_count: isize = 0;
+    for (pfd, inode_opt) in poll_fds.iter_mut().zip(inodes.iter()) {
+        pfd.revents = 0;
+        match inode_opt {
+            None => {
                 pfd.revents = POLLNVAL;
                 ready_count += 1;
-                continue;
-            };
-
-            let readiness = file_desc.inode.poll_readiness(None);
-            pfd.revents = readiness
-                & (pfd.events
-                    | hadron_syscall::POLLERR
-                    | hadron_syscall::POLLHUP
-                    | hadron_syscall::POLLNVAL);
-
-            if pfd.revents != 0 {
-                ready_count += 1;
+            }
+            Some(inode) => {
+                let readiness = inode.poll_readiness(None);
+                pfd.revents = readiness
+                    & (pfd.events
+                        | hadron_syscall::POLLERR
+                        | hadron_syscall::POLLHUP
+                        | hadron_syscall::POLLNVAL);
+                if pfd.revents != 0 {
+                    ready_count += 1;
+                }
             }
         }
-    });
+    }
 
     // If nothing is ready and timeout > 0, we'd need to block.
     // For now, return the count (0 means nothing ready in non-blocking mode).
