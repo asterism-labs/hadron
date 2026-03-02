@@ -224,13 +224,16 @@ pub(super) fn sys_vnode_write(fd: usize, buf_ptr: usize, buf_len: usize) -> isiz
 /// Returns 0 on success, or a negative errno on failure.
 pub(super) fn sys_handle_close(fd: usize) -> isize {
     let fd = Fd::new(fd as u32);
-    crate::proc::ProcessTable::with_current(|process| {
-        let mut fd_table = process.fd_table.lock();
-        match fd_table.close(fd) {
-            Ok(()) => 0,
-            Err(e) => -e.to_errno(),
-        }
-    })
+    // close_take extracts the FileDescriptor without dropping it while the
+    // fd_table lock is held. This avoids a lockdep violation: Drop for
+    // UnixSocket acquires unix_socket (level 3) which is lower than fd_table
+    // (level 4). The extracted entry is dropped here, after both locks release.
+    let removed =
+        crate::proc::ProcessTable::with_current(|process| process.fd_table.lock().close_take(fd));
+    match removed {
+        Some(_dropped) => 0,
+        None => -(crate::syscall::EBADF),
+    }
 }
 
 /// `sys_handle_dup` — duplicate a file descriptor (dup2 semantics).
@@ -247,20 +250,27 @@ pub(super) fn sys_handle_close(fd: usize) -> isize {
 pub(super) fn sys_handle_dup(old_fd: usize, new_fd: usize) -> isize {
     let old_fd = Fd::new(old_fd as u32);
     let new_fd = Fd::new(new_fd as u32);
-    crate::proc::ProcessTable::with_current(|process| {
+    // close_take extracts the displaced entry without dropping it inside the
+    // lock. This avoids the lockdep violation that fires when Drop for
+    // UnixSocket (level 3) runs while fd_table (level 4) is held.
+    let result = crate::proc::ProcessTable::with_current(|process| {
         let mut fd_table = process.fd_table.lock();
         let Some(src) = fd_table.get(old_fd) else {
-            return -crate::syscall::EBADF;
+            return Err(crate::syscall::EBADF);
         };
         let inode = src.inode.clone();
         let flags = src.flags;
 
-        // If new_fd is already open, close it silently (POSIX dup2 semantics).
-        let _ = fd_table.close(new_fd);
-
+        // If new_fd is already open, take the entry out without dropping it.
+        let displaced = fd_table.close_take(new_fd);
         fd_table.insert_at(new_fd, inode, flags);
-        new_fd.as_u32() as isize
-    })
+        Ok((new_fd.as_u32() as isize, displaced))
+    });
+    // fd_table and CURRENT_PROCESS released above; displaced (if any) drops here.
+    match result {
+        Ok((ret, _displaced)) => ret,
+        Err(_) => -(crate::syscall::EBADF),
+    }
 }
 
 /// `sys_vnode_stat` — get file status information.

@@ -52,17 +52,14 @@ Signal handlers receive only the signal number. The extended `siginfo_t`
 structure (providing fault address, sending PID, etc.) is not supported.
 Programs that install handlers with `SA_SIGINFO` will get `EINVAL`.
 
-### No socket subsystem
+### No network socket subsystem
 
-There is no networking stack. All socket-related syscalls (`socket`,
-`bind`, `listen`, `accept`, `connect`, `send`, `recv`, `getaddrinfo`)
-are unimplemented. This blocks `curl`, `wget`, DNS resolution, and any
-network-aware program.
+`AF_UNIX` stream sockets are implemented (Wayland compositor transport).
+Network sockets (`AF_INET`/`AF_INET6`) are not. All TCP/UDP syscalls
+(`socket(AF_INET, ...)`, `getaddrinfo`, etc.) return `ENOSYS`. This blocks
+`curl`, `wget`, DNS resolution, and any network-aware program.
 
-**Planned**: `AF_UNIX` stream sockets with `SCM_RIGHTS` fd-passing are planned
-as a prerequisite for Wayland transport in the graphics stack. See
-[Unix Domain Sockets](../features/unix-domain-sockets.md). Network sockets
-(`AF_INET`) remain deferred.
+**Planned**: Network sockets remain deferred pending a full networking stack.
 
 ### No `mprotect`
 
@@ -89,6 +86,9 @@ order — acquire higher levels first):
 |     4 | `PROCESS_TABLE`       | SpinLock     | `kernel/kernel/src/proc/mod.rs` |
 |     4 | `fd_table`            | SpinLock (Arc) | `kernel/kernel/src/proc/mod.rs` |
 |     4 | `address_space`       | SpinLock (Arc) | `kernel/kernel/src/proc/mod.rs` |
+|     3 | `unix_socket`         | SpinLock     | `kernel/kernel/src/net/unix.rs` |
+|     3 | `unix_registry`       | SpinLock     | `kernel/kernel/src/net/unix.rs` |
+|     3 | `unix_a2b` / `unix_b2a` | SpinLock  | `kernel/kernel/src/net/unix.rs` |
 |     2 | `FUTEX_TABLE`         | SpinLock     | `kernel/kernel/src/ipc/futex.rs` |
 |     2 | `PTY_SLAVES`          | SpinLock     | `kernel/kernel/src/tty/pty.rs` |
 |     1 | `HEAP`                | SpinLock     | `kernel/mm/src/heap.rs`      |
@@ -100,6 +100,10 @@ order — acquire higher levels first):
 - Never call `waker.wake()` while holding a lock — it acquires
   `ready_queues` (level 13). Take the waker out first, release the lock,
   then invoke it. See `HeapWaitQueue::wake_all` for the correct pattern.
+- When closing an fd that may be a unix socket, use `close_take()` and drop
+  the result **after** releasing `fd_table`. `Drop for UnixSocket` acquires
+  `unix_socket` (level 3), which is lower than `fd_table` (level 4), so
+  dropping inside the lock violates ordering.
 - `SpinLock::lock()` panics (with `hadron_lock_debug`) if called while any
   `IrqSpinLock` is held (`irq_lock_depth != 0`). The heap allocator uses
   `lock_unchecked()` to bypass this, since allocations may occur inside

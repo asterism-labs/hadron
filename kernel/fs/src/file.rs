@@ -119,6 +119,14 @@ impl FileDescriptorTable {
         Ok(())
     }
 
+    /// Remove a file descriptor, returning the entry so the caller can drop it
+    /// *outside* any spinlock that wraps this table. Required to avoid
+    /// lock-ordering violations when the inode's `Drop` acquires a lower-level
+    /// lock (e.g., `unix_socket` at level 3 < `fd_table` at level 4).
+    pub fn close_take(&mut self, fd: Fd) -> Option<FileDescriptor> {
+        self.fds.remove(&fd)
+    }
+
     /// Close all file descriptors that have `CLOEXEC` set.
     /// Called during `execve` to prevent fd leaks.
     pub fn close_cloexec(&mut self) {

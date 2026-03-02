@@ -457,7 +457,7 @@ impl Inode for UnixSocket {
                     if rx.available() > 0 {
                         let n = rx.read(buf);
                         drop(rx);
-                        pair.wq_b.wake_one(); // B may write more now
+                        pair.wq_b.wake_all(); // B may write more now
                         return Ok(n);
                     }
                     if pair.closed_b.load(Ordering::Acquire) {
@@ -468,7 +468,7 @@ impl Inode for UnixSocket {
                     if rx.available() > 0 {
                         let n = rx.read(buf);
                         drop(rx);
-                        pair.wq_a.wake_one(); // A may write more now
+                        pair.wq_a.wake_all(); // A may write more now
                         return Ok(n);
                     }
                     if pair.closed_a.load(Ordering::Acquire) {
@@ -535,7 +535,7 @@ impl Inode for UnixSocket {
                     }
                     let n = pair.a_to_b.lock().write(buf);
                     if n > 0 {
-                        pair.wq_b.wake_one(); // B can now read
+                        pair.wq_b.wake_all(); // B can now read
                         return Ok(n);
                     }
                 } else {
@@ -544,7 +544,7 @@ impl Inode for UnixSocket {
                     }
                     let n = pair.b_to_a.lock().write(buf);
                     if n > 0 {
-                        pair.wq_a.wake_one(); // A can now read
+                        pair.wq_a.wake_all(); // A can now read
                         return Ok(n);
                     }
                 }

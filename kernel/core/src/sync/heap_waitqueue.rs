@@ -66,8 +66,19 @@ impl<B: IrqBackend> HeapWaitQueueInner<B> {
     }
 
     /// Registers a waker without creating a future.
+    ///
+    /// If an identical waker (same task, same CPU) is already queued, the
+    /// existing entry is kept and no duplicate is added. This prevents stale
+    /// waker accumulation when a task is re-polled on the same CPU before a
+    /// prior wakeup fires.
     pub fn register_waker(&self, waker: &Waker) {
-        self.waiters.lock().push_back(waker.clone());
+        let mut waiters = self.waiters.lock();
+        for w in waiters.iter() {
+            if w.will_wake(waker) {
+                return; // already registered
+            }
+        }
+        waiters.push_back(waker.clone());
     }
 
     /// Returns `true` if there are registered waiters (diagnostic use only).
