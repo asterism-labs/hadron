@@ -52,6 +52,7 @@ use crate::percpu::{CpuLocal, MAX_CPUS};
 use crate::sync::SpinLock;
 use crate::{kdebug, kinfo, kwarn};
 
+use crate::fs::Inode;
 use crate::fs::file::{FileDescriptorTable, OpenFlags};
 use crate::id::Fd;
 use crate::sync::HeapWaitQueue;
@@ -125,6 +126,8 @@ pub enum TrapReason {
     Futex = 7,
     /// Syscall requested blocking `accept()` on a Unix socket.
     Accept = 8,
+    /// Syscall requested blocking poll (`event_wait_many` with timeout).
+    Poll = 9,
 }
 
 impl TrapReason {
@@ -139,6 +142,7 @@ impl TrapReason {
             6 => Self::Exec,
             7 => Self::Futex,
             8 => Self::Accept,
+            9 => Self::Poll,
             _ => Self::Exit,
         }
     }
@@ -312,6 +316,14 @@ static FUTEX_VAL: CpuLocal<AtomicU64> = CpuLocal::new([const { AtomicU64::new(0)
 
 /// Per-CPU listening socket fd for TRAP_ACCEPT.
 static ACCEPT_FD: CpuLocal<AtomicU64> = CpuLocal::new([const { AtomicU64::new(0) }; MAX_CPUS]);
+
+/// Per-CPU user pointer to `PollFd` array for TRAP_POLL.
+static POLL_FDS_PTR: CpuLocal<AtomicU64> = CpuLocal::new([const { AtomicU64::new(0) }; MAX_CPUS]);
+/// Per-CPU number of fds for TRAP_POLL.
+static POLL_NFDS: CpuLocal<AtomicU64> = CpuLocal::new([const { AtomicU64::new(0) }; MAX_CPUS]);
+/// Per-CPU timeout in milliseconds for TRAP_POLL.
+static POLL_TIMEOUT_MS: CpuLocal<AtomicU64> =
+    CpuLocal::new([const { AtomicU64::new(0) }; MAX_CPUS]);
 
 /// Send a signal to all processes in a process group.
 ///
@@ -997,6 +1009,20 @@ impl FutexState {
     pub fn set_params(addr: u64, val: u64) {
         FUTEX_ADDR.get().store(addr, Ordering::Release);
         FUTEX_VAL.get().store(val, Ordering::Release);
+    }
+}
+
+// ── PollState facade ──────────────────────────────────────────────
+
+/// Zero-sized facade for blocking poll syscall parameters.
+pub struct PollState;
+
+impl PollState {
+    /// Sets the poll parameters for a `TRAP_POLL`.
+    pub fn set_params(fds_ptr: u64, nfds: u64, timeout_ms: u64) {
+        POLL_FDS_PTR.get().store(fds_ptr, Ordering::Release);
+        POLL_NFDS.get().store(nfds, Ordering::Release);
+        POLL_TIMEOUT_MS.get().store(timeout_ms, Ordering::Release);
     }
 }
 
@@ -2010,6 +2036,192 @@ async fn process_task_inner(process: Arc<Process>, first_entry_args: Option<(u64
                 }
 
                 // Check for pending signals after futex wait completes.
+                match check_signals(&process) {
+                    SignalCheckResult::Terminate(exit_code) => {
+                        kinfo!("Process {} killed by signal (exit {})", pid, exit_code);
+                        *process.exit_status.lock() = Some(exit_code);
+                        process.exit_notify.wake_all();
+                        break;
+                    }
+                    SignalCheckResult::Delivered | SignalCheckResult::None => {}
+                }
+                continue;
+            }
+            TrapReason::Poll => {
+                let poll_fds_ptr = POLL_FDS_PTR.get().load(Ordering::Acquire) as usize;
+                let poll_nfds = POLL_NFDS.get().load(Ordering::Acquire) as usize;
+                let poll_timeout = POLL_TIMEOUT_MS.get().load(Ordering::Acquire);
+
+                // Snapshot saved user registers (same pattern as TRAP_FUTEX).
+                // SAFETY: SYSCALL_SAVED_REGS is only written by syscall entry
+                // assembly with interrupts masked, and we haven't yielded yet.
+                let (
+                    saved_rip,
+                    saved_rflags,
+                    saved_rbx,
+                    saved_rbp,
+                    saved_r12,
+                    saved_r13,
+                    saved_r14,
+                    saved_r15,
+                    saved_user_rsp,
+                ) = unsafe {
+                    let saved = &*crate::arch::x86_64::syscall::SYSCALL_SAVED_REGS.get().get();
+                    (
+                        saved.user_rip,
+                        saved.user_rflags,
+                        saved.rbx,
+                        saved.rbp,
+                        saved.r12,
+                        saved.r13,
+                        saved.r14,
+                        saved.r15,
+                        crate::percpu::PerCpuState::current().user_rsp,
+                    )
+                };
+
+                // Snapshot user FPU state before the .await.
+                unsafe {
+                    let fpu_ptr = USER_FPU_CONTEXT.get().get() as *mut u8;
+                    core::arch::asm!("fxsave64 [{}]", in(reg) fpu_ptr, options(nostack));
+                }
+                let saved_fpu = unsafe { (*USER_FPU_CONTEXT.get().get()).clone() };
+
+                // Compute deadline: current ticks + timeout_ms (1 tick = 1ms).
+                let deadline = if poll_timeout == u64::MAX {
+                    u64::MAX
+                } else {
+                    crate::time::Time::timer_ticks() + poll_timeout
+                };
+
+                // Phase 1: clone inodes while holding fd_table.
+                //
+                // poll_readiness() on unix sockets acquires unix_socket (level 3).
+                // fd_table is level 4, so calling poll_readiness() while fd_table
+                // is locked would violate lock ordering.  We collect Arc clones
+                // here — cheap and safe inside the lock — then call
+                // poll_readiness() after releasing it.
+                let inodes: Vec<Option<Arc<dyn Inode>>> = {
+                    // Switch to user CR3 to read the PollFd array.
+                    // SAFETY: user CR3 is valid; kernel upper-half is identity-mapped.
+                    unsafe {
+                        Cr3::write(process.user_cr3());
+                    }
+                    // SAFETY: poll_fds_ptr was validated by UserSlice in the syscall handler.
+                    let poll_fds = unsafe {
+                        core::slice::from_raw_parts(
+                            poll_fds_ptr as *const hadron_syscall::PollFd,
+                            poll_nfds,
+                        )
+                    };
+                    let fd_table = process.fd_table.lock();
+                    let result = poll_fds
+                        .iter()
+                        .map(|pfd| {
+                            fd_table
+                                .get(crate::id::Fd::new(pfd.fd))
+                                .map(|f| f.inode.clone())
+                        })
+                        .collect();
+                    drop(fd_table);
+                    unsafe {
+                        Cr3::write(TrapContext::kernel_cr3());
+                    }
+                    result
+                };
+
+                // Phase 2: poll readiness outside all locks.
+                #[expect(
+                    clippy::cast_possible_wrap,
+                    reason = "ready_count fits in isize for syscall return"
+                )]
+                let ready_count: isize = core::future::poll_fn(|cx| {
+                    // Register timeout waker so we get woken at deadline.
+                    if deadline != u64::MAX {
+                        crate::sched::timer::register_sleep_waker(deadline, cx.waker().clone());
+                    }
+
+                    // Switch to user CR3 to write revents back into user memory.
+                    // SAFETY: user CR3 is valid; kernel upper-half is identity-mapped.
+                    unsafe {
+                        Cr3::write(process.user_cr3());
+                    }
+
+                    // SAFETY: poll_fds_ptr was validated by UserSlice in the syscall handler.
+                    let poll_fds = unsafe {
+                        core::slice::from_raw_parts_mut(
+                            poll_fds_ptr as *mut hadron_syscall::PollFd,
+                            poll_nfds,
+                        )
+                    };
+
+                    let mut count: isize = 0;
+
+                    // No fd_table lock needed — inodes already cloned above.
+                    for (pfd, inode_opt) in poll_fds.iter_mut().zip(inodes.iter()) {
+                        pfd.revents = 0;
+                        match inode_opt {
+                            None => {
+                                pfd.revents = crate::syscall::POLLNVAL;
+                                count += 1;
+                            }
+                            Some(inode) => {
+                                // Register waker BEFORE checking readiness (prevents lost wakeups).
+                                let readiness = inode.poll_readiness(Some(cx.waker()));
+                                pfd.revents = readiness
+                                    & (pfd.events
+                                        | hadron_syscall::POLLERR
+                                        | hadron_syscall::POLLHUP
+                                        | hadron_syscall::POLLNVAL);
+                                if pfd.revents != 0 {
+                                    count += 1;
+                                }
+                            }
+                        }
+                    }
+
+                    // Switch back to kernel CR3.
+                    unsafe {
+                        Cr3::write(TrapContext::kernel_cr3());
+                    }
+
+                    if count > 0 || crate::time::Time::timer_ticks() >= deadline {
+                        core::task::Poll::Ready(count)
+                    } else {
+                        core::task::Poll::Pending
+                    }
+                })
+                .await;
+
+                // Restore FPU state after poll wait.
+                unsafe {
+                    *USER_FPU_CONTEXT.get().get() = saved_fpu;
+                }
+
+                // Restore user registers, returning ready_count in rax.
+                unsafe {
+                    let ctx = &mut *USER_CONTEXT.get().get();
+                    ctx.rip = saved_rip;
+                    ctx.rflags = saved_rflags;
+                    ctx.rsp = saved_user_rsp;
+                    ctx.rbx = saved_rbx;
+                    ctx.rbp = saved_rbp;
+                    ctx.r12 = saved_r12;
+                    ctx.r13 = saved_r13;
+                    ctx.r14 = saved_r14;
+                    ctx.r15 = saved_r15;
+                    ctx.rax = ready_count as u64;
+                    ctx.rcx = 0;
+                    ctx.rdx = 0;
+                    ctx.rsi = 0;
+                    ctx.rdi = 0;
+                    ctx.r8 = 0;
+                    ctx.r9 = 0;
+                    ctx.r10 = 0;
+                    ctx.r11 = 0;
+                }
+
+                // Check for pending signals after poll completes.
                 match check_signals(&process) {
                     SignalCheckResult::Terminate(exit_code) => {
                         kinfo!("Process {} killed by signal (exit {})", pid, exit_code);

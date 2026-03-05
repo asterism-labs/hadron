@@ -18,9 +18,9 @@ use hadron_syscall::PollFd;
 /// `timeout_ms`: 0 = non-blocking, `usize::MAX` = infinite (blocks via trap),
 /// other values = timeout in ms (blocks via trap).
 ///
-/// For the initial implementation, only non-blocking (timeout_ms == 0) and
-/// single-shot polling is supported. Blocking poll is handled by retrying
-/// in userspace or via the trap mechanism in a future iteration.
+/// When nothing is ready and `timeout_ms > 0`, longjmps back to `process_task`
+/// via `trap_poll()`, where the executor `.await`s on fd readiness with a
+/// timeout (same mechanism as `TrapReason::Futex` and `TrapReason::Sleep`).
 #[expect(
     clippy::cast_possible_wrap,
     reason = "returning negated errno or small count as isize"
@@ -88,12 +88,9 @@ pub(super) fn sys_event_wait_many(fds_ptr: usize, nfds: usize, timeout_ms: usize
         }
     }
 
-    // If nothing is ready and timeout > 0, we'd need to block.
-    // For now, return the count (0 means nothing ready in non-blocking mode).
+    // If nothing is ready and timeout > 0, block via trap mechanism.
     if ready_count == 0 && timeout_ms > 0 {
-        // TODO: implement blocking poll via trap mechanism.
-        // For now, return 0 to indicate nothing ready (non-blocking behavior).
-        return 0;
+        trap_poll(fds_ptr, nfds, timeout_ms);
     }
 
     ready_count
@@ -133,6 +130,36 @@ pub(super) fn sys_futex(addr: usize, op: usize, val: usize, _timeout_ms: usize) 
             }
         }
         _ => -EINVAL,
+    }
+}
+
+/// Trigger a `TRAP_POLL` longjmp back to `process_task`.
+///
+/// Sets the poll parameters (fds pointer, count, timeout), restores kernel
+/// CR3 and GS bases, then calls `restore_kernel_context` — never returns.
+fn trap_poll(fds_ptr: usize, nfds: usize, timeout_ms: usize) -> ! {
+    use crate::arch::x86_64::registers::control::Cr3;
+    use crate::arch::x86_64::registers::model_specific::{IA32_GS_BASE, IA32_KERNEL_GS_BASE};
+    use crate::arch::x86_64::userspace::restore_kernel_context;
+
+    let kernel_cr3 = crate::proc::TrapContext::kernel_cr3();
+
+    // SAFETY: Restoring kernel CR3 and GS bases is the standard pattern
+    // for returning from userspace context to kernel context.
+    unsafe {
+        Cr3::write(kernel_cr3);
+        let percpu = IA32_GS_BASE.read();
+        IA32_KERNEL_GS_BASE.write(percpu);
+    }
+
+    crate::proc::PollState::set_params(fds_ptr as u64, nfds as u64, timeout_ms as u64);
+    crate::proc::TrapContext::set_trap_reason(crate::proc::TrapReason::Poll);
+
+    let saved_rsp = crate::proc::TrapContext::saved_kernel_rsp();
+    // SAFETY: saved_rsp is the kernel RSP saved by enter_userspace_save,
+    // still valid on the executor stack.
+    unsafe {
+        restore_kernel_context(saved_rsp);
     }
 }
 
