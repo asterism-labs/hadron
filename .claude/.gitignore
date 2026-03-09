@@ -1,0 +1,17 @@
+# Ignore everything by default
+*
+
+# Allow this file
+!.gitignore
+
+# Allow project settings (shared)
+!settings.json
+
+# Allow project skills (shared)
+!skills/
+!skills/*/
+!skills/**/SKILL.md
+
+# Allow project hooks (shared)
+!hooks/
+!hooks/**

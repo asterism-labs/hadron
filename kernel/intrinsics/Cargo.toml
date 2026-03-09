@@ -1,0 +1,29 @@
+[package]
+name = "hadron-intrinsics"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "SIMD intrinsic wrappers for the Hadron kernel"
+
+[lib]
+bench = false
+doctest = false
+
+[dependencies]
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+missing_docs = "warn"
+
+[lints.rust.unexpected_cfgs]
+level = "warn"
+check-cfg = [
+    'cfg(hadron_kernel_fpu)',
+]
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"

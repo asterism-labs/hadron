@@ -1,0 +1,24 @@
+[package]
+name = "hadron-syscall"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+readme.workspace = true
+publish = true
+
+[lib]
+bench = false
+doctest = false
+
+[dependencies]
+hadron-syscall-macros = { workspace = true }
+
+[features]
+kernel = [  ]
+userspace = [  ]
+
+[lints]
+workspace = true

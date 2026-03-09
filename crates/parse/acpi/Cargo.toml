@@ -1,0 +1,23 @@
+[package]
+name = "hadron-acpi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+readme.workspace = true
+publish = true
+
+[lib]
+bench = false
+doctest = false
+
+[features]
+alloc = []
+
+[dependencies]
+hadron-binparse = { workspace = true }
+
+[lints]
+workspace = true

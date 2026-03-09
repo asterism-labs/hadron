@@ -1,0 +1,15 @@
+[package]
+name = "hadron-libc-core"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[features]
+default = []
+userspace = ["hadron-syscall/userspace"]
+# Enables the ELF entry point (`_start`) and `eh_personality` lang item.
+# Must NOT be enabled when linking alongside a separate runtime (e.g. hadron-utest).
+runtime = ["userspace"]
+
+[dependencies]
+hadron-syscall = { path = "../../../kernel/syscall", default-features = false }

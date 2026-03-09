@@ -1,0 +1,12 @@
+[target.x86_64-unknown-hadron]
+runner = "cargo-image-runner"
+rustflags = [ "-C", "force-frame-pointers=yes" ]
+
+[target.aarch64-unknown-hadron]
+runner = "cargo-image-runner"
+
+[target.x86_64-unknown-uefi]
+runner = "cargo-image-runner"
+
+# Note: build-std is passed via gluon, not in this config,
+# to avoid affecting native builds (like gluon itself).

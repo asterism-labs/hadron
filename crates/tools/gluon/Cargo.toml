@@ -1,0 +1,27 @@
+[package]
+name = "gluon"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+anyhow = { workspace = true }
+cargo-image-runner = { workspace = true }
+clap = { workspace = true }
+crc32fast = { workspace = true }
+crossterm = { workspace = true }
+flate2 = { workspace = true }
+hadris-cpio = { workspace = true, features = ["std", "write"] }
+hadron-dwarf = { workspace = true }
+hadron-elf = { workspace = true }
+hadron-perf = { workspace = true }
+ratatui = { workspace = true }
+rhai = { workspace = true }
+rustc-demangle = { workspace = true }
+semver = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tar = { workspace = true }
+toml = { workspace = true }
+walkdir = { workspace = true }

@@ -1,0 +1,13 @@
+[package]
+name = "hadron-perf"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+anyhow = { workspace = true }
+hadron-elf = { workspace = true }
+inferno = { workspace = true }
+rustc-demangle = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

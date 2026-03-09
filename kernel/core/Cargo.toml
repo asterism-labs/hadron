@@ -1,0 +1,45 @@
+[package]
+name = "hadron-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Core types and synchronization primitives for the Hadron kernel"
+
+[lib]
+bench = false
+doctest = false
+
+[dependencies]
+bitflags = { workspace = true }
+hadron-linkset = { workspace = true }
+planck-noalloc = { workspace = true }
+
+[dev-dependencies]
+loom = "0.7"
+shuttle = "0.8"
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+missing_docs = "warn"
+
+[lints.rust.unexpected_cfgs]
+level = "warn"
+check-cfg = [
+    'cfg(hadron_lockdep)',
+    'cfg(hadron_lock_debug)',
+    'cfg(hadron_lock_stat)',
+    'cfg(hadron_lock_stress)',
+    'cfg(hadron_lockdep_warn)',
+    'cfg(hadron_hardened)',
+    'cfg(loom)',
+    'cfg(miri)',
+    'cfg(kani)',
+    'cfg(shuttle)',
+]
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"

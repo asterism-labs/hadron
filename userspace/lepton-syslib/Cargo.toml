@@ -1,0 +1,8 @@
+[package]
+name = "lepton-syslib"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+hadron-syscall = { path = "../../kernel/syscall", features = [ "userspace" ] }

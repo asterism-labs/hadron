@@ -1,0 +1,19 @@
+[package]
+name = "hadron-fdt"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+readme.workspace = true
+publish = true
+
+[features]
+alloc = []
+
+[dependencies]
+hadron-binparse = { workspace = true }
+
+[lints]
+workspace = true
