@@ -266,6 +266,13 @@ let utest_deps = group("utest-deps").target("x86_64-unknown-hadron-user").editio
 utest_deps.add("hadron-utest", "crates/test/hadron-utest")
     .deps(#{ hadron_syscall: "hadron-syscall-user" });
 
+// hadron-libc-core compiled without the `runtime` feature (no _start / panic
+// handler) so utest binaries can link against it without conflicting with the
+// entry point and panic handler provided by hadron-utest.
+utest_deps.add("hadron-libc-core-utest", "userspace/hadron-libc/core")
+    .features(["userspace"])
+    .deps(#{ hadron_syscall: "hadron-syscall-user" });
+
 // ===========================================================================
 // Benchmark dependency crates (compiled on-demand during benchmarks)
 // ===========================================================================
@@ -331,13 +338,23 @@ userspace.add("hadron-syscall-user", "kernel/syscall")
     .features(["userspace"])
     .deps(#{ hadron_syscall_macros: #{ "crate": "hadron-syscall-macros", proc_macro: true } });
 
+// hadron-libc-core without the `runtime` feature: no `_start`, no panic
+// handler.  Used as the shared rlib for type-checking and as the extern for
+// utest binaries (see utest-deps group below).
 userspace.add("hadron-libc-core", "userspace/hadron-libc/core")
     .features(["userspace"])
     .deps(#{ hadron_syscall: "hadron-syscall-user" });
 
+// hadron-libc-core-runtime: same source, compiled with `runtime` feature so
+// it includes `_start` and the EH personality.  Only consumed by the
+// hadron-libc staticlib; never exposed to utest binaries.
+userspace.add("hadron-libc-core-runtime", "userspace/hadron-libc/core")
+    .features(["userspace", "runtime"])
+    .deps(#{ hadron_syscall: "hadron-syscall-user" });
+
 userspace.add("hadron-libc", "userspace/hadron-libc")
     .crate_type(STATICLIB)
-    .deps(#{ hadron_libc_core: "hadron-libc-core", hadron_syscall: "hadron-syscall-user" });
+    .deps(#{ hadron_libc_core: "hadron-libc-core-runtime", hadron_syscall: "hadron-syscall-user" });
 
 userspace.add("lepton-syslib", "userspace/lepton-syslib")
     .deps(#{ hadron_syscall: "hadron-syscall-user" });
@@ -358,13 +375,15 @@ userspace.add("lepton-coreutils", "userspace/coreutils")
 userspace.add("lepton-gfx", "userspace/lepton-gfx")
     .deps(#{});
 
-userspace.add("lepton-display-protocol", "userspace/lepton-display-protocol")
-    .deps(#{});
+userspace.add("lepton-wayland", "userspace/lepton-wayland")
+    .deps(#{
+        lepton_syslib: "lepton-syslib"
+    });
 
 userspace.add("lepton-display-client", "userspace/lepton-display-client")
     .deps(#{
         lepton_syslib: "lepton-syslib",
-        lepton_display_protocol: "lepton-display-protocol",
+        lepton_wayland: "lepton-wayland",
         lepton_gfx: "lepton-gfx"
     });
 
@@ -373,7 +392,7 @@ userspace.add("lepton-compositor", "userspace/lepton-compositor")
     .deps(#{
         lepton_syslib: "lepton-syslib",
         lepton_gfx: "lepton-gfx",
-        lepton_display_protocol: "lepton-display-protocol"
+        lepton_wayland: "lepton-wayland"
     });
 
 userspace.add("lepton-sysmon", "userspace/lepton-sysmon")

@@ -37,7 +37,7 @@ pub mod search;
 pub mod signal;
 #[cfg(feature = "userspace")]
 pub mod socket;
-#[cfg(feature = "userspace")]
+#[cfg(feature = "runtime")]
 pub mod start;
 #[cfg(feature = "userspace")]
 pub mod stdio;
@@ -47,6 +47,6 @@ pub mod sys;
 #[cfg(feature = "userspace")]
 pub mod time;
 
-#[cfg(not(test))]
+#[cfg(all(not(test), feature = "runtime"))]
 #[lang = "eh_personality"]
 fn eh_personality() {}

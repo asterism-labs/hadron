@@ -784,6 +784,17 @@ fn compile_utest_binary(
             .arg(format!("hadron_syscall_user={}", syscall_rlib.display()));
     }
 
+    // hadron-libc-core-utest: the libc core rlib compiled without the `runtime`
+    // feature (no `_start`, no panic handler).  Aliased as `hadron_libc_core` so
+    // that `extern crate hadron_libc_core` resolves, and its `#[no_mangle]`
+    // symbols (strlen, atoi, …) are available to C-ABI extern blocks without
+    // a `#[link(name = "hadron_libc")]` attribute.
+    let libc_core_rlib = lib_dir.join("libhadron_libc_core_utest.rlib");
+    if libc_core_rlib.exists() {
+        cmd.arg("--extern")
+            .arg(format!("hadron_libc_core={}", libc_core_rlib.display()));
+    }
+
     // Output directory.
     cmd.arg("--out-dir").arg(out_dir);
 

@@ -15,7 +15,7 @@
 extern crate alloc;
 use alloc::vec::Vec;
 
-// ── Encoding ─────────────────────────────────────────────────────────────────
+// -- Encoding ----------------------------------------------------------------
 
 /// Append a `u32` (little-endian) to `buf`.
 #[inline]
@@ -76,7 +76,7 @@ pub fn end_msg(buf: &mut Vec<u8>, start: usize, opcode: u16) {
     buf[start + 7] = bytes[3];
 }
 
-// ── Decoding ─────────────────────────────────────────────────────────────────
+// -- Decoding ----------------------------------------------------------------
 
 /// Parse a Wayland message header from the front of `data`.
 ///

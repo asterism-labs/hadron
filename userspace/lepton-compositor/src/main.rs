@@ -27,8 +27,8 @@ use lepton_syslib::hadron_syscall::{
 };
 use lepton_syslib::{io, println, sys};
 
-mod net;
-mod proto;
+use lepton_wayland::net;
+use lepton_wayland::wire as proto;
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -199,6 +199,9 @@ struct Client {
     objects: Vec<ObjEntry>,
     /// Serial counter for configure events.
     next_serial: u32,
+    /// Fd received in a previous recv that no handler consumed yet.
+    /// Carried across dispatch cycles so it reaches the right message.
+    deferred_fd: Option<usize>,
 }
 
 impl Client {
@@ -209,6 +212,7 @@ impl Client {
             write_buf: Vec::new(),
             objects: Vec::new(),
             next_serial: 1,
+            deferred_fd: None,
         };
         // wl_display is always object 1.
         c.objects.push(ObjEntry::new(1, ObjKind::Display));
@@ -612,23 +616,19 @@ impl Compositor {
             } else {
                 None
             };
-            // We hand the fd to the first message that consumes it.
-            let mut fd_taken = false;
+            // Merge any deferred fd from a previous recv cycle with the newly received fd.
+            let mut pending_fd = recv_fd_opt.or(client.deferred_fd.take());
             let mut consumed = 0usize;
             let buf_snapshot: Vec<u8> = client.read_buf.clone();
             while let Some((obj_id, opcode, msg_size)) =
                 proto::parse_header(&buf_snapshot[consumed..])
             {
                 let args = &buf_snapshot[consumed + 8..consumed + msg_size];
-                let fd_for_this = if !fd_taken {
-                    fd_taken = true;
-                    recv_fd_opt
-                } else {
-                    None
-                };
-                dispatch(client, obj_id, opcode, args, fd_for_this);
+                dispatch(client, obj_id, opcode, args, &mut pending_fd);
                 consumed += msg_size;
             }
+            // Store unconsumed fd for the next dispatch cycle instead of closing it.
+            client.deferred_fd = pending_fd;
             // Discard the bytes we processed.
             {
                 let remaining = client.read_buf.len().saturating_sub(consumed);
@@ -643,6 +643,9 @@ impl Compositor {
         for i in disconnected.into_iter().rev() {
             let c = self.clients.remove(i);
             println!("[compositor] client {} disconnected", c.fd);
+            if let Some(fd) = c.deferred_fd {
+                sys::close(fd);
+            }
             sys::close(c.fd);
         }
 
@@ -709,7 +712,7 @@ fn blit(
 // ── Message dispatcher ───────────────────────────────────────────────────────
 
 /// Dispatch one parsed Wayland request to the appropriate handler.
-fn dispatch(client: &mut Client, obj_id: u32, opcode: u16, args: &[u8], recv_fd: Option<usize>) {
+fn dispatch(client: &mut Client, obj_id: u32, opcode: u16, args: &[u8], recv_fd: &mut Option<usize>) {
     let kind = client.obj_kind(obj_id);
     match (kind, opcode) {
         // wl_display
@@ -918,7 +921,7 @@ fn handle_surface_commit(client: &mut Client, surf_id: u32) {
 /// `wl_shm.create_pool(id, fd, size)`.
 ///
 /// The fd arrives as SCM_RIGHTS in `recv_fd`. Wire args: [uint32 id][int32 size].
-fn handle_shm_create_pool(client: &mut Client, args: &[u8], recv_fd: Option<usize>) {
+fn handle_shm_create_pool(client: &mut Client, args: &[u8], recv_fd: &mut Option<usize>) {
     let (id, off) = match proto::read_u32(args, 0) {
         Some(v) => v,
         None => return,
@@ -928,7 +931,7 @@ fn handle_shm_create_pool(client: &mut Client, args: &[u8], recv_fd: Option<usiz
         None => return,
     };
     let size = size_i32.max(0) as usize;
-    let fd = match recv_fd {
+    let fd = match recv_fd.take() {
         Some(f) => f,
         None => return, // fd is required
     };
@@ -1153,6 +1156,14 @@ extern "C" fn main(_argc: isize, _argv: *const *const u8) -> isize {
             return 1;
         }
     };
+
+    // Launch a default terminal so the user has something to interact with.
+    let ret = sys::spawn("/bin/terminal", &["/bin/terminal"]);
+    if ret < 0 {
+        println!("[compositor] failed to spawn terminal: errno {}", -ret);
+    } else {
+        println!("[compositor] spawned terminal (pid {})", ret);
+    }
 
     println!("[compositor] running");
     loop {

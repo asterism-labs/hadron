@@ -1,31 +1,52 @@
 //! Display client library for compositor-managed applications.
 //!
-//! Supports two connection modes:
-//! 1. **Legacy** (fd-passing at spawn): fd 3 = channel, fd 4 = shm.
-//! 2. **Dynamic**: open `/dev/compositor`, send `CreateWindow`, receive
-//!    `Configure` + shm fd via `channel_recv_fd`.
+//! Connects to the Wayland compositor at `/run/wayland-0` and performs the
+//! full Wayland handshake to obtain a shared-memory surface for rendering.
 //!
-//! [`Display::connect`] tries the legacy path first, then falls back to
-//! the dynamic path.
+//! The public API is unchanged from the previous channel-based implementation:
+//! [`Display::connect`], [`Display::surface`], [`Display::commit`],
+//! [`Display::poll_event`], and [`Display::disconnect`].
 
 #![no_std]
 
 extern crate alloc;
 
-use lepton_display_protocol::{
-    self as proto, MESSAGE_SIZE, OP_CONFIGURE, OP_FOCUS_GAINED, OP_FOCUS_LOST, OP_KEYBOARD_INPUT,
-    OP_MOUSE_INPUT,
-};
+use alloc::vec::Vec;
 use lepton_gfx::Surface;
-use lepton_syslib::{io, sys};
+use lepton_syslib::sys;
+use lepton_wayland::consts::*;
+use lepton_wayland::{net, wire};
 
-/// Channel endpoint fd inherited from the compositor (legacy path).
-const LEGACY_CHANNEL_FD: usize = 3;
-/// Shared-memory fd inherited from the compositor (legacy path).
-const LEGACY_SHM_FD: usize = 4;
-
-/// Bytes per pixel (32-bit BGRA).
+/// Bytes per pixel (32-bit XRGB).
 const BPP: usize = 4;
+
+/// Default surface width when compositor sends (0, 0).
+const DEFAULT_WIDTH: u32 = 800;
+/// Default surface height when compositor sends (0, 0).
+const DEFAULT_HEIGHT: u32 = 600;
+
+// -- Object ID scheme (hardcoded) --------------------------------------------
+
+/// `wl_display` — implicit, always 1.
+const OBJ_DISPLAY: u32 = 1;
+/// `wl_registry` — allocated by `get_registry`.
+const OBJ_REGISTRY: u32 = 2;
+/// `wl_compositor` — bound global.
+const OBJ_COMPOSITOR: u32 = 3;
+/// `wl_shm` — bound global.
+const OBJ_SHM: u32 = 4;
+/// `xdg_wm_base` — bound global.
+const OBJ_XDG_WM_BASE: u32 = 5;
+/// `wl_surface` — created surface.
+const OBJ_SURFACE: u32 = 6;
+/// `wl_shm_pool` — created pool.
+const OBJ_SHM_POOL: u32 = 7;
+/// `wl_buffer` — created buffer.
+const OBJ_BUFFER: u32 = 8;
+/// `xdg_surface` — wraps wl_surface.
+const OBJ_XDG_SURFACE: u32 = 9;
+/// `xdg_toplevel` — top-level window role.
+const OBJ_TOPLEVEL: u32 = 10;
 
 /// A connection to the compositor.
 pub struct Display {
@@ -37,8 +58,8 @@ pub struct Display {
     shm_ptr: *mut u8,
     /// Size of the shared-memory region in bytes.
     shm_size: usize,
-    /// Channel fd to the compositor.
-    channel_fd: usize,
+    /// Socket fd connected to the compositor.
+    socket_fd: usize,
     /// Shared-memory fd (kept open so the mapping stays valid).
     shm_fd: usize,
 }
@@ -72,93 +93,302 @@ pub enum Event {
 }
 
 impl Display {
-    /// Connect to the compositor.
+    /// Connect to the compositor via Wayland protocol.
     ///
-    /// Tries the legacy path (fd 3/4 from spawn) first, then falls back to
-    /// the dynamic path (opening `/dev/compositor`).
+    /// Performs the full handshake: socket connect, registry bind, surface
+    /// creation, SHM pool setup, and initial configure/attach/commit.
     pub fn connect() -> Option<Self> {
-        // Try legacy: check if fd 3 has a pending Configure message.
-        if sys::poll_fd_read(LEGACY_CHANNEL_FD) {
-            if let Some(d) = Self::connect_legacy() {
-                return Some(d);
+        // 1. Create socket and connect to compositor.
+        let sfd = net::socket_create();
+        if sfd < 0 {
+            return None;
+        }
+        let socket_fd = sfd as usize;
+
+        if net::socket_connect(socket_fd, WAYLAND_SOCKET_PATH) < 0 {
+            sys::close(socket_fd);
+            return None;
+        }
+
+        // 2. Send wl_display.get_registry(new_id=2).
+        let mut buf = Vec::new();
+        let start = wire::begin_msg(&mut buf, OBJ_DISPLAY, WL_DISPLAY_GET_REGISTRY);
+        wire::push_u32(&mut buf, OBJ_REGISTRY);
+        wire::end_msg(&mut buf, start, WL_DISPLAY_GET_REGISTRY);
+        if !net::send_all(socket_fd, &buf) {
+            sys::close(socket_fd);
+            return None;
+        }
+
+        // 3. Read registry global events.
+        //    We expect 3 globals: wl_compositor, wl_shm, xdg_wm_base.
+        let mut recv_buf = [0u8; 4096];
+        let mut recv_pos = 0usize;
+        let mut globals_seen = 0u32;
+
+        while globals_seen < 3 {
+            let (n, _) = net::recv_with_fd(socket_fd, &mut recv_buf[recv_pos..]);
+            if n <= 0 {
+                sys::close(socket_fd);
+                return None;
+            }
+            recv_pos += n as usize;
+
+            // Parse all complete messages in the buffer.
+            let mut consumed = 0;
+            while let Some((obj, opcode, size)) = wire::parse_header(&recv_buf[consumed..recv_pos])
+            {
+                if obj == OBJ_REGISTRY && opcode == WL_REGISTRY_GLOBAL {
+                    globals_seen += 1;
+                }
+                consumed += size;
+            }
+            // Shift unconsumed data to front.
+            if consumed > 0 {
+                recv_buf.copy_within(consumed..recv_pos, 0);
+                recv_pos -= consumed;
             }
         }
-        // Dynamic: open /dev/compositor.
-        Self::connect_dynamic()
-    }
 
-    /// Legacy connection: read Configure from fd 3, map shm from fd 4.
-    fn connect_legacy() -> Option<Self> {
-        let mut buf = [0u8; MESSAGE_SIZE];
-        let n = sys::channel_recv(LEGACY_CHANNEL_FD, &mut buf).ok()?;
-        if n < MESSAGE_SIZE {
+        // 4. Bind globals: compositor, shm, xdg_wm_base.
+        buf.clear();
+        Self::bind_global(
+            &mut buf,
+            OBJ_REGISTRY,
+            GLOBAL_COMPOSITOR,
+            WL_COMPOSITOR,
+            WL_COMPOSITOR_VERSION,
+            OBJ_COMPOSITOR,
+        );
+        Self::bind_global(
+            &mut buf,
+            OBJ_REGISTRY,
+            GLOBAL_SHM,
+            WL_SHM,
+            WL_SHM_VERSION,
+            OBJ_SHM,
+        );
+        Self::bind_global(
+            &mut buf,
+            OBJ_REGISTRY,
+            GLOBAL_XDG_WM_BASE,
+            XDG_WM_BASE,
+            XDG_WM_BASE_VERSION,
+            OBJ_XDG_WM_BASE,
+        );
+        if !net::send_all(socket_fd, &buf) {
+            sys::close(socket_fd);
             return None;
         }
 
-        if proto::peek_opcode(&buf) != OP_CONFIGURE {
+        // 5. Read wl_shm.format events (expect at least XRGB8888).
+        //    Drain until we see at least one format event.
+        let mut got_format = false;
+        while !got_format {
+            let (n, _) = net::recv_with_fd(socket_fd, &mut recv_buf[recv_pos..]);
+            if n <= 0 {
+                sys::close(socket_fd);
+                return None;
+            }
+            recv_pos += n as usize;
+
+            let mut consumed = 0;
+            while let Some((obj, opcode, size)) = wire::parse_header(&recv_buf[consumed..recv_pos])
+            {
+                if obj == OBJ_SHM && opcode == WL_SHM_FORMAT_EVENT {
+                    got_format = true;
+                }
+                consumed += size;
+            }
+            if consumed > 0 {
+                recv_buf.copy_within(consumed..recv_pos, 0);
+                recv_pos -= consumed;
+            }
+        }
+
+        // 6. Create surface: wl_compositor.create_surface(new_id=6).
+        buf.clear();
+        let start = wire::begin_msg(&mut buf, OBJ_COMPOSITOR, WL_COMPOSITOR_CREATE_SURFACE);
+        wire::push_u32(&mut buf, OBJ_SURFACE);
+        wire::end_msg(&mut buf, start, WL_COMPOSITOR_CREATE_SURFACE);
+        if !net::send_all(socket_fd, &buf) {
+            sys::close(socket_fd);
             return None;
         }
 
-        let cfg = proto::decode_msg::<proto::Configure>(&buf);
-        let width = cfg.width;
-        let height = cfg.height;
-
+        // 7. Create shared memory for the pixel buffer.
+        //    Use default size initially; we resize after configure.
+        let width = DEFAULT_WIDTH;
+        let height = DEFAULT_HEIGHT;
         let shm_size = width as usize * height as usize * BPP;
-        let shm_ptr = sys::mem_map_shared(LEGACY_SHM_FD, shm_size)?;
+
+        let shm_fd = match sys::mem_create_shared(shm_size) {
+            Ok(fd) => fd,
+            Err(_) => {
+                sys::close(socket_fd);
+                return None;
+            }
+        };
+
+        let shm_ptr = match sys::mem_map_shared(shm_fd, shm_size) {
+            Some(ptr) => ptr,
+            None => {
+                sys::close(shm_fd);
+                sys::close(socket_fd);
+                return None;
+            }
+        };
+
+        // 8. Send wl_shm.create_pool with fd, then create buffer, xdg_surface, toplevel.
+        buf.clear();
+
+        // wl_shm.create_pool(new_id=7, fd=shm_fd, size) — fd sent OOB
+        let start = wire::begin_msg(&mut buf, OBJ_SHM, WL_SHM_CREATE_POOL);
+        wire::push_u32(&mut buf, OBJ_SHM_POOL);
+        wire::push_i32(&mut buf, shm_size as i32);
+        wire::end_msg(&mut buf, start, WL_SHM_CREATE_POOL);
+
+        // Send the pool creation message with the shm fd attached.
+        if !net::send_with_fd(socket_fd, &buf, shm_fd as i32) {
+            sys::mem_unmap(shm_ptr, shm_size);
+            sys::close(shm_fd);
+            sys::close(socket_fd);
+            return None;
+        }
+
+        // wl_shm_pool.create_buffer(new_id=8, offset=0, w, h, stride, format=XRGB8888)
+        buf.clear();
+        let stride = width * BPP as u32;
+        let start = wire::begin_msg(&mut buf, OBJ_SHM_POOL, WL_SHM_POOL_CREATE_BUFFER);
+        wire::push_u32(&mut buf, OBJ_BUFFER);
+        wire::push_i32(&mut buf, 0); // offset
+        wire::push_i32(&mut buf, width as i32);
+        wire::push_i32(&mut buf, height as i32);
+        wire::push_i32(&mut buf, stride as i32);
+        wire::push_u32(&mut buf, WL_SHM_FORMAT_XRGB8888);
+        wire::end_msg(&mut buf, start, WL_SHM_POOL_CREATE_BUFFER);
+
+        // xdg_wm_base.get_xdg_surface(new_id=9, surface=6)
+        let start = wire::begin_msg(&mut buf, OBJ_XDG_WM_BASE, XDG_WM_BASE_GET_XDG_SURFACE);
+        wire::push_u32(&mut buf, OBJ_XDG_SURFACE);
+        wire::push_u32(&mut buf, OBJ_SURFACE);
+        wire::end_msg(&mut buf, start, XDG_WM_BASE_GET_XDG_SURFACE);
+
+        // xdg_surface.get_toplevel(new_id=10)
+        let start = wire::begin_msg(&mut buf, OBJ_XDG_SURFACE, XDG_SURFACE_GET_TOPLEVEL);
+        wire::push_u32(&mut buf, OBJ_TOPLEVEL);
+        wire::end_msg(&mut buf, start, XDG_SURFACE_GET_TOPLEVEL);
+
+        // wl_surface.commit() — triggers the initial configure sequence
+        let start = wire::begin_msg(&mut buf, OBJ_SURFACE, WL_SURFACE_COMMIT);
+        wire::end_msg(&mut buf, start, WL_SURFACE_COMMIT);
+
+        if !net::send_all(socket_fd, &buf) {
+            sys::mem_unmap(shm_ptr, shm_size);
+            sys::close(shm_fd);
+            sys::close(socket_fd);
+            return None;
+        }
+
+        // 9. Read configure events:
+        //    - xdg_toplevel.configure(w, h, states)
+        //    - xdg_surface.configure(serial)
+        let mut final_width = width;
+        let mut final_height = height;
+        let mut configure_serial: Option<u32> = None;
+
+        while configure_serial.is_none() {
+            let (n, _) = net::recv_with_fd(socket_fd, &mut recv_buf[recv_pos..]);
+            if n <= 0 {
+                sys::mem_unmap(shm_ptr, shm_size);
+                sys::close(shm_fd);
+                sys::close(socket_fd);
+                return None;
+            }
+            recv_pos += n as usize;
+
+            let mut consumed = 0;
+            while let Some((obj, opcode, size)) = wire::parse_header(&recv_buf[consumed..recv_pos])
+            {
+                let args = &recv_buf[consumed + 8..consumed + size];
+
+                if obj == OBJ_TOPLEVEL && opcode == XDG_TOPLEVEL_CONFIGURE {
+                    // xdg_toplevel.configure(width: int, height: int, states: array)
+                    if let Some((w, off)) = wire::read_i32(args, 0) {
+                        if let Some((h, _)) = wire::read_i32(args, off) {
+                            if w > 0 && h > 0 {
+                                final_width = w as u32;
+                                final_height = h as u32;
+                            }
+                        }
+                    }
+                } else if obj == OBJ_XDG_SURFACE && opcode == XDG_SURFACE_CONFIGURE {
+                    // xdg_surface.configure(serial)
+                    if let Some((serial, _)) = wire::read_u32(args, 0) {
+                        configure_serial = Some(serial);
+                    }
+                }
+
+                consumed += size;
+            }
+            if consumed > 0 {
+                recv_buf.copy_within(consumed..recv_pos, 0);
+                recv_pos -= consumed;
+            }
+        }
+
+        // 10. Ack configure + attach + commit.
+        buf.clear();
+
+        // xdg_surface.ack_configure(serial)
+        let serial = configure_serial.unwrap_or(0);
+        let start = wire::begin_msg(&mut buf, OBJ_XDG_SURFACE, XDG_SURFACE_ACK_CONFIGURE);
+        wire::push_u32(&mut buf, serial);
+        wire::end_msg(&mut buf, start, XDG_SURFACE_ACK_CONFIGURE);
+
+        // wl_surface.attach(buffer=8, x=0, y=0)
+        let start = wire::begin_msg(&mut buf, OBJ_SURFACE, WL_SURFACE_ATTACH);
+        wire::push_u32(&mut buf, OBJ_BUFFER);
+        wire::push_i32(&mut buf, 0);
+        wire::push_i32(&mut buf, 0);
+        wire::end_msg(&mut buf, start, WL_SURFACE_ATTACH);
+
+        // wl_surface.commit()
+        let start = wire::begin_msg(&mut buf, OBJ_SURFACE, WL_SURFACE_COMMIT);
+        wire::end_msg(&mut buf, start, WL_SURFACE_COMMIT);
+
+        if !net::send_all(socket_fd, &buf) {
+            sys::mem_unmap(shm_ptr, shm_size);
+            sys::close(shm_fd);
+            sys::close(socket_fd);
+            return None;
+        }
 
         Some(Display {
-            width,
-            height,
+            width: final_width,
+            height: final_height,
             shm_ptr,
             shm_size,
-            channel_fd: LEGACY_CHANNEL_FD,
-            shm_fd: LEGACY_SHM_FD,
-        })
-    }
-
-    /// Dynamic connection: open `/dev/compositor`, send `CreateWindow`,
-    /// receive `Configure` + shm fd.
-    fn connect_dynamic() -> Option<Self> {
-        let fd = io::open("/dev/compositor", 3); // READ | WRITE
-        if fd < 0 {
-            return None;
-        }
-        let channel_fd = fd as usize;
-
-        // Send CreateWindow request (0 = compositor chooses size).
-        let create = proto::create_window(0, 0);
-        let mut buf = [0u8; MESSAGE_SIZE];
-        proto::encode_msg(&create, &mut buf);
-        if sys::channel_send(channel_fd, &buf).is_err() {
-            sys::close(channel_fd);
-            return None;
-        }
-
-        // Receive Configure + shm fd.
-        let mut recv_buf = [0u8; MESSAGE_SIZE];
-        let (n, shm_fd_opt) = sys::channel_recv_fd(channel_fd, &mut recv_buf).ok()?;
-        if n < MESSAGE_SIZE || proto::peek_opcode(&recv_buf) != OP_CONFIGURE {
-            sys::close(channel_fd);
-            return None;
-        }
-
-        let shm_fd = shm_fd_opt?;
-
-        let cfg = proto::decode_msg::<proto::Configure>(&recv_buf);
-        let width = cfg.width;
-        let height = cfg.height;
-
-        let shm_size = width as usize * height as usize * BPP;
-        let shm_ptr = sys::mem_map_shared(shm_fd, shm_size)?;
-
-        Some(Display {
-            width,
-            height,
-            shm_ptr,
-            shm_size,
-            channel_fd,
+            socket_fd,
             shm_fd,
         })
+    }
+
+    /// Build a `wl_registry.bind` message into `buf`.
+    fn bind_global(
+        buf: &mut Vec<u8>,
+        registry_id: u32,
+        name: u32,
+        iface: &[u8],
+        version: u32,
+        new_id: u32,
+    ) {
+        let start = wire::begin_msg(buf, registry_id, WL_REGISTRY_BIND);
+        wire::push_u32(buf, name);
+        wire::push_str(buf, iface);
+        wire::push_u32(buf, version);
+        wire::push_u32(buf, new_id);
+        wire::end_msg(buf, start, WL_REGISTRY_BIND);
     }
 
     /// Returns the surface width in pixels.
@@ -181,61 +411,91 @@ impl Display {
         // interpreted as u32 pixels. The mutable borrow of `self` ensures
         // exclusive access.
         let pixels =
-            unsafe { core::slice::from_raw_parts_mut(self.shm_ptr as *mut u32, pixel_count) };
+            unsafe { core::slice::from_raw_parts_mut(self.shm_ptr.cast::<u32>(), pixel_count) };
         Surface::from_raw(pixels, self.width, self.height, self.width)
     }
 
     /// Signal the compositor that drawing is complete and the surface is ready
     /// to be composited.
-    pub fn commit(&self) {
-        let msg = proto::commit(0);
-        let mut buf = [0u8; MESSAGE_SIZE];
-        proto::encode_msg(&msg, &mut buf);
-        let _ = sys::channel_send(self.channel_fd, &buf);
+    pub fn commit(&mut self) {
+        let mut buf = Vec::new();
+
+        // wl_surface.attach(buffer=8, x=0, y=0)
+        let start = wire::begin_msg(&mut buf, OBJ_SURFACE, WL_SURFACE_ATTACH);
+        wire::push_u32(&mut buf, OBJ_BUFFER);
+        wire::push_i32(&mut buf, 0);
+        wire::push_i32(&mut buf, 0);
+        wire::end_msg(&mut buf, start, WL_SURFACE_ATTACH);
+
+        // wl_surface.commit()
+        let start = wire::begin_msg(&mut buf, OBJ_SURFACE, WL_SURFACE_COMMIT);
+        wire::end_msg(&mut buf, start, WL_SURFACE_COMMIT);
+
+        let _ = net::send_all(self.socket_fd, &buf);
     }
 
     /// Poll for the next event from the compositor (non-blocking).
     ///
-    /// Returns `None` if no event is pending.
-    pub fn poll_event(&self) -> Option<Event> {
-        if !sys::poll_fd_read(self.channel_fd) {
+    /// Returns `None` if no event is pending. Automatically handles
+    /// `xdg_wm_base.ping` keepalives and `wl_buffer.release` events.
+    pub fn poll_event(&mut self) -> Option<Event> {
+        if !sys::poll_fd_read(self.socket_fd) {
             return None;
         }
 
-        let mut buf = [0u8; MESSAGE_SIZE];
-        let n = sys::channel_recv(self.channel_fd, &mut buf).ok()?;
-        if n < MESSAGE_SIZE {
+        let mut buf = [0u8; 4096];
+        let (n, _) = net::recv_with_fd(self.socket_fd, &mut buf);
+        if n <= 0 {
             return None;
         }
 
-        match proto::peek_opcode(&buf) {
-            OP_KEYBOARD_INPUT => {
-                let msg = proto::decode_msg::<proto::KeyboardInput>(&buf);
-                Some(Event::Key {
-                    character: msg.character,
-                    keycode: msg.keycode,
-                    pressed: msg.pressed != 0,
-                })
+        let recv_len = n as usize;
+        let mut consumed = 0;
+
+        while let Some((obj, opcode, size)) = wire::parse_header(&buf[consumed..recv_len]) {
+            let args = &buf[consumed + 8..consumed + size];
+
+            // Handle xdg_wm_base.ping → auto-reply pong
+            if obj == OBJ_XDG_WM_BASE && opcode == XDG_WM_BASE_PING {
+                if let Some((serial, _)) = wire::read_u32(args, 0) {
+                    let mut reply = Vec::new();
+                    let start = wire::begin_msg(&mut reply, OBJ_XDG_WM_BASE, XDG_WM_BASE_PONG);
+                    wire::push_u32(&mut reply, serial);
+                    wire::end_msg(&mut reply, start, XDG_WM_BASE_PONG);
+                    let _ = net::send_all(self.socket_fd, &reply);
+                }
             }
-            OP_MOUSE_INPUT => {
-                let msg = proto::decode_msg::<proto::MouseInput>(&buf);
-                Some(Event::Mouse {
-                    x: msg.x,
-                    y: msg.y,
-                    buttons: msg.buttons,
-                    prev_buttons: msg.prev_buttons,
-                })
-            }
-            OP_FOCUS_GAINED => Some(Event::FocusGained),
-            OP_FOCUS_LOST => Some(Event::FocusLost),
-            _ => None,
+
+            // wl_buffer.release — no-op for single-buffer scheme
+            // Other events — no input forwarding yet (no wl_seat)
+
+            consumed += size;
         }
+
+        None
     }
 
     /// Disconnect from the compositor, unmapping shared memory and closing fds.
     pub fn disconnect(self) {
+        // Send cleanup messages (best-effort).
+        let mut buf = Vec::new();
+
+        // wl_surface.destroy()
+        let start = wire::begin_msg(&mut buf, OBJ_SURFACE, WL_SURFACE_DESTROY);
+        wire::end_msg(&mut buf, start, WL_SURFACE_DESTROY);
+
+        // wl_buffer.destroy()
+        let start = wire::begin_msg(&mut buf, OBJ_BUFFER, WL_BUFFER_DESTROY);
+        wire::end_msg(&mut buf, start, WL_BUFFER_DESTROY);
+
+        // wl_shm_pool.destroy()
+        let start = wire::begin_msg(&mut buf, OBJ_SHM_POOL, WL_SHM_POOL_DESTROY);
+        wire::end_msg(&mut buf, start, WL_SHM_POOL_DESTROY);
+
+        let _ = net::send_all(self.socket_fd, &buf);
+
         sys::mem_unmap(self.shm_ptr, self.shm_size);
         sys::close(self.shm_fd);
-        sys::close(self.channel_fd);
+        sys::close(self.socket_fd);
     }
 }

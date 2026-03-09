@@ -10,5 +10,5 @@ publish = false
 crate-type = ["staticlib"]
 
 [dependencies]
-hadron-libc-core = { path = "core", features = ["userspace"] }
+hadron-libc-core = { path = "core", features = ["userspace", "runtime"] }
 hadron-syscall = { path = "../../kernel/syscall", default-features = false, features = ["userspace"] }
