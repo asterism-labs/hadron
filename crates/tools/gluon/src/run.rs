@@ -18,9 +18,16 @@ use crate::config::ResolvedConfig;
 const LIMINE_VERSION: &str = "v10.7.0-binary";
 
 /// OVMF firmware paths (CODE + VARS) for UEFI boot.
-struct OvmfFirmware {
-    code: PathBuf,
-    vars: PathBuf,
+pub(crate) struct OvmfFirmware {
+    /// Path to OVMF CODE firmware file.
+    pub code: PathBuf,
+    /// Path to OVMF VARS firmware file.
+    pub vars: PathBuf,
+}
+
+/// Public wrapper for `ensure_ovmf` used by the script subcommand.
+pub(crate) fn ensure_ovmf_pub(config: &ResolvedConfig) -> Result<OvmfFirmware> {
+    ensure_ovmf(config)
 }
 
 /// Fetch OVMF firmware, downloading prebuilt binaries if needed.

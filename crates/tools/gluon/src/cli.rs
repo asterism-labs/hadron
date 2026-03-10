@@ -1,5 +1,7 @@
 //! Command-line interface definitions for gluon.
 
+use std::path::PathBuf;
+
 use clap::{Parser, Subcommand};
 
 /// Hadron kernel build system.
@@ -66,6 +68,19 @@ pub enum Command {
     Vendor(VendorArgs),
     /// Analyze profiling data captured from kernel serial output.
     Perf(PerfArgs),
+    /// Run a Rhai script against a booted QEMU instance for automated testing.
+    Script(ScriptArgs),
+}
+
+/// Arguments for the `script` subcommand.
+#[derive(Parser)]
+pub struct ScriptArgs {
+    /// Path to Rhai script file. If omitted, starts an interactive REPL.
+    pub script: Option<PathBuf>,
+
+    /// Extra arguments passed to QEMU after `--`.
+    #[arg(last = true)]
+    pub extra_args: Vec<String>,
 }
 
 /// Arguments for the `build` subcommand.

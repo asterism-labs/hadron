@@ -28,6 +28,7 @@ mod run;
 mod rustc_cmd;
 mod rustc_info;
 mod scheduler;
+mod script;
 mod shuttle;
 mod sysroot;
 mod test;
@@ -61,6 +62,7 @@ fn main() -> Result<()> {
         cli::Command::Fmt(ref args) => fmt::cmd_fmt(args),
         cli::Command::Menuconfig => cmd_menuconfig(&cli),
         cli::Command::Vendor(ref args) => cmd_vendor(&cli, args),
+        cli::Command::Script(ref args) => cmd_script(&cli, args),
         cli::Command::Perf(ref args) => {
             // Only resolve config for subcommands that need it (record).
             let config = match &args.command {
@@ -667,6 +669,17 @@ fn cmd_shuttle(cli: &cli::Cli, args: &cli::ShuttleArgs) -> Result<()> {
 fn cmd_bench(cli: &cli::Cli, args: &cli::BenchArgs) -> Result<()> {
     let (mut state, model) = do_build(cli)?;
     bench::run_benchmarks(&model, &mut state, args)
+}
+
+/// Run a script against a booted kernel in QEMU.
+fn cmd_script(cli: &cli::Cli, args: &cli::ScriptArgs) -> Result<()> {
+    let (state, _model) = do_build(cli)?;
+
+    let kernel_bin = state.kernel_binary.as_ref().ok_or_else(|| {
+        anyhow::anyhow!("no kernel binary produced — check boot-binary in profile")
+    })?;
+
+    script::cmd_script(&state.config, kernel_bin, args)
 }
 
 // ===========================================================================

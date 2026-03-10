@@ -61,6 +61,10 @@ loom *args:
 shuttle *args:
     RUSTFLAGS="--cfg shuttle" cargo test -p hadron-core {{args}}
 
+# Run a Rhai script against a booted QEMU instance
+script *args: bootstrap
+    {{hb}} script {{args}}
+
 # Analyze profiling data (perf report, perf record)
 perf *args: bootstrap
     {{hb}} perf {{args}}

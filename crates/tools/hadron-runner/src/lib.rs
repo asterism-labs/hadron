@@ -16,4 +16,5 @@ pub use iso::IsoBuilder;
 pub use limine::LimineCache;
 pub use qemu::{DisplayConfig, QemuConfig, QemuExit, RunningQemu, TestConfig};
 pub use qmp::QmpClient;
-pub use serial::SerialConfig;
+pub mod scripting;
+pub use serial::{SerialConfig, SerialPty};
