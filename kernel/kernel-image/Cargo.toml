@@ -1,23 +1,20 @@
 [package]
-name = "hadron-boot-uefi"
+name = "hadron-kernel-image"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
-repository.workspace = true
 license.workspace = true
-publish = false
+publish.workspace = true
 
 [[bin]]
-name = "hadron-boot-uefi"
+name = "hadron-kernel-image"
 path = "src/main.rs"
 test = false
 bench = false
 doctest = false
 
 [dependencies]
-hadron-boot-info = { workspace = true }
-hadron-elf = { workspace = true }
-uefi = { workspace = true }
+hadron-kernel = { workspace = true }
 
 [lints]
 workspace = true

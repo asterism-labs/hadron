@@ -1,12 +1,12 @@
-/* x86_64 Hadron kernel linker script (Limine bootloader, relocatable PIE)
+/* x86_64 Hadron kernel linker script (UEFI boot stub, relocatable PIE)
  *
  * This script produces a higher-half relocatable ELF (ET_DYN) loaded by
- * Limine at KERNEL_VADDR.  The ELF must contain a valid PT_DYNAMIC segment
- * so that Limine's ELF loader accepts it.
+ * the UEFI boot stub at KERNEL_VADDR. The ELF must contain a valid
+ * PT_DYNAMIC segment so that the stub's ELF loader can process relocations.
  *
  * Section layout:
  *   .text       Executable code
- *   .rodata     Read-only data (includes Limine request markers)
+ *   .rodata     Read-only data
  *   .dynsym     Dynamic symbol table  \
  *   .dynstr     Dynamic string table   | required for PT_DYNAMIC
  *   .rela.dyn   Relocations            |
@@ -19,8 +19,7 @@
 
 OUTPUT_FORMAT(elf64-x86-64)
 OUTPUT_ARCH(i386:x86-64)
-ENTRY(_start)
-EXTERN(__HADRON_DRIVERS_ANCHOR)
+ENTRY(kernel_init)
 
 KERNEL_VADDR = 0xffffffff80000000;
 
@@ -48,33 +47,6 @@ SECTIONS {
 
     .rodata : AT(ADDR(.rodata) - KERNEL_VADDR) {
         __rodata_start = .;
-        /* Limine request markers — bootloader scans for magic bytes between
-         * the start and end markers. No special section name required. */
-        KEEP(*(.requests_start))
-        KEEP(*(.requests))
-        KEEP(*(.requests_end))
-
-        /* Driver registration tables — kernel scans these during init */
-        __hadron_pci_drivers_start = .;
-        KEEP(*(.hadron_pci_drivers))
-        __hadron_pci_drivers_end = .;
-
-        __hadron_platform_drivers_start = .;
-        KEEP(*(.hadron_platform_drivers))
-        __hadron_platform_drivers_end = .;
-
-        /* Filesystem driver entries */
-        __hadron_block_fs_start = .;
-        KEEP(*(.hadron_block_fs))
-        __hadron_block_fs_end = .;
-
-        __hadron_virtual_fs_start = .;
-        KEEP(*(.hadron_virtual_fs))
-        __hadron_virtual_fs_end = .;
-
-        __hadron_initramfs_start = .;
-        KEEP(*(.hadron_initramfs))
-        __hadron_initramfs_end = .;
 
         /* Kernel test descriptors (populated only with --cfg ktest) */
         __hadron_kernel_tests_start = .;
@@ -126,7 +98,7 @@ SECTIONS {
         *(.data .data.*)
     } :data
 
-    /* PT_DYNAMIC segment — Limine requires this for ET_DYN binaries */
+    /* PT_DYNAMIC segment — required for ET_DYN binaries */
     .dynamic : AT(ADDR(.dynamic) - KERNEL_VADDR) {
         *(.dynamic)
     } :data :dynamic

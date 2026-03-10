@@ -94,7 +94,8 @@ impl<'a> RelaIter<'a> {
     ///
     /// `data` is the full ELF file; `offset` and `end` delimit the section
     /// containing the Rela entries.
-    pub(crate) fn new(data: &'a [u8], offset: usize, end: usize) -> Self {
+    /// Creates a new iterator over Rela entries in the given byte range.
+    pub fn new(data: &'a [u8], offset: usize, end: usize) -> Self {
         Self { data, offset, end }
     }
 }

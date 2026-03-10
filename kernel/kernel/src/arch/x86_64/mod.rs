@@ -1,11 +1,13 @@
 //! x86_64 architecture support.
 
+#[cfg(hadron_acpi)]
 pub mod acpi;
 #[cfg(hadron_alt_instructions)]
 pub mod alt_fn;
 #[cfg(hadron_alt_instructions)]
 pub mod alt_instr;
 pub mod cpuid;
+#[cfg(hadron_kernel_fpu)]
 pub mod fpu;
 pub mod gdt;
 pub mod hw;

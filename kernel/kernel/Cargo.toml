@@ -15,18 +15,10 @@ doctest = false
 
 [dependencies]
 bitflags = { workspace = true }
-hadris-io = { workspace = true }
-hadron-acpi = { workspace = true, features = ["alloc"] }
+hadron-boot-info = { workspace = true }
 hadron-core = { workspace = true }
 hadron-intrinsics = { workspace = true }
 hadron-mm = { workspace = true }
-hadron-objects = { workspace = true }
-hadron-pci = { workspace = true }
-hadron-sched = { workspace = true }
-hadron-elf = { workspace = true }
-hadron-ktest = { workspace = true }
-hadron-linkset = { workspace = true }
-hadron-syscall = { workspace = true, features = [ "kernel" ] }
 planck-noalloc = { workspace = true }
 
 [dev-dependencies]

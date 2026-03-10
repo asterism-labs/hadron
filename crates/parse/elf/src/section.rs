@@ -79,7 +79,8 @@ impl Elf64SectionHeader {
     /// Parse a section header from raw bytes at the given file offset.
     ///
     /// The caller must ensure `file_offset + ELF64_SHDR_SIZE <= data.len()`.
-    pub(crate) fn parse(data: &[u8], file_offset: usize) -> Self {
+    /// Parse a section header from raw bytes at the given file offset.
+    pub fn parse(data: &[u8], file_offset: usize) -> Self {
         let b = &data[file_offset..];
         Self {
             sh_name: le_u32(b, 0),

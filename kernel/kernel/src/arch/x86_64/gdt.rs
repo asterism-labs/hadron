@@ -169,6 +169,7 @@ pub fn selectors() -> &'static Selectors {
 /// Must be called exactly once per AP, after the heap is available and
 /// VMM is initialized. The caller must ensure no interrupts are processed
 /// before the GDT and TSS are fully loaded.
+#[cfg(hadron_smp)]
 pub unsafe fn init_ap(cpu_id: crate::id::CpuId) -> u64 {
     extern crate alloc;
     use alloc::boxed::Box;

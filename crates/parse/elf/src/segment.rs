@@ -45,6 +45,12 @@ impl<'a> ElfFile<'a> {
         self.header.e_entry
     }
 
+    /// Returns a reference to the raw ELF data.
+    #[must_use]
+    pub fn data(&self) -> &'a [u8] {
+        self.data
+    }
+
     /// Returns the parsed ELF64 file header.
     #[must_use]
     pub fn header(&self) -> &Elf64Header {

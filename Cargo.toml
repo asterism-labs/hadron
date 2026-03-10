@@ -27,6 +27,7 @@ hadron-linkset = { path = "crates/core/linkset" }
 
 # Internal crates — kernel subsystems
 hadron-kernel = { path = "kernel/kernel" }
+hadron-kernel-image = { path = "kernel/kernel-image" }
 hadron-mm = { path = "kernel/mm" }
 hadron-objects = { path = "kernel/objects" }
 hadron-pci = { path = "kernel/pci" }
@@ -45,6 +46,7 @@ hadron-binparse-macros = { path = "crates/parse/binparse-macros" }
 hadron-elf = { path = "crates/parse/elf" }
 
 # Internal crates — boot
+hadron-boot-info = { path = "crates/boot/boot-info" }
 uefi = { path = "crates/boot/uefi" }
 
 # Internal crates — test infrastructure

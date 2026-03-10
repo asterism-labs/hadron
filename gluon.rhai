@@ -135,6 +135,7 @@ host.add("hadron-ktest-macros", "crates/test/hadron-ktest-macros")
 
 let kernel_libs = group("kernel-libs").target("x86_64-unknown-hadron").edition("2024").config(true);
 
+kernel_libs.add("hadron-boot-info", "crates/boot/boot-info");
 kernel_libs.add("hadron-core", "kernel/core")
     .deps(#{ bitflags: "bitflags", hadron_linkset: "hadron-linkset", planck_noalloc: "planck-noalloc" });
 kernel_libs.add("hadron-linkset", "crates/core/linkset");
@@ -199,6 +200,8 @@ vendored_uefi.add("bitflags-uefi", "vendor/bitflags");
 
 let uefi_libs = group("uefi-libs").target("x86_64-unknown-uefi").edition("2024");
 
+uefi_libs.add("hadron-boot-info-uefi", "crates/boot/boot-info");
+uefi_libs.add("hadron-elf-uefi", "crates/parse/elf");
 uefi_libs.add("uefi", "crates/boot/uefi")
     .deps(#{ bitflags: "bitflags-uefi" });
 
@@ -211,24 +214,24 @@ let kernel_main = group("kernel-main").target("x86_64-unknown-hadron").edition("
 kernel_main.add("hadron-kernel", "kernel/kernel")
     .deps(#{
         bitflags: "bitflags",
-        hadris_io: "hadris-io",
-        hadron_acpi: "hadron-acpi",
+        hadron_boot_info: "hadron-boot-info",
         hadron_core: "hadron-core",
-        hadron_elf: "hadron-elf",
         hadron_intrinsics: "hadron-intrinsics",
-        hadron_ktest: "hadron-ktest",
-        hadron_linkset: "hadron-linkset",
         hadron_mm: "hadron-mm",
-        hadron_objects: "hadron-objects",
-        hadron_pci: "hadron-pci",
-        hadron_sched: "hadron-sched",
-        hadron_syscall: "hadron-syscall",
         planck_noalloc: "planck-noalloc"
     })
     .dev_deps(#{
         hadron_bench: "hadron-bench",
         hadron_test: "hadron-test",
         planck_noalloc: "planck-noalloc"
+    });
+
+kernel_main.add("hadron-kernel-image", "kernel/kernel-image")
+    .crate_type(BIN)
+    .root("src/main.rs")
+    .linker_script("targets/x86_64-unknown-hadron.ld")
+    .deps(#{
+        hadron_kernel: "hadron-kernel"
     });
 
 // ===========================================================================
@@ -241,7 +244,9 @@ uefi_boot.add("hadron-boot-uefi", "kernel/boot/uefi")
     .crate_type(BIN)
     .root("src/main.rs")
     .deps(#{
-        uefi: "uefi"
+        uefi: "uefi",
+        hadron_boot_info: "hadron-boot-info-uefi",
+        hadron_elf: "hadron-elf-uefi"
     });
 
 // ===========================================================================
@@ -273,6 +278,8 @@ pipeline()
     .barrier("host-ready")
     .stage("kernel", ["vendored", "vendored-uefi", "kernel-libs", "uefi-libs"])
     .barrier("kernel-ready")
+    .stage("link", ["kernel-main"])
+    .barrier("link-ready")
     .stage("boot", ["uefi-boot"]);
 
 // ===========================================================================
@@ -307,8 +314,7 @@ tests()
         "hadron-fdt",
         "hadron-mm",
         "hadron-sched",
-        "hadron-pci",
-        "hadron-kernel"
+        "hadron-pci"
     ])
     .kani_verifiable(["hadron-core"])
     .shuttle_testable(["hadron-core"])
