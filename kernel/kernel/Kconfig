@@ -14,8 +14,48 @@ config LOG_MAX_LEVEL
 
 endmenu
 
+menu "Platform"
+
+config ACPI
+    bool "ACPI table parsing and platform init"
+    default y
+
+config APIC
+    bool "Local APIC and I/O APIC support"
+    default y
+    depends on ACPI
+
+config HPET
+    bool "HPET timer support"
+    default y
+    depends on ACPI
+
+endmenu
+
+menu "CPU Features"
+
+config ALT_INSTRUCTIONS
+    bool "Boot-time instruction patching"
+    default y
+
+config KERNEL_FPU
+    bool "Kernel FPU/SSE/AVX state management"
+    default y
+
+endmenu
+
 preset debug
     set KERNEL_DEBUG y
+    set ACPI y
+    set APIC y
+    set HPET y
+    set ALT_INSTRUCTIONS y
+    set KERNEL_FPU y
 
 preset release
     set KERNEL_DEBUG n
+    set ACPI y
+    set APIC y
+    set HPET y
+    set ALT_INSTRUCTIONS y
+    set KERNEL_FPU y

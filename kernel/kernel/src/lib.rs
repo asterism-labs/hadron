@@ -29,10 +29,22 @@ pub use hadron_core::static_assert;
 pub use hadron_core::sync;
 pub use hadron_core::task;
 
-// ── Crate re-exports (preserves `crate::mm` paths in arch code) ───────────
+// ── Crate re-exports (preserves `crate::mm`, `crate::sched` paths) ────────
 
 #[cfg(target_os = "none")]
+pub use hadron_acpi as acpi_tables;
+#[cfg(target_os = "none")]
 pub use hadron_mm as mm;
+#[cfg(target_os = "none")]
+pub use hadron_mmio as mmio;
+#[cfg(target_os = "none")]
+pub use hadron_objects as objects;
+#[cfg(target_os = "none")]
+pub use hadron_pci as pci;
+#[cfg(target_os = "none")]
+pub use hadron_sched as sched;
+#[cfg(target_os = "none")]
+pub use hadron_syscall as syscall;
 
 // ── Kernel-runtime modules (require target_os = "none") ───────────────────
 
@@ -41,6 +53,9 @@ pub mod arch;
 
 #[cfg(target_os = "none")]
 pub mod boot;
+
+#[cfg(target_os = "none")]
+pub mod driver_api;
 
 #[cfg(target_os = "none")]
 pub mod entry;

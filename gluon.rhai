@@ -217,11 +217,17 @@ let kernel_main = group("kernel-main").target("x86_64-unknown-hadron").edition("
 kernel_main.add("hadron-kernel", "kernel/kernel")
     .deps(#{
         bitflags: "bitflags",
+        hadron_acpi: "hadron-acpi",
         hadron_boot_info: "hadron-boot-info",
         hadron_core: "hadron-core",
         hadron_intrinsics: "hadron-intrinsics",
         hadron_log: "hadron-log",
         hadron_mm: "hadron-mm",
+        hadron_mmio: "hadron-mmio",
+        hadron_objects: "hadron-objects",
+        hadron_pci: "hadron-pci",
+        hadron_sched: "hadron-sched",
+        hadron_syscall: "hadron-syscall",
         planck_noalloc: "planck-noalloc"
     })
     .dev_deps(#{

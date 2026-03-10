@@ -620,10 +620,9 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
     lapic.enable(vectors::SPURIOUS.as_irq_vector());
     lapic.set_tpr(0); // Accept all interrupts
 
-    // Initialize per-CPU state
     let apic_id = lapic.id();
-    crate::percpu::PerCpuState::current().init(crate::id::CpuId::new(0), apic_id);
-    crate::sched::smp::register_cpu_apic_id(crate::id::CpuId::new(0), apic_id);
+    // TODO: wire PerCpuState::current().init() and SMP CPU registration
+    // when the process model is implemented.
 
     crate::kinfo!(
         "acpi",

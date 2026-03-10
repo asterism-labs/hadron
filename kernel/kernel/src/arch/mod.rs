@@ -1,7 +1,5 @@
 //! Architecture-specific modules and uniform facade.
 
-#[cfg(target_arch = "aarch64")]
-pub mod aarch64;
 #[cfg(target_arch = "x86_64")]
 pub mod x86_64;
 
@@ -32,8 +30,6 @@ pub fn spawn_platform_tasks() {}
 
 /// Arch-uniform interrupt facade.
 pub mod interrupts {
-    #[cfg(target_arch = "aarch64")]
-    pub use super::aarch64::interrupts::*;
     #[cfg(target_arch = "x86_64")]
     pub use super::x86_64::interrupts::*;
 }

@@ -3,8 +3,6 @@
 pub mod dispatch;
 pub(crate) mod exception_table;
 pub mod handlers;
-#[cfg(hadron_apic)]
-pub mod timer_stub;
 
 pub use dispatch::{
     InterruptError, InterruptHandler, alloc_vector, register_handler, unregister_handler, vectors,

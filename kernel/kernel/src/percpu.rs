@@ -1,28 +1,9 @@
-//! Minimal per-CPU state stubs.
+//! Per-CPU state and storage.
 //!
-//! These stubs satisfy compile-time references from GDT, syscall, and other
-//! arch modules. Runtime correctness is deferred to a later phase.
+//! Re-exports `CpuLocal` and `MAX_CPUS` from `hadron_core` and provides
+//! kernel-specific per-CPU state (GS-base setup, early kernel RSP).
 
-/// Maximum number of CPUs supported.
-pub const MAX_CPUS: usize = 64;
-
-/// Per-CPU data wrapper indexed by CPU ID.
-///
-/// Stores one `T` per CPU. In the current stub, this is just a fixed-size array.
-pub struct CpuLocal<T> {
-    data: [T; MAX_CPUS],
-}
-
-// SAFETY: CpuLocal is accessed with interrupts disabled or by a single CPU.
-// This Sync impl matches the real implementation's safety contract.
-unsafe impl<T> Sync for CpuLocal<T> {}
-
-impl<T> CpuLocal<T> {
-    /// Creates a new `CpuLocal` from a pre-initialized array.
-    pub const fn new(data: [T; MAX_CPUS]) -> Self {
-        Self { data }
-    }
-}
+pub use hadron_core::cpu_local::{CpuLocal, MAX_CPUS};
 
 /// Per-CPU state (stub).
 #[repr(C)]
