@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// Current schema version. Bump when the manifest format changes.
-const MANIFEST_VERSION: u32 = 2;
+const MANIFEST_VERSION: u32 = 3;
 
 /// Manifest filename within the build directory.
 const MANIFEST_FILE: &str = "cache-manifest.json";
@@ -41,6 +41,10 @@ pub struct CacheManifest {
     pub version: u32,
     /// SHA-256 hash of `rustc -vV` output — detects toolchain changes.
     pub rustc_version_hash: String,
+    /// SHA-256 hash of global build inputs (gluon.rhai, target specs, Kconfig files).
+    /// Detects configuration changes that require a full rebuild.
+    #[serde(default)]
+    pub global_inputs_hash: String,
     /// Per-crate cache entries, keyed by crate name.
     pub entries: HashMap<String, CrateEntry>,
     /// Sysroot cache entries, keyed by target name.
@@ -63,6 +67,9 @@ pub struct SysrootEntry {
     /// SHA-256 hash of concatenated sysroot source entry points.
     #[serde(default)]
     pub sources_hash: String,
+    /// SHA-256 hash of the target spec JSON file.
+    #[serde(default)]
+    pub target_spec_hash: String,
 }
 
 /// Cache entry for the initrd output.
@@ -88,6 +95,10 @@ pub struct CrateEntry {
     /// SHA-256 of the artifact content (used for config cascade avoidance).
     #[serde(default)]
     pub artifact_hash: Option<String>,
+    /// Parent directories of source files and their recorded mtimes.
+    /// Used to detect new file additions (directory mtime changes when files are added).
+    #[serde(default)]
+    pub source_dirs: HashMap<PathBuf, i64>,
 }
 
 /// Recorded state of a single source file dependency.
@@ -105,6 +116,7 @@ impl CacheManifest {
         Self {
             version: MANIFEST_VERSION,
             rustc_version_hash,
+            global_inputs_hash: String::new(),
             entries: HashMap::new(),
             sysroots: HashMap::new(),
             initrd: None,
@@ -146,6 +158,7 @@ impl CacheManifest {
         target_name: &str,
         opt_level: u32,
         current_sources_hash: &str,
+        current_target_spec_hash: Option<&str>,
     ) -> FreshResult {
         let entry = match self.sysroots.get(target_name) {
             Some(e) => e,
@@ -162,6 +175,13 @@ impl CacheManifest {
         // Empty stored hash (old manifest) or mismatch triggers rebuild.
         if entry.sources_hash.is_empty() || entry.sources_hash != current_sources_hash {
             return FreshResult::Stale("sysroot sources changed".into());
+        }
+
+        // Check target spec hash if provided.
+        if let Some(spec_hash) = current_target_spec_hash {
+            if !entry.target_spec_hash.is_empty() && entry.target_spec_hash != spec_hash {
+                return FreshResult::Stale("target spec changed".into());
+            }
         }
 
         for path in [
@@ -186,6 +206,7 @@ impl CacheManifest {
         compiler_builtins_rlib: PathBuf,
         alloc_rlib: PathBuf,
         sources_hash: String,
+        target_spec_hash: String,
     ) {
         self.sysroots.insert(
             target_name.to_string(),
@@ -195,6 +216,7 @@ impl CacheManifest {
                 compiler_builtins_rlib,
                 alloc_rlib,
                 sources_hash,
+                target_spec_hash,
             },
         );
     }
@@ -325,6 +347,18 @@ impl CrateEntry {
             record.mtime_secs = current_mtime;
         }
 
+        // 5. Check source directory mtimes (detects new file additions).
+        for (dir, recorded_mtime) in &self.source_dirs {
+            if let Some(current_mtime) = file_mtime_secs(dir) {
+                if current_mtime != *recorded_mtime {
+                    return FreshResult::Stale(format!(
+                        "source directory changed (new files?): {}",
+                        dir.display()
+                    ));
+                }
+            }
+        }
+
         FreshResult::Fresh
     }
 
@@ -342,19 +376,30 @@ impl CrateEntry {
         };
 
         let mut sources = HashMap::new();
-        for src in source_paths {
+        let mut source_dirs: HashMap<PathBuf, i64> = HashMap::new();
+
+        for src in &source_paths {
             if !src.exists() {
                 continue;
             }
-            let mtime = file_mtime_secs(&src).unwrap_or(0);
-            let content_hash = hash_file(&src).unwrap_or_default();
+            let mtime = file_mtime_secs(src).unwrap_or(0);
+            let content_hash = hash_file(src).unwrap_or_default();
             sources.insert(
-                src,
+                src.clone(),
                 SourceRecord {
                     mtime_secs: mtime,
                     content_hash,
                 },
             );
+
+            // Record parent directory mtime for new file detection.
+            if let Some(parent) = src.parent() {
+                if !source_dirs.contains_key(parent) {
+                    if let Some(dir_mtime) = file_mtime_secs(parent) {
+                        source_dirs.insert(parent.to_path_buf(), dir_mtime);
+                    }
+                }
+            }
         }
 
         Ok(Self {
@@ -363,6 +408,7 @@ impl CrateEntry {
             artifact_mtime_secs: artifact_mtime,
             sources,
             artifact_hash: None,
+            source_dirs,
         })
     }
 }
@@ -370,6 +416,46 @@ impl CrateEntry {
 /// Compute a SHA-256 hash of the `rustc -vV` output to detect toolchain changes.
 pub fn get_rustc_version_hash() -> Result<String> {
     Ok(hash_bytes(crate::rustc_info::version_output().as_bytes()))
+}
+
+/// Compute a SHA-256 hash of all global build inputs that should trigger
+/// a full cache invalidation when changed.
+///
+/// Includes: `gluon.rhai`, target spec JSON files, Kconfig input files,
+/// and `.hadron-config` (user config overrides).
+pub fn compute_global_inputs_hash(root: &Path, model: &crate::model::BuildModel) -> String {
+    let mut hasher = Sha256::new();
+
+    // Hash gluon.rhai.
+    if let Ok(content) = fs::read(root.join("gluon.rhai")) {
+        hasher.update(&content);
+    }
+
+    // Hash target spec JSON files.
+    let mut spec_paths: Vec<PathBuf> = model.targets.values().map(|t| root.join(&t.spec)).collect();
+    spec_paths.sort();
+    for path in &spec_paths {
+        if let Ok(content) = fs::read(path) {
+            hasher.update(&content);
+        }
+    }
+
+    // Hash Kconfig input files.
+    let mut input_files: Vec<&PathBuf> = model.input_files.iter().collect();
+    input_files.sort();
+    for path in input_files {
+        if let Ok(content) = fs::read(path) {
+            hasher.update(&content);
+        }
+    }
+
+    // Hash .hadron-config (user config overrides) if it exists.
+    let config_file = root.join(".hadron-config");
+    if let Ok(content) = fs::read(&config_file) {
+        hasher.update(&content);
+    }
+
+    format!("{:x}", hasher.finalize())
 }
 
 /// Compute a SHA-256 hash of sysroot library entry-point sources.
@@ -659,6 +745,7 @@ mod tests {
             artifact_mtime_secs: artifact_mtime,
             sources: src_map,
             artifact_hash: None,
+            source_dirs: HashMap::new(),
         }
     }
 
@@ -764,16 +851,14 @@ mod tests {
     // CacheManifest::is_sysroot_fresh tests
     // ---------------------------------------------------------------
 
-    #[test]
-    fn sysroot_fresh_no_cached_entry_is_stale() {
-        let manifest = CacheManifest::new("rustc_hash".into());
-        let result = manifest.is_sysroot_fresh("x86_64-unknown-hadron", 2, "hash");
-        assert!(!result.is_fresh());
-    }
-
-    #[test]
-    fn sysroot_fresh_opt_level_changed_is_stale() {
-        let dir = make_test_dir("sysroot_opt");
+    /// Helper: create sysroot rlib files and record them in a manifest.
+    fn setup_sysroot(
+        dir: &Path,
+        manifest: &mut CacheManifest,
+        opt_level: u32,
+        sources_hash: &str,
+        target_spec_hash: &str,
+    ) -> (PathBuf, PathBuf, PathBuf) {
         let core_rlib = dir.join("libcore.rlib");
         let cb_rlib = dir.join("libcompiler_builtins.rlib");
         let alloc_rlib = dir.join("liballoc.rlib");
@@ -781,18 +866,33 @@ mod tests {
         fs::write(&cb_rlib, b"cb").unwrap();
         fs::write(&alloc_rlib, b"alloc").unwrap();
 
-        let mut manifest = CacheManifest::new("rustc_hash".into());
         manifest.record_sysroot(
             "x86_64-unknown-hadron",
-            1,
-            core_rlib,
-            cb_rlib,
-            alloc_rlib,
-            "src_hash".into(),
+            opt_level,
+            core_rlib.clone(),
+            cb_rlib.clone(),
+            alloc_rlib.clone(),
+            sources_hash.into(),
+            target_spec_hash.into(),
         );
 
-        // Ask for opt-level 2, but recorded 1.
-        let result = manifest.is_sysroot_fresh("x86_64-unknown-hadron", 2, "src_hash");
+        (core_rlib, cb_rlib, alloc_rlib)
+    }
+
+    #[test]
+    fn sysroot_fresh_no_cached_entry_is_stale() {
+        let manifest = CacheManifest::new("rustc_hash".into());
+        let result = manifest.is_sysroot_fresh("x86_64-unknown-hadron", 2, "hash", None);
+        assert!(!result.is_fresh());
+    }
+
+    #[test]
+    fn sysroot_fresh_opt_level_changed_is_stale() {
+        let dir = make_test_dir("sysroot_opt");
+        let mut manifest = CacheManifest::new("rustc_hash".into());
+        setup_sysroot(&dir, &mut manifest, 1, "src_hash", "spec_hash");
+
+        let result = manifest.is_sysroot_fresh("x86_64-unknown-hadron", 2, "src_hash", None);
         assert!(!result.is_fresh());
 
         let _ = fs::remove_dir_all(&dir);
@@ -801,24 +901,10 @@ mod tests {
     #[test]
     fn sysroot_fresh_sources_changed_is_stale() {
         let dir = make_test_dir("sysroot_src_changed");
-        let core_rlib = dir.join("libcore.rlib");
-        let cb_rlib = dir.join("libcompiler_builtins.rlib");
-        let alloc_rlib = dir.join("liballoc.rlib");
-        fs::write(&core_rlib, b"core").unwrap();
-        fs::write(&cb_rlib, b"cb").unwrap();
-        fs::write(&alloc_rlib, b"alloc").unwrap();
-
         let mut manifest = CacheManifest::new("rustc_hash".into());
-        manifest.record_sysroot(
-            "x86_64-unknown-hadron",
-            2,
-            core_rlib,
-            cb_rlib,
-            alloc_rlib,
-            "old_src_hash".into(),
-        );
+        setup_sysroot(&dir, &mut manifest, 2, "old_src_hash", "spec_hash");
 
-        let result = manifest.is_sysroot_fresh("x86_64-unknown-hadron", 2, "new_src_hash");
+        let result = manifest.is_sysroot_fresh("x86_64-unknown-hadron", 2, "new_src_hash", None);
         assert!(!result.is_fresh());
 
         let _ = fs::remove_dir_all(&dir);
@@ -827,25 +913,10 @@ mod tests {
     #[test]
     fn sysroot_fresh_empty_stored_hash_is_stale() {
         let dir = make_test_dir("sysroot_empty_hash");
-        let core_rlib = dir.join("libcore.rlib");
-        let cb_rlib = dir.join("libcompiler_builtins.rlib");
-        let alloc_rlib = dir.join("liballoc.rlib");
-        fs::write(&core_rlib, b"core").unwrap();
-        fs::write(&cb_rlib, b"cb").unwrap();
-        fs::write(&alloc_rlib, b"alloc").unwrap();
-
         let mut manifest = CacheManifest::new("rustc_hash".into());
-        // Simulate old manifest with empty sources_hash (migration case).
-        manifest.record_sysroot(
-            "x86_64-unknown-hadron",
-            2,
-            core_rlib,
-            cb_rlib,
-            alloc_rlib,
-            String::new(),
-        );
+        setup_sysroot(&dir, &mut manifest, 2, "", "spec_hash");
 
-        let result = manifest.is_sysroot_fresh("x86_64-unknown-hadron", 2, "any_hash");
+        let result = manifest.is_sysroot_fresh("x86_64-unknown-hadron", 2, "any_hash", None);
         assert!(!result.is_fresh());
 
         let _ = fs::remove_dir_all(&dir);
@@ -854,27 +925,12 @@ mod tests {
     #[test]
     fn sysroot_fresh_rlib_missing_is_stale() {
         let dir = make_test_dir("sysroot_missing");
-        let core_rlib = dir.join("libcore.rlib");
-        let cb_rlib = dir.join("libcompiler_builtins.rlib");
-        let alloc_rlib = dir.join("liballoc.rlib");
-        fs::write(&core_rlib, b"core").unwrap();
-        fs::write(&cb_rlib, b"cb").unwrap();
-        fs::write(&alloc_rlib, b"alloc").unwrap();
-
         let mut manifest = CacheManifest::new("rustc_hash".into());
-        manifest.record_sysroot(
-            "x86_64-unknown-hadron",
-            2,
-            core_rlib.clone(),
-            cb_rlib,
-            alloc_rlib,
-            "src_hash".into(),
-        );
+        let (core_rlib, _, _) = setup_sysroot(&dir, &mut manifest, 2, "src_hash", "spec_hash");
 
-        // Remove one rlib.
         fs::remove_file(&core_rlib).unwrap();
 
-        let result = manifest.is_sysroot_fresh("x86_64-unknown-hadron", 2, "src_hash");
+        let result = manifest.is_sysroot_fresh("x86_64-unknown-hadron", 2, "src_hash", None);
         assert!(!result.is_fresh());
 
         let _ = fs::remove_dir_all(&dir);
@@ -883,25 +939,194 @@ mod tests {
     #[test]
     fn sysroot_fresh_all_present_and_matching_is_fresh() {
         let dir = make_test_dir("sysroot_fresh");
-        let core_rlib = dir.join("libcore.rlib");
-        let cb_rlib = dir.join("libcompiler_builtins.rlib");
-        let alloc_rlib = dir.join("liballoc.rlib");
-        fs::write(&core_rlib, b"core").unwrap();
-        fs::write(&cb_rlib, b"cb").unwrap();
-        fs::write(&alloc_rlib, b"alloc").unwrap();
-
         let mut manifest = CacheManifest::new("rustc_hash".into());
-        manifest.record_sysroot(
+        setup_sysroot(&dir, &mut manifest, 2, "src_hash", "spec_hash");
+
+        let result =
+            manifest.is_sysroot_fresh("x86_64-unknown-hadron", 2, "src_hash", Some("spec_hash"));
+        assert!(result.is_fresh());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sysroot_fresh_detects_target_spec_change() {
+        let dir = make_test_dir("sysroot_spec_change");
+        let mut manifest = CacheManifest::new("rustc_hash".into());
+        setup_sysroot(&dir, &mut manifest, 2, "src_hash", "old_spec_hash");
+
+        let result = manifest.is_sysroot_fresh(
             "x86_64-unknown-hadron",
             2,
-            core_rlib,
-            cb_rlib,
-            alloc_rlib,
-            "src_hash".into(),
+            "src_hash",
+            Some("new_spec_hash"),
+        );
+        assert!(!result.is_fresh());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // ---------------------------------------------------------------
+    // Global inputs hash tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn global_inputs_hash_changes_on_file_edit() {
+        let dir = make_test_dir("global_hash_change");
+        let gluon_file = dir.join("gluon.rhai");
+        fs::write(&gluon_file, "// original").unwrap();
+
+        let model = crate::model::BuildModel::default();
+        let hash1 = compute_global_inputs_hash(&dir, &model);
+
+        fs::write(&gluon_file, "// modified").unwrap();
+        let hash2 = compute_global_inputs_hash(&dir, &model);
+
+        assert_ne!(hash1, hash2, "hash should change when gluon.rhai changes");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn global_inputs_hash_stable() {
+        let dir = make_test_dir("global_hash_stable");
+        let gluon_file = dir.join("gluon.rhai");
+        fs::write(&gluon_file, "// stable content").unwrap();
+
+        let model = crate::model::BuildModel::default();
+        let hash1 = compute_global_inputs_hash(&dir, &model);
+        let hash2 = compute_global_inputs_hash(&dir, &model);
+
+        assert_eq!(hash1, hash2, "hash should be stable across calls");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // ---------------------------------------------------------------
+    // Source directory mtime tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn source_dir_mtime_detects_new_file() {
+        let dir = make_test_dir("source_dir_mtime");
+        let src_dir = dir.join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+
+        let artifact = dir.join("lib.rlib");
+        fs::write(&artifact, b"artifact").unwrap();
+
+        let src = src_dir.join("main.rs");
+        fs::write(&src, b"fn main() {}").unwrap();
+        let src_mtime = file_mtime_secs(&src).unwrap();
+        let src_hash = sha256_hex(b"fn main() {}");
+        let dir_mtime = file_mtime_secs(&src_dir).unwrap();
+
+        let mut entry = make_entry("hash", &artifact, vec![(src, src_mtime, src_hash)]);
+        entry.source_dirs.insert(src_dir.clone(), dir_mtime);
+
+        // Verify it's fresh initially.
+        let result = entry.is_fresh("hash", &HashSet::new(), &[]);
+        assert!(result.is_fresh());
+
+        // Add a new file to the directory (changes dir mtime).
+        // Sleep 1.1s to ensure mtime changes (macOS HFS+ has 1s resolution).
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        fs::write(src_dir.join("new_file.rs"), b"// new").unwrap();
+
+        let result = entry.is_fresh("hash", &HashSet::new(), &[]);
+        assert!(
+            !result.is_fresh(),
+            "should be stale after new file added to source dir"
         );
 
-        let result = manifest.is_sysroot_fresh("x86_64-unknown-hadron", 2, "src_hash");
-        assert!(result.is_fresh());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // ---------------------------------------------------------------
+    // Flags hash tests (via scheduler)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn flags_hash_includes_rustc_flags() {
+        // Different rustc_flags should produce different hashes.
+        let hash1 = crate::compile::hash_args(&[
+            "host".as_ref(),
+            "foo".as_ref(),
+            "2024".as_ref(),
+            "lib".as_ref(),
+            "".as_ref(), // rustc_flags
+            "".as_ref(), // features
+            "".as_ref(), // cfg_flags
+            "".as_ref(), // linker_script
+        ]);
+        let hash2 = crate::compile::hash_args(&[
+            "host".as_ref(),
+            "foo".as_ref(),
+            "2024".as_ref(),
+            "lib".as_ref(),
+            "-Ctarget-feature=+sse2".as_ref(), // different rustc_flags
+            "".as_ref(),
+            "".as_ref(),
+            "".as_ref(),
+        ]);
+        assert_ne!(
+            hash1, hash2,
+            "different rustc_flags should produce different hashes"
+        );
+    }
+
+    #[test]
+    fn flags_hash_includes_features() {
+        let hash1 = crate::compile::hash_args(&[
+            "host".as_ref(),
+            "foo".as_ref(),
+            "2024".as_ref(),
+            "lib".as_ref(),
+            "".as_ref(),
+            "".as_ref(), // no features
+            "".as_ref(),
+            "".as_ref(),
+        ]);
+        let hash2 = crate::compile::hash_args(&[
+            "host".as_ref(),
+            "foo".as_ref(),
+            "2024".as_ref(),
+            "lib".as_ref(),
+            "".as_ref(),
+            "my_feature".as_ref(), // different features
+            "".as_ref(),
+            "".as_ref(),
+        ]);
+        assert_ne!(
+            hash1, hash2,
+            "different features should produce different hashes"
+        );
+    }
+
+    #[test]
+    fn manifest_version_bump_invalidates() {
+        let dir = make_test_dir("manifest_version");
+        let build_dir = dir.join("build");
+        fs::create_dir_all(&build_dir).unwrap();
+
+        // Write a v2 manifest (old version).
+        let old_manifest = serde_json::json!({
+            "version": 2,
+            "rustc_version_hash": "hash",
+            "entries": {},
+            "sysroots": {}
+        });
+        fs::write(
+            build_dir.join("cache-manifest.json"),
+            serde_json::to_string(&old_manifest).unwrap(),
+        )
+        .unwrap();
+
+        // Loading should return None (version mismatch).
+        assert!(
+            CacheManifest::load(&dir).is_none(),
+            "v2 manifest should be rejected when current version is 3"
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }

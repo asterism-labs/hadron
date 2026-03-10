@@ -248,7 +248,8 @@ uefi_boot.add("hadron-boot-uefi", "kernel/boot/uefi")
         uefi: "uefi",
         hadron_boot_info: "hadron-boot-info-uefi",
         hadron_elf: "hadron-elf-uefi"
-    });
+    })
+    .artifact_deps(["hadron-kernel-image"]);
 
 // ===========================================================================
 // Test dependency crates (compiled on-demand during tests, NOT in pipeline)

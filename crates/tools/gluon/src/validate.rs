@@ -547,6 +547,7 @@ mod tests {
             cfg_flags: Vec::new(),
             rustc_flags: Vec::new(),
             requires_config: Vec::new(),
+            artifact_deps: Vec::new(),
         }
     }
 

@@ -273,6 +273,7 @@ mod tests {
                     cfg_flags: vec![],
                     rustc_flags: vec![],
                     requires_config: vec![],
+                    artifact_deps: vec![],
                 },
             );
         }
@@ -451,12 +452,26 @@ mod tests {
                 cfg_flags: vec![],
                 requires_config: vec![],
                 rustc_flags: vec![],
+                artifact_deps: vec![],
             },
         );
 
         let names = resolve_names(&model).expect("resolution should succeed");
         // Only "a" is in the group.
         assert_eq!(names, vec!["a"]);
+    }
+
+    #[test]
+    fn artifact_deps_field_in_make_model() {
+        let model = make_model(&[("a", &[]), ("b", &[])]);
+        // Default artifact_deps should be empty.
+        assert!(model.crates["a"].artifact_deps.is_empty());
+        assert!(model.crates["b"].artifact_deps.is_empty());
+
+        // Manually set artifact_deps and verify round-trip.
+        let mut model = model;
+        model.crates.get_mut("b").unwrap().artifact_deps = vec!["a".into()];
+        assert_eq!(model.crates["b"].artifact_deps, vec!["a".to_string()]);
     }
 
     #[test]

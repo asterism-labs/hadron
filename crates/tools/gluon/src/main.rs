@@ -23,6 +23,7 @@ mod model;
 mod model_cache;
 mod perf;
 mod perf_cmd;
+mod rule_engine;
 mod run;
 mod rustc_cmd;
 mod rustc_info;
@@ -213,7 +214,7 @@ fn cmd_run(cli: &cli::Cli, extra_args: &[String]) -> Result<()> {
 /// Type-check all kernel crates without linking.
 fn cmd_check(cli: &cli::Cli) -> Result<()> {
     let (resolved, model) = resolve_config(cli)?;
-    let mut state = prepare_pipeline_state(resolved, cli.force, cli.jobs.unwrap_or(0))?;
+    let mut state = prepare_pipeline_state(resolved, &model, cli.force, cli.jobs.unwrap_or(0))?;
 
     verbose::dprintln!("\nChecking crates...");
     scheduler::execute_pipeline(&model, &mut state, CompileMode::Check)?;
@@ -235,7 +236,7 @@ fn cmd_check(cli: &cli::Cli) -> Result<()> {
 /// Run clippy lints on project crates.
 fn cmd_clippy(cli: &cli::Cli) -> Result<()> {
     let (resolved, model) = resolve_config(cli)?;
-    let mut state = prepare_pipeline_state(resolved, cli.force, cli.jobs.unwrap_or(0))?;
+    let mut state = prepare_pipeline_state(resolved, &model, cli.force, cli.jobs.unwrap_or(0))?;
 
     verbose::dprintln!("\nLinting crates with clippy...");
     scheduler::execute_pipeline(&model, &mut state, CompileMode::Clippy)?;
@@ -677,20 +678,29 @@ fn cmd_bench(cli: &cli::Cli, args: &cli::BenchArgs) -> Result<()> {
 /// Takes `ResolvedConfig` by value to avoid a redundant field-by-field clone.
 fn prepare_pipeline_state(
     resolved: config::ResolvedConfig,
+    model: &model::BuildModel,
     force: bool,
     max_workers: usize,
 ) -> Result<scheduler::PipelineState> {
     use verbose::vprintln;
 
     let rustc_hash = cache::get_rustc_version_hash()?;
+    let global_hash = cache::compute_global_inputs_hash(&resolved.root, model);
     let cache = if force {
         vprintln!("  force build: ignoring cache");
         CacheManifest::new(rustc_hash.clone())
     } else {
         match CacheManifest::load(&resolved.root) {
             Some(m) if m.rustc_version_hash == rustc_hash => {
-                vprintln!("  loaded cache manifest ({} entries)", m.entries.len());
-                m
+                if !m.global_inputs_hash.is_empty() && m.global_inputs_hash != global_hash {
+                    vprintln!(
+                        "  global inputs changed (gluon.rhai, target specs, Kconfig), discarding cache"
+                    );
+                    CacheManifest::new(rustc_hash.clone())
+                } else {
+                    vprintln!("  loaded cache manifest ({} entries)", m.entries.len());
+                    m
+                }
             }
             Some(_) => {
                 vprintln!("  rustc version changed, discarding cache");
@@ -702,6 +712,10 @@ fn prepare_pipeline_state(
             }
         }
     };
+
+    // Store the global hash so it's persisted on save.
+    let mut cache = cache;
+    cache.global_inputs_hash = global_hash;
 
     Ok(scheduler::PipelineState {
         config: resolved,
@@ -735,7 +749,7 @@ fn do_build(cli: &cli::Cli) -> Result<(scheduler::PipelineState, model::BuildMod
         analyzer::generate_rust_project(&resolved, &model)?;
     }
 
-    let mut state = prepare_pipeline_state(resolved, cli.force, cli.jobs.unwrap_or(0))?;
+    let mut state = prepare_pipeline_state(resolved, &model, cli.force, cli.jobs.unwrap_or(0))?;
 
     verbose::dprintln!("\nCompiling crates...");
     scheduler::execute_pipeline(&model, &mut state, CompileMode::Build)?;

@@ -210,6 +210,10 @@ pub struct CrateDef {
     pub rustc_flags: Vec<String>,
     /// Config options that must be enabled for this crate to be compiled.
     pub requires_config: Vec<String>,
+    /// Ordering-only dependencies on other crates. Creates DAG edges
+    /// without `--extern` flags (the dependent does not link the artifact).
+    #[serde(default)]
+    pub artifact_deps: Vec<String>,
 }
 
 /// A dependency specification within a crate definition.
@@ -308,8 +312,7 @@ pub struct RuleDef {
 pub enum RuleHandler {
     /// A built-in Rust function identified by name (e.g. "hbtf", "initrd", "config_crate").
     Builtin(String),
-    /// A Rhai function name to call for user-defined rules.
-    #[allow(dead_code)] // future: user-defined script rules
+    /// Rhai source code for user-defined rule callbacks.
     Script(String),
 }
 

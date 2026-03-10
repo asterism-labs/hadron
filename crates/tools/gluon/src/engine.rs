@@ -841,6 +841,7 @@ fn register_group_api(engine: &mut Engine, model: SharedModel) {
                     cfg_flags: Vec::new(),
                     rustc_flags: Vec::new(),
                     requires_config: Vec::new(),
+                    artifact_deps: Vec::new(),
                 },
             );
             CrateBuilder {
@@ -956,6 +957,20 @@ fn register_group_api(engine: &mut Engine, model: SharedModel) {
             }
         }
     );
+
+    builder_method!(
+        engine,
+        "artifact_deps",
+        CrateBuilder,
+        |builder, model, deps: rhai::Array| {
+            if let Some(krate) = model.crates.get_mut(&builder.name) {
+                krate.artifact_deps = deps
+                    .into_iter()
+                    .filter_map(|v| v.into_string().ok())
+                    .collect();
+            }
+        }
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1045,6 +1060,17 @@ fn register_rule_api(engine: &mut Engine, model: SharedModel) {
         |builder, model, handler: &str| {
             if let Some(rule) = model.rules.get_mut(&builder.name) {
                 rule.handler = RuleHandler::Builtin(handler.into());
+            }
+        }
+    );
+
+    builder_method!(
+        engine,
+        "on_execute",
+        RuleBuilder,
+        |builder, model, source: &str| {
+            if let Some(rule) = model.rules.get_mut(&builder.name) {
+                rule.handler = RuleHandler::Script(source.into());
             }
         }
     );

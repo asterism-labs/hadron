@@ -186,13 +186,22 @@ pub fn execute_pipeline(
 
     let total = nodes.len();
 
-    // Build adjacency (dependents) and in-degree.
+    // Build adjacency (dependents) and in-degree with edge deduplication.
+    // Without dedup, a crate with both barrier and Rust dep edges from the same
+    // predecessor gets inflated in-degree, causing deadlock.
     let mut in_degree: Vec<usize> = vec![0; total];
     let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); total];
+    let mut edge_set: HashSet<(usize, usize)> = HashSet::new();
 
-    let mut add_edge = |from: usize, to: usize| {
-        in_degree[to] += 1;
-        dependents[from].push(to);
+    let add_edge = |from: usize,
+                    to: usize,
+                    edge_set: &mut HashSet<(usize, usize)>,
+                    in_degree: &mut Vec<usize>,
+                    dependents: &mut Vec<Vec<usize>>| {
+        if edge_set.insert((from, to)) {
+            in_degree[to] += 1;
+            dependents[from].push(to);
+        }
     };
 
     for (krate, has_config) in &all_crates {
@@ -202,7 +211,13 @@ pub fn execute_pipeline(
         if krate.target != "host" {
             if let Some(&sysroot_idx) = node_name_to_idx.get(&format!("__sysroot_{}", krate.target))
             {
-                add_edge(sysroot_idx, crate_node_idx);
+                add_edge(
+                    sysroot_idx,
+                    crate_node_idx,
+                    &mut edge_set,
+                    &mut in_degree,
+                    &mut dependents,
+                );
             }
 
             // Config-enabled crates depend on their target's ConfigCrate node.
@@ -210,7 +225,13 @@ pub fn execute_pipeline(
                 if let Some(&config_idx) =
                     node_name_to_idx.get(&format!("__config_{}", krate.target))
                 {
-                    add_edge(config_idx, crate_node_idx);
+                    add_edge(
+                        config_idx,
+                        crate_node_idx,
+                        &mut edge_set,
+                        &mut in_degree,
+                        &mut dependents,
+                    );
                 }
             }
         }
@@ -218,7 +239,13 @@ pub fn execute_pipeline(
         // Crate-to-crate edges from resolved dependencies.
         for dep in &krate.deps {
             if let Some(&dep_node_idx) = node_name_to_idx.get(&dep.crate_name) {
-                add_edge(dep_node_idx, crate_node_idx);
+                add_edge(
+                    dep_node_idx,
+                    crate_node_idx,
+                    &mut edge_set,
+                    &mut in_degree,
+                    &mut dependents,
+                );
             }
         }
     }
@@ -229,7 +256,13 @@ pub fn execute_pipeline(
             node_name_to_idx.get(&format!("__config_{target}")),
             node_name_to_idx.get(&format!("__sysroot_{target}")),
         ) {
-            add_edge(sysroot_idx, config_idx);
+            add_edge(
+                sysroot_idx,
+                config_idx,
+                &mut edge_set,
+                &mut in_degree,
+                &mut dependents,
+            );
         }
     }
 
@@ -241,12 +274,91 @@ pub fn execute_pipeline(
         if let Some(rule) = model.rules.get(rule_name) {
             for input in &rule.inputs {
                 if let Some(&input_idx) = node_name_to_idx.get(input) {
-                    add_edge(input_idx, rule_node_idx);
+                    add_edge(
+                        input_idx,
+                        rule_node_idx,
+                        &mut edge_set,
+                        &mut in_degree,
+                        &mut dependents,
+                    );
                 }
             }
             for dep_rule in &rule.depends_on {
                 if let Some(&dep_idx) = node_name_to_idx.get(&format!("__rule_{dep_rule}")) {
-                    add_edge(dep_idx, rule_node_idx);
+                    add_edge(
+                        dep_idx,
+                        rule_node_idx,
+                        &mut edge_set,
+                        &mut in_degree,
+                        &mut dependents,
+                    );
+                }
+            }
+        }
+    }
+
+    // Barrier edges: partition pipeline stages by barriers, then add edges
+    // from all crates in the preceding segment to all crates in the following segment.
+    {
+        let mut segments: Vec<Vec<usize>> = Vec::new();
+        let mut current_segment: Vec<usize> = Vec::new();
+
+        for step in &model.pipeline.steps {
+            match step {
+                PipelineStep::Stage { groups, .. } => {
+                    for gname in groups {
+                        if let Some(group) = model.groups.get(gname) {
+                            for crate_name in &group.crates {
+                                if let Some(&idx) = node_name_to_idx.get(crate_name) {
+                                    current_segment.push(idx);
+                                }
+                            }
+                        }
+                    }
+                }
+                PipelineStep::Rule(rule_name) => {
+                    if let Some(&idx) = node_name_to_idx.get(&format!("__rule_{rule_name}")) {
+                        current_segment.push(idx);
+                    }
+                }
+                PipelineStep::Barrier(_) => {
+                    if !current_segment.is_empty() {
+                        segments.push(std::mem::take(&mut current_segment));
+                    }
+                }
+            }
+        }
+        // Push the final segment (after the last barrier, or the only segment if no barriers).
+        if !current_segment.is_empty() {
+            segments.push(current_segment);
+        }
+
+        // Add edges from each segment to the next (adjacent segments only).
+        for i in 0..segments.len().saturating_sub(1) {
+            for &pre in &segments[i] {
+                for &post in &segments[i + 1] {
+                    add_edge(pre, post, &mut edge_set, &mut in_degree, &mut dependents);
+                }
+            }
+        }
+    }
+
+    // Artifact dependency edges: ordering-only edges without --extern flags.
+    for (krate, _) in &all_crates {
+        if let Some(def) = model.crates.get(&krate.name) {
+            let crate_idx = *node_name_to_idx.get(&krate.name).unwrap();
+            for art_dep in &def.artifact_deps {
+                if let Some(&dep_idx) = node_name_to_idx
+                    .get(art_dep)
+                    .or_else(|| node_name_to_idx.get(&format!("__rule_{art_dep}")))
+                {
+                    add_edge(
+                        dep_idx,
+                        crate_idx,
+                        &mut edge_set,
+                        &mut in_degree,
+                        &mut dependents,
+                    );
                 }
             }
         }
@@ -461,27 +573,42 @@ pub fn execute_pipeline(
                             CompileMode::Clippy => "clippy",
                         };
 
-                        let flags_hash = if is_host {
-                            compile::hash_args(&[
-                                "host".as_ref(),
-                                krate.name.as_ref(),
-                                krate.edition.as_ref(),
-                                krate.crate_type.as_str().as_ref(),
-                            ])
-                        } else {
-                            let specs = shared_target_specs.read().unwrap();
-                            let target_spec =
-                                specs.get(&krate.target).map(|s| s.as_str()).unwrap_or("");
-                            let hash = compile::hash_args(&[
-                                mode_tag.as_ref(),
-                                krate.name.as_ref(),
-                                krate.edition.as_ref(),
-                                krate.crate_type.as_str().as_ref(),
-                                format!("{}", config.profile.opt_level).as_ref(),
-                                target_spec.as_ref(),
-                            ]);
-                            drop(specs);
-                            hash
+                        let flags_hash = {
+                            let rustc_flags_str = krate.rustc_flags.join(",");
+                            let features_str = krate.features.join(",");
+                            let cfg_flags_str = krate.cfg_flags.join(",");
+                            let linker_script_str = krate.linker_script.as_deref().unwrap_or("");
+
+                            if is_host {
+                                compile::hash_args(&[
+                                    "host".as_ref(),
+                                    krate.name.as_ref(),
+                                    krate.edition.as_ref(),
+                                    krate.crate_type.as_str().as_ref(),
+                                    rustc_flags_str.as_ref(),
+                                    features_str.as_ref(),
+                                    cfg_flags_str.as_ref(),
+                                    linker_script_str.as_ref(),
+                                ])
+                            } else {
+                                let specs = shared_target_specs.read().unwrap();
+                                let target_spec =
+                                    specs.get(&krate.target).map(|s| s.as_str()).unwrap_or("");
+                                let hash = compile::hash_args(&[
+                                    mode_tag.as_ref(),
+                                    krate.name.as_ref(),
+                                    krate.edition.as_ref(),
+                                    krate.crate_type.as_str().as_ref(),
+                                    format!("{}", config.profile.opt_level).as_ref(),
+                                    target_spec.as_ref(),
+                                    rustc_flags_str.as_ref(),
+                                    features_str.as_ref(),
+                                    cfg_flags_str.as_ref(),
+                                    linker_script_str.as_ref(),
+                                ]);
+                                drop(specs);
+                                hash
+                            }
                         };
 
                         // Check cache freshness (main thread only — mutates cache).
@@ -698,9 +825,15 @@ fn ensure_sysroot(
     crate::verbose::dprintln!("  Building sysroot for {target}...");
     let sysroot_src = sysroot::sysroot_src_dir()?;
     let sources_hash = crate::cache::hash_sysroot_sources(&sysroot_src);
+    let target_spec_file_hash = crate::cache::hash_file(&target_spec_path).unwrap_or_default();
     let sysroot_dir = if !force
         && cache
-            .is_sysroot_fresh(target, config.profile.opt_level, &sources_hash)
+            .is_sysroot_fresh(
+                target,
+                config.profile.opt_level,
+                &sources_hash,
+                Some(&target_spec_file_hash),
+            )
             .is_fresh()
     {
         crate::verbose::vprintln!("  Sysroot unchanged, skipping.");
@@ -715,6 +848,7 @@ fn ensure_sysroot(
             sysroot_output.compiler_builtins_rlib,
             sysroot_output.alloc_rlib,
             sources_hash,
+            target_spec_file_hash,
         );
         crate::verbose::dprintln!("  Sysroot ready.");
         sysroot_output.sysroot_dir
@@ -1015,12 +1149,400 @@ fn execute_rule(
                 }
             }
         }
-        RuleHandler::Script(fn_name) => {
-            bail!(
-                "script rule handlers are not yet implemented (rule: '{rule_name}', fn: '{fn_name}')"
+        RuleHandler::Script(source) => {
+            let ctx = crate::rule_engine::RuleContext::new(
+                rule_name,
+                rule,
+                config,
+                root,
+                kernel_binary,
+                kernel_binary_rebuilt,
+                force,
+                shared_artifacts,
             );
+            let engine = crate::rule_engine::create_rule_engine(
+                model,
+                config,
+                shared_artifacts,
+                shared_target_specs,
+                shared_sysroots,
+                shared_config_rlibs,
+            );
+            let ctx = crate::rule_engine::execute_script(&engine, source, rule_name, ctx)?;
+
+            // Apply mutations from the script.
+            if let Some(new_kb) = ctx.kernel_binary_override {
+                *kernel_binary = Some(PathBuf::from(&new_kb));
+                shared_artifacts
+                    .write()
+                    .unwrap()
+                    .insert(&config.profile.boot_binary, PathBuf::from(&new_kb));
+            }
         }
     }
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// DAG construction helper (extracted for testing)
+// ---------------------------------------------------------------------------
+
+/// Result of building a DAG: node indices, edges, and in-degrees.
+#[cfg(test)]
+struct DagInfo {
+    node_name_to_idx: HashMap<String, usize>,
+    in_degree: Vec<usize>,
+    edge_set: HashSet<(usize, usize)>,
+}
+
+/// Build a DAG from a model without executing it. Used by tests to verify
+/// edge creation for barriers, artifact deps, and deduplication.
+#[cfg(test)]
+fn build_dag(model: &crate::model::BuildModel) -> DagInfo {
+    use crate::model::PipelineStep;
+
+    // Resolve all crates (host-only for test models, no sysroot needed).
+    let root = std::path::Path::new("/fake/root");
+    let sysroot_src = std::path::Path::new("/fake/sysroot");
+    let config_options = std::collections::BTreeMap::new();
+    let all_crates = crate_graph::resolve_all_groups(model, root, sysroot_src, &config_options)
+        .expect("resolve_all_groups should succeed in test");
+
+    let mut nodes: Vec<String> = Vec::new();
+    let mut node_name_to_idx: HashMap<String, usize> = HashMap::new();
+
+    // Add Crate nodes.
+    for (krate, _) in &all_crates {
+        let idx = nodes.len();
+        node_name_to_idx.insert(krate.name.clone(), idx);
+        nodes.push(krate.name.clone());
+    }
+
+    // Add Rule nodes.
+    let rules: Vec<String> = model
+        .pipeline
+        .steps
+        .iter()
+        .filter_map(|step| {
+            if let PipelineStep::Rule(name) = step {
+                Some(name.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+    for rule_name in &rules {
+        let idx = nodes.len();
+        node_name_to_idx.insert(format!("__rule_{rule_name}"), idx);
+        nodes.push(format!("__rule_{rule_name}"));
+    }
+
+    let total = nodes.len();
+    let mut in_degree: Vec<usize> = vec![0; total];
+    let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); total];
+    let mut edge_set: HashSet<(usize, usize)> = HashSet::new();
+
+    let add_edge = |from: usize,
+                    to: usize,
+                    edge_set: &mut HashSet<(usize, usize)>,
+                    in_degree: &mut Vec<usize>,
+                    dependents: &mut Vec<Vec<usize>>| {
+        if edge_set.insert((from, to)) {
+            in_degree[to] += 1;
+            dependents[from].push(to);
+        }
+    };
+
+    // Crate-to-crate edges from resolved dependencies.
+    for (krate, _) in &all_crates {
+        let crate_node_idx = *node_name_to_idx.get(&krate.name).unwrap();
+        for dep in &krate.deps {
+            if let Some(&dep_node_idx) = node_name_to_idx.get(&dep.crate_name) {
+                add_edge(
+                    dep_node_idx,
+                    crate_node_idx,
+                    &mut edge_set,
+                    &mut in_degree,
+                    &mut dependents,
+                );
+            }
+        }
+    }
+
+    // Rule edges.
+    for rule_name in &rules {
+        let rule_node_idx = *node_name_to_idx
+            .get(&format!("__rule_{rule_name}"))
+            .unwrap();
+        if let Some(rule) = model.rules.get(rule_name) {
+            for input in &rule.inputs {
+                if let Some(&input_idx) = node_name_to_idx.get(input) {
+                    add_edge(
+                        input_idx,
+                        rule_node_idx,
+                        &mut edge_set,
+                        &mut in_degree,
+                        &mut dependents,
+                    );
+                }
+            }
+            for dep_rule in &rule.depends_on {
+                if let Some(&dep_idx) = node_name_to_idx.get(&format!("__rule_{dep_rule}")) {
+                    add_edge(
+                        dep_idx,
+                        rule_node_idx,
+                        &mut edge_set,
+                        &mut in_degree,
+                        &mut dependents,
+                    );
+                }
+            }
+        }
+    }
+
+    // Barrier edges.
+    {
+        let mut segments: Vec<Vec<usize>> = Vec::new();
+        let mut current_segment: Vec<usize> = Vec::new();
+
+        for step in &model.pipeline.steps {
+            match step {
+                PipelineStep::Stage { groups, .. } => {
+                    for gname in groups {
+                        if let Some(group) = model.groups.get(gname) {
+                            for crate_name in &group.crates {
+                                if let Some(&idx) = node_name_to_idx.get(crate_name) {
+                                    current_segment.push(idx);
+                                }
+                            }
+                        }
+                    }
+                }
+                PipelineStep::Rule(rule_name) => {
+                    if let Some(&idx) = node_name_to_idx.get(&format!("__rule_{rule_name}")) {
+                        current_segment.push(idx);
+                    }
+                }
+                PipelineStep::Barrier(_) => {
+                    if !current_segment.is_empty() {
+                        segments.push(std::mem::take(&mut current_segment));
+                    }
+                }
+            }
+        }
+        if !current_segment.is_empty() {
+            segments.push(current_segment);
+        }
+
+        for i in 0..segments.len().saturating_sub(1) {
+            for &pre in &segments[i] {
+                for &post in &segments[i + 1] {
+                    add_edge(pre, post, &mut edge_set, &mut in_degree, &mut dependents);
+                }
+            }
+        }
+    }
+
+    // Artifact dependency edges.
+    for (krate, _) in &all_crates {
+        if let Some(def) = model.crates.get(&krate.name) {
+            let crate_idx = *node_name_to_idx.get(&krate.name).unwrap();
+            for art_dep in &def.artifact_deps {
+                if let Some(&dep_idx) = node_name_to_idx
+                    .get(art_dep)
+                    .or_else(|| node_name_to_idx.get(&format!("__rule_{art_dep}")))
+                {
+                    add_edge(
+                        dep_idx,
+                        crate_idx,
+                        &mut edge_set,
+                        &mut in_degree,
+                        &mut dependents,
+                    );
+                }
+            }
+        }
+    }
+
+    DagInfo {
+        node_name_to_idx,
+        in_degree,
+        edge_set,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{
+        BuildModel, CrateDef, CrateType, DepDef, GroupDef, PipelineDef, PipelineStep, RuleDef,
+        RuleHandler,
+    };
+    use std::collections::BTreeMap;
+
+    /// Build a minimal model with groups and a pipeline for DAG testing.
+    /// Each entry is (group_name, [(crate_name, [dep_names])]).
+    /// Pipeline steps alternate: stage(group), barrier, stage(group), ...
+    fn make_pipeline_model(groups: &[(&str, &[(&str, &[&str])])], barriers: &[&str]) -> BuildModel {
+        let mut model = BuildModel::default();
+        model.project.name = "test".into();
+
+        let mut steps: Vec<PipelineStep> = Vec::new();
+        let mut barrier_idx = 0;
+
+        for (gname, crates) in groups {
+            let mut group = GroupDef::default();
+            group.name = (*gname).into();
+
+            for &(name, deps) in *crates {
+                group.crates.push(name.into());
+
+                let mut dep_map = BTreeMap::new();
+                for &dep in deps {
+                    dep_map.insert(
+                        dep.into(),
+                        DepDef {
+                            extern_name: dep.into(),
+                            crate_name: dep.into(),
+                            features: vec![],
+                            version: None,
+                        },
+                    );
+                }
+
+                model.crates.insert(
+                    name.into(),
+                    CrateDef {
+                        name: name.into(),
+                        path: format!("crates/{name}"),
+                        edition: "2024".into(),
+                        crate_type: CrateType::Lib,
+                        target: "host".into(),
+                        deps: dep_map,
+                        dev_deps: BTreeMap::new(),
+                        features: vec![],
+                        root: None,
+                        linker_script: None,
+                        group: Some((*gname).into()),
+                        is_project_crate: true,
+                        cfg_flags: vec![],
+                        rustc_flags: vec![],
+                        requires_config: vec![],
+                        artifact_deps: vec![],
+                    },
+                );
+            }
+
+            model.groups.insert((*gname).into(), group);
+
+            steps.push(PipelineStep::Stage {
+                name: (*gname).into(),
+                groups: vec![(*gname).into()],
+            });
+
+            if barrier_idx < barriers.len() {
+                steps.push(PipelineStep::Barrier(barriers[barrier_idx].into()));
+                barrier_idx += 1;
+            }
+        }
+
+        model.pipeline = PipelineDef { steps };
+        model
+    }
+
+    #[test]
+    fn test_barrier_creates_edges() {
+        // Two stages separated by a barrier: stage1=[a, b], barrier, stage2=[c, d]
+        let model = make_pipeline_model(
+            &[
+                ("stage1", &[("a", &[]), ("b", &[])]),
+                ("stage2", &[("c", &[]), ("d", &[])]),
+            ],
+            &["barrier1"],
+        );
+
+        let dag = build_dag(&model);
+        let a = dag.node_name_to_idx["a"];
+        let b = dag.node_name_to_idx["b"];
+        let c = dag.node_name_to_idx["c"];
+        let d = dag.node_name_to_idx["d"];
+
+        // All pre-barrier crates should have edges to all post-barrier crates.
+        assert!(dag.edge_set.contains(&(a, c)), "expected edge a->c");
+        assert!(dag.edge_set.contains(&(a, d)), "expected edge a->d");
+        assert!(dag.edge_set.contains(&(b, c)), "expected edge b->c");
+        assert!(dag.edge_set.contains(&(b, d)), "expected edge b->d");
+
+        // Post-barrier crates should have in-degree of 2 (from a and b).
+        assert_eq!(dag.in_degree[c], 2);
+        assert_eq!(dag.in_degree[d], 2);
+    }
+
+    #[test]
+    fn test_artifact_deps_create_edges() {
+        // Crate B has artifact_deps on A, but no Rust dep.
+        let mut model = make_pipeline_model(&[("stage1", &[("a", &[]), ("b", &[])])], &[]);
+        model.crates.get_mut("b").unwrap().artifact_deps = vec!["a".into()];
+
+        let dag = build_dag(&model);
+        let a = dag.node_name_to_idx["a"];
+        let b = dag.node_name_to_idx["b"];
+
+        assert!(
+            dag.edge_set.contains(&(a, b)),
+            "expected artifact dep edge a->b"
+        );
+        assert_eq!(dag.in_degree[b], 1);
+    }
+
+    #[test]
+    fn test_edge_deduplication() {
+        // Crate B has both a Rust dep on A and an artifact dep on A.
+        // Should result in only one edge (in_degree = 1, not 2).
+        let mut model = make_pipeline_model(&[("stage1", &[("a", &[]), ("b", &["a"])])], &[]);
+        model.crates.get_mut("b").unwrap().artifact_deps = vec!["a".into()];
+
+        let dag = build_dag(&model);
+        let b = dag.node_name_to_idx["b"];
+
+        assert_eq!(
+            dag.in_degree[b], 1,
+            "edge should be deduplicated: in_degree should be 1, not 2"
+        );
+    }
+
+    #[test]
+    fn test_barrier_transitivity() {
+        // Three stages: A | B | C (two barriers).
+        // C should depend on B (direct), A should depend on nothing,
+        // B should depend on A. No direct A->C edge.
+        let model = make_pipeline_model(
+            &[
+                ("stage1", &[("a", &[])]),
+                ("stage2", &[("b", &[])]),
+                ("stage3", &[("c", &[])]),
+            ],
+            &["barrier1", "barrier2"],
+        );
+
+        let dag = build_dag(&model);
+        let a = dag.node_name_to_idx["a"];
+        let b = dag.node_name_to_idx["b"];
+        let c = dag.node_name_to_idx["c"];
+
+        // Direct edges: a->b (barrier1) and b->c (barrier2).
+        assert!(dag.edge_set.contains(&(a, b)), "expected edge a->b");
+        assert!(dag.edge_set.contains(&(b, c)), "expected edge b->c");
+
+        // No direct a->c edge (transitivity through b handles this).
+        assert!(
+            !dag.edge_set.contains(&(a, c)),
+            "should NOT have direct edge a->c"
+        );
+
+        assert_eq!(dag.in_degree[a], 0);
+        assert_eq!(dag.in_degree[b], 1);
+        assert_eq!(dag.in_degree[c], 1);
+    }
 }

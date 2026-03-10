@@ -1759,6 +1759,7 @@ pub fn auto_register_dependencies(
             cfg_flags,
             rustc_flags,
             requires_config: Vec::new(),
+            artifact_deps: Vec::new(),
         };
 
         model.crates.insert(dep.name.clone(), crate_def);
