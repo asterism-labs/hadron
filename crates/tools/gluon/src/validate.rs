@@ -39,7 +39,10 @@ fn validate_project(model: &BuildModel) -> Result<()> {
 
 fn validate_targets(model: &BuildModel) -> Result<()> {
     for (name, target) in &model.targets {
-        ensure!(!target.spec.is_empty(), "target '{name}' has no spec path");
+        ensure!(
+            !target.spec.is_empty(),
+            "target '{name}' has no spec path or triple"
+        );
     }
     Ok(())
 }
@@ -49,6 +52,7 @@ fn validate_config_options(model: &BuildModel) -> Result<()> {
         // Default value type must match declared type.
         match (&opt.ty, &opt.default) {
             (ConfigType::Bool, ConfigValue::Bool(_)) => {}
+            (ConfigType::Tristate, ConfigValue::Tristate(_)) => {}
             (ConfigType::U32, ConfigValue::U32(_)) => {}
             (ConfigType::U64, ConfigValue::U64(_)) => {}
             (ConfigType::Str, ConfigValue::Str(_)) => {}
@@ -496,6 +500,7 @@ mod tests {
             TargetDef {
                 name: "x86_64".into(),
                 spec: "x86_64-unknown-hadron".into(),
+                builtin: false,
             },
         );
         model.profiles.insert(
@@ -526,6 +531,7 @@ mod tests {
             choices: None,
             menu: None,
             bindings: Vec::new(),
+            visible_if: Vec::new(),
         }
     }
 
@@ -666,6 +672,7 @@ mod tests {
                 choices: None,
                 menu: None,
                 bindings: Vec::new(),
+                visible_if: Vec::new(),
             },
         );
 
@@ -696,6 +703,7 @@ mod tests {
                 choices: None,
                 menu: None,
                 bindings: Vec::new(),
+                visible_if: Vec::new(),
             },
         );
 
@@ -726,6 +734,7 @@ mod tests {
                 choices: Some(vec![]),
                 menu: None,
                 bindings: Vec::new(),
+                visible_if: Vec::new(),
             },
         );
 
@@ -881,6 +890,7 @@ mod tests {
                 ]),
                 menu: None,
                 bindings: Vec::new(),
+                visible_if: Vec::new(),
             },
         );
         model.config_options.insert(
@@ -896,6 +906,7 @@ mod tests {
                 choices: None,
                 menu: None,
                 bindings: Vec::new(),
+                visible_if: Vec::new(),
             },
         );
 

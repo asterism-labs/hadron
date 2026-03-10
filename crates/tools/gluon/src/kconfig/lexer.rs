@@ -36,6 +36,7 @@ pub enum TokenKind {
     EndMenu,
     Source,
     Bool,
+    Tristate,
     U32,
     U64,
     Str,
@@ -47,6 +48,7 @@ pub enum TokenKind {
     Binding,
     Help,
     Prompt,
+    VisibleIf,
     Preset,
     Set,
     Inherits,
@@ -58,6 +60,8 @@ pub enum TokenKind {
     Integer(u64),
     /// `y` boolean true.
     Yes,
+    /// `m` tristate module.
+    Module,
     /// `n` boolean false.
     No,
     /// An identifier (config name, binding type, etc.).
@@ -350,6 +354,7 @@ pub fn tokenize(source: &str, file: PathBuf) -> Result<Vec<Token>, String> {
                     "endmenu" => TokenKind::EndMenu,
                     "source" => TokenKind::Source,
                     "bool" => TokenKind::Bool,
+                    "tristate" => TokenKind::Tristate,
                     "u32" => TokenKind::U32,
                     "u64" => TokenKind::U64,
                     "str" => TokenKind::Str,
@@ -394,7 +399,36 @@ pub fn tokenize(source: &str, file: PathBuf) -> Result<Vec<Token>, String> {
                     "set" => TokenKind::Set,
                     "inherits" => TokenKind::Inherits,
                     "y" => TokenKind::Yes,
+                    "m" => TokenKind::Module,
                     "n" => TokenKind::No,
+                    "visible" => {
+                        // Lookahead for "if" keyword to form compound "visible if"
+                        let saved: Vec<_> = chars.clone().take(10).collect();
+                        let remaining: String = saved.iter().map(|(_, c)| c).collect();
+                        let trimmed = remaining.trim_start();
+                        if trimmed.starts_with("if")
+                            && trimmed[2..]
+                                .starts_with(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                        {
+                            // Consume whitespace + "if"
+                            while let Some(&(_, c)) = chars.peek() {
+                                if c == ' ' || c == '\t' {
+                                    chars.next();
+                                } else {
+                                    break;
+                                }
+                            }
+                            if let Some(&(_, 'i')) = chars.peek() {
+                                chars.next();
+                                if let Some(&(_, 'f')) = chars.peek() {
+                                    chars.next();
+                                }
+                            }
+                            TokenKind::VisibleIf
+                        } else {
+                            TokenKind::Ident(word.to_string())
+                        }
+                    }
                     "on" => TokenKind::Ident(word.to_string()),
                     "cumulative" | "cfg" | "const" | "build" => TokenKind::Ident(word.to_string()),
                     _ => TokenKind::Ident(word.to_string()),

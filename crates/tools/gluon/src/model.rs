@@ -46,6 +46,9 @@ pub struct BuildModel {
     /// Used by model caching to track invalidation inputs.
     #[serde(default)]
     pub input_files: Vec<PathBuf>,
+    /// Deferred per-crate script loads from `group.load("path")` calls.
+    #[serde(default)]
+    pub pending_loads: Vec<PendingLoad>,
 }
 
 /// Project metadata.
@@ -61,6 +64,9 @@ pub struct TargetDef {
     /// Redundant with map key; kept for validation error messages.
     pub name: String,
     pub spec: String,
+    /// If true, `spec` is a rustc builtin triple (not a file path).
+    #[serde(default)]
+    pub builtin: bool,
 }
 
 /// Crate output type.
@@ -105,6 +111,9 @@ pub struct ConfigOptionDef {
     pub menu: Option<String>,
     /// Code generation bindings for this option.
     pub bindings: Vec<Binding>,
+    /// Symbols that must be enabled for this option to be visible in the TUI.
+    #[serde(default)]
+    pub visible_if: Vec<String>,
 }
 
 /// How a config option maps to generated code or build flags.
@@ -124,6 +133,8 @@ pub enum Binding {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConfigType {
     Bool,
+    /// Tristate: yes/module/no.
+    Tristate,
     U32,
     U64,
     Str,
@@ -135,10 +146,20 @@ pub enum ConfigType {
     Group,
 }
 
+/// Tristate value: yes, module, or no.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TristateVal {
+    Yes,
+    Module,
+    No,
+}
+
 /// A typed configuration value.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ConfigValue {
     Bool(bool),
+    /// Tristate value (yes/module/no).
+    Tristate(TristateVal),
     U32(u32),
     U64(u64),
     Str(String),
@@ -294,6 +315,15 @@ impl Default for GroupDef {
             config: false,
         }
     }
+}
+
+/// A deferred per-crate script load from `group.load("path")`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingLoad {
+    /// The group name this load belongs to.
+    pub group: String,
+    /// Relative path to the crate directory (contains `gluon.rhai`).
+    pub path: String,
 }
 
 /// A rule for custom artifact generation.

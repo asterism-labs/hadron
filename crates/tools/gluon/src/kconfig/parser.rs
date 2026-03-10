@@ -67,6 +67,7 @@ impl Parser {
             prompt: None,
             default: None,
             depends_on: None,
+            visible_if: None,
             selects: Vec::new(),
             range: None,
             bindings: Vec::new(),
@@ -91,6 +92,19 @@ impl Parser {
                     let prompt = self.try_string();
                     block.ty = Some(TypeDecl {
                         kind: TypeKind::Bool,
+                        variants: Vec::new(),
+                        prompt: prompt.clone(),
+                    });
+                    if prompt.is_some() {
+                        block.prompt = prompt;
+                    }
+                    self.expect_newline()?;
+                }
+                TokenKind::Tristate => {
+                    self.advance();
+                    let prompt = self.try_string();
+                    block.ty = Some(TypeDecl {
+                        kind: TypeKind::Tristate,
                         variants: Vec::new(),
                         prompt: prompt.clone(),
                     });
@@ -160,6 +174,11 @@ impl Parser {
                 TokenKind::DependsOn => {
                     self.advance();
                     block.depends_on = Some(self.parse_depends_expr()?);
+                    self.expect_newline()?;
+                }
+                TokenKind::VisibleIf => {
+                    self.advance();
+                    block.visible_if = Some(self.parse_depends_expr()?);
                     self.expect_newline()?;
                 }
                 TokenKind::Select => {
@@ -299,6 +318,10 @@ impl Parser {
             TokenKind::Yes => {
                 self.advance();
                 Ok(DefaultValue::Bool(true))
+            }
+            TokenKind::Module => {
+                self.advance();
+                Ok(DefaultValue::Tristate(AstTristateValue::Module))
             }
             TokenKind::No => {
                 self.advance();

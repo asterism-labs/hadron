@@ -170,6 +170,14 @@ fn convert_preset_block(block: &PresetBlock) -> PresetDef {
     for ov in &block.overrides {
         let value = match &ov.value {
             DefaultValue::Bool(v) => ConfigValue::Bool(*v),
+            DefaultValue::Tristate(v) => {
+                let model_val = match v {
+                    AstTristateValue::Yes => crate::model::TristateVal::Yes,
+                    AstTristateValue::Module => crate::model::TristateVal::Module,
+                    AstTristateValue::No => crate::model::TristateVal::No,
+                };
+                ConfigValue::Tristate(model_val)
+            }
             DefaultValue::Integer(v) => {
                 if *v <= u32::MAX as u64 {
                     ConfigValue::U32(*v as u32)
@@ -207,6 +215,32 @@ fn convert_config_block(
                 _ => return Err(format!("config '{}': bool expects y/n default", block.name)),
             };
             (ConfigType::Bool, default, None)
+        }
+        TypeKind::Tristate => {
+            let default = match &block.default {
+                Some(DefaultValue::Bool(true)) => {
+                    ConfigValue::Tristate(crate::model::TristateVal::Yes)
+                }
+                Some(DefaultValue::Bool(false)) => {
+                    ConfigValue::Tristate(crate::model::TristateVal::No)
+                }
+                Some(DefaultValue::Tristate(v)) => {
+                    let model_val = match v {
+                        AstTristateValue::Yes => crate::model::TristateVal::Yes,
+                        AstTristateValue::Module => crate::model::TristateVal::Module,
+                        AstTristateValue::No => crate::model::TristateVal::No,
+                    };
+                    ConfigValue::Tristate(model_val)
+                }
+                None => ConfigValue::Tristate(crate::model::TristateVal::No),
+                _ => {
+                    return Err(format!(
+                        "config '{}': tristate expects y/m/n default",
+                        block.name
+                    ));
+                }
+            };
+            (ConfigType::Tristate, default, None)
         }
         TypeKind::U32 => {
             let default = match &block.default {
@@ -294,6 +328,11 @@ fn convert_config_block(
         choices,
         menu: menu_title.map(String::from),
         bindings: block.bindings.clone(),
+        visible_if: block
+            .visible_if
+            .as_ref()
+            .map(|expr| expr.flatten_symbols())
+            .unwrap_or_default(),
     })
 }
 
@@ -317,6 +356,7 @@ mod tests {
             selects: vec!["APIC".to_string()],
             range: None,
             bindings: vec![Binding::Cfg, Binding::Build],
+            visible_if: None,
             help: None,
         };
 
@@ -351,6 +391,7 @@ mod tests {
             selects: Vec::new(),
             range: None,
             bindings: vec![Binding::CfgCumulative, Binding::Const],
+            visible_if: None,
             help: None,
         };
 
@@ -376,6 +417,7 @@ mod tests {
             selects: Vec::new(),
             range: Some((1, 256)),
             bindings: vec![Binding::Const],
+            visible_if: None,
             help: None,
         };
 
@@ -403,6 +445,7 @@ mod tests {
             selects: Vec::new(),
             range: None,
             bindings: vec![Binding::Build],
+            visible_if: None,
             help: None,
         };
 
@@ -499,6 +542,7 @@ mod tests {
             selects: Vec::new(),
             range: None,
             bindings: Vec::new(),
+            visible_if: None,
             help: None,
         };
 
@@ -531,6 +575,7 @@ mod tests {
                 selects: vec![],
                 range: None,
                 bindings: vec![],
+                visible_if: None,
                 help: None,
             }),
             KconfigItem::Menu(MenuBlock {
@@ -548,6 +593,7 @@ mod tests {
                     selects: vec![],
                     range: None,
                     bindings: vec![],
+                    visible_if: None,
                     help: None,
                 })],
             }),

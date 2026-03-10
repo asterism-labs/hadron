@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use crate::compile;
 use crate::config::{ResolvedConfig, ResolvedValue};
 use crate::crate_graph::{self, ResolvedCrate};
-use crate::model::{BuildModel, CrateType};
+use crate::model::{BuildModel, CrateType, TristateVal};
 use crate::sysroot;
 
 /// Top-level rust-project.json structure.
@@ -116,12 +116,18 @@ pub fn generate_rust_project(config: &ResolvedConfig, model: &BuildModel) -> Res
     // Resolve target spec paths for non-host crates.
     let mut target_spec_paths: BTreeMap<String, String> = BTreeMap::new();
     for (tname, tdef) in &model.targets {
-        let spec_path = config
-            .root
-            .join(&tdef.spec)
-            .to_str()
-            .expect("target spec path is valid UTF-8")
-            .to_string();
+        let spec_path = if tdef.builtin {
+            // Builtin target: use the triple string directly.
+            tdef.spec.clone()
+        } else {
+            // Custom target: resolve relative spec path to absolute.
+            config
+                .root
+                .join(&tdef.spec)
+                .to_str()
+                .expect("target spec path is valid UTF-8")
+                .to_string()
+        };
         target_spec_paths.insert(tname.clone(), spec_path);
     }
 
@@ -250,6 +256,12 @@ fn build_config_cfgs(config: &ResolvedConfig) -> Vec<String> {
             match value {
                 ResolvedValue::Bool(true) => {
                     cfgs.push(format!("hadron_{name}"));
+                }
+                ResolvedValue::Tristate(TristateVal::Yes) => {
+                    cfgs.push(format!("hadron_{name}"));
+                }
+                ResolvedValue::Tristate(TristateVal::Module) => {
+                    cfgs.push(format!("hadron_{name}_module"));
                 }
                 ResolvedValue::Choice(v) | ResolvedValue::Str(v) => {
                     cfgs.push(format!("hadron_{name}=\"{v}\""));

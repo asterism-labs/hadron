@@ -22,7 +22,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 
 use crate::config;
-use crate::model::{BuildModel, ConfigOptionDef, ConfigType, ConfigValue};
+use crate::model::{BuildModel, ConfigOptionDef, ConfigType, ConfigValue, TristateVal};
 
 // ─── Hierarchical menu tree ──────────────────────────────────────────
 
@@ -344,6 +344,36 @@ impl App {
         }
     }
 
+    /// Cycle a tristate option: y -> m -> n -> y.
+    fn cycle_tristate(&mut self, name: &str) {
+        if !self.deps_satisfied(name) {
+            return;
+        }
+        if let Some(ConfigValue::Tristate(v)) = self.values.get_mut(name) {
+            *v = match v {
+                TristateVal::Yes => TristateVal::Module,
+                TristateVal::Module => TristateVal::No,
+                TristateVal::No => TristateVal::Yes,
+            };
+            self.dirty = true;
+            self.apply_selects();
+        }
+    }
+
+    /// Check if an option is visible based on its `visible_if` constraints.
+    fn is_visible(&self, name: &str) -> bool {
+        let Some(opt) = self.model_options.get(name) else {
+            return true;
+        };
+        if opt.visible_if.is_empty() {
+            return true;
+        }
+        // All visible_if symbols must be enabled (same logic as deps_satisfied).
+        opt.visible_if
+            .iter()
+            .all(|dep| matches!(self.values.get(dep), Some(ConfigValue::Bool(true))))
+    }
+
     /// Cycle a Choice option forward or backward through its variants.
     fn cycle_choice(&mut self, name: &str, forward: bool) {
         if !self.deps_satisfied(name) {
@@ -487,6 +517,9 @@ impl App {
             Some(ConfigType::Bool) => {
                 self.toggle_bool(&name);
             }
+            Some(ConfigType::Tristate) => {
+                self.cycle_tristate(&name);
+            }
             Some(ConfigType::Choice) => {
                 self.cycle_choice(&name, true);
             }
@@ -542,8 +575,8 @@ impl App {
                     .collect();
                 Some(ConfigValue::List(items))
             }
-            ConfigType::Bool | ConfigType::Group => {
-                unreachable!("bools/groups are not text-edited")
+            ConfigType::Bool | ConfigType::Tristate | ConfigType::Group => {
+                unreachable!("bools/tristates/groups are not text-edited")
             }
         };
 
@@ -815,6 +848,7 @@ fn run_event_loop(
                     if let Some(name) = app.selected_option_name() {
                         let ty = app.model_options.get(&name).map(|o| o.ty);
                         match ty {
+                            Some(ConfigType::Tristate) => app.cycle_tristate(&name),
                             Some(ConfigType::Choice) => app.cycle_choice(&name, true),
                             _ => app.toggle_bool(&name),
                         }
@@ -906,6 +940,10 @@ fn draw_page_list(f: &mut ratatui::Frame, app: &mut App, area: Rect) {
     let items: Vec<ListItem> = children
         .iter()
         .enumerate()
+        .filter(|(_, child)| match child {
+            MenuChild::Option { name } => app.is_visible(name),
+            _ => true,
+        })
         .skip(scroll_offset)
         .take(list_height)
         .map(|(i, child)| {
@@ -936,6 +974,15 @@ fn draw_page_list(f: &mut ratatui::Frame, app: &mut App, area: Rect) {
                             "[*]".to_string()
                         }
                         (Some(ConfigType::Bool), _) => "[ ]".to_string(),
+                        (
+                            Some(ConfigType::Tristate),
+                            Some(ConfigValue::Tristate(TristateVal::Yes)),
+                        ) => "<*>".to_string(),
+                        (
+                            Some(ConfigType::Tristate),
+                            Some(ConfigValue::Tristate(TristateVal::Module)),
+                        ) => "<M>".to_string(),
+                        (Some(ConfigType::Tristate), _) => "< >".to_string(),
                         (Some(ConfigType::Choice), Some(ConfigValue::Choice(v))) => {
                             format!("< {v} >")
                         }
@@ -1107,6 +1154,11 @@ fn draw_help_popup(f: &mut ratatui::Frame, app: &App, popup: &HelpPopupState, ar
 fn format_value(val: &ConfigValue) -> String {
     match val {
         ConfigValue::Bool(v) => format!("{v}"),
+        ConfigValue::Tristate(v) => match v {
+            TristateVal::Yes => "y".to_string(),
+            TristateVal::Module => "m".to_string(),
+            TristateVal::No => "n".to_string(),
+        },
         ConfigValue::U32(v) => format!("{v}"),
         ConfigValue::U64(v) => format!("{v:#x}"),
         ConfigValue::Str(v) => v.clone(),

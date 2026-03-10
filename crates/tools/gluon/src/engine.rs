@@ -12,8 +12,8 @@ use rhai::{Dynamic, Engine, Map};
 
 use crate::model::{
     BuildModel, ConfigOptionDef, ConfigType, ConfigValue, CrateDef, CrateType, DepDef, DepSource,
-    ExternalDepDef, GitRef, GroupDef, PipelineStep, ProfileDef, ProjectDef, RuleDef, RuleHandler,
-    TargetDef,
+    ExternalDepDef, GitRef, GroupDef, PendingLoad, PipelineStep, ProfileDef, ProjectDef, RuleDef,
+    RuleHandler, TargetDef,
 };
 
 /// Shared model state passed to all builder types.
@@ -90,6 +90,8 @@ pub fn evaluate_script(root: &Path) -> Result<BuildModel> {
     register_benchmarks_api(&mut engine, model.clone());
     register_dependency_api(&mut engine, model.clone());
     register_kconfig_api(&mut engine, model.clone(), &root_path);
+    register_config_query_api(&mut engine, model.clone());
+    register_crate_def_api(&mut engine, model.clone());
     register_helpers(&mut engine, &root_path);
 
     // Set up include() mechanism with circular-include detection.
@@ -109,6 +111,43 @@ pub fn evaluate_script(root: &Path) -> Result<BuildModel> {
     engine
         .run_ast_with_scope(&mut scope, &ast)
         .map_err(|e| anyhow::anyhow!("error evaluating {}: {e}", script_path.display()))?;
+
+    // Process deferred per-crate script loads.
+    let pending = model.lock().unwrap().pending_loads.clone();
+    if !pending.is_empty() {
+        // Compile the helper that wraps __crate_def_impl with scope variables.
+        let helper_ast = engine
+            .compile("fn crate_def(name) { __crate_def_impl(name, __group, __crate_path) }")
+            .map_err(|e| anyhow::anyhow!("error compiling crate_def helper: {e}"))?;
+
+        for load in &pending {
+            let sub_script_path = root.join(&load.path).join("gluon.rhai");
+            crate::verbose::vprintln!("  loading per-crate script: {}", sub_script_path.display());
+
+            let mut sub_scope = rhai::Scope::new();
+            sub_scope.push("__group", load.group.clone());
+            sub_scope.push("__crate_path", load.path.clone());
+            // Push crate type constants.
+            sub_scope.push_constant("LIB", 10_i64);
+            sub_scope.push_constant("BIN", 11_i64);
+            sub_scope.push_constant("PROC_MACRO", 12_i64);
+            sub_scope.push_constant("STATICLIB", 13_i64);
+
+            let sub_ast = engine
+                .compile_file(sub_script_path.clone().into())
+                .map_err(|e| {
+                    anyhow::anyhow!("error compiling {}: {e}", sub_script_path.display())
+                })?;
+
+            // Merge the helper AST so crate_def() is available, then run.
+            let merged = helper_ast.merge(&sub_ast);
+            engine
+                .run_ast_with_scope(&mut sub_scope, &merged)
+                .map_err(|e| {
+                    anyhow::anyhow!("error evaluating {}: {e}", sub_script_path.display())
+                })?;
+        }
+    }
 
     // Drop the engine, AST, and scope to release all Arc references held by closures.
     drop(ast);
@@ -159,6 +198,7 @@ struct TargetBuilder {
 }
 
 fn register_target_api(engine: &mut Engine, model: SharedModel) {
+    // 2-arg overload: target("name", "spec.json") — custom spec file
     let m = model.clone();
     engine.register_fn("target", move |name: &str, spec: &str| -> TargetBuilder {
         let mut model = m.lock().unwrap();
@@ -167,6 +207,25 @@ fn register_target_api(engine: &mut Engine, model: SharedModel) {
             TargetDef {
                 name: name.into(),
                 spec: spec.into(),
+                builtin: false,
+            },
+        );
+        TargetBuilder {
+            model: m.clone(),
+            name: name.into(),
+        }
+    });
+
+    // 1-arg overload: target("triple") — builtin rustup target
+    let m = model.clone();
+    engine.register_fn("target", move |name: &str| -> TargetBuilder {
+        let mut model = m.lock().unwrap();
+        model.targets.insert(
+            name.into(),
+            TargetDef {
+                name: name.into(),
+                spec: name.into(),
+                builtin: true,
             },
         );
         TargetBuilder {
@@ -212,6 +271,7 @@ fn register_config_api(engine: &mut Engine, model: SharedModel) {
                     choices: None,
                     menu: None,
                     bindings: Vec::new(),
+                    visible_if: Vec::new(),
                 },
             );
             ConfigBuilder {
@@ -240,6 +300,7 @@ fn register_config_api(engine: &mut Engine, model: SharedModel) {
                     choices: None,
                     menu: None,
                     bindings: Vec::new(),
+                    visible_if: Vec::new(),
                 },
             );
             ConfigBuilder {
@@ -269,6 +330,7 @@ fn register_config_api(engine: &mut Engine, model: SharedModel) {
                     choices: None,
                     menu: None,
                     bindings: Vec::new(),
+                    visible_if: Vec::new(),
                 },
             );
             ConfigBuilder {
@@ -297,6 +359,7 @@ fn register_config_api(engine: &mut Engine, model: SharedModel) {
                     choices: None,
                     menu: None,
                     bindings: Vec::new(),
+                    visible_if: Vec::new(),
                 },
             );
             ConfigBuilder {
@@ -325,6 +388,7 @@ fn register_config_api(engine: &mut Engine, model: SharedModel) {
                     choices: None,
                     menu: None,
                     bindings: Vec::new(),
+                    visible_if: Vec::new(),
                 },
             );
             ConfigBuilder {
@@ -357,6 +421,7 @@ fn register_config_api(engine: &mut Engine, model: SharedModel) {
                     choices: Some(choices),
                     menu: None,
                     bindings: Vec::new(),
+                    visible_if: Vec::new(),
                 },
             );
             ConfigBuilder {
@@ -389,6 +454,7 @@ fn register_config_api(engine: &mut Engine, model: SharedModel) {
                     choices: None,
                     menu: None,
                     bindings: Vec::new(),
+                    visible_if: Vec::new(),
                 },
             );
             ConfigBuilder {
@@ -415,6 +481,7 @@ fn register_config_api(engine: &mut Engine, model: SharedModel) {
                 choices: None,
                 menu: None,
                 bindings: Vec::new(),
+                visible_if: Vec::new(),
             },
         );
         ConfigGroupBuilder {
@@ -433,6 +500,7 @@ fn register_config_api(engine: &mut Engine, model: SharedModel) {
             let config_val = dynamic_to_config_value(&value);
             let ty = match &config_val {
                 ConfigValue::Bool(_) => ConfigType::Bool,
+                ConfigValue::Tristate(_) => ConfigType::Tristate,
                 ConfigValue::U32(_) => ConfigType::U32,
                 ConfigValue::U64(_) => ConfigType::U64,
                 ConfigValue::Str(_) => ConfigType::Str,
@@ -457,6 +525,7 @@ fn register_config_api(engine: &mut Engine, model: SharedModel) {
                     choices: None,
                     menu,
                     bindings: Vec::new(),
+                    visible_if: Vec::new(),
                 },
             );
         }
@@ -810,6 +879,19 @@ fn register_group_api(engine: &mut Engine, model: SharedModel) {
                 g.is_project = is_proj;
             }
         }
+    );
+
+    // group.load(path) — defer loading a per-crate gluon.rhai script.
+    engine.register_fn(
+        "load",
+        |builder: &mut GroupBuilder, path: &str| -> GroupBuilder {
+            let mut model = builder.model.lock().unwrap();
+            model.pending_loads.push(PendingLoad {
+                group: builder.name.clone(),
+                path: path.into(),
+            });
+            builder.clone()
+        },
     );
 
     // group.add(name, path) -> CrateBuilder (returns a different type, not macro-eligible)
@@ -1663,6 +1745,119 @@ fn register_kconfig_api(engine: &mut Engine, model: SharedModel, root: &Path) {
 // ---------------------------------------------------------------------------
 // Helper functions available in scripts
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// config_get(), config_is_enabled(), target_name() — conditional compilation
+// ---------------------------------------------------------------------------
+
+fn register_config_query_api(engine: &mut Engine, model: SharedModel) {
+    // config_is_enabled("NAME") -> bool
+    // Returns true if the named config option has a truthy default value.
+    let m = model.clone();
+    engine.register_fn("config_is_enabled", move |name: &str| -> bool {
+        let model = m.lock().unwrap();
+        match model.config_options.get(name) {
+            Some(opt) => matches!(opt.default, ConfigValue::Bool(true)),
+            None => false,
+        }
+    });
+
+    // config_get("NAME") -> Dynamic
+    // Returns the default value of a config option as a Rhai-native value.
+    let m = model.clone();
+    engine.register_fn("config_get", move |name: &str| -> Dynamic {
+        let model = m.lock().unwrap();
+        match model.config_options.get(name) {
+            Some(opt) => match &opt.default {
+                ConfigValue::Bool(v) => Dynamic::from(*v),
+                ConfigValue::Tristate(v) => match v {
+                    crate::model::TristateVal::Yes => Dynamic::from("y".to_string()),
+                    crate::model::TristateVal::Module => Dynamic::from("m".to_string()),
+                    crate::model::TristateVal::No => Dynamic::from("n".to_string()),
+                },
+                ConfigValue::U32(v) => Dynamic::from(i64::from(*v)),
+                ConfigValue::U64(v) => Dynamic::from(*v as i64),
+                ConfigValue::Str(v) => Dynamic::from(v.clone()),
+                ConfigValue::Choice(v) => Dynamic::from(v.clone()),
+                ConfigValue::List(v) => {
+                    let arr: rhai::Array = v.iter().map(|s| Dynamic::from(s.clone())).collect();
+                    Dynamic::from(arr)
+                }
+            },
+            None => Dynamic::UNIT,
+        }
+    });
+
+    // target_name() -> string
+    // Returns the target triple from the first defined target (or empty string).
+    let m = model.clone();
+    engine.register_fn("target_name", move || -> String {
+        let model = m.lock().unwrap();
+        model
+            .targets
+            .values()
+            .next()
+            .map(|t| t.name.clone())
+            .unwrap_or_default()
+    });
+}
+
+/// Register the `__crate_def_impl(name, group, path)` native function used by per-crate scripts.
+///
+/// Per-crate scripts call `crate_def("name")` which is a Rhai wrapper that
+/// forwards to this native function with `__group` and `__crate_path` from scope.
+fn register_crate_def_api(engine: &mut Engine, model: SharedModel) {
+    let m = model;
+    engine.register_fn(
+        "__crate_def_impl",
+        move |name: &str, group_name: &str, crate_path: &str| -> CrateBuilder {
+            let mut mdl = m.lock().unwrap();
+            let (edition, target, is_project) = {
+                let group = mdl
+                    .groups
+                    .get(group_name)
+                    .expect("group not found for load");
+                (
+                    group.default_edition.clone(),
+                    group.target.clone(),
+                    group.is_project,
+                )
+            };
+
+            // Add crate to the group's crate list.
+            if let Some(group) = mdl.groups.get_mut(group_name) {
+                group.crates.push(name.into());
+            }
+
+            mdl.crates.insert(
+                name.into(),
+                CrateDef {
+                    name: name.into(),
+                    path: crate_path.into(),
+                    edition,
+                    crate_type: CrateType::Lib,
+                    target,
+                    deps: std::collections::BTreeMap::new(),
+                    dev_deps: std::collections::BTreeMap::new(),
+                    features: Vec::new(),
+                    root: None,
+                    linker_script: None,
+                    group: Some(group_name.into()),
+                    is_project_crate: is_project,
+                    cfg_flags: Vec::new(),
+                    rustc_flags: Vec::new(),
+                    requires_config: Vec::new(),
+                    artifact_deps: Vec::new(),
+                },
+            );
+            drop(mdl);
+            CrateBuilder {
+                model: m.clone(),
+                name: name.into(),
+            }
+        },
+    );
+}
 
 fn register_helpers(engine: &mut Engine, root: &Path) {
     let root_for_project = root.to_path_buf();

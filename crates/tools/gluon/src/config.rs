@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail, ensure};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::model::{BuildModel, ConfigType, ConfigValue};
+use crate::model::{BuildModel, ConfigType, ConfigValue, TristateVal};
 
 // ===========================================================================
 // Shared types (consumed by compile, run, test, analyzer, scheduler, etc.)
@@ -143,6 +143,8 @@ pub enum ResolvedValue {
     Str(String),
     /// Selected variant name for a Choice option.
     Choice(String),
+    /// Tristate value (y/m/n).
+    Tristate(TristateVal),
     /// Ordered list of string items.
     List(Vec<String>),
 }
@@ -155,6 +157,11 @@ impl std::fmt::Display for ResolvedValue {
             ResolvedValue::U64(v) => write!(f, "{v:#x}"),
             ResolvedValue::Str(v) => write!(f, "{v}"),
             ResolvedValue::Choice(v) => write!(f, "{v}"),
+            ResolvedValue::Tristate(v) => match v {
+                TristateVal::Yes => write!(f, "y"),
+                TristateVal::Module => write!(f, "m"),
+                TristateVal::No => write!(f, "n"),
+            },
             ResolvedValue::List(v) => write!(f, "[{}]", v.join(", ")),
         }
     }
@@ -443,6 +450,7 @@ fn resolve_options(
             (ConfigType::U64, ConfigValue::U64(v)) => ResolvedValue::U64(*v),
             (ConfigType::Str, ConfigValue::Str(v)) => ResolvedValue::Str(v.clone()),
             (ConfigType::Choice, ConfigValue::Choice(v)) => ResolvedValue::Choice(v.clone()),
+            (ConfigType::Tristate, ConfigValue::Tristate(v)) => ResolvedValue::Tristate(*v),
             (ConfigType::List, ConfigValue::List(v)) => ResolvedValue::List(v.clone()),
             _ => bail!(
                 "config option '{name}' value type does not match declared type {:?}",
@@ -483,7 +491,76 @@ fn resolve_options(
         resolved.insert(name.clone(), resolved_value);
     }
 
+    interpolate_strings(&mut resolved);
+
     Ok(resolved)
+}
+
+/// Perform `${CONFIG_NAME}` interpolation on string-typed resolved values.
+fn interpolate_strings(resolved: &mut BTreeMap<String, ResolvedValue>) {
+    // Collect string values that need interpolation.
+    let snapshot: BTreeMap<String, String> = resolved
+        .iter()
+        .filter_map(|(k, v)| {
+            if let ResolvedValue::Str(s) = v {
+                Some((k.clone(), s.clone()))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    for (name, original) in &snapshot {
+        if !original.contains("${") {
+            continue;
+        }
+        let mut visited = std::collections::HashSet::new();
+        visited.insert(name.clone());
+        let interpolated = interpolate_one(original, resolved, &mut visited);
+        if let Some(entry) = resolved.get_mut(name) {
+            *entry = ResolvedValue::Str(interpolated);
+        }
+    }
+}
+
+/// Interpolate a single string, replacing `${CONFIG_NAME}` with resolved values.
+fn interpolate_one(
+    value: &str,
+    resolved: &BTreeMap<String, ResolvedValue>,
+    visited: &mut std::collections::HashSet<String>,
+) -> String {
+    let mut result = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(start) = rest.find("${") {
+        result.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        if let Some(end) = after.find('}') {
+            let var_name = &after[..end];
+            let replacement = if visited.contains(var_name) {
+                // Circular reference — leave as-is.
+                format!("${{{var_name}}}")
+            } else if let Some(val) = resolved.get(var_name) {
+                visited.insert(var_name.to_string());
+                let s = val.to_string();
+                if s.contains("${") {
+                    interpolate_one(&s, resolved, visited)
+                } else {
+                    s
+                }
+            } else {
+                // Unknown variable — leave as-is.
+                format!("${{{var_name}}}")
+            };
+            result.push_str(&replacement);
+            rest = &after[end + 1..];
+        } else {
+            // Unclosed `${` — copy literally.
+            result.push_str("${");
+            rest = after;
+        }
+    }
+    result.push_str(rest);
+    result
 }
 
 /// Apply `select` and validate `depends-on` constraints.
@@ -630,6 +707,11 @@ pub fn save_config_overrides(root: &Path, values: &BTreeMap<String, ConfigValue>
             ConfigValue::U64(v) => format!("{v:#x}"),
             ConfigValue::Str(v) => v.clone(),
             ConfigValue::Choice(v) => v.clone(),
+            ConfigValue::Tristate(v) => match v {
+                TristateVal::Yes => "y".to_string(),
+                TristateVal::Module => "m".to_string(),
+                TristateVal::No => "n".to_string(),
+            },
             ConfigValue::List(v) => {
                 let quoted: Vec<String> = v.iter().map(|s| format!("\"{s}\"")).collect();
                 format!("[{}]", quoted.join(", "))
@@ -688,6 +770,7 @@ mod tests {
                 choices: None,
                 menu: None,
                 bindings: Vec::new(),
+                visible_if: Vec::new(),
             },
         );
         defs.insert(
@@ -703,6 +786,7 @@ mod tests {
                 choices: None,
                 menu: None,
                 bindings: Vec::new(),
+                visible_if: Vec::new(),
             },
         );
         defs.insert(
@@ -718,6 +802,7 @@ mod tests {
                 choices: None,
                 menu: None,
                 bindings: Vec::new(),
+                visible_if: Vec::new(),
             },
         );
 
@@ -748,6 +833,7 @@ mod tests {
                 choices: None,
                 menu: None,
                 bindings: Vec::new(),
+                visible_if: Vec::new(),
             },
         );
         defs.insert(
@@ -763,6 +849,7 @@ mod tests {
                 choices: None,
                 menu: None,
                 bindings: Vec::new(),
+                visible_if: Vec::new(),
             },
         );
 
@@ -784,6 +871,7 @@ mod tests {
             choices: None,
             menu: None,
             bindings: Vec::new(),
+            visible_if: Vec::new(),
         }
     }
 
@@ -821,6 +909,7 @@ mod tests {
             TargetDef {
                 name: "x86_64".into(),
                 spec: "x86_64-unknown-hadron".into(),
+                builtin: false,
             },
         );
         model.profiles.insert(
@@ -873,6 +962,7 @@ mod tests {
                 choices: None,
                 menu: None,
                 bindings: Vec::new(),
+                visible_if: Vec::new(),
             },
         );
 
@@ -902,6 +992,7 @@ mod tests {
                 choices: None,
                 menu: None,
                 bindings: Vec::new(),
+                visible_if: Vec::new(),
             },
         );
 
@@ -931,6 +1022,7 @@ mod tests {
                 choices: Some(vec!["x86_64".into(), "aarch64".into()]),
                 menu: None,
                 bindings: Vec::new(),
+                visible_if: Vec::new(),
             },
         );
 
@@ -955,6 +1047,7 @@ mod tests {
                 choices: Some(vec!["x86_64".into(), "aarch64".into()]),
                 menu: None,
                 bindings: Vec::new(),
+                visible_if: Vec::new(),
             },
         );
 
@@ -984,6 +1077,7 @@ mod tests {
                 choices: Some(vec!["x86_64".into(), "aarch64".into()]),
                 menu: None,
                 bindings: Vec::new(),
+                visible_if: Vec::new(),
             },
         );
 
@@ -1061,6 +1155,7 @@ list_opt = [\"a\", \"b\"]
             TargetDef {
                 name: "x86_64".into(),
                 spec: "x86_64-unknown-hadron".into(),
+                builtin: false,
             },
         );
 
@@ -1107,6 +1202,7 @@ list_opt = [\"a\", \"b\"]
             TargetDef {
                 name: "x86_64".into(),
                 spec: "x86_64-unknown-hadron".into(),
+                builtin: false,
             },
         );
 
@@ -1167,6 +1263,7 @@ list_opt = [\"a\", \"b\"]
             TargetDef {
                 name: "x86_64".into(),
                 spec: "x86_64-unknown-hadron".into(),
+                builtin: false,
             },
         );
 
@@ -1218,6 +1315,7 @@ list_opt = [\"a\", \"b\"]
                 choices: None,
                 menu: None,
                 bindings: Vec::new(),
+                visible_if: Vec::new(),
             },
         );
 
@@ -1248,6 +1346,7 @@ list_opt = [\"a\", \"b\"]
                 choices: None,
                 menu: None,
                 bindings: Vec::new(),
+                visible_if: Vec::new(),
             },
         );
 

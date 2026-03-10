@@ -32,6 +32,7 @@ pub struct ConfigBlock {
     pub prompt: Option<String>,
     pub default: Option<DefaultValue>,
     pub depends_on: Option<DependsExpr>,
+    pub visible_if: Option<DependsExpr>,
     pub selects: Vec<String>,
     pub range: Option<(u64, u64)>,
     pub bindings: Vec<Binding>,
@@ -52,10 +53,20 @@ pub struct TypeDecl {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TypeKind {
     Bool,
+    Tristate,
     U32,
     U64,
     Str,
     Choice,
+}
+
+/// Tristate value in Kconfig syntax.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // variants used via pattern matching in kconfig/mod.rs
+pub enum AstTristateValue {
+    Yes,
+    Module,
+    No,
 }
 
 /// A default value in Kconfig syntax.
@@ -63,6 +74,8 @@ pub enum TypeKind {
 pub enum DefaultValue {
     /// `y` or `n`.
     Bool(bool),
+    /// `y`, `m`, or `n` (tristate).
+    Tristate(AstTristateValue),
     /// Decimal or hex integer.
     Integer(u64),
     /// Quoted string.

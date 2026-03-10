@@ -94,11 +94,17 @@ pub fn execute_pipeline(
 
     // Pre-resolve all target specs eagerly so workers can reference them.
     for (_name, target_def) in &model.targets {
-        let target_spec_path = root.join(&target_def.spec);
-        let target_spec = target_spec_path
-            .to_str()
-            .expect("target spec path is valid UTF-8")
-            .to_string();
+        let target_spec = if target_def.builtin {
+            // Builtin target: pass the triple directly to --target.
+            target_def.spec.clone()
+        } else {
+            // Custom target: resolve relative spec path to absolute.
+            let target_spec_path = root.join(&target_def.spec);
+            target_spec_path
+                .to_str()
+                .expect("target spec path is valid UTF-8")
+                .to_string()
+        };
         state
             .target_specs
             .insert(target_def.name.clone(), target_spec);
@@ -809,6 +815,23 @@ fn ensure_sysroot(
         .targets
         .get(target)
         .ok_or_else(|| anyhow::anyhow!("target '{target}' not found in model"))?;
+
+    // Builtin targets use rustc's own sysroot — no custom sysroot build needed.
+    if target_def.builtin {
+        let target_spec = target_def.spec.clone();
+        shared_target_specs
+            .write()
+            .unwrap()
+            .insert(target.to_string(), target_spec);
+        // Use the default rustc sysroot for builtin targets.
+        let default_sysroot = crate::rustc_info::sysroot_path().clone();
+        shared_sysroots
+            .write()
+            .unwrap()
+            .insert(target.to_string(), default_sysroot);
+        return Ok(());
+    }
+
     let target_spec_path = root.join(&target_def.spec);
     let target_spec = target_spec_path
         .to_str()

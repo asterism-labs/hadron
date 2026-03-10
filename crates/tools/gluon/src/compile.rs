@@ -5,7 +5,7 @@
 
 use crate::config::{ResolvedConfig, ResolvedValue};
 use crate::crate_graph::ResolvedCrate;
-use crate::model::CrateType;
+use crate::model::{CrateType, TristateVal};
 use crate::rustc_cmd::RustcCommandBuilder;
 use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
@@ -169,6 +169,18 @@ fn emit_const(source: &mut String, name: &str, value: &ResolvedValue, indent: &s
     match value {
         ResolvedValue::Bool(v) => {
             source.push_str(&format!("{indent}pub const {name}: bool = {v};\n"));
+        }
+        ResolvedValue::Tristate(v) => {
+            // Emit NAME: bool = true for y, NAME_MODULE: bool = true for m, neither for n.
+            match v {
+                TristateVal::Yes => {
+                    source.push_str(&format!("{indent}pub const {name}: bool = true;\n"));
+                }
+                TristateVal::Module => {
+                    source.push_str(&format!("{indent}pub const {name}_MODULE: bool = true;\n"));
+                }
+                TristateVal::No => {} // no const emitted for n
+            }
         }
         ResolvedValue::U32(v) => {
             source.push_str(&format!("{indent}pub const {name}: u32 = {v};\n"));
@@ -393,6 +405,12 @@ fn compile_crate_cross(
                 match value {
                     ResolvedValue::Bool(true) => {
                         cmd.cfg(&format!("hadron_{name}"));
+                    }
+                    ResolvedValue::Tristate(TristateVal::Yes) => {
+                        cmd.cfg(&format!("hadron_{name}"));
+                    }
+                    ResolvedValue::Tristate(TristateVal::Module) => {
+                        cmd.cfg(&format!("hadron_{name}_module"));
                     }
                     ResolvedValue::Choice(v) | ResolvedValue::Str(v) => {
                         cmd.cfg(&format!("hadron_{name}=\"{v}\""));
