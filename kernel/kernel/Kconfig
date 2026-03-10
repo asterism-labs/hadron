@@ -1,0 +1,13 @@
+menu "Kernel"
+
+config KERNEL_DEBUG
+    bool "Enable kernel debug output"
+    default y
+
+endmenu
+
+preset debug
+    set KERNEL_DEBUG y
+
+preset release
+    set KERNEL_DEBUG n

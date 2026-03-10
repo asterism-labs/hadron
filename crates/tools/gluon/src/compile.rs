@@ -353,11 +353,17 @@ fn compile_crate_cross(
 
     // Linker args for binary crates (only in Build mode).
     if !is_check && krate.crate_type == CrateType::Bin {
+        let is_uefi = krate.target.contains("uefi");
+
         if let Some(ref ld_script) = krate.linker_script {
             let ld_path = config.root.join(ld_script);
             cmd.link_arg(&format!("-T{}", ld_path.display()));
         }
-        cmd.link_arg("--gc-sections");
+
+        // UEFI targets use MSVC-style linker (no --gc-sections).
+        if !is_uefi {
+            cmd.link_arg("--gc-sections");
+        }
 
         // Extra object files (e.g., HKIF blob for pass-2 link).
         for obj in extra_link_objects {
@@ -468,7 +474,12 @@ fn compile_crate_cross(
 
     // Determine output artifact path.
     let artifact = if !is_check && krate.crate_type == CrateType::Bin {
-        out_dir.join(crate_name_sanitized(&krate.name))
+        // UEFI targets produce .efi PE binaries.
+        if krate.target.contains("uefi") {
+            out_dir.join(format!("{}.efi", crate_name_sanitized(&krate.name)))
+        } else {
+            out_dir.join(crate_name_sanitized(&krate.name))
+        }
     } else if !is_check && krate.crate_type == CrateType::StaticLib {
         out_dir.join(format!("lib{}.a", crate_name_sanitized(&krate.name)))
     } else if is_check {
@@ -636,7 +647,12 @@ pub fn crate_artifact_path(
             out_dir.join(format!("lib{sanitized}.rlib"))
         }
     } else if !is_check && krate.crate_type == CrateType::Bin {
-        out_dir.join(&sanitized)
+        // UEFI targets produce .efi PE binaries.
+        if krate.target.contains("uefi") {
+            out_dir.join(format!("{sanitized}.efi"))
+        } else {
+            out_dir.join(&sanitized)
+        }
     } else if !is_check && krate.crate_type == CrateType::StaticLib {
         out_dir.join(format!("lib{sanitized}.a"))
     } else if is_check {

@@ -1,30 +1,212 @@
 //! QEMU invocation for running and testing the kernel.
 //!
-//! Uses `cargo-image-runner` as a library for ISO creation and QEMU execution.
-//! This avoids the exit-code wrapping problem that occurs when invoking the CLI:
-//! QEMU exits with code 33 (success via `isa-debug-exit`), but the CLI wrapper
-//! treats non-zero as failure. Using the library API gives direct access to the
-//! runner result.
-//!
-//! Also provides [`run_kernel_with_serial_capture`] for capturing serial output
-//! with optional HPRF end-of-stream auto-shutdown (used by `perf record`).
+//! Supports both Limine ISO boot (legacy) and UEFI direct boot via OVMF.
+//! Uses `hadron-runner` for ISO creation and QEMU execution.
+
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use std::path::{Path, PathBuf};
 
-use cargo_image_runner::runner::Runner;
-use cargo_image_runner::runner::io::{IoAction, IoHandler};
-use cargo_image_runner::runner::qemu::QemuRunner;
-use cargo_image_runner::{BootType, BootloaderKind, ImageFormat, RunResult};
+use hadron_runner::{
+    DisplayConfig, IsoBuilder, LimineCache, QemuConfig, QemuExit, SerialConfig, TestConfig,
+};
 
 use crate::config::ResolvedConfig;
 
-/// Strip QEMU flags that the runner already manages internally.
+/// Limine binary release version.
+const LIMINE_VERSION: &str = "v10.7.0-binary";
+
+/// OVMF firmware paths (CODE + VARS) for UEFI boot.
+struct OvmfFirmware {
+    code: PathBuf,
+    vars: PathBuf,
+}
+
+/// Fetch OVMF firmware, downloading prebuilt binaries if needed.
 ///
-/// `QemuRunner` hardcodes `-serial mon:stdio`, so any `-serial <arg>` in the
-/// user-provided extra args would cause a "cannot use stdio by multiple
-/// character devices" conflict.
-fn strip_runner_managed_args(args: &[String]) -> Vec<String> {
+/// Uses the `ovmf-prebuilt` crate to download and cache OVMF firmware.
+/// Set `OVMF_CODE` and `OVMF_VARS` environment variables to override.
+fn ensure_ovmf(config: &ResolvedConfig) -> Result<OvmfFirmware> {
+    // Allow environment variable overrides.
+    if let (Ok(code), Ok(vars)) = (std::env::var("OVMF_CODE"), std::env::var("OVMF_VARS")) {
+        let code = PathBuf::from(&code);
+        let vars = PathBuf::from(&vars);
+        if !code.exists() {
+            bail!("OVMF_CODE={} does not exist", code.display());
+        }
+        if !vars.exists() {
+            bail!("OVMF_VARS={} does not exist", vars.display());
+        }
+        return Ok(OvmfFirmware { code, vars });
+    }
+
+    let cache_dir = config.root.join("target/ovmf");
+    let prebuilt = ovmf_prebuilt::Prebuilt::fetch(ovmf_prebuilt::Source::LATEST, &cache_dir)
+        .map_err(|e| anyhow::anyhow!("failed to fetch OVMF prebuilt: {e}"))?;
+
+    let code = prebuilt
+        .get_file(ovmf_prebuilt::Arch::X64, ovmf_prebuilt::FileType::Code)
+        .to_path_buf();
+    let vars = prebuilt
+        .get_file(ovmf_prebuilt::Arch::X64, ovmf_prebuilt::FileType::Vars)
+        .to_path_buf();
+
+    Ok(OvmfFirmware { code, vars })
+}
+
+/// Ensure Limine binaries are cached and return the path.
+fn ensure_limine(config: &ResolvedConfig) -> Result<PathBuf> {
+    let cache_dir = config.root.join("target/hadron-runner/cache/bootloaders");
+    let cache = LimineCache::new(&cache_dir, LIMINE_VERSION);
+    cache.ensure_available()
+}
+
+/// Read the limine.conf content, applying template substitution.
+fn read_limine_conf(config: &ResolvedConfig) -> Result<String> {
+    let config_path = if let Some(ref path) = config.bootloader.config_file {
+        config.root.join(path)
+    } else {
+        config.root.join("limine.conf")
+    };
+
+    std::fs::read_to_string(&config_path)
+        .with_context(|| format!("reading {}", config_path.display()))
+}
+
+/// Build an ISO image for the kernel.
+///
+/// Returns the path to the created ISO.
+fn build_iso(
+    config: &ResolvedConfig,
+    kernel_binary: &Path,
+    limine_conf: &str,
+    extra_files: &[(String, PathBuf)],
+) -> Result<PathBuf> {
+    let limine_dir = ensure_limine(config)?;
+
+    let output_dir = config.root.join("target/hadron-runner/output");
+    std::fs::create_dir_all(&output_dir).context("creating output directory")?;
+    let iso_path = output_dir.join("image.iso");
+
+    let mut builder = IsoBuilder::new(&limine_dir, kernel_binary);
+    builder.config(limine_conf);
+
+    // Add extra files from config (e.g. initrd.cpio)
+    for (iso_path_str, host_path_str) in &config.image.extra_files {
+        let host_path = config.root.join(host_path_str);
+        builder.extra_file(iso_path_str, &host_path);
+    }
+
+    // Add caller-provided extra files
+    for (iso_path_str, host_path) in extra_files {
+        builder.extra_file(iso_path_str, host_path);
+    }
+
+    builder.build(&iso_path).context("building ISO image")?;
+    Ok(iso_path)
+}
+
+/// Build a [`QemuConfig`] from hadron's [`ResolvedConfig`] with ISO boot.
+fn build_qemu_config_iso(
+    config: &ResolvedConfig,
+    iso_path: PathBuf,
+    is_test: bool,
+    extra_args: &[String],
+) -> QemuConfig {
+    let boot_args = vec![
+        "-cdrom".to_string(),
+        iso_path.to_string_lossy().into_owned(),
+    ];
+    build_qemu_config_common(config, boot_args, is_test, extra_args)
+}
+
+/// Build a [`QemuConfig`] from hadron's [`ResolvedConfig`] with UEFI boot.
+fn build_qemu_config_uefi(
+    config: &ResolvedConfig,
+    ovmf: &OvmfFirmware,
+    efi_binary: &Path,
+    is_test: bool,
+    extra_args: &[String],
+) -> QemuConfig {
+    let boot_args = vec![
+        // OVMF CODE (read-only pflash)
+        "-drive".to_string(),
+        format!(
+            "if=pflash,format=raw,readonly=on,file={}",
+            ovmf.code.display()
+        ),
+        // OVMF VARS (writable pflash)
+        "-drive".to_string(),
+        format!(
+            "if=pflash,format=raw,readonly=on,file={}",
+            ovmf.vars.display()
+        ),
+        // EFI binary loaded directly as kernel
+        "-kernel".to_string(),
+        efi_binary.to_string_lossy().into_owned(),
+    ];
+    build_qemu_config_common(config, boot_args, is_test, extra_args)
+}
+
+/// Common QEMU config builder.
+fn build_qemu_config_common(
+    config: &ResolvedConfig,
+    boot_args: Vec<String>,
+    is_test: bool,
+    extra_args: &[String],
+) -> QemuConfig {
+    let memory = config.profile.qemu_memory.unwrap_or(config.qemu.memory);
+    let cores = config.profile.qemu_cores.unwrap_or(1);
+
+    let mut qemu_extra_args = config.qemu.extra_args.clone();
+    if let Some(ref profile_args) = config.profile.qemu_extra_args {
+        qemu_extra_args.extend(profile_args.iter().cloned());
+    }
+
+    // Strip any user-provided -serial flags — we manage serial directly.
+    let mut filtered_args = strip_serial_args(&qemu_extra_args);
+
+    // Extra args from the caller
+    filtered_args.extend(extra_args.iter().cloned());
+
+    let test_mode = if is_test {
+        let test_cfg = &config.qemu.test;
+        let timeout = config.profile.test_timeout.unwrap_or(test_cfg.timeout);
+
+        // Add test-specific QEMU args from config
+        filtered_args.extend(test_cfg.extra_args.iter().cloned());
+
+        Some(TestConfig {
+            success_exit_code: test_cfg.success_exit_code as i32,
+            timeout_secs: u64::from(timeout),
+        })
+    } else {
+        None
+    };
+
+    let display = if is_test {
+        DisplayConfig::None
+    } else {
+        DisplayConfig::Default
+    };
+
+    QemuConfig {
+        machine: config.qemu.machine.clone(),
+        memory,
+        cores,
+        cpu: "max".to_string(),
+        boot_args,
+        serial: vec![SerialConfig::Stdio],
+        qmp_socket: None,
+        display,
+        extra_args: filtered_args,
+        test_mode,
+    }
+}
+
+/// Strip `-serial <arg>` pairs from QEMU args since we manage serial directly.
+fn strip_serial_args(args: &[String]) -> Vec<String> {
     let mut result = Vec::new();
     let mut skip_next = false;
     for arg in args {
@@ -41,122 +223,66 @@ fn strip_runner_managed_args(args: &[String]) -> Vec<String> {
     result
 }
 
-/// Build a [`cargo_image_runner::Config`] from hadron's [`ResolvedConfig`].
+/// Run the kernel in QEMU using UEFI direct boot via OVMF.
 ///
-/// Maps hadron config fields to `cargo-image-runner` config fields, applying
-/// profile overrides for memory, cores, extra args, and test timeout.
-fn build_runner_config(config: &ResolvedConfig, is_test: bool) -> cargo_image_runner::Config {
-    let memory = config.profile.qemu_memory.unwrap_or(config.qemu.memory);
-    let cores = config.profile.qemu_cores.unwrap_or(1);
-
-    let mut qemu_extra_args = config.qemu.extra_args.clone();
-    if let Some(ref profile_args) = config.profile.qemu_extra_args {
-        qemu_extra_args.extend(profile_args.iter().cloned());
-    }
-    // The runner adds -serial mon:stdio internally; strip any -serial from
-    // the user-provided args to avoid duplicate stdio device errors.
-    let mut qemu_extra_args = strip_runner_managed_args(&qemu_extra_args);
-
-    // Expose the maximum CPU feature set to the guest so userspace SSE/SSE4.2
-    // code runs natively instead of being trapped by TCG.
-    qemu_extra_args.extend(["-cpu".into(), "max".into()]);
-
-    let mut cfg = cargo_image_runner::Config::default();
-    cfg.boot.boot_type = BootType::Bios;
-    cfg.bootloader.kind = BootloaderKind::Limine;
-    cfg.bootloader.limine.version = "v10.7.0-binary".into();
-    cfg.bootloader.config_file = config.bootloader.config_file.as_ref().map(Into::into);
-    cfg.image.format = ImageFormat::Iso;
-    cfg.runner.qemu.machine = config.qemu.machine.clone();
-    cfg.runner.qemu.memory = memory;
-    cfg.runner.qemu.cores = cores;
-    cfg.runner.qemu.kvm = false;
-    cfg.runner.qemu.extra_args = qemu_extra_args;
-
-    if is_test {
-        let test_cfg = &config.qemu.test;
-        cfg.test.success_exit_code = Some(test_cfg.success_exit_code as i32);
-        let timeout = config.profile.test_timeout.unwrap_or(test_cfg.timeout);
-        cfg.test.timeout = Some(u64::from(timeout));
-        cfg.test.extra_args = test_cfg.extra_args.clone();
-    }
-
-    cfg.extra_files = config
-        .image
-        .extra_files
-        .iter()
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
-
-    cfg
-}
-
-/// Run the kernel in QEMU.
-///
-/// Builds an ISO image via `cargo-image-runner` (Limine bootloader, BIOS boot)
-/// and launches QEMU. Extra args are forwarded directly to QEMU.
+/// Detects OVMF firmware and launches QEMU with UEFI pflash and `-kernel` flags.
 pub fn run_kernel(
     config: &ResolvedConfig,
     kernel_binary: &Path,
     extra_args: &[String],
 ) -> Result<()> {
-    let cfg = build_runner_config(config, false);
+    let ovmf = ensure_ovmf(config)?;
+    println!("Using OVMF: {}", ovmf.code.display());
+    println!("Running kernel in QEMU (UEFI)...");
 
-    println!("Running kernel via cargo-image-runner...");
-    cargo_image_runner::builder()
-        .with_config(cfg)
-        .workspace_root(config.root.clone())
-        .executable(kernel_binary.to_path_buf())
-        .extra_args(extra_args.to_vec())
-        .limine()
-        .iso_image()
-        .qemu()
-        .run()
-        .context("failed to run kernel in QEMU")
+    let qemu_config = build_qemu_config_uefi(config, &ovmf, kernel_binary, false, extra_args);
+
+    let mut qemu = qemu_config.spawn().context("failed to spawn QEMU")?;
+    let exit = qemu.wait().context("failed to wait for QEMU")?;
+
+    if !exit.success {
+        bail!("QEMU exited with code {}", exit.exit_code);
+    }
+    Ok(())
 }
 
-/// Build an ISO image and runner config for a kernel binary.
+/// Build a test ISO image for Limine-based boot.
 ///
-/// Factors out the ISO-building step from [`run_kernel_tests`] so that
-/// callers (e.g. benchmarks) can reuse the ISO without going through the
-/// runner's QEMU path.
-///
-/// Returns `(iso_path, runner_config)`.
+/// Returns `(iso_path, qemu_config)`.
 pub fn build_test_iso(
     config: &ResolvedConfig,
     kernel_binary: &Path,
     extra_args: &[String],
-) -> Result<(PathBuf, cargo_image_runner::Config)> {
-    let mut cfg = build_runner_config(config, true);
+) -> Result<(PathBuf, QemuConfig)> {
+    let limine_conf = read_limine_conf(config)?;
+    let iso_path = build_iso(config, kernel_binary, &limine_conf, &[])?;
+    let qemu_config = build_qemu_config_iso(config, iso_path.clone(), true, extra_args);
+    Ok((iso_path, qemu_config))
+}
 
-    // Extra args from the caller go into runner.qemu.extra_args since
-    // cli_extra_args aren't forwarded in test mode.
-    cfg.runner
-        .qemu
-        .extra_args
-        .extend(extra_args.iter().cloned());
-
-    // Build the ISO image via the builder pipeline.
-    let runner = cargo_image_runner::builder()
-        .with_config(cfg.clone())
-        .workspace_root(config.root.clone())
-        .executable(kernel_binary.to_path_buf())
-        .limine()
-        .iso_image()
-        .qemu()
-        .build()
-        .context("failed to build image runner")?;
-    let image_path = runner.build_image().context("failed to build ISO image")?;
-
-    Ok((image_path, cfg))
+/// Build a UEFI test QEMU config.
+///
+/// Returns the `QemuConfig` for UEFI boot.
+#[allow(dead_code)] // Phase 2: used by kernel integration tests with UEFI boot
+pub fn build_test_uefi(
+    config: &ResolvedConfig,
+    kernel_binary: &Path,
+    extra_args: &[String],
+) -> Result<QemuConfig> {
+    let ovmf = ensure_ovmf(config)?;
+    Ok(build_qemu_config_uefi(
+        config,
+        &ovmf,
+        kernel_binary,
+        true,
+        extra_args,
+    ))
 }
 
 /// Run a kernel integration test in QEMU.
 ///
 /// Builds an ISO image, then runs QEMU with test configuration (isa-debug-exit
-/// device, timeout, headless display). Uses the lower-level runner API to
-/// override `is_test` detection — our test binaries lack the hex hash suffix
-/// that auto-detection expects.
+/// device, timeout, headless display).
 ///
 /// Returns `Ok(())` if the test exits with the configured success exit code.
 pub fn run_kernel_tests(
@@ -164,30 +290,27 @@ pub fn run_kernel_tests(
     kernel_binary: &Path,
     extra_args: &[String],
 ) -> Result<()> {
-    let (image_path, cfg) = build_test_iso(config, kernel_binary, extra_args)?;
+    let (_, qemu_config) = build_test_iso(config, kernel_binary, extra_args)?;
 
-    // Create context with is_test = true to enable test-specific
-    // behavior (timeout enforcement, exit code checking).
-    let mut ctx = cargo_image_runner::core::Context::new(
-        cfg,
-        config.root.clone(),
-        kernel_binary.to_path_buf(),
-    )
-    .context("failed to create runner context")?;
-    ctx.is_test = true;
+    let timeout = qemu_config
+        .test_mode
+        .as_ref()
+        .map(|t| Duration::from_secs(t.timeout_secs));
 
-    // Run QEMU and get the result.
-    use cargo_image_runner::runner::Runner;
-    let result = cargo_image_runner::runner::qemu::QemuRunner::new()
-        .run(&ctx, &image_path)
-        .context("failed to run QEMU")?;
+    let mut qemu = qemu_config.spawn().context("failed to spawn QEMU")?;
 
-    // Check result.
-    if result.timed_out {
+    let exit = if let Some(timeout) = timeout {
+        qemu.wait_with_timeout(timeout)
+            .context("failed to wait for QEMU")?
+    } else {
+        qemu.wait().context("failed to wait for QEMU")?
+    };
+
+    if exit.timed_out {
         bail!("kernel test timed out");
     }
-    if !result.success {
-        bail!("kernel test failed (exit code {})", result.exit_code);
+    if !exit.success {
+        bail!("kernel test failed (exit code {})", exit.exit_code);
     }
     Ok(())
 }
@@ -199,8 +322,8 @@ pub fn run_kernel_tests(
 /// Write a Limine config for a userspace test.
 ///
 /// Reads `limine.conf` from the project root and substitutes:
-/// - `cmdline: {{ARGS}}` → `cmdline: --utest`
-/// - `module_path: boot():/boot/initrd.cpio` → `module_path: boot():/boot/utest.cpio`
+/// - `cmdline: {{ARGS}}` -> `cmdline: --utest`
+/// - `module_path: boot():/boot/initrd.cpio` -> `module_path: boot():/boot/utest.cpio`
 ///
 /// The result is written to `build/utests/limine-<test_name>.conf`.
 pub fn write_utest_limine_conf(root: &Path, test_name: &str) -> Result<PathBuf> {
@@ -235,62 +358,37 @@ pub fn run_userspace_test(
     cpio_path: &Path,
     extra_args: &[String],
 ) -> Result<()> {
-    // Write a patched limine.conf for this test.
-    let limine_conf = write_utest_limine_conf(&config.root, test_name)?;
+    let limine_conf_path = write_utest_limine_conf(&config.root, test_name)?;
+    let limine_conf = std::fs::read_to_string(&limine_conf_path)
+        .with_context(|| format!("reading {}", limine_conf_path.display()))?;
 
-    // Build runner config (test mode: success exit code, timeout).
-    let mut cfg = build_runner_config(config, true);
+    // Extra file: the per-test CPIO
+    let extra_files = vec![("boot/utest.cpio".to_string(), cpio_path.to_path_buf())];
 
-    // Override the Limine config to use the patched one.
-    cfg.bootloader.config_file = Some(limine_conf.into());
+    let iso_path = build_iso(config, kernel_binary, &limine_conf, &extra_files)?;
+    let qemu_config = build_qemu_config_iso(config, iso_path, true, extra_args);
 
-    // Provide the per-test CPIO as `boot/utest.cpio`.
-    cfg.extra_files.insert(
-        "boot/utest.cpio".into(),
-        cpio_path.to_string_lossy().into_owned(),
-    );
+    let timeout = qemu_config
+        .test_mode
+        .as_ref()
+        .map(|t| Duration::from_secs(t.timeout_secs));
 
-    // Extend QEMU extra args with caller-supplied args.
-    cfg.runner
-        .qemu
-        .extra_args
-        .extend(extra_args.iter().cloned());
+    let mut qemu = qemu_config.spawn().context("failed to spawn QEMU")?;
 
-    // Build the ISO.
-    let runner = cargo_image_runner::builder()
-        .with_config(cfg.clone())
-        .workspace_root(config.root.clone())
-        .executable(kernel_binary.to_path_buf())
-        .limine()
-        .iso_image()
-        .qemu()
-        .build()
-        .context("failed to build utest ISO")?;
-    let image_path = runner
-        .build_image()
-        .context("failed to build utest ISO image")?;
+    let exit = if let Some(timeout) = timeout {
+        qemu.wait_with_timeout(timeout)
+            .context("failed to wait for QEMU")?
+    } else {
+        qemu.wait().context("failed to wait for QEMU")?
+    };
 
-    // Run QEMU in test mode.
-    let mut ctx = cargo_image_runner::core::Context::new(
-        cfg,
-        config.root.clone(),
-        kernel_binary.to_path_buf(),
-    )
-    .context("failed to create utest runner context")?;
-    ctx.is_test = true;
-
-    use cargo_image_runner::runner::Runner;
-    let result = cargo_image_runner::runner::qemu::QemuRunner::new()
-        .run(&ctx, &image_path)
-        .context("failed to run utest QEMU")?;
-
-    if result.timed_out {
+    if exit.timed_out {
         bail!("userspace test '{test_name}' timed out");
     }
-    if !result.success {
+    if !exit.success {
         bail!(
             "userspace test '{test_name}' failed (exit code {})",
-            result.exit_code
+            exit.exit_code
         );
     }
     Ok(())
@@ -307,42 +405,37 @@ struct StderrTeeHandler {
     serial: Vec<u8>,
 }
 
-impl IoHandler for StderrTeeHandler {
-    fn on_output(&mut self, data: &[u8]) -> IoAction {
+impl hadron_runner::qemu::IoHandler for StderrTeeHandler {
+    fn on_output(&mut self, data: &[u8]) -> bool {
         use std::io::Write;
         self.serial.extend_from_slice(data);
         let _ = std::io::stderr().write_all(data);
-        IoAction::Continue
+        true
     }
 }
 
 /// Run a kernel binary in QEMU with serial output captured as raw bytes.
 ///
-/// Builds a test ISO and runs QEMU using the `IoHandler` API from
-/// `cargo-image-runner` 0.5, which preserves binary serial data that
-/// `run_with_result()` would corrupt via `String::from_utf8_lossy`.
+/// Builds a test ISO and runs QEMU with piped IO, capturing serial data
+/// while teeing to stderr for real-time visibility.
 ///
-/// Returns `(RunResult, captured_serial_bytes)`.
+/// Returns `(QemuExit, captured_serial_bytes)`.
 pub fn run_with_serial_capture(
     config: &ResolvedConfig,
     kernel_binary: &Path,
     extra_args: &[String],
-) -> Result<(RunResult, Vec<u8>)> {
-    let (image_path, cfg) = build_test_iso(config, kernel_binary, extra_args)?;
+) -> Result<(QemuExit, Vec<u8>)> {
+    let (_, qemu_config) = build_test_iso(config, kernel_binary, extra_args)?;
 
-    let mut ctx = cargo_image_runner::core::Context::new(
-        cfg,
-        config.root.clone(),
-        kernel_binary.to_path_buf(),
-    )
-    .context("failed to create runner context")?;
-    ctx.is_test = true;
+    let mut qemu = qemu_config
+        .spawn_piped()
+        .context("failed to spawn QEMU for serial capture")?;
 
     let mut handler = StderrTeeHandler { serial: Vec::new() };
 
-    let result = QemuRunner::new()
-        .run_with_io(&ctx, &image_path, &mut handler)
+    let exit = qemu
+        .wait_with_io(&mut handler)
         .context("failed to run QEMU with IO capture")?;
 
-    Ok((result, handler.serial))
+    Ok((exit, handler.serial))
 }

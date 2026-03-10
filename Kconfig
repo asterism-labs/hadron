@@ -4,4 +4,3 @@
 # near the code they affect.
 
 source "kernel/kernel/Kconfig"
-source "kernel/drivers/Kconfig"

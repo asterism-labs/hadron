@@ -93,9 +93,8 @@ impl PciDeviceId {
             return false;
         }
         if self.class_mask != 0 {
-            let dev_class = ((info.class as u32) << 16)
-                | ((info.subclass as u32) << 8)
-                | (info.prog_if as u32);
+            let dev_class =
+                ((info.class as u32) << 16) | ((info.subclass as u32) << 8) | (info.prog_if as u32);
             if (dev_class & self.class_mask) != (self.class & self.class_mask) {
                 return false;
             }

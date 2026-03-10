@@ -6,7 +6,8 @@ publish = false
 
 [dependencies]
 anyhow = { workspace = true }
-cargo-image-runner = { workspace = true }
+hadron-runner = { workspace = true }
+ovmf-prebuilt = "0.2"
 clap = { workspace = true }
 crc32fast = { workspace = true }
 crossterm = { workspace = true }

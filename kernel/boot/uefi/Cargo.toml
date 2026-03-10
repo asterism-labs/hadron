@@ -1,18 +1,21 @@
 [package]
-name = "hadron-pci"
+name = "hadron-boot-uefi"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
 authors.workspace = true
+repository.workspace = true
 license.workspace = true
-publish.workspace = true
-description = "PCI enumeration and capability parsing for Hadron OS"
+publish = false
 
-[lib]
+[[bin]]
+name = "hadron-boot-uefi"
+path = "src/main.rs"
+test = false
 bench = false
 doctest = false
 
 [dependencies]
+uefi = { workspace = true }
 
 [lints]
 workspace = true

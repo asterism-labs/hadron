@@ -16,6 +16,7 @@ extern crate alloc;
 pub mod caps;
 pub mod enumerate;
 pub mod regs;
+pub mod types;
 
 /// Trait for reading/writing PCI configuration space.
 ///

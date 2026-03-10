@@ -14,12 +14,10 @@ bench = false
 doctest = false
 
 [features]
-default = [ "limine" ]
-limine = [ "dep:limine" ]
+default = [ "uefi" ]
 uefi = [ "dep:uefi" ]
 
 [dependencies]
-limine = { workspace = true, optional = true }
 uefi = { workspace = true, optional = true }
 
 [lints]

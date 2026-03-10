@@ -12,7 +12,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use bitflags::bitflags;
 use hadron_core::sync::SpinLock;
 
-use crate::object::{Koid, KernelObject, ObjectType, Signals};
+use crate::object::{KernelObject, Koid, ObjectType, Signals};
 use crate::vmo::Vmo;
 
 bitflags! {
@@ -106,11 +106,7 @@ impl Vmar {
     ///
     /// Returns `Err` if the requested range is out of bounds or overlaps
     /// an existing child or mapping.
-    pub fn allocate(
-        self: &Arc<Self>,
-        offset: u64,
-        size: u64,
-    ) -> Result<Arc<Vmar>, VmarError> {
+    pub fn allocate(self: &Arc<Self>, offset: u64, size: u64) -> Result<Arc<Vmar>, VmarError> {
         let child_base = self.base.checked_add(offset).ok_or(VmarError::OutOfRange)?;
         let child_end = child_base.checked_add(size).ok_or(VmarError::OutOfRange)?;
         let self_end = self.base + self.size;
@@ -295,7 +291,10 @@ mod tests {
     #[test]
     fn allocate_out_of_range() {
         let root = Vmar::new_root(USER_BASE, 0x1000);
-        assert!(matches!(root.allocate(0, 0x2000), Err(VmarError::OutOfRange)));
+        assert!(matches!(
+            root.allocate(0, 0x2000),
+            Err(VmarError::OutOfRange)
+        ));
     }
 
     #[test]

@@ -1,0 +1,14 @@
+[package]
+name = "hadron-runner"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+anyhow = { workspace = true }
+hadris-iso = { workspace = true, features = ["std", "write", "sync"] }
+libc = "0.2"
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

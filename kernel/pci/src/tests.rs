@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use hadron_driver_api::pci::{PciAddress, PciBar};
+use crate::types::{PciAddress, PciBar};
 
 use crate::PciConfigAccess;
 use crate::caps::{VirtioPciCfgType, walk_capabilities};

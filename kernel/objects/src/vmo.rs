@@ -7,7 +7,7 @@
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-use crate::object::{Koid, KernelObject, ObjectType, Signals};
+use crate::object::{KernelObject, Koid, ObjectType, Signals};
 
 /// The kind of backing store for a VMO.
 pub enum VmoKind {

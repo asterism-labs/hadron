@@ -324,9 +324,7 @@ mod tests {
         }
 
         fn get_signals(&self) -> Signals {
-            Signals::from_bits_truncate(
-                self.signals.load(core::sync::atomic::Ordering::Relaxed),
-            )
+            Signals::from_bits_truncate(self.signals.load(core::sync::atomic::Ordering::Relaxed))
         }
 
         fn add_observer(&self, _port: &Arc<dyn KernelObject>, _key: u64, _signals: Signals) {}

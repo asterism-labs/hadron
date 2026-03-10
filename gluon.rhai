@@ -14,8 +14,7 @@ project("hadron", "0.1.0");
 // ===========================================================================
 
 target("x86_64-unknown-hadron", "targets/x86_64-unknown-hadron.json");
-target("aarch64-unknown-hadron", "targets/aarch64-unknown-hadron.json");
-target("x86_64-unknown-hadron-user", "targets/x86_64-unknown-hadron-user.json");
+target("x86_64-unknown-uefi", "targets/x86_64-unknown-uefi.json");
 
 // ===========================================================================
 // Kconfig-style options (loaded from distributed Kconfig files)
@@ -33,28 +32,14 @@ profile("default")
     .debug_info(true)
     .preset("debug")
     .qemu_cores(4)
-    .boot_binary("hadron-boot-limine");
+    .boot_binary("hadron-boot-uefi");
 
 profile("release")
     .target("x86_64-unknown-hadron")
     .opt_level(2)
     .lto("thin")
     .preset("release")
-    .boot_binary("hadron-boot-limine");
-
-profile("stress")
-    .inherits("default")
-    .preset("sched_stress")
-    .qemu_memory(1024)
-    .qemu_cores(4)
-    .test_timeout(120);
-
-profile("lock-stress")
-    .inherits("default")
-    .preset("lock_stress")
-    .qemu_memory(1024)
-    .qemu_cores(4)
-    .test_timeout(120);
+    .boot_binary("hadron-boot-uefi");
 
 profile("debug-gdb")
     .inherits("default")
@@ -62,23 +47,8 @@ profile("debug-gdb")
     .qemu_extra_args(["-s", "-S"])
     .test_timeout(3600);
 
-profile("debug-sanitizers")
-    .inherits("default")
-    .preset("sanitizers");
-
-profile("profile")
-    .inherits("default")
-    .preset("perf");
-
-profile("net")
-    .inherits("default")
-    .qemu_extra_args([
-        "-netdev", "tap,id=net0,ifname=tap0,script=no,downscript=no",
-        "-device", "virtio-net-pci,netdev=net0,mac=52:54:00:12:34:56"
-    ]);
-
 // ===========================================================================
-// Sysroot crates (built first, for kernel target)
+// Sysroot crates — kernel target (built first)
 // ===========================================================================
 
 let sysroot = group("sysroot").target("x86_64-unknown-hadron").edition("2024").project(false);
@@ -96,6 +66,24 @@ sysroot.add("alloc", "{sysroot}/alloc")
     .deps(#{ core: "core", compiler_builtins: "compiler_builtins" });
 
 // ===========================================================================
+// Sysroot crates — UEFI target
+// ===========================================================================
+
+let sysroot_uefi = group("sysroot-uefi").target("x86_64-unknown-uefi").edition("2024").project(false);
+
+sysroot_uefi.add("core-uefi", "{sysroot}/core")
+    .root("src/lib.rs");
+
+sysroot_uefi.add("compiler_builtins-uefi", "{sysroot}/compiler-builtins/compiler-builtins")
+    .root("src/lib.rs")
+    .features(["compiler-builtins", "rustc-dep-of-std"])
+    .deps(#{ core: "core-uefi" });
+
+sysroot_uefi.add("alloc-uefi", "{sysroot}/alloc")
+    .root("src/lib.rs")
+    .deps(#{ core: "core-uefi", compiler_builtins: "compiler_builtins-uefi" });
+
+// ===========================================================================
 // External dependencies (resolved + vendored by `gluon vendor`)
 // ===========================================================================
 
@@ -108,20 +96,12 @@ dependency("proc-macro2").version("1.0.106")
 dependency("quote").version("1.0.35");
 
 // Kernel no_std dependencies — bitflags is a direct dep of project crates.
-// Transitive deps (cfg-if, bytemuck, bytemuck_derive) are auto-resolved.
 dependency("bitflags").version("2.11.0");
 dependency("planck-noalloc").version("0.1.1").no_default_features();
 
-// Hadris ecosystem — direct deps of hadron-drivers. Transitive deps
-// (hadris-common, hadris-part) are auto-resolved from their Cargo.toml.
-dependency("hadris-cpio").version("1.0.1")
-    .features(["sync", "read", "alloc"]).no_default_features();
+// Hadris ecosystem — hadris-io is used by hadron-kernel.
 dependency("hadris-io").version("1.0.1")
     .features(["sync"]).no_default_features();
-dependency("hadris-fat").version("1.0.1")
-    .features(["sync", "read", "write", "alloc", "lfn"]).no_default_features();
-dependency("hadris-iso").version("1.0.1")
-    .features(["sync", "read", "alloc"]).no_default_features();
 
 // ===========================================================================
 // Host crates (project proc-macros, built for host triple)
@@ -130,11 +110,6 @@ dependency("hadris-iso").version("1.0.1")
 let host = group("host").target("host").edition("2021").project(false);
 
 host.add("hadron-syscall-macros", "kernel/syscall-macros")
-    .edition("2024")
-    .crate_type(PROC_MACRO)
-    .deps(#{ syn: "syn", quote: "quote", proc_macro2: "proc-macro2" });
-
-host.add("hadron-driver-macros", "kernel/driver-macros")
     .edition("2024")
     .crate_type(PROC_MACRO)
     .deps(#{ syn: "syn", quote: "quote", proc_macro2: "proc-macro2" });
@@ -171,20 +146,8 @@ kernel_libs.add("hadron-elf", "crates/parse/elf");
 kernel_libs.add("hadron-dwarf", "crates/parse/dwarf");
 kernel_libs.add("hadron-mmio", "kernel/mmio")
     .deps(#{ hadron_mmio_macros: #{ "crate": "hadron-mmio-macros", proc_macro: true } });
-kernel_libs.add("hadron-driver-api", "kernel/driver-api")
-    .deps(#{ hadron_core: "hadron-core", hadron_acpi: "hadron-acpi" });
 
-kernel_libs.add("hadron-net", "kernel/net")
-    .deps(#{ hadron_driver_api: "hadron-driver-api" });
-
-kernel_libs.add("hadron-ipc", "kernel/ipc")
-    .deps(#{ hadron_core: "hadron-core", hadron_fs: "hadron-fs", hadron_syscall: "hadron-syscall" });
-
-kernel_libs.add("hadron-pci", "kernel/pci")
-    .deps(#{ hadron_driver_api: "hadron-driver-api" });
-
-kernel_libs.add("hadron-tty", "kernel/tty")
-    .deps(#{ hadron_driver_api: "hadron-driver-api", planck_noalloc: "planck-noalloc" });
+kernel_libs.add("hadron-pci", "kernel/pci");
 
 kernel_libs.add("hadron-mm", "kernel/mm")
     .deps(#{
@@ -193,17 +156,16 @@ kernel_libs.add("hadron-mm", "kernel/mm")
         planck_noalloc: "planck-noalloc"
     });
 
-kernel_libs.add("hadron-fs", "kernel/fs")
-    .deps(#{
-        bitflags: "bitflags",
-        hadron_core: "hadron-core",
-        hadron_syscall: "hadron-syscall"
-    });
-
 kernel_libs.add("hadron-sched", "kernel/sched")
     .deps(#{
         hadron_core: "hadron-core",
         planck_noalloc: "planck-noalloc"
+    });
+
+kernel_libs.add("hadron-objects", "kernel/objects")
+    .deps(#{
+        bitflags: "bitflags",
+        hadron_core: "hadron-core"
     });
 
 kernel_libs.add("hadron-acpi", "crates/parse/acpi")
@@ -212,12 +174,6 @@ kernel_libs.add("hadron-acpi", "crates/parse/acpi")
 
 kernel_libs.add("hadron-fdt", "crates/parse/fdt")
     .deps(#{ hadron_binparse: "hadron-binparse" });
-
-kernel_libs.add("limine", "crates/boot/limine")
-    .deps(#{ bitflags: "bitflags" });
-
-kernel_libs.add("uefi", "crates/boot/uefi")
-    .deps(#{ bitflags: "bitflags" });
 
 kernel_libs.add("hadron-syscall", "kernel/syscall")
     .features(["kernel"])
@@ -229,62 +185,25 @@ kernel_libs.add("hadron-ktest", "crates/test/hadron-ktest")
         hadron_ktest_macros: #{ "crate": "hadron-ktest-macros", proc_macro: true }
     });
 
-
 // ===========================================================================
-// Project kernel driver crates
-// ===========================================================================
-
-let kernel_drivers = group("kernel-drivers").target("x86_64-unknown-hadron").edition("2024").config(true);
-
-kernel_drivers.add("hadron-drivers", "kernel/drivers")
-    .deps(#{
-        bitflags: "bitflags",
-        hadris_cpio: "hadris-cpio",
-        hadris_fat: "hadris-fat",
-        hadris_io: "hadris-io",
-        hadris_iso: "hadris-iso",
-        hadron_kernel: "hadron-kernel",
-        hadron_linkset: "hadron-linkset",
-        hadron_mmio: "hadron-mmio",
-        hadron_pci: "hadron-pci",
-        hadron_driver_macros: #{ "crate": "hadron-driver-macros", proc_macro: true }
-    });
-
-// ===========================================================================
-// Test dependency crates (compiled on-demand during tests, NOT in pipeline)
+// Vendored crates for UEFI target (suffixed to avoid name collision)
 // ===========================================================================
 
-let test_deps = group("test-deps").target("x86_64-unknown-hadron").edition("2024").project(false);
+let vendored_uefi = group("vendored-uefi").target("x86_64-unknown-uefi").edition("2021").project(false);
 
-test_deps.add("hadron-test", "crates/test/hadron-test")
-    .features(["limine"])
-    .deps(#{ limine: "limine" });
-
-// Userspace test dependency crates (compiled on-demand during utest).
-let utest_deps = group("utest-deps").target("x86_64-unknown-hadron-user").edition("2024").project(false);
-
-utest_deps.add("hadron-utest", "crates/test/hadron-utest")
-    .deps(#{ hadron_syscall: "hadron-syscall-user" });
-
-// hadron-libc-core compiled without the `runtime` feature (no _start / panic
-// handler) so utest binaries can link against it without conflicting with the
-// entry point and panic handler provided by hadron-utest.
-utest_deps.add("hadron-libc-core-utest", "userspace/hadron-libc/core")
-    .features(["userspace"])
-    .deps(#{ hadron_syscall: "hadron-syscall-user" });
+vendored_uefi.add("bitflags-uefi", "vendor/bitflags");
 
 // ===========================================================================
-// Benchmark dependency crates (compiled on-demand during benchmarks)
+// UEFI library crates (built for UEFI target)
 // ===========================================================================
 
-let bench_deps = group("bench-deps").target("x86_64-unknown-hadron").edition("2024").project(false);
+let uefi_libs = group("uefi-libs").target("x86_64-unknown-uefi").edition("2024");
 
-bench_deps.add("hadron-bench", "crates/test/hadron-bench")
-    .features(["limine"])
-    .deps(#{ limine: "limine" });
+uefi_libs.add("uefi", "crates/boot/uefi")
+    .deps(#{ bitflags: "bitflags-uefi" });
 
 // ===========================================================================
-// Kernel main (hadron-kernel + boot stub)
+// Kernel main (hadron-kernel)
 // ===========================================================================
 
 let kernel_main = group("kernel-main").target("x86_64-unknown-hadron").edition("2024").config(true);
@@ -295,17 +214,13 @@ kernel_main.add("hadron-kernel", "kernel/kernel")
         hadris_io: "hadris-io",
         hadron_acpi: "hadron-acpi",
         hadron_core: "hadron-core",
-        hadron_driver_api: "hadron-driver-api",
         hadron_elf: "hadron-elf",
-        hadron_fs: "hadron-fs",
         hadron_intrinsics: "hadron-intrinsics",
-        hadron_ipc: "hadron-ipc",
         hadron_ktest: "hadron-ktest",
-        hadron_pci: "hadron-pci",
-        hadron_tty: "hadron-tty",
         hadron_linkset: "hadron-linkset",
         hadron_mm: "hadron-mm",
-        hadron_net: "hadron-net",
+        hadron_objects: "hadron-objects",
+        hadron_pci: "hadron-pci",
         hadron_sched: "hadron-sched",
         hadron_syscall: "hadron-syscall",
         planck_noalloc: "planck-noalloc"
@@ -313,133 +228,52 @@ kernel_main.add("hadron-kernel", "kernel/kernel")
     .dev_deps(#{
         hadron_bench: "hadron-bench",
         hadron_test: "hadron-test",
-        limine: "limine",
         planck_noalloc: "planck-noalloc"
     });
 
-kernel_main.add("hadron-boot-limine", "kernel/boot/limine")
+// ===========================================================================
+// UEFI boot binary
+// ===========================================================================
+
+let uefi_boot = group("uefi-boot").target("x86_64-unknown-uefi").edition("2024");
+
+uefi_boot.add("hadron-boot-uefi", "kernel/boot/uefi")
     .crate_type(BIN)
     .root("src/main.rs")
-    .linker_script("targets/x86_64-unknown-hadron.ld")
     .deps(#{
-        hadron_drivers: "hadron-drivers",
-        hadron_kernel: "hadron-kernel",
-        limine: "limine",
-        planck_noalloc: "planck-noalloc"
+        uefi: "uefi"
     });
 
 // ===========================================================================
-// Userspace crates
+// Test dependency crates (compiled on-demand during tests, NOT in pipeline)
 // ===========================================================================
 
-let userspace = group("userspace").target("x86_64-unknown-hadron-user").edition("2024");
+let test_deps = group("test-deps").target("x86_64-unknown-hadron").edition("2024").project(false);
 
-userspace.add("hadron-syscall-user", "kernel/syscall")
-    .features(["userspace"])
-    .deps(#{ hadron_syscall_macros: #{ "crate": "hadron-syscall-macros", proc_macro: true } });
-
-// hadron-libc-core without the `runtime` feature: no `_start`, no panic
-// handler.  Used as the shared rlib for type-checking and as the extern for
-// utest binaries (see utest-deps group below).
-userspace.add("hadron-libc-core", "userspace/hadron-libc/core")
-    .features(["userspace"])
-    .deps(#{ hadron_syscall: "hadron-syscall-user" });
-
-// hadron-libc-core-runtime: same source, compiled with `runtime` feature so
-// it includes `_start` and the EH personality.  Only consumed by the
-// hadron-libc staticlib; never exposed to utest binaries.
-userspace.add("hadron-libc-core-runtime", "userspace/hadron-libc/core")
-    .features(["userspace", "runtime"])
-    .deps(#{ hadron_syscall: "hadron-syscall-user" });
-
-userspace.add("hadron-libc", "userspace/hadron-libc")
-    .crate_type(STATICLIB)
-    .deps(#{ hadron_libc_core: "hadron-libc-core-runtime", hadron_syscall: "hadron-syscall-user" });
-
-userspace.add("lepton-syslib", "userspace/lepton-syslib")
-    .deps(#{ hadron_syscall: "hadron-syscall-user" });
-
-userspace.add("lepton-init", "userspace/init")
-    .crate_type(BIN)
-    .root("src/main.rs")
-    .deps(#{ lepton_syslib: "lepton-syslib" });
-
-userspace.add("lsh", "userspace/shell")
-    .crate_type(BIN).root("src/main.rs")
-    .deps(#{ lepton_syslib: "lepton-syslib" });
-
-userspace.add("lepton-coreutils", "userspace/coreutils")
-    .crate_type(BIN).root("src/main.rs")
-    .deps(#{ lepton_syslib: "lepton-syslib" });
-
-userspace.add("lepton-gfx", "userspace/lepton-gfx")
+test_deps.add("hadron-test", "crates/test/hadron-test")
     .deps(#{});
 
-userspace.add("lepton-wayland", "userspace/lepton-wayland")
-    .deps(#{
-        lepton_syslib: "lepton-syslib"
-    });
-
-userspace.add("lepton-display-client", "userspace/lepton-display-client")
-    .deps(#{
-        lepton_syslib: "lepton-syslib",
-        lepton_wayland: "lepton-wayland",
-        lepton_gfx: "lepton-gfx"
-    });
-
-userspace.add("lepton-compositor", "userspace/lepton-compositor")
-    .crate_type(BIN).root("src/main.rs")
-    .deps(#{
-        lepton_syslib: "lepton-syslib",
-        lepton_gfx: "lepton-gfx",
-        lepton_wayland: "lepton-wayland"
-    });
-
-userspace.add("lepton-sysmon", "userspace/lepton-sysmon")
-    .crate_type(BIN).root("src/main.rs")
-    .deps(#{
-        lepton_syslib: "lepton-syslib",
-        lepton_gfx: "lepton-gfx",
-        lepton_display_client: "lepton-display-client"
-    });
-
-userspace.add("lepton-terminal", "userspace/lepton-terminal")
-    .crate_type(BIN).root("src/main.rs")
-    .deps(#{
-        lepton_syslib: "lepton-syslib",
-        lepton_gfx: "lepton-gfx",
-        lepton_display_client: "lepton-display-client"
-    });
-
 // ===========================================================================
-// Rules (custom artifact generation)
+// Benchmark dependency crates (compiled on-demand during benchmarks)
 // ===========================================================================
 
-rule("hkif")
-    .inputs(["hadron-boot-limine"])
-    .output("build/hkif.bin")
-    .handler("hkif");
+let bench_deps = group("bench-deps").target("x86_64-unknown-hadron").edition("2024").project(false);
 
-rule("initrd")
-    .inputs(["lepton-init", "lsh", "lepton-coreutils", "lepton-sysmon", "lepton-compositor", "lepton-terminal"])
-    .output("build/initrd.cpio")
-    .handler("initrd");
+bench_deps.add("hadron-bench", "crates/test/hadron-bench")
+    .deps(#{});
 
 // ===========================================================================
 // Pipeline
 // ===========================================================================
 
 pipeline()
-    .stage("sysroot", ["sysroot"])
+    .stage("sysroot", ["sysroot", "sysroot-uefi"])
     .barrier("sysroot-ready")
     .stage("host", ["host"])
     .barrier("host-ready")
-    .stage("kernel", ["vendored", "kernel-libs", "kernel-drivers", "kernel-main"])
+    .stage("kernel", ["vendored", "vendored-uefi", "kernel-libs", "uefi-libs"])
     .barrier("kernel-ready")
-    .rule("hkif")
-    .stage("userspace", ["userspace"])
-    .barrier("userspace-ready")
-    .rule("initrd");
+    .stage("boot", ["uefi-boot"]);
 
 // ===========================================================================
 // QEMU
@@ -455,22 +289,6 @@ qemu("q35", 256)
     ]);
 
 // ===========================================================================
-// Bootloader
-// ===========================================================================
-
-bootloader("limine")
-    .config_file("limine.conf");
-
-// ===========================================================================
-// Image
-// ===========================================================================
-
-image()
-    .extra_files(#{
-        "boot/initrd.cpio": "build/initrd.cpio"
-    });
-
-// ===========================================================================
 // Tests
 // ===========================================================================
 
@@ -484,24 +302,16 @@ tests()
         "hadron-acpi",
         "hadron-binparse",
         "hadron-core",
-        "hadron-driver-api",
         "hadron-dwarf",
         "hadron-elf",
         "hadron-fdt",
-        "hadron-fs",
         "hadron-mm",
         "hadron-sched",
-        "hadron-net",
-        "hadron-ipc",
         "hadron-pci",
-        "hadron-tty",
-        "hadron-drivers",
-        "hadron-kernel",
-        "hadron-libc-core"
+        "hadron-kernel"
     ])
     .kani_verifiable(["hadron-core"])
     .shuttle_testable(["hadron-core"])
     .kernel_tests_dir("kernel/kernel/tests")
     .kernel_tests_crate("hadron-kernel")
-    .kernel_tests_linker_script("targets/x86_64-unknown-hadron.ld")
-    .userspace_tests_dir("userspace/tests");
+    .kernel_tests_linker_script("targets/x86_64-unknown-hadron.ld");

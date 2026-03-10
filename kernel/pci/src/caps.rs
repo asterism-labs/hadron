@@ -4,7 +4,7 @@
 //! register (offset 0x34), parsing each capability header. Supports VirtIO PCI
 //! capabilities (cap ID 0x09) and MSI-X capabilities (cap ID 0x11).
 
-use hadron_driver_api::pci::PciAddress;
+use crate::types::PciAddress;
 
 use crate::PciConfigAccess;
 use crate::regs;

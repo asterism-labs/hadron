@@ -370,8 +370,8 @@ fn compile_bench_binary(
 
 /// Run a benchmark binary in QEMU, capturing serial output to a file.
 ///
-/// Uses `run_with_serial_capture()` which delegates to `cargo-image-runner`'s
-/// `IoHandler` API for structured serial capture with real-time stderr tee.
+/// Uses `run_with_serial_capture()` which delegates to `hadron-runner`'s
+/// piped IO API for structured serial capture with real-time stderr tee.
 fn run_benchmark_binary(
     config: &crate::config::ResolvedConfig,
     kernel_binary: &Path,

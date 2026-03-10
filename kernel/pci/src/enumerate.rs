@@ -5,7 +5,7 @@
 
 use alloc::vec::Vec;
 
-use hadron_driver_api::pci::{PciAddress, PciBar, PciDeviceInfo};
+use crate::types::{PciAddress, PciBar, PciDeviceInfo};
 
 use crate::PciConfigAccess;
 use crate::regs;

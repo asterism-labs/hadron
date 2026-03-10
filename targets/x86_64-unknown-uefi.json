@@ -1,0 +1,45 @@
+{
+    "llvm-target": "x86_64-unknown-windows",
+    "data-layout": "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128",
+    "arch": "x86_64",
+    "target-endian": "little",
+    "target-pointer-width": 64,
+    "target-c-int-width": 32,
+    "os": "uefi",
+    "binary-format": "coff",
+    "archive-format": "coff",
+    "rustc-abi": "softfloat",
+    "executables": true,
+    "linker-flavor": "msvc-lld",
+    "linker": "rust-lld",
+    "linker-is-gnu": false,
+    "lld-flavor": "link",
+    "panic-strategy": "abort",
+    "disable-redzone": true,
+    "exe-suffix": ".efi",
+    "is-like-msvc": true,
+    "is-like-windows": true,
+    "allows-weak-linkage": false,
+    "singlethread": true,
+    "dll-tls-export": false,
+    "emit-debug-gdb-scripts": false,
+    "features": "-mmx,-sse,+soft-float",
+    "stack-probes": {
+        "kind": "call"
+    },
+    "pre-link-args": {
+        "msvc": [
+            "/NOLOGO",
+            "/entry:efi_main",
+            "/subsystem:efi_application"
+        ],
+        "msvc-lld": [
+            "/NOLOGO",
+            "/entry:efi_main",
+            "/subsystem:efi_application"
+        ]
+    },
+    "position-independent-executables": false,
+    "has-thread-local": false,
+    "max-atomic-width": 64
+}

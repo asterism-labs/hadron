@@ -13,7 +13,7 @@ use core::sync::atomic::{AtomicI64, AtomicU32, Ordering};
 use hadron_core::sync::SpinLock;
 
 use crate::handle::HandleTable;
-use crate::object::{Koid, KernelObject, ObjectType, Signals};
+use crate::object::{KernelObject, Koid, ObjectType, Signals};
 use crate::thread::Thread;
 use crate::vmar::Vmar;
 

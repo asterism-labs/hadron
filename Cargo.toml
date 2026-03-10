@@ -3,7 +3,6 @@ resolver = "2"
 members = [
     "crates/*/*",
     "kernel/*",
-    "userspace/hadron-libc/core",
 ]
 exclude = [ "userspace", "kernel/boot" ]
 default-members = [
@@ -21,49 +20,51 @@ readme = "README.md"
 publish = false
 
 [workspace.dependencies]
-# Internal crates
-hadron-acpi = { path = "crates/parse/acpi" }
-hadron-fdt = { path = "crates/parse/fdt" }
+# Internal crates — core
 hadron-core = { path = "kernel/core" }
-hadron-binparse = { path = "crates/parse/binparse" }
-hadron-binparse-macros = { path = "crates/parse/binparse-macros" }
-hadron-driver-api = { path = "kernel/driver-api" }
-hadron-mmio = { path = "kernel/mmio" }
-hadron-mmio-macros = { path = "kernel/mmio-macros" }
-hadron-codegen = { path = "crates/tools/hadron-codegen" }
-hadron-drivers = { path = "kernel/drivers" }
-hadron-fs = { path = "kernel/fs" }
-hadron-ipc = { path = "kernel/ipc" }
-hadron-pci = { path = "kernel/pci" }
-hadron-tty = { path = "kernel/tty" }
-hadron-mm = { path = "kernel/mm" }
-hadron-net = { path = "kernel/net" }
-hadron-sched = { path = "kernel/sched" }
-hadron-dwarf = { path = "crates/parse/dwarf" }
-hadron-elf = { path = "crates/parse/elf" }
-hadron-kernel = { path = "kernel/kernel" }
 hadron-intrinsics = { path = "kernel/intrinsics" }
 hadron-linkset = { path = "crates/core/linkset" }
+
+# Internal crates — kernel subsystems
+hadron-kernel = { path = "kernel/kernel" }
+hadron-mm = { path = "kernel/mm" }
+hadron-objects = { path = "kernel/objects" }
+hadron-pci = { path = "kernel/pci" }
+hadron-sched = { path = "kernel/sched" }
 hadron-syscall = { path = "kernel/syscall" }
 hadron-syscall-macros = { path = "kernel/syscall-macros" }
+
+# Internal crates — MMIO
+hadron-mmio = { path = "kernel/mmio" }
+hadron-mmio-macros = { path = "kernel/mmio-macros" }
+
+# Internal crates — parsers
+hadron-acpi = { path = "crates/parse/acpi" }
+hadron-binparse = { path = "crates/parse/binparse" }
+hadron-binparse-macros = { path = "crates/parse/binparse-macros" }
+hadron-elf = { path = "crates/parse/elf" }
+
+# Internal crates — boot
+uefi = { path = "crates/boot/uefi" }
+
+# Internal crates — test infrastructure
 hadron-bench = { path = "crates/test/hadron-bench", default-features = false }
 hadron-ktest = { path = "crates/test/hadron-ktest" }
 hadron-ktest-macros = { path = "crates/test/hadron-ktest-macros" }
 hadron-test = { path = "crates/test/hadron-test", default-features = false }
 hadron-utest = { path = "crates/test/hadron-utest" }
-limine = { path = "crates/boot/limine" }
-uefi = { path = "crates/boot/uefi" }
 
-# Internal tool crate
+# Internal crates — tools (host-only)
+hadron-dwarf = { path = "crates/parse/dwarf" }
 hadron-perf = { path = "crates/tools/hadron-perf" }
+hadron-runner = { path = "crates/tools/hadron-runner" }
 
 # External dependencies (no_std kernel)
 bitflags = "2"
 planck-noalloc = { version = "0.1.1", default-features = false }
 hadris-cpio = { version = "1.0.1", default-features = false }
-hadris-fat = { version = "1.0.1", default-features = false }
 hadris-io = { version = "1.0.1", default-features = false }
-hadris-iso = { version = "1.0.1", default-features = false }
+hadris-iso = { version = "1.0.3", default-features = false }
 
 # External dependencies (proc-macro ecosystem)
 proc-macro2 = "1"
@@ -72,19 +73,18 @@ syn = { version = "2", features = ["full", "extra-traits"] }
 
 # External dependencies (host tools)
 anyhow = "1"
-cargo-image-runner = { version = "0.5", default-features = false, features = ["bios", "limine", "iso", "qemu"] }
 clap = { version = "4", features = ["derive"] }
 crc32fast = "1"
 crossterm = "0.28"
 flate2 = "1"
-fontdue = "0.9"
-inferno = { version = "0.12", default-features = false, features = ["nameattr"] }
 ratatui = "0.29"
 rhai = { version = "1", features = ["sync"] }
-rustc-demangle = "0.1"
 semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+fontdue = "0.9"
+inferno = { version = "0.12", default-features = false, features = ["nameattr"] }
+rustc-demangle = "0.1"
 sha2 = "0.10"
 tar = "0.4"
 toml = "0.8"
@@ -106,66 +106,3 @@ pedantic = "warn"
 
 [workspace.metadata.hadron]
 default-target = "x86_64-unknown-hadron"
-
-[workspace.metadata.image-runner]
-verbose = true
-
-[workspace.metadata.image-runner.boot]
-type = "bios"
-
-[workspace.metadata.image-runner.bootloader]
-kind = "limine"
-config-file = "limine.conf"
-
-[workspace.metadata.image-runner.bootloader.limine]
-version = "v10.7.0-binary"
-
-[workspace.metadata.image-runner.extra-files]
-"boot/initrd.cpio" = "target/initrd.cpio"
-
-[workspace.metadata.image-runner.image]
-format = "iso"
-
-[workspace.metadata.image-runner.runner]
-kind = "qemu"
-
-[workspace.metadata.image-runner.runner.qemu]
-machine = "q35"
-memory = 256
-cores = 4
-extra-args = [ "-serial", "stdio" ]
-
-[workspace.metadata.image-runner.test]
-success-exit-code = 33
-timeout = 30
-extra-args = [
-    "-device",
-    "isa-debug-exit,iobase=0xf4,iosize=0x04",
-    "-display",
-    "none",
-    "-no-reboot",
-]
-
-[workspace.metadata.image-runner.run]
-gui = true
-
-[workspace.metadata.image-runner.profiles.stress]
-[workspace.metadata.image-runner.profiles.stress.runner.qemu]
-memory = 1024
-cores = 4
-extra-args = [ "-serial", "stdio" ]
-[workspace.metadata.image-runner.profiles.stress.test]
-timeout = 120
-
-[workspace.metadata.image-runner.profiles.debug]
-[workspace.metadata.image-runner.profiles.debug.runner.qemu]
-memory = 512
-extra-args = [ "-serial", "stdio", "-s", "-S" ]
-[workspace.metadata.image-runner.profiles.debug.test]
-timeout = 3600
-
-[workspace.metadata.image-runner.profiles.minimal]
-[workspace.metadata.image-runner.profiles.minimal.runner.qemu]
-memory = 64
-cores = 1
-extra-args = [ "-serial", "stdio" ]

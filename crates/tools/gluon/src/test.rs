@@ -2,7 +2,7 @@
 //!
 //! Supports:
 //! - Host unit tests: `cargo test -p <crate>` for each host-testable crate
-//! - Kernel integration tests: compile via rustc + run in QEMU via cargo-image-runner
+//! - Kernel integration tests: compile via rustc + run in QEMU via hadron-runner
 
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
@@ -426,7 +426,7 @@ fn compile_test_binary(
 
 /// Run compiled kernel test binaries in QEMU.
 ///
-/// Each test binary is booted individually via `cargo-image-runner`.
+/// Each test binary is booted individually via `hadron-runner`.
 /// Reports per-test pass/fail results.
 pub fn run_kernel_test_binaries(
     config: &ResolvedConfig,
