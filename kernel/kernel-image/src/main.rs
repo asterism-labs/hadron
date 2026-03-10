@@ -15,8 +15,46 @@ extern crate hadron_kernel;
 core::arch::global_asm!(".global kernel_init");
 
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! {
+fn panic(info: &core::panic::PanicInfo) -> ! {
+    // Write panic info to COM1 for debugging.
+    serial_str("KERNEL PANIC: ");
+    if let Some(loc) = info.location() {
+        serial_str(loc.file());
+        serial_str(":");
+        // Simple decimal formatting for line number.
+        let mut buf = [0u8; 10];
+        let s = fmt_u32(loc.line(), &mut buf);
+        serial_str(s);
+    }
+    serial_str("\n");
     loop {
         core::hint::spin_loop();
     }
+}
+
+fn serial_str(s: &str) {
+    for b in s.bytes() {
+        unsafe {
+            core::arch::asm!(
+                "out dx, al",
+                in("dx") 0x3F8u16,
+                in("al") b,
+                options(nomem, nostack, preserves_flags),
+            );
+        }
+    }
+}
+
+fn fmt_u32(mut n: u32, buf: &mut [u8; 10]) -> &str {
+    if n == 0 {
+        return "0";
+    }
+    let mut i = 10;
+    while n > 0 {
+        i -= 1;
+        buf[i] = b'0' + (n % 10) as u8;
+        n /= 10;
+    }
+    // SAFETY: digits are all ASCII.
+    unsafe { core::str::from_utf8_unchecked(&buf[i..]) }
 }

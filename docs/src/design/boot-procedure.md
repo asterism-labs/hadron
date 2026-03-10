@@ -307,9 +307,39 @@ pub struct BootInfo {
 
     /// HHDM virtual base address (set by stub page table builder).
     pub hhdm_offset: u64,
+
+    /// KASLR slide applied to kernel virtual address (0 = disabled).
+    pub kaslr_slide: u64,
+
+    /// Base address for kernel virtual regions (heap, stacks, MMIO).
+    pub regions_base: u64,
+
+    /// Physical address and size of the loaded kernel image.
+    pub kernel_phys: u64,
+    pub kernel_size: u64,
+
+    /// Boot page table pool (physical base and page count) for reclamation.
+    pub boot_pt_pool_phys: u64,
+    pub boot_pt_pool_pages: u64,
+
+    /// Boot services vtable (valid until kernel switches CR3).
+    pub boot_services: *const BootServices,
 }
 ```
 
 The stub fills every field before calling `kernel_init`. The kernel must not modify `BootInfo`
 after entry — it may be located in UEFI loader data pages that the PMM will reclaim once the
 memory map is consumed.
+
+### Two-Phase Logging
+
+The kernel uses a two-phase logging architecture:
+
+- **Phase 0** (early boot): Before `PerCpuState` is initialized, log macros write
+  synchronously to COM1 via inline `out` instructions. No ring buffer or sinks are used.
+- **Phase 1** (after per-CPU init): Once `cpu_is_initialized()` returns true, log entries
+  are buffered in per-CPU ring buffers and dispatched to registered sinks (e.g. serial,
+  framebuffer) on `flush()`.
+
+The transition occurs when `init_gs_base()` sets the `initialized` flag in the BSP's
+`PerCpuState` struct.

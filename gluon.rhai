@@ -209,6 +209,7 @@ kernel_main.add("hadron-kernel", "kernel/kernel")
         hadron_boot_info: "hadron-boot-info",
         hadron_core: "hadron-core",
         hadron_intrinsics: "hadron-intrinsics",
+        hadron_linkset: "hadron-linkset",
         hadron_log: "hadron-log",
         hadron_mm: "hadron-mm",
         hadron_mmio: "hadron-mmio",
