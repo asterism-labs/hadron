@@ -1,7 +1,7 @@
 //! Kernel entry point called by the UEFI boot stub.
 //!
 //! Executes the full BSP boot sequence: GDT → IDT → TLB registration →
-//! PMM → VMM → heap → per-CPU state → logging flush.
+//! PMM → VMM → heap → per-CPU state → disable auto-flush.
 
 use hadron_core::addr::VirtAddr;
 
@@ -90,19 +90,20 @@ pub extern "C" fn kernel_init(boot_info: *const BootInfo) -> ! {
     crate::vmm::init(vmm);
 
     // ── 10. Per-CPU init (GS base) ─────────────────────────────────────
-    // After this, cpu_is_initialized() returns true and logging switches
-    // from Phase 0 (direct serial) to Phase 1 (ring buffer + sinks).
+    // After this, cpu_is_initialized() returns true and span tracking
+    // becomes available for log records.
     // SAFETY: Called once after GDT, before any code that reads GS-relative data.
     unsafe { crate::percpu::init_gs_base() };
     crate::kinfo!("boot", "BSP per-CPU state initialized");
 
-    // ── 11. Flush logs ─────────────────────────────────────────────────
-    // Drain any Phase 1 messages that were buffered during init.
-    crate::flush();
-
-    // ── 12. Boot complete ──────────────────────────────────────────────
+    // ── 11. Boot complete ──────────────────────────────────────────────
     crate::kinfo!("boot", "kernel bootstrap complete");
-    crate::flush();
+
+    // ── 12. Disable auto-flush ─────────────────────────────────────────
+    // All boot messages have been flushed synchronously via auto-flush.
+    // Disable it before the scheduler starts; a periodic drain mechanism
+    // will take over.
+    hadron_log::disable_auto_flush();
 
     // ── 13. Spin (placeholder for scheduler) ───────────────────────────
     loop {

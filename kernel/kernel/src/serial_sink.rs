@@ -1,60 +1,30 @@
 //! COM1 serial log sink.
 //!
 //! Registers a [`LogSink`] in the `hadron_log_sinks` linker section so that
-//! Phase 1 log messages are written to the serial port. Phase 0 messages
-//! already bypass sinks and write to COM1 directly via `hadron_log::early`.
+//! log messages are written to the serial port. Outputs the pre-formatted
+//! `formatted_line` from each record, ensuring identical formatting across
+//! all log paths.
 
 use hadron_log::{FormattedRecord, Level, LogSink};
 
-/// COM1 data register port.
-const COM1_PORT: u16 = 0x3F8;
+use crate::arch::x86_64::Port;
 
-/// Writes a single byte to COM1.
-#[inline]
-fn serial_byte(b: u8) {
-    // SAFETY: Port 0x3F8 is the standard COM1 data register.
-    unsafe {
-        core::arch::asm!(
-            "out dx, al",
-            in("dx") COM1_PORT,
-            in("al") b,
-            options(nomem, nostack, preserves_flags),
-        );
-    }
-}
+/// COM1 serial port (data register at `0x3F8`).
+const COM1: Port<u8> = Port::new(0x3F8);
 
 /// Writes a byte slice to COM1.
 fn serial_bytes(bytes: &[u8]) {
     for &b in bytes {
-        serial_byte(b);
+        // SAFETY: Port 0x3F8 is the standard COM1 data register.
+        // Writing bytes to it produces serial output with no side effects
+        // beyond character transmission.
+        unsafe { COM1.write(b) };
     }
 }
 
-/// Writes a formatted log record to COM1.
-///
-/// Formats as `[LEVEL subsystem] message\n`. The level tag is right-padded
-/// to 5 characters for alignment.
+/// Writes a pre-formatted log line to COM1.
 fn serial_write(record: &FormattedRecord<'_>) {
-    serial_bytes(b"[");
-    serial_bytes(level_tag(record.level).as_bytes());
-    serial_bytes(b" ");
-    serial_bytes(record.subsystem.as_bytes());
-    serial_bytes(b"] ");
-    serial_bytes(record.message.as_bytes());
-    serial_byte(b'\n');
-}
-
-/// Returns a fixed-width tag string for the given log level.
-fn level_tag(level: Level) -> &'static str {
-    match level {
-        Level::FATAL => "FATAL",
-        Level::ERROR => "ERROR",
-        Level::WARN => "WARN ",
-        Level::INFO => "INFO ",
-        Level::DEBUG => "DEBUG",
-        Level::TRACE => "TRACE",
-        _ => "?????",
-    }
+    serial_bytes(record.formatted_line);
 }
 
 /// Flush callback — no-op since COM1 is unbuffered.

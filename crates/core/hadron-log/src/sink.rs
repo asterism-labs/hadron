@@ -21,6 +21,9 @@ pub struct LogSink {
 }
 
 /// A fully formatted log record ready for output to sinks.
+///
+/// Simple sinks can output `formatted_line` directly. Sinks wanting
+/// custom formatting still have access to the structured fields.
 pub struct FormattedRecord<'a> {
     /// Timestamp (rdtsc value).
     pub timestamp: u64,
@@ -36,6 +39,10 @@ pub struct FormattedRecord<'a> {
     pub file: &'static str,
     /// Source line number.
     pub line: u32,
+    /// Pre-formatted log line: `[LEVEL subsystem] {spans} message\n`.
+    ///
+    /// Ready for byte-level output to serial or framebuffer sinks.
+    pub formatted_line: &'a [u8],
 }
 
 // ── Linkset declaration ─────────────────────────────────────────────────

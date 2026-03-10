@@ -1,16 +1,17 @@
 //! Structured logging subsystem for the Hadron kernel.
 //!
-//! Provides severity-based logging with subsystem tagging, per-CPU ring
-//! buffering, span-scoped context, and linkset-based sink registration.
-//! All messages are formatted at the call site using `core::fmt` into a
-//! fixed 128-byte inline buffer.
+//! Provides severity-based logging with subsystem tagging, a global
+//! lock-free MPSC ring buffer, span-scoped context, and linkset-based
+//! sink registration. All messages are formatted at the call site using
+//! `core::fmt` into a fixed 128-byte inline buffer.
 //!
-//! # Phases
+//! # Architecture
 //!
-//! - **Phase 0** (early boot): Before `CpuLocal` is initialized, log entries
-//!   are formatted synchronously and written directly to COM1.
-//! - **Phase 1**: After per-CPU data is live, entries are buffered in a small
-//!   static per-CPU ring and drained synchronously on `flush()`.
+//! Every `klog!` invocation pushes a [`LogRecord`] into a single global
+//! [`MpscRing`](ring::MpscRing). By default, auto-flush is enabled and
+//! each push immediately drains the ring through all registered sinks.
+//! Call [`disable_auto_flush()`] once a periodic drain mechanism (e.g.
+//! a timer or scheduler tick) is in place.
 //!
 //! # Usage
 //!
@@ -27,13 +28,12 @@
 #![cfg_attr(not(test), no_std)]
 #![warn(missing_docs)]
 
-mod buffer;
 mod drain;
-mod early;
 mod fmt;
 mod level;
 mod macros;
 mod record;
+pub(crate) mod ring;
 mod sink;
 mod span;
 
@@ -41,6 +41,26 @@ pub use level::{Level, get_runtime_level, runtime_level, set_runtime_level};
 pub use record::{LogRecord, RecordMessage};
 pub use sink::{FormattedRecord, LogSink};
 pub use span::{SpanGuard, SpanSnapshot, enter_span};
+
+use core::sync::atomic::{AtomicBool, Ordering};
+
+// ── Auto-flush control ──────────────────────────────────────────────────
+
+/// When `true`, every `__emit_log` call immediately drains the ring.
+///
+/// Enabled by default so that early boot messages appear on serial
+/// without an explicit `flush()`. Disable once a periodic drain
+/// mechanism is running.
+static AUTO_FLUSH: AtomicBool = AtomicBool::new(true);
+
+/// Disables auto-flush after each log call.
+///
+/// Call this once a periodic drain mechanism (timer tick, scheduler
+/// idle loop) is in place. After this, log records accumulate in the
+/// ring until [`flush()`] is called explicitly.
+pub fn disable_auto_flush() {
+    AUTO_FLUSH.store(false, Ordering::Relaxed);
+}
 
 // ── Internal emit function (called by macros) ───────────────────────────
 
@@ -54,19 +74,19 @@ pub fn __emit_log(
     file: &'static str,
     line: u32,
 ) {
-    if hadron_core::cpu_local::cpu_is_initialized() {
-        let record = LogRecord {
-            timestamp: read_tsc(),
-            level,
-            subsystem,
-            file,
-            line,
-            spans: span::current_spans(),
-            message,
-        };
-        buffer::push_record(record);
-    } else {
-        early::emit_serial_sync(level, subsystem, &message);
+    let record = LogRecord {
+        timestamp: read_tsc(),
+        level,
+        subsystem,
+        file,
+        line,
+        spans: span::current_spans(),
+        message,
+    };
+    ring::RING.push(record);
+
+    if AUTO_FLUSH.load(Ordering::Relaxed) {
+        drain::drain_all();
     }
 }
 
@@ -100,10 +120,11 @@ pub fn __format_into_buf(buf: &mut [u8; 128], args: core::fmt::Arguments<'_>) ->
     len
 }
 
-/// Synchronously drains all per-CPU ring buffers and dispatches to sinks.
+/// Synchronously drains the global ring buffer and dispatches to sinks.
 ///
-/// Call this after boot initialization to flush buffered messages, or
-/// from a panic handler to ensure all messages are output.
+/// Call this from a panic handler or anywhere immediate output is needed.
+/// With auto-flush enabled (the default), this is also called after every
+/// log emission.
 pub fn flush() {
     drain::drain_all();
 }

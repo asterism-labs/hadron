@@ -1,47 +1,55 @@
-//! Drain logic for per-CPU ring buffers.
+//! Drain logic for the global MPSC ring buffer.
 //!
-//! The drain function reads committed entries from all CPU ring buffers,
-//! extracts formatted messages, and dispatches [`FormattedRecord`]s to all
+//! The drain function reads published entries from the ring, formats each
+//! into a complete log line, and dispatches [`FormattedRecord`]s to all
 //! registered sinks.
 
-use crate::buffer::RINGS;
 use crate::record::{MAX_FMT_BUF, RecordMessage};
+use crate::ring;
 use crate::sink::{FormattedRecord, log_sinks};
 
-/// Synchronously drains all per-CPU ring buffers and dispatches to sinks.
+/// Synchronously drains the global MPSC ring and dispatches to sinks.
 ///
-/// Iterates all CPU slots, reads committed entries, and writes to every
-/// registered sink. Called explicitly via [`flush()`](crate::flush) or
-/// from the panic handler.
+/// Pops all published entries, formats each into a complete log line,
+/// and writes to every registered sink whose `min_level` passes.
+/// Called via [`flush()`](crate::flush), from auto-flush in `__emit_log`,
+/// or from the panic handler.
 pub(crate) fn drain_all() {
     let sinks = log_sinks();
 
-    for cpu_id in 0..hadron_core::cpu_local::MAX_CPUS {
-        let ring = RINGS.get_for(cpu_id as u32);
-        while let Some(record) = ring.pop() {
-            let msg_str = match &record.message {
-                RecordMessage::Formatted { buf, len } => {
-                    let n = *len as usize;
-                    // SAFETY: The buffer was written by core::fmt which
-                    // guarantees valid UTF-8.
-                    unsafe { core::str::from_utf8_unchecked(&buf[..n]) }
-                }
-            };
+    while let Some(record) = ring::RING.pop() {
+        let msg_str = match &record.message {
+            RecordMessage::Formatted { buf, len } => {
+                let n = *len as usize;
+                // SAFETY: The buffer was written by core::fmt which
+                // guarantees valid UTF-8.
+                unsafe { core::str::from_utf8_unchecked(&buf[..n]) }
+            }
+        };
 
-            let formatted = FormattedRecord {
-                timestamp: record.timestamp,
-                level: record.level,
-                subsystem: record.subsystem,
-                spans: &record.spans,
-                message: msg_str,
-                file: record.file,
-                line: record.line,
-            };
+        let mut line_buf = [0u8; MAX_FMT_BUF];
+        let line_len = format_full_line(
+            &mut line_buf,
+            record.level,
+            record.subsystem,
+            &record.spans,
+            msg_str,
+        );
 
-            for sink in sinks {
-                if record.level <= sink.min_level {
-                    (sink.write)(&formatted);
-                }
+        let formatted = FormattedRecord {
+            timestamp: record.timestamp,
+            level: record.level,
+            subsystem: record.subsystem,
+            spans: &record.spans,
+            message: msg_str,
+            file: record.file,
+            line: record.line,
+            formatted_line: &line_buf[..line_len],
+        };
+
+        for sink in sinks {
+            if record.level <= sink.min_level {
+                (sink.write)(&formatted);
             }
         }
     }

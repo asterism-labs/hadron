@@ -2,8 +2,8 @@
 //!
 //! These macros provide the primary logging interface for kernel code.
 //! Each macro performs compile-time level elimination, runtime level
-//! filtering (one relaxed atomic load), and routes to either the per-CPU
-//! ring buffer (Phase 1+) or direct serial output (Phase 0).
+//! filtering (one relaxed atomic load), and pushes a record into the
+//! global MPSC ring buffer.
 //!
 //! All macros use `core::fmt` at the call site to format into a fixed
 //! 128-byte inline buffer. This keeps the interface simple and supports
@@ -11,9 +11,8 @@
 
 /// Core logging macro.
 ///
-/// Formats the message at the call site using `core::fmt`, then stores
-/// the result in the per-CPU ring buffer (or writes directly to serial
-/// during early boot).
+/// Formats the message at the call site using `core::fmt`, then pushes
+/// the record into the global MPSC ring buffer.
 ///
 /// # Usage
 ///
