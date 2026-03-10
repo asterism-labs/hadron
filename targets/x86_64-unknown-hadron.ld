@@ -68,6 +68,11 @@ SECTIONS {
         KEEP(*(.hadron_alt_instr_replacement))
         __hadron_alt_instr_replacement_end = .;
 
+        /* Log sink descriptors (hadron-log) */
+        __hadron_log_sinks_start = .;
+        KEEP(*(.hadron_log_sinks))
+        __hadron_log_sinks_end = .;
+
         *(.rodata .rodata.*)
     } :rodata
 

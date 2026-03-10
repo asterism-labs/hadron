@@ -12,7 +12,7 @@ const PIC_DEFAULT_MASK: u16 = !(1 << 0 | 1 << 1 | 1 << 2);
 /// Remaps the PIC to vectors 32-47, enables IRQs 0/1/2, and starts PIT
 /// channel 0 at ~1000 Hz for the system timer.
 pub fn init() {
-    crate::kinfo!("Legacy: initializing PIC + PIT (no ACPI)");
+    crate::kinfo!("legacy", "Legacy: initializing PIC + PIT (no ACPI)");
 
     // 1. Remap PIC to vectors 32-47 and enable needed IRQs.
     // SAFETY: Called once during early boot with interrupts disabled.
@@ -29,5 +29,5 @@ pub fn init() {
     // 4. Read CMOS RTC for wall-clock epoch.
     crate::time::Time::init_rtc_epoch();
 
-    crate::kinfo!("Legacy: PIC remapped, PIT running at 1000 Hz");
+    crate::kinfo!("legacy", "Legacy: PIC remapped, PIT running at 1000 Hz");
 }

@@ -118,7 +118,7 @@ pub unsafe fn init() {
         MSR_SFMASK.write(SFMASK_VALUE);
     }
 
-    crate::kdebug!("SYSCALL/SYSRET initialized");
+    crate::kdebug!("syscall", "SYSCALL/SYSRET initialized");
 }
 
 // Declared in hadron-kernel, linked via `extern "C"`.

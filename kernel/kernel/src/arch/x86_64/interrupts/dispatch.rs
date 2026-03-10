@@ -55,7 +55,7 @@ pub fn register_handler(
     );
     match HANDLERS[vector.table_index()].try_set(handler) {
         Ok(()) => {
-            crate::ktrace_subsys!(irq, "registered handler for vector {}", vector);
+            crate::ktrace!("irq", "registered handler for vector {}", vector);
             Ok(())
         }
         Err(()) => Err(InterruptError::AlreadyRegistered),
@@ -65,7 +65,7 @@ pub fn register_handler(
 /// Unregisters the handler for the given hardware interrupt vector.
 pub fn unregister_handler(vector: HwIrqVector) {
     HANDLERS[vector.table_index()].clear();
-    crate::ktrace_subsys!(irq, "unregistered handler for vector {}", vector);
+    crate::ktrace!("irq", "unregistered handler for vector {}", vector);
 }
 
 /// Common dispatch function called by all hardware interrupt stubs.

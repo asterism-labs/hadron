@@ -225,7 +225,10 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
     let rsdp_phys = match rsdp_phys {
         Some(addr) => addr,
         None => {
-            crate::kwarn!("ACPI: No RSDP address available, skipping ACPI init");
+            crate::kwarn!(
+                "acpi",
+                "ACPI: No RSDP address available, skipping ACPI init"
+            );
             return;
         }
     };
@@ -234,6 +237,7 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
     let tables = match AcpiTables::new(rsdp_phys.as_u64(), HhdmAcpiHandler) {
         Ok(t) => {
             crate::kinfo!(
+                "acpi",
                 "ACPI: RSDP validated, {} at {:#x}",
                 if t.is_xsdt() { "XSDT" } else { "RSDT" },
                 t.rsdt_addr()
@@ -241,7 +245,7 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
             t
         }
         Err(e) => {
-            crate::kerr!("ACPI: Failed to parse RSDP: {:?}", e);
+            crate::kerror!("acpi", "ACPI: Failed to parse RSDP: {:?}", e);
             return;
         }
     };
@@ -263,6 +267,7 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
                 }
             }
             crate::kinfo!(
+                "acpi",
                 "ACPI: MADT: {} CPUs, {} I/O APICs, LAPIC at {:#x}",
                 cpu_count,
                 io_apic_count,
@@ -271,7 +276,7 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
             Some(m)
         }
         Err(e) => {
-            crate::kwarn!("ACPI: MADT not found: {:?}", e);
+            crate::kwarn!("acpi", "ACPI: MADT not found: {:?}", e);
             None
         }
     };
@@ -281,11 +286,16 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
         Ok(h) => {
             let hpet_addr = h.base_address.address;
             let min_tick = h.minimum_tick;
-            crate::kdebug!("ACPI: HPET at {:#x}, minimum tick {}", hpet_addr, min_tick);
+            crate::kdebug!(
+                "acpi",
+                "ACPI: HPET at {:#x}, minimum tick {}",
+                hpet_addr,
+                min_tick
+            );
             Some(h)
         }
         Err(e) => {
-            crate::kwarn!("ACPI: HPET not available: {:?}", e);
+            crate::kwarn!("acpi", "ACPI: HPET not available: {:?}", e);
             None
         }
     };
@@ -293,7 +303,7 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
     // Parse MCFG and store ECAM info for PCI Express config access.
     match tables.mcfg() {
         Ok(m) => {
-            crate::kdebug!("ACPI: MCFG with {} entries", m.entry_count());
+            crate::kdebug!("acpi", "ACPI: MCFG with {} entries", m.entry_count());
             if let Some(entry) = m.entries().next() {
                 let info = EcamInfo {
                     phys_base: entry.base_address,
@@ -303,6 +313,7 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
                 };
                 *ECAM_INFO.lock() = Some(info);
                 crate::kinfo!(
+                    "acpi",
                     "ACPI: ECAM at {:#x}, segment {}, buses {}-{}",
                     info.phys_base,
                     info.segment,
@@ -312,7 +323,7 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
             }
         }
         Err(_) => {
-            crate::kdebug!("ACPI: MCFG not found");
+            crate::kdebug!("acpi", "ACPI: MCFG not found");
         }
     }
 
@@ -320,20 +331,21 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
     let fadt = match tables.fadt() {
         Ok(f) => {
             crate::kinfo!(
+                "acpi",
                 "ACPI: FADT: PM timer port {:#x}, boot arch flags {:#x}",
                 f.pm_timer_block,
                 f.boot_architecture_flags
             );
             if let Some(dsdt) = f.dsdt_address() {
-                crate::kdebug!("ACPI: FADT: DSDT at {:#x}", dsdt);
+                crate::kdebug!("acpi", "ACPI: FADT: DSDT at {:#x}", dsdt);
             }
             if let Some(facs) = f.facs_address() {
-                crate::kdebug!("ACPI: FADT: FACS at {:#x}", facs);
+                crate::kdebug!("acpi", "ACPI: FADT: FACS at {:#x}", facs);
             }
             Some(f)
         }
         Err(_) => {
-            crate::kdebug!("ACPI: FADT not present");
+            crate::kdebug!("acpi", "ACPI: FADT not present");
             None
         }
     };
@@ -374,6 +386,7 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
                         if flags & 1 != 0 {
                             mem_regions += 1;
                             crate::kdebug!(
+                                "acpi",
                                 "ACPI: SRAT: memory domain {} base {:#x} length {:#x}",
                                 proximity_domain,
                                 base_address,
@@ -404,6 +417,7 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
                 domains = max_domain + 1;
             }
             crate::kinfo!(
+                "acpi",
                 "ACPI: SRAT: {} proximity domains, {} CPUs, {} memory regions",
                 domains,
                 cpu_count,
@@ -411,7 +425,7 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
             );
         }
         Err(_) => {
-            crate::kdebug!("ACPI: SRAT not present");
+            crate::kdebug!("acpi", "ACPI: SRAT not present");
         }
     }
 
@@ -419,19 +433,19 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
     match tables.slit() {
         Ok(slit) => {
             let n = slit.num_localities();
-            crate::kinfo!("ACPI: SLIT: {} localities", n);
+            crate::kinfo!("acpi", "ACPI: SLIT: {} localities", n);
             if n <= 8 {
                 for from in 0..n {
                     for to in 0..n {
                         if let Some(d) = slit.distance(from, to) {
-                            crate::kdebug!("ACPI: SLIT: [{} -> {}] = {}", from, to, d);
+                            crate::kdebug!("acpi", "ACPI: SLIT: [{} -> {}] = {}", from, to, d);
                         }
                     }
                 }
             }
         }
         Err(_) => {
-            crate::kdebug!("ACPI: SLIT not present");
+            crate::kdebug!("acpi", "ACPI: SLIT not present");
         }
     }
 
@@ -441,6 +455,7 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
             let mut drhd_count = 0u32;
             let mut rmrr_count = 0u32;
             crate::kdebug!(
+                "acpi",
                 "ACPI: DMAR: host address width {}, flags {:#x}",
                 dmar.host_address_width,
                 dmar.flags
@@ -455,6 +470,7 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
                     } => {
                         drhd_count += 1;
                         crate::kdebug!(
+                            "acpi",
                             "ACPI: DMAR: DRHD segment {} base {:#x} flags {:#x}",
                             segment,
                             register_base_address,
@@ -469,6 +485,7 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
                     } => {
                         rmrr_count += 1;
                         crate::kdebug!(
+                            "acpi",
                             "ACPI: DMAR: RMRR segment {} range {:#x}-{:#x}",
                             segment,
                             base_address,
@@ -476,15 +493,25 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
                         );
                     }
                     hadron_acpi::DmarEntry::Atsr { flags, segment, .. } => {
-                        crate::kdebug!("ACPI: DMAR: ATSR segment {} flags {:#x}", segment, flags);
+                        crate::kdebug!(
+                            "acpi",
+                            "ACPI: DMAR: ATSR segment {} flags {:#x}",
+                            segment,
+                            flags
+                        );
                     }
                     hadron_acpi::DmarEntry::Unknown { .. } => {}
                 }
             }
-            crate::kinfo!("ACPI: DMAR: {} DRHDs, {} RMRRs", drhd_count, rmrr_count);
+            crate::kinfo!(
+                "acpi",
+                "ACPI: DMAR: {} DRHDs, {} RMRRs",
+                drhd_count,
+                rmrr_count
+            );
         }
         Err(_) => {
-            crate::kdebug!("ACPI: DMAR not present");
+            crate::kdebug!("acpi", "ACPI: DMAR not present");
         }
     }
 
@@ -493,7 +520,7 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
         Ok(ivrs) => {
             let mut ivhd_count = 0u32;
             let mut ivmd_count = 0u32;
-            crate::kdebug!("ACPI: IVRS: iv_info {:#x}", ivrs.iv_info);
+            crate::kdebug!("acpi", "ACPI: IVRS: iv_info {:#x}", ivrs.iv_info);
             for entry in ivrs.entries() {
                 match entry {
                     hadron_acpi::IvrsEntry::Ivhd {
@@ -505,6 +532,7 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
                     } => {
                         ivhd_count += 1;
                         crate::kdebug!(
+                            "acpi",
                             "ACPI: IVRS: IVHD type {:#x} IOMMU base {:#x} segment {} device {:#x}",
                             ivhd_type,
                             iommu_base_address,
@@ -520,6 +548,7 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
                     } => {
                         ivmd_count += 1;
                         crate::kdebug!(
+                            "acpi",
                             "ACPI: IVRS: IVMD type {:#x} start {:#x} length {:#x}",
                             ivmd_type,
                             start_address,
@@ -529,10 +558,15 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
                     hadron_acpi::IvrsEntry::Unknown { .. } => {}
                 }
             }
-            crate::kinfo!("ACPI: IVRS: {} IVHDs, {} IVMDs", ivhd_count, ivmd_count);
+            crate::kinfo!(
+                "acpi",
+                "ACPI: IVRS: {} IVHDs, {} IVMDs",
+                ivhd_count,
+                ivmd_count
+            );
         }
         Err(_) => {
-            crate::kdebug!("ACPI: IVRS not present");
+            crate::kdebug!("acpi", "ACPI: IVRS not present");
         }
     }
 
@@ -540,6 +574,7 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
     match tables.bgrt() {
         Ok(bgrt) => {
             crate::kinfo!(
+                "acpi",
                 "ACPI: BGRT: image at {:#x} type {} offset ({}, {})",
                 bgrt.image_address,
                 bgrt.image_type,
@@ -548,7 +583,7 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
             );
         }
         Err(_) => {
-            crate::kdebug!("ACPI: BGRT not present");
+            crate::kdebug!("acpi", "ACPI: BGRT not present");
         }
     }
 
@@ -562,13 +597,13 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
     // --- 2. Disable legacy PIC ---
     // SAFETY: Interrupts are disabled at this point (CLI from boot).
     unsafe { crate::arch::x86_64::hw::pic::remap_and_disable() };
-    crate::kdebug!("PIC: Remapped to vectors 32-47, masked all");
+    crate::kdebug!("acpi", "PIC: Remapped to vectors 32-47, masked all");
 
     // --- 3. Map and enable Local APIC ---
     let madt = match madt_info {
         Some(m) => m,
         None => {
-            crate::kerr!("ACPI: Cannot initialize APIC without MADT");
+            crate::kerror!("acpi", "ACPI: Cannot initialize APIC without MADT");
             return;
         }
     };
@@ -591,6 +626,7 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
     crate::sched::smp::register_cpu_apic_id(crate::id::CpuId::new(0), apic_id);
 
     crate::kinfo!(
+        "acpi",
         "LAPIC: Enabled, ID={}, spurious vector={}",
         apic_id,
         vectors::SPURIOUS
@@ -619,6 +655,7 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
             let max_entry = ioapic.max_redirection_entry();
 
             crate::kdebug!(
+                "acpi",
                 "I/O APIC: ID={}, GSI base={}, {} entries",
                 ioapic.id(),
                 gsi_base,
@@ -671,6 +708,7 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
         crate::time::Time::init_rtc_epoch();
 
         crate::kinfo!(
+            "acpi",
             "HPET: Enabled, {} Hz, {} comparators",
             hpet.frequency_hz(),
             hpet.num_comparators()
@@ -787,6 +825,7 @@ fn calibrate_and_start_timer(lapic: &LocalApic, hpet: Option<&Hpet>) {
     let ticks_per_ms = ticks_per_second / 1000;
 
     crate::kinfo!(
+        "acpi",
         "Timer: LAPIC calibrated at {} MHz ({} ticks/ms, divide={})",
         ticks_per_second / 1_000_000,
         ticks_per_ms,
@@ -805,9 +844,12 @@ fn calibrate_and_start_timer(lapic: &LocalApic, hpet: Option<&Hpet>) {
         LAPIC_TIMER_DIVIDE.store(divide, Ordering::Release);
 
         lapic.start_timer_periodic(vectors::TIMER.as_irq_vector(), initial_count, divide);
-        crate::kinfo!("Timer: LAPIC periodic timer started (1ms interval)");
+        crate::kinfo!("acpi", "Timer: LAPIC periodic timer started (1ms interval)");
     } else {
-        crate::kwarn!("Timer: Calibration returned 0 ticks, timer not started");
+        crate::kwarn!(
+            "acpi",
+            "Timer: Calibration returned 0 ticks, timer not started"
+        );
     }
 }
 
@@ -820,7 +862,7 @@ fn parse_aml_namespace(tables: &AcpiTables<HhdmAcpiHandler>) -> Option<Namespace
     let dsdt = match tables.dsdt() {
         Ok(d) => d,
         Err(_) => {
-            crate::kdebug!("ACPI: DSDT not available");
+            crate::kdebug!("acpi", "ACPI: DSDT not available");
             return None;
         }
     };
@@ -831,13 +873,13 @@ fn parse_aml_namespace(tables: &AcpiTables<HhdmAcpiHandler>) -> Option<Namespace
     let aml_data = match dsdt.data.get(SdtHeader::SIZE..) {
         Some(d) if !d.is_empty() => d,
         _ => {
-            crate::kdebug!("ACPI: DSDT has no AML data");
+            crate::kdebug!("acpi", "ACPI: DSDT has no AML data");
             return None;
         }
     };
 
     if let Err(e) = aml::walk_aml(aml_data, &mut builder) {
-        crate::kdebug!("ACPI: DSDT AML walk error: {:?}", e);
+        crate::kdebug!("acpi", "ACPI: DSDT AML walk error: {:?}", e);
     }
 
     // Walk any SSDTs and merge into the same namespace.
@@ -847,13 +889,18 @@ fn parse_aml_namespace(tables: &AcpiTables<HhdmAcpiHandler>) -> Option<Namespace
             Ok(ssdt) => {
                 if let Some(aml) = ssdt.data.get(SdtHeader::SIZE..) {
                     if let Err(e) = aml::walk_aml(aml, &mut builder) {
-                        crate::kdebug!("ACPI: SSDT AML walk error: {:?}", e);
+                        crate::kdebug!("acpi", "ACPI: SSDT AML walk error: {:?}", e);
                     }
                     ssdt_count += 1;
                 }
             }
             Err(e) => {
-                crate::kdebug!("ACPI: Failed to load SSDT at {:#x}: {:?}", ssdt_phys, e);
+                crate::kdebug!(
+                    "acpi",
+                    "ACPI: Failed to load SSDT at {:#x}: {:?}",
+                    ssdt_phys,
+                    e
+                );
             }
         }
     }
@@ -863,12 +910,17 @@ fn parse_aml_namespace(tables: &AcpiTables<HhdmAcpiHandler>) -> Option<Namespace
 
     if ssdt_count > 0 {
         crate::kinfo!(
+            "acpi",
             "ACPI: AML namespace: {} devices (DSDT + {} SSDTs)",
             device_count,
             ssdt_count
         );
     } else {
-        crate::kinfo!("ACPI: AML namespace: {} devices (DSDT)", device_count);
+        crate::kinfo!(
+            "acpi",
+            "ACPI: AML namespace: {} devices (DSDT)",
+            device_count
+        );
     }
 
     for dev in ns.devices() {
@@ -880,34 +932,41 @@ fn parse_aml_namespace(tables: &AcpiTables<HhdmAcpiHandler>) -> Option<Namespace
                 let hid_str = core::str::from_utf8(&decoded).unwrap_or("?");
                 if resource_count > 0 {
                     crate::kdebug!(
+                        "acpi",
                         "ACPI: AML: {} _HID={} ({} resources)",
                         dev.path,
                         hid_str,
                         resource_count
                     );
                 } else {
-                    crate::kdebug!("ACPI: AML: {} _HID={}", dev.path, hid_str);
+                    crate::kdebug!("acpi", "ACPI: AML: {} _HID={}", dev.path, hid_str);
                 }
             }
             Some(AmlValue::String(s)) => {
                 if resource_count > 0 {
                     crate::kdebug!(
+                        "acpi",
                         "ACPI: AML: {} _HID=\"{}\" ({} resources)",
                         dev.path,
                         s.as_str(),
                         resource_count
                     );
                 } else {
-                    crate::kdebug!("ACPI: AML: {} _HID=\"{}\"", dev.path, s.as_str());
+                    crate::kdebug!("acpi", "ACPI: AML: {} _HID=\"{}\"", dev.path, s.as_str());
                 }
             }
             Some(AmlValue::Integer(v)) => {
-                crate::kdebug!("ACPI: AML: {} _HID={:#x}", dev.path, v);
+                crate::kdebug!("acpi", "ACPI: AML: {} _HID={:#x}", dev.path, v);
             }
             _ => {}
         }
         if prt_count > 0 {
-            crate::kdebug!("ACPI: AML: {} has {} _PRT entries", dev.path, prt_count);
+            crate::kdebug!(
+                "acpi",
+                "ACPI: AML: {} has {} _PRT entries",
+                dev.path,
+                prt_count
+            );
         }
     }
 

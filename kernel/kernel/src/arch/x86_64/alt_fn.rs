@@ -30,7 +30,7 @@ pub unsafe fn apply() {
     let entries = alt_fn_entries();
 
     if entries.is_empty() {
-        crate::kinfo!("alt-fn: no entries to patch");
+        crate::kinfo!("alt-fn", "alt-fn: no entries to patch");
         return;
     }
 
@@ -76,6 +76,7 @@ pub unsafe fn apply() {
     hadron_core::sync::atomic::fence(Ordering::Release);
 
     crate::kinfo!(
+        "alt-fn",
         "alt-fn: patched {} dispatch points ({} entries, features={:?})",
         patched,
         entries.len(),

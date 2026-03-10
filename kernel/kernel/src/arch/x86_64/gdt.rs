@@ -129,7 +129,7 @@ pub unsafe fn init() {
         load_tss(selectors.tss);
     }
 
-    crate::kdebug!("GDT initialized");
+    crate::kdebug!("gdt", "GDT initialized");
 }
 
 /// Updates RSP0 in the TSS (ring 3 → ring 0 stack pointer).
@@ -225,7 +225,7 @@ pub unsafe fn init_ap(cpu_id: crate::id::CpuId) -> u64 {
         load_tss(tss_sel);
     }
 
-    crate::kdebug!("AP {} GDT/TSS initialized", cpu_id);
+    crate::kdebug!("gdt", "AP {} GDT/TSS initialized", cpu_id);
 
     kernel_stack_top
 }

@@ -88,5 +88,5 @@ static IDT: LazyLock<InterruptDescriptorTable> = LazyLock::new(|| {
 /// Must be called after GDT initialization (CS must be valid).
 pub unsafe fn init() {
     unsafe { IDT.load() };
-    crate::kdebug!("IDT initialized");
+    crate::kdebug!("idt", "IDT initialized");
 }

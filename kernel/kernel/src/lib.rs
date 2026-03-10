@@ -10,37 +10,13 @@
 
 extern crate alloc;
 
-// ── Logging stubs (replaced by serial output in a later phase) ──────────
+// ── Logging (hadron-log) ─────────────────────────────────────────────────
 
-/// Log an informational message (no-op stub).
-#[macro_export]
-macro_rules! kinfo {
-    ($($arg:tt)*) => {};
-}
-
-/// Log a debug message (no-op stub).
-#[macro_export]
-macro_rules! kdebug {
-    ($($arg:tt)*) => {};
-}
-
-/// Log a warning message (no-op stub).
-#[macro_export]
-macro_rules! kwarn {
-    ($($arg:tt)*) => {};
-}
-
-/// Log an error message (no-op stub).
-#[macro_export]
-macro_rules! kerr {
-    ($($arg:tt)*) => {};
-}
-
-/// Subsystem-level trace logging (no-op stub).
-#[macro_export]
-macro_rules! ktrace_subsys {
-    ($subsys:ident, $($arg:tt)*) => {};
-}
+/// Re-export logging macros and public API from `hadron-log`.
+pub use hadron_log;
+pub use hadron_log::{
+    Level, flush, kdebug, kerror, kfatal, kinfo, klog, kspan, ktrace, kwarn, set_runtime_level,
+};
 
 // ── Core type re-exports (host-testable) ──────────────────────────────────
 

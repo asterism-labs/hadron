@@ -92,6 +92,7 @@ pub fn park_aps(smp_cpus: &[SmpCpuEntry], kernel_cr3: u64) {
         spin_count += 1;
         if spin_count >= PARK_TIMEOUT {
             kwarn!(
+                "smp",
                 "SMP: Timeout parking APs ({}/{} parked)",
                 AP_PARKED_COUNT.load(Ordering::Acquire),
                 expected
@@ -101,7 +102,7 @@ pub fn park_aps(smp_cpus: &[SmpCpuEntry], kernel_cr3: u64) {
     }
 
     let parked = AP_PARKED_COUNT.load(Ordering::Acquire);
-    kinfo!("SMP: {} APs parked on kernel page tables", parked);
+    kinfo!("smp", "SMP: {} APs parked on kernel page tables", parked);
 }
 
 /// AP parking trampoline. Limine calls this with RDI = MpInfo*, RSI = extra_argument.
@@ -163,11 +164,11 @@ pub fn boot_aps(boot_info: &impl BootInfo) {
     let ap_count = smp_cpus.len();
 
     if ap_count == 0 {
-        kinfo!("SMP: No APs to boot (single-processor system)");
+        kinfo!("smp", "SMP: No APs to boot (single-processor system)");
         return;
     }
 
-    kinfo!("SMP: Initializing {} parked APs...", ap_count);
+    kinfo!("smp", "SMP: Initializing {} parked APs...", ap_count);
 
     // Allocate per-CPU state for each AP and store in the shared table.
     for (i, cpu_entry) in smp_cpus.iter().enumerate() {
@@ -181,6 +182,7 @@ pub fn boot_aps(boot_info: &impl BootInfo) {
         crate::sched::smp::register_cpu_apic_id(cpu_id, cpu_entry.lapic_id as u8);
 
         kdebug!(
+            "smp",
             "SMP: Prepared AP {} (LAPIC ID={}, PerCpu={:#x})",
             cpu_id,
             cpu_entry.lapic_id,
@@ -194,7 +196,7 @@ pub fn boot_aps(boot_info: &impl BootInfo) {
     // Release all parked APs. The Release ordering ensures all PerCpu
     // table writes are visible before APs read them.
     AP_RELEASE.store(true, Ordering::Release);
-    kinfo!("SMP: Released {} APs for initialization", ap_count);
+    kinfo!("smp", "SMP: Released {} APs for initialization", ap_count);
 
     // Wait for all APs to complete their initialization (with timeout).
     let expected = ap_count as u32;
@@ -206,6 +208,7 @@ pub fn boot_aps(boot_info: &impl BootInfo) {
         spin_count += 1;
         if spin_count >= SPIN_TIMEOUT {
             kwarn!(
+                "smp",
                 "SMP: Timeout waiting for APs ({}/{} ready)",
                 AP_READY_COUNT.load(Ordering::Acquire),
                 expected
@@ -216,7 +219,12 @@ pub fn boot_aps(boot_info: &impl BootInfo) {
 
     let ready = AP_READY_COUNT.load(Ordering::Acquire);
     crate::percpu::PerCpuState::set_cpu_count(1 + ready);
-    kinfo!("SMP: {} APs online ({} total CPUs)", ready, 1 + ready);
+    kinfo!(
+        "smp",
+        "SMP: {} APs online ({} total CPUs)",
+        ready,
+        1 + ready
+    );
 }
 
 /// Full AP initialization. Called from [`ap_early_park`] after release, or
@@ -292,6 +300,7 @@ fn ap_entry(_mp_info: u64, percpu_addr: u64) -> ! {
     AP_READY_COUNT.fetch_add(1, Ordering::Release);
 
     kinfo!(
+        "smp",
         "SMP: AP {} online (LAPIC ID={})",
         cpu_id,
         percpu.get_apic_id()
@@ -324,6 +333,7 @@ fn init_ap_lapic(cpu_id: CpuId) {
     if initial_count > 0 {
         lapic.start_timer_periodic(vectors::TIMER.as_irq_vector(), initial_count, divide);
         kdebug!(
+            "smp",
             "SMP: AP {} LAPIC timer started (initial_count={}, divide={})",
             cpu_id,
             initial_count,
@@ -331,6 +341,7 @@ fn init_ap_lapic(cpu_id: CpuId) {
         );
     } else {
         kwarn!(
+            "smp",
             "SMP: AP {} LAPIC timer not started (BSP calibration not available)",
             cpu_id
         );

@@ -189,7 +189,7 @@ fn detect() -> CpuFeatures {
 pub fn init() {
     let features = detect();
     CPU_FEATURES.store(features.bits(), Ordering::Release);
-    crate::kinfo!("CPUID: {:#x} ({:?})", features.bits(), features);
+    crate::kinfo!("cpuid", "CPUID: {:#x} ({:?})", features.bits(), features);
 }
 
 /// Verifies that the calling AP supports at least the BSP's feature set.

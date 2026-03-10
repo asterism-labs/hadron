@@ -6,6 +6,14 @@ config KERNEL_DEBUG
 
 endmenu
 
+menu "Logging"
+
+config LOG_MAX_LEVEL
+    u32 "Maximum log level (0=fatal only, 255=all)"
+    default 255
+
+endmenu
+
 preset debug
     set KERNEL_DEBUG y
 

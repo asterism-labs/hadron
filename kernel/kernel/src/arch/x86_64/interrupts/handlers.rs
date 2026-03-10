@@ -15,7 +15,7 @@ pub extern "x86-interrupt" fn divide_error(frame: InterruptStackFrame) {
 }
 
 pub extern "x86-interrupt" fn debug(frame: InterruptStackFrame) {
-    crate::kwarn!("EXCEPTION: DEBUG\n{:#?}", frame);
+    crate::kwarn!("exception", "EXCEPTION: DEBUG\n{:#?}", frame);
 }
 
 pub extern "x86-interrupt" fn nmi(_frame: InterruptStackFrame) {
@@ -23,7 +23,7 @@ pub extern "x86-interrupt" fn nmi(_frame: InterruptStackFrame) {
 }
 
 pub extern "x86-interrupt" fn breakpoint(frame: InterruptStackFrame) {
-    crate::kwarn!("EXCEPTION: BREAKPOINT\n{:#?}", frame);
+    crate::kwarn!("exception", "EXCEPTION: BREAKPOINT\n{:#?}", frame);
 }
 
 pub extern "x86-interrupt" fn overflow(frame: InterruptStackFrame) {

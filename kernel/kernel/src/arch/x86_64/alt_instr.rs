@@ -33,7 +33,7 @@ pub unsafe fn apply() {
     let entries = alt_instr_entries();
 
     if entries.is_empty() {
-        crate::kinfo!("alt-instr: no entries to patch");
+        crate::kinfo!("alt-instr", "alt-instr: no entries to patch");
         return;
     }
 
@@ -84,6 +84,7 @@ pub unsafe fn apply() {
     hadron_core::sync::atomic::fence(Ordering::SeqCst);
 
     crate::kinfo!(
+        "alt-instr",
         "alt-instr: patched {} sites ({} entries, features={:?})",
         patched,
         entries.len(),
