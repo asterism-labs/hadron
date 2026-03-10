@@ -32,9 +32,6 @@ hadron-mm = { path = "kernel/mm" }
 hadron-objects = { path = "kernel/objects" }
 hadron-pci = { path = "kernel/pci" }
 hadron-sched = { path = "kernel/sched" }
-hadron-syscall = { path = "kernel/syscall" }
-hadron-syscall-macros = { path = "kernel/syscall-macros" }
-
 # Internal crates — MMIO
 hadron-mmio = { path = "kernel/mmio" }
 hadron-mmio-macros = { path = "kernel/mmio-macros" }

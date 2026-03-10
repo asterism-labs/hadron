@@ -764,7 +764,7 @@ fn compile_utest_binary(
 
     // Search path for target-side transitive deps.
     cmd.arg("-L").arg(lib_dir);
-    // Proc-macro dylibs (e.g. hadron_syscall_macros) live in the host dir.
+    // Proc-macro dylibs live in the host dir.
     cmd.arg("-L").arg(config.root.join("build/host"));
 
     // Extern rlibs directly from the lib_dir — more robust than artifact map
@@ -773,15 +773,6 @@ fn compile_utest_binary(
     if utest_rlib.exists() {
         cmd.arg("--extern")
             .arg(format!("hadron_utest={}", utest_rlib.display()));
-    }
-
-    // The syscall crate is built by gluon as crate name "hadron_syscall_user"
-    // (sanitized from "hadron-syscall-user"). hadron_utest's rlib records the
-    // dep under that same crate name, so we must use it as the extern alias.
-    let syscall_rlib = lib_dir.join("libhadron_syscall_user.rlib");
-    if syscall_rlib.exists() {
-        cmd.arg("--extern")
-            .arg(format!("hadron_syscall_user={}", syscall_rlib.display()));
     }
 
     // hadron-libc-core-utest: the libc core rlib compiled without the `runtime`

@@ -1,7 +1,14 @@
-//! Minimal time subsystem stubs.
+//! Time subsystem and clock source abstraction.
 //!
-//! Provides compile-time stubs for time-related functions referenced by
-//! the interrupt dispatch, ACPI init, and legacy init modules.
+//! Provides the [`ClockSource`] trait for hardware clock drivers and
+//! compile-time stubs for time-related functions referenced by the
+//! interrupt dispatch, ACPI init, and legacy init modules.
+
+/// A hardware clock source that provides monotonic time readings.
+pub trait ClockSource {
+    /// Returns the current time in nanoseconds since the clock was enabled.
+    fn read_nanos(&self) -> u64;
+}
 
 #[cfg(hadron_hpet)]
 use crate::addr::VirtAddr;

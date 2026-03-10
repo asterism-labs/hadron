@@ -1,7 +1,4 @@
 // Hadron kernel build configuration.
-//
-// This script is evaluated by gluon to produce the build model.
-// It replaces the old hadron.toml + crates.toml configuration files.
 
 // ===========================================================================
 // Project
@@ -109,11 +106,6 @@ dependency("hadris-io").version("1.0.1")
 
 let host = group("host").target("host").edition("2021").project(false);
 
-host.add("hadron-syscall-macros", "kernel/syscall-macros")
-    .edition("2024")
-    .crate_type(PROC_MACRO)
-    .deps(#{ syn: "syn", quote: "quote", proc_macro2: "proc-macro2" });
-
 host.add("hadron-binparse-macros", "crates/parse/binparse-macros")
     .edition("2024")
     .crate_type(PROC_MACRO)
@@ -179,10 +171,6 @@ kernel_libs.add("hadron-acpi", "crates/parse/acpi")
 kernel_libs.add("hadron-fdt", "crates/parse/fdt")
     .deps(#{ hadron_binparse: "hadron-binparse" });
 
-kernel_libs.add("hadron-syscall", "kernel/syscall")
-    .features(["kernel"])
-    .deps(#{ hadron_syscall_macros: #{ "crate": "hadron-syscall-macros", proc_macro: true } });
-
 kernel_libs.add("hadron-ktest", "crates/test/hadron-ktest")
     .deps(#{
         hadron_linkset: "hadron-linkset",
@@ -227,7 +215,6 @@ kernel_main.add("hadron-kernel", "kernel/kernel")
         hadron_objects: "hadron-objects",
         hadron_pci: "hadron-pci",
         hadron_sched: "hadron-sched",
-        hadron_syscall: "hadron-syscall",
         planck_noalloc: "planck-noalloc"
     })
     .dev_deps(#{
@@ -325,6 +312,7 @@ tests()
         "hadron-fdt",
         "hadron-log",
         "hadron-mm",
+        "hadron-objects",
         "hadron-sched",
         "hadron-pci"
     ])

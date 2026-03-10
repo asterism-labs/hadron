@@ -121,9 +121,21 @@ pub unsafe fn init() {
     crate::kdebug!("syscall", "SYSCALL/SYSRET initialized");
 }
 
-// Declared in hadron-kernel, linked via `extern "C"`.
-unsafe extern "C" {
-    fn syscall_dispatch(nr: usize, a0: usize, a1: usize, a2: usize, a3: usize, a4: usize) -> isize;
+/// Syscall dispatch stub — returns -1 (ENOSYS) for all syscalls.
+///
+/// The legacy POSIX syscall dispatch has been removed. This stub ensures the
+/// SYSCALL instruction handler has a valid symbol to call. Future phases will
+/// wire this to the capability-based syscall dispatch.
+#[unsafe(no_mangle)]
+extern "C" fn syscall_dispatch(
+    _nr: usize,
+    _a0: usize,
+    _a1: usize,
+    _a2: usize,
+    _a3: usize,
+    _a4: usize,
+) -> isize {
+    -1 // ENOSYS
 }
 
 /// SYSCALL entry point (naked function).

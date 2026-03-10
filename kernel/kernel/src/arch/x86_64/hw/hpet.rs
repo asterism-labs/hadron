@@ -4,7 +4,7 @@
 //! and calibration.
 
 use crate::addr::VirtAddr;
-use crate::driver_api::ClockSource;
+use crate::time::ClockSource;
 
 // Register offsets.
 const REG_CAPABILITIES: u64 = 0x000;

@@ -43,9 +43,6 @@ pub use hadron_objects as objects;
 pub use hadron_pci as pci;
 #[cfg(target_os = "none")]
 pub use hadron_sched as sched;
-#[cfg(target_os = "none")]
-pub use hadron_syscall as syscall;
-
 // ── Kernel-runtime modules (require target_os = "none") ───────────────────
 
 #[cfg(target_os = "none")]
@@ -53,9 +50,6 @@ pub mod arch;
 
 #[cfg(target_os = "none")]
 pub mod boot;
-
-#[cfg(target_os = "none")]
-pub mod driver_api;
 
 #[cfg(target_os = "none")]
 pub mod entry;

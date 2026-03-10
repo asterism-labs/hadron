@@ -14,7 +14,6 @@ bench = false
 doctest = false
 
 [dependencies]
-hadron-syscall = { workspace = true, features = ["userspace"] }
 
 [lints]
 workspace = true

@@ -6,10 +6,8 @@ publish = false
 
 [features]
 default = []
-userspace = ["hadron-syscall/userspace"]
 # Enables the ELF entry point (`_start`) and `eh_personality` lang item.
 # Must NOT be enabled when linking alongside a separate runtime (e.g. hadron-utest).
-runtime = ["userspace"]
+runtime = []
 
 [dependencies]
-hadron-syscall = { path = "../../../kernel/syscall", default-features = false }
