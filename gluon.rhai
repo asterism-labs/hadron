@@ -11,6 +11,7 @@ project("hadron", "0.1.0");
 // ===========================================================================
 
 target("x86_64-unknown-hadron", "targets/x86_64-unknown-hadron.json");
+target("x86_64-unknown-hadron-user", "targets/x86_64-unknown-hadron-user.json");
 target("x86_64-unknown-uefi", "targets/x86_64-unknown-uefi.json");
 
 // ===========================================================================
@@ -79,6 +80,20 @@ sysroot_uefi.add("compiler_builtins-uefi", "{sysroot}/compiler-builtins/compiler
 sysroot_uefi.add("alloc-uefi", "{sysroot}/alloc")
     .root("src/lib.rs")
     .deps(#{ core: "core-uefi", compiler_builtins: "compiler_builtins-uefi" });
+
+// ===========================================================================
+// Sysroot crates — user target
+// ===========================================================================
+
+let sysroot_user = group("sysroot-user").target("x86_64-unknown-hadron-user").edition("2024").project(false);
+
+sysroot_user.add("core-user", "{sysroot}/core")
+    .root("src/lib.rs");
+
+sysroot_user.add("compiler_builtins-user", "{sysroot}/compiler-builtins/compiler-builtins")
+    .root("src/lib.rs")
+    .features(["compiler-builtins", "rustc-dep-of-std"])
+    .deps(#{ core: "core-user" });
 
 // ===========================================================================
 // External dependencies (resolved + vendored by `gluon vendor`)
@@ -208,6 +223,7 @@ kernel_main.add("hadron-kernel", "kernel/kernel")
         hadron_acpi: "hadron-acpi",
         hadron_boot_info: "hadron-boot-info",
         hadron_core: "hadron-core",
+        hadron_elf: "hadron-elf",
         hadron_intrinsics: "hadron-intrinsics",
         hadron_linkset: "hadron-linkset",
         hadron_log: "hadron-log",
@@ -230,7 +246,18 @@ kernel_main.add("hadron-kernel-image", "kernel/kernel-image")
     .linker_script("targets/x86_64-unknown-hadron.ld")
     .deps(#{
         hadron_kernel: "hadron-kernel"
-    });
+    })
+    .artifact_deps(["userboot"]);
+
+// ===========================================================================
+// Userboot (first userspace binary)
+// ===========================================================================
+
+let userboot = group("userboot").target("x86_64-unknown-hadron-user").edition("2024");
+
+userboot.add("userboot", "userspace/userboot")
+    .crate_type(BIN)
+    .root("src/main.rs");
 
 // ===========================================================================
 // UEFI boot binary
@@ -271,11 +298,11 @@ bench_deps.add("hadron-bench", "crates/test/hadron-bench")
 // ===========================================================================
 
 pipeline()
-    .stage("sysroot", ["sysroot", "sysroot-uefi"])
+    .stage("sysroot", ["sysroot", "sysroot-uefi", "sysroot-user"])
     .barrier("sysroot-ready")
     .stage("host", ["host"])
     .barrier("host-ready")
-    .stage("kernel", ["vendored", "vendored-uefi", "kernel-libs", "uefi-libs"])
+    .stage("kernel", ["vendored", "vendored-uefi", "kernel-libs", "uefi-libs", "userboot"])
     .barrier("kernel-ready")
     .stage("link", ["kernel-main"])
     .barrier("link-ready")

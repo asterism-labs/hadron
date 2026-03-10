@@ -1,7 +1,7 @@
 //! Kernel entry point called by the UEFI boot stub.
 //!
 //! Executes the full BSP boot sequence: GDT → IDT → TLB registration →
-//! PMM → VMM → heap → per-CPU state → disable auto-flush.
+//! PMM → VMM → heap → per-CPU state → SYSCALL init → userboot launch.
 
 use hadron_core::addr::VirtAddr;
 
@@ -96,17 +96,157 @@ pub extern "C" fn kernel_init(boot_info: *const BootInfo) -> ! {
     unsafe { crate::percpu::init_gs_base() };
     crate::kinfo!("boot", "BSP per-CPU state initialized");
 
-    // ── 11. Boot complete ──────────────────────────────────────────────
+    // ── 11. Initialize SYSCALL/SYSRET ──────────────────────────────────
+    // SAFETY: Called after GDT + per-CPU init, exactly once on BSP.
+    unsafe { crate::arch::x86_64::syscall::init() };
+    crate::kinfo!("boot", "SYSCALL/SYSRET initialized");
+
+    // ── 12. Boot complete ──────────────────────────────────────────────
     crate::kinfo!("boot", "kernel bootstrap complete");
 
-    // ── 12. Disable auto-flush ─────────────────────────────────────────
-    // All boot messages have been flushed synchronously via auto-flush.
-    // Disable it before the scheduler starts; a periodic drain mechanism
-    // will take over.
+    // ── 13. Load and launch userboot ───────────────────────────────────
+    load_and_run_userboot();
+}
+
+/// Parses the embedded userboot ELF, maps it into user address space,
+/// allocates a user stack, and jumps to ring 3.
+///
+/// This function never returns.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "ELF vaddr fits in usize on x86_64"
+)]
+fn load_and_run_userboot() -> ! {
+    use hadron_core::addr::VirtAddr;
+    use hadron_core::paging::{Page, Size4KiB};
+    use hadron_mm::mapper::MapFlags;
+
+    /// Page size in bytes.
+    const PAGE_SIZE: u64 = 4096;
+    /// Page offset mask.
+    const PAGE_MASK: u64 = PAGE_SIZE - 1;
+    /// ELF segment flag: executable.
+    const PF_X: u32 = 1;
+    /// ELF segment flag: writable.
+    const PF_W: u32 = 2;
+    /// User stack top address (well within canonical user range).
+    const USER_STACK_TOP: u64 = 0x0000_7FFF_FFFF_0000;
+    /// Number of pages for the user stack (64 KiB).
+    const USER_STACK_PAGES: u64 = 16;
+
+    crate::kinfo!("boot", "loading userboot ELF");
+
+    // ── Parse the ELF ────────────────────────────────────────────────
+    let elf =
+        hadron_elf::ElfFile::parse(crate::userboot::elf_bytes()).expect("invalid userboot ELF");
+    let entry = elf.entry_point();
+
+    // ── Map PT_LOAD segments ─────────────────────────────────────────
+    for seg in elf.load_segments() {
+        let seg_vaddr = seg.vaddr;
+        let seg_memsz = seg.memsz;
+        let page_start = seg_vaddr & !PAGE_MASK;
+        let page_end = (seg_vaddr + seg_memsz + PAGE_MASK) & !PAGE_MASK;
+
+        // Determine mapping flags from ELF segment flags.
+        let mut flags = MapFlags::USER;
+        if seg.flags & PF_W != 0 {
+            flags |= MapFlags::WRITABLE;
+        }
+        if seg.flags & PF_X != 0 {
+            flags |= MapFlags::EXECUTABLE;
+        }
+
+        let mut page_addr = page_start;
+        while page_addr < page_end {
+            let page = Page::<Size4KiB>::containing_address(VirtAddr::new(page_addr));
+            let frame = hadron_mm::pmm::with(|pmm| {
+                pmm.allocate_frame()
+                    .expect("PMM: out of frames for userboot")
+            });
+
+            // Zero the page via HHDM, then copy any overlapping segment data.
+            let hhdm_ptr = hadron_mm::hhdm::phys_to_virt(frame.start_address());
+            // SAFETY: Frame was just allocated and is HHDM-mapped. We zero
+            // PAGE_SIZE bytes which is exactly one frame.
+            let page_slice = unsafe {
+                core::slice::from_raw_parts_mut(hhdm_ptr.as_u64() as *mut u8, PAGE_SIZE as usize)
+            };
+            page_slice.fill(0);
+
+            // Copy file-backed data that overlaps this page.
+            let copy_start = page_addr.max(seg_vaddr);
+            // Data only covers seg_vaddr..seg_vaddr+filesz; the rest is BSS.
+            let data_end = seg_vaddr + seg.data.len() as u64;
+            let copy_end = (page_addr + PAGE_SIZE).min(data_end);
+            if copy_start < copy_end {
+                let dst_offset = (copy_start - page_addr) as usize;
+                let src_offset = (copy_start - seg_vaddr) as usize;
+                let len = (copy_end - copy_start) as usize;
+                page_slice[dst_offset..dst_offset + len]
+                    .copy_from_slice(&seg.data[src_offset..src_offset + len]);
+            }
+
+            // Map the page into the current address space.
+            crate::vmm::with(|vmm| {
+                hadron_mm::pmm::with(|pmm| {
+                    let mut alloc = hadron_mm::pmm::BitmapFrameAllocRef(pmm);
+                    vmm.map_page(page, frame, flags, &mut alloc)
+                        .expect("failed to map userboot page")
+                        .flush();
+                });
+            });
+
+            page_addr += PAGE_SIZE;
+        }
+    }
+
+    // ── Allocate user stack ──────────────────────────────────────────
+    let stack_bottom = USER_STACK_TOP - USER_STACK_PAGES * PAGE_SIZE;
+    for i in 0..USER_STACK_PAGES {
+        let page_addr = stack_bottom + i * PAGE_SIZE;
+        let page = Page::<Size4KiB>::containing_address(VirtAddr::new(page_addr));
+        let frame = hadron_mm::pmm::with(|pmm| {
+            pmm.allocate_frame()
+                .expect("PMM: out of frames for user stack")
+        });
+
+        // Zero the stack page via HHDM.
+        let hhdm_ptr = hadron_mm::hhdm::phys_to_virt(frame.start_address());
+        // SAFETY: Frame was just allocated and is HHDM-mapped.
+        let page_slice = unsafe {
+            core::slice::from_raw_parts_mut(hhdm_ptr.as_u64() as *mut u8, PAGE_SIZE as usize)
+        };
+        page_slice.fill(0);
+
+        crate::vmm::with(|vmm| {
+            hadron_mm::pmm::with(|pmm| {
+                let mut alloc = hadron_mm::pmm::BitmapFrameAllocRef(pmm);
+                let flags = MapFlags::USER | MapFlags::WRITABLE;
+                vmm.map_page(page, frame, flags, &mut alloc)
+                    .expect("failed to map user stack page")
+                    .flush();
+            });
+        });
+    }
+
+    crate::kinfo!("boot", "entering userspace at {:#x}", entry);
+
+    // Flush all log messages before leaving the kernel.
+    hadron_log::flush();
+
+    // Disable auto-flush — syscall handlers will manage flushing.
     hadron_log::disable_auto_flush();
 
-    // ── 13. Spin (placeholder for scheduler) ───────────────────────────
-    loop {
-        core::hint::spin_loop();
+    // Swap GS to "user" state. The syscall entry stub does `swapgs` to get
+    // kernel GS, so GS must be in user state before entering ring 3.
+    // SAFETY: swapgs is valid here — kernel GS was set by init_gs_base.
+    unsafe { core::arch::asm!("swapgs") };
+
+    // SAFETY: entry is a valid user-mode entry point (from the ELF), and
+    // USER_STACK_TOP points to a mapped, zeroed user stack. GDT has user
+    // segments at the expected indices. CR3 has user-accessible mappings.
+    unsafe {
+        crate::arch::x86_64::userspace::jump_to_userspace(entry, USER_STACK_TOP);
     }
 }

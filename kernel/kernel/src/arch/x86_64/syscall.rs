@@ -121,21 +121,83 @@ pub unsafe fn init() {
     crate::kdebug!("syscall", "SYSCALL/SYSRET initialized");
 }
 
-/// Syscall dispatch stub — returns -1 (ENOSYS) for all syscalls.
+/// Syscall number: terminate the calling task.
+const SYS_TASK_EXIT: usize = 0x00;
+
+/// Syscall number: write a debug message to serial (Phase 1 only).
+const SYS_DEBUG_LOG: usize = 0xF1;
+
+/// EFAULT error code (bad address).
+const EFAULT: isize = -14;
+
+/// Upper bound of the user-accessible virtual address range.
+const USER_ADDR_LIMIT: usize = 0x0000_8000_0000_0000;
+
+/// Minimum valid user address (first page is unmapped as a null guard).
+const USER_ADDR_MIN: usize = 0x1000;
+
+/// Syscall dispatch — routes syscall numbers to their handlers.
 ///
-/// The legacy POSIX syscall dispatch has been removed. This stub ensures the
-/// SYSCALL instruction handler has a valid symbol to call. Future phases will
-/// wire this to the capability-based syscall dispatch.
+/// Called from the assembly entry stub with arguments remapped from the
+/// Linux syscall ABI to the SysV C calling convention.
 #[unsafe(no_mangle)]
 extern "C" fn syscall_dispatch(
-    _nr: usize,
-    _a0: usize,
-    _a1: usize,
+    nr: usize,
+    a0: usize,
+    a1: usize,
     _a2: usize,
     _a3: usize,
     _a4: usize,
 ) -> isize {
-    -1 // ENOSYS
+    match nr {
+        SYS_TASK_EXIT => sys_task_exit(a0),
+        SYS_DEBUG_LOG => sys_debug_log(a0, a1),
+        _ => -1, // ENOSYS
+    }
+}
+
+/// `SYS_DEBUG_LOG(buf_ptr, len)` — write a user buffer to the serial port.
+///
+/// Validates that the buffer resides entirely within the user address range,
+/// then writes each byte to COM1.
+fn sys_debug_log(buf_ptr: usize, len: usize) -> isize {
+    // Validate pointer range is within user space.
+    if buf_ptr < USER_ADDR_MIN || len > USER_ADDR_LIMIT {
+        return EFAULT;
+    }
+    let end = match buf_ptr.checked_add(len) {
+        Some(e) if e <= USER_ADDR_LIMIT => e,
+        _ => return EFAULT,
+    };
+    let _ = end;
+
+    // SAFETY: We validated that buf_ptr..buf_ptr+len is within user address
+    // space. The pages were mapped USER-accessible during ELF loading.
+    // The data is read-only from the kernel's perspective.
+    let buf = unsafe { core::slice::from_raw_parts(buf_ptr as *const u8, len) };
+
+    let com1 = super::Port::<u8>::new(0x3F8);
+    for &b in buf {
+        // SAFETY: Port 0x3F8 is the standard COM1 data register.
+        unsafe { com1.write(b) };
+    }
+
+    0
+}
+
+/// `SYS_TASK_EXIT(code)` — terminate the current task.
+///
+/// In Phase 1 (no scheduler), this logs the exit code, re-enables
+/// auto-flush so the message reaches serial, and halts the CPU.
+fn sys_task_exit(code: usize) -> isize {
+    hadron_log::enable_auto_flush();
+    crate::kinfo!("syscall", "userboot exited with code {}", code);
+    hadron_log::flush();
+
+    loop {
+        // SAFETY: HLT is always safe in ring 0 — it just waits for an interrupt.
+        unsafe { core::arch::asm!("hlt") };
+    }
 }
 
 /// SYSCALL entry point (naked function).

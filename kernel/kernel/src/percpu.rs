@@ -27,8 +27,12 @@ pub struct PerCpuState {
     pub _pad: u8,
     /// Set to 1 after this CPU's per-CPU state is fully initialized.
     pub initialized: u8,
-    /// Padding to align the struct to 32 bytes.
+    /// Padding to 32 bytes.
     pub _pad2: [u8; 2],
+    /// Padding from offset 32 to offset 56.
+    pub _pad3: [u8; 24],
+    /// Pointer to this CPU's `SyscallSavedRegs` (read by syscall entry at `GS:[56]`).
+    pub saved_regs_ptr: u64,
 }
 
 // Static assertions for GS-relative offsets used in cpu_local.rs.
@@ -37,6 +41,7 @@ const _: () = assert!(core::mem::offset_of!(PerCpuState, kernel_rsp) == 8);
 const _: () = assert!(core::mem::offset_of!(PerCpuState, user_rsp) == 16);
 const _: () = assert!(core::mem::offset_of!(PerCpuState, cpu_id) == 24);
 const _: () = assert!(core::mem::offset_of!(PerCpuState, initialized) == 29);
+const _: () = assert!(core::mem::offset_of!(PerCpuState, saved_regs_ptr) == 56);
 
 /// BSP per-CPU state, allocated statically.
 static mut BSP_PERCPU: PerCpuState = PerCpuState {
@@ -47,6 +52,8 @@ static mut BSP_PERCPU: PerCpuState = PerCpuState {
     _pad: 0,
     initialized: 0,
     _pad2: [0; 2],
+    _pad3: [0; 24],
+    saved_regs_ptr: 0,
 };
 
 /// Initialize GS base to point at the BSP's per-CPU data.
@@ -66,6 +73,12 @@ pub unsafe fn init_gs_base() {
         (*ptr).user_rsp = 0;
         (*ptr).cpu_id = 0;
         (*ptr).initialized = 1;
+
+        // Set saved_regs_ptr to the BSP's SyscallSavedRegs for the syscall
+        // entry stub (reads GS:[56]).
+        (*ptr).saved_regs_ptr = crate::arch::x86_64::syscall::SYSCALL_SAVED_REGS
+            .get_for(0)
+            .get() as u64;
 
         // SAFETY: IA32_GS_BASE is a valid MSR. Writing the per-CPU state
         // address establishes GS-relative addressing for this CPU.

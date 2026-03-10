@@ -62,6 +62,14 @@ pub fn disable_auto_flush() {
     AUTO_FLUSH.store(false, Ordering::Relaxed);
 }
 
+/// Re-enables auto-flush after each log call.
+///
+/// Used when a final message must be guaranteed to reach serial output
+/// (e.g. before halting the CPU on task exit).
+pub fn enable_auto_flush() {
+    AUTO_FLUSH.store(true, Ordering::Relaxed);
+}
+
 // ── Internal emit function (called by macros) ───────────────────────────
 
 /// Emit a pre-formatted log entry. Called by the [`klog!`] macro.

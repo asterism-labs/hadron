@@ -64,4 +64,7 @@ pub mod serial_sink;
 pub mod time;
 
 #[cfg(target_os = "none")]
+pub mod userboot;
+
+#[cfg(target_os = "none")]
 pub mod vmm;
