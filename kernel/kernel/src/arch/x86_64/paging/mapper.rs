@@ -91,6 +91,10 @@ impl PageTableMapper {
     /// with `USER` added for user-accessible mappings). If the entry already
     /// exists, any missing flags from `intermediate_flags` are OR'd in.
     ///
+    /// If the entry is a huge page (2 MiB in a PD, or 1 GiB in a PDPT), the
+    /// huge page is split into 512 entries at the next level, preserving the
+    /// existing mapping at finer granularity.
+    ///
     /// Newly allocated frames are zeroed before use so that no stale data is
     /// misinterpreted as present page table entries.
     ///
@@ -106,6 +110,14 @@ impl PageTableMapper {
         let table = unsafe { self.table_at(table_phys) };
         let entry = table.entries[index];
         if entry.is_present() {
+            if entry.flags().contains(PageTableFlags::HUGE_PAGE) {
+                // Split the huge page into a next-level table with 512 entries
+                // that preserve the original mapping at finer granularity.
+                // SAFETY: The new frame is allocated and HHDM-accessible.
+                return unsafe {
+                    self.split_huge_page(table, index, entry, intermediate_flags, alloc)
+                };
+            }
             // OR in any new flags (e.g. USER for mixed kernel/user subtrees).
             let combined = entry.flags() | intermediate_flags;
             if combined != entry.flags() {
@@ -123,6 +135,71 @@ impl PageTableMapper {
             table.entries[index] = PageTableEntry::new(new_frame, intermediate_flags);
             new_frame
         }
+    }
+
+    /// Splits a huge page entry into a next-level page table with 512 entries,
+    /// preserving the existing mapping at finer granularity.
+    ///
+    /// For a 2 MiB PD entry → 512 × 4 KiB PT entries.
+    /// For a 1 GiB PDPT entry → 512 × 2 MiB PD entries (each still huge).
+    ///
+    /// # Safety
+    /// - `table` must be a valid, HHDM-accessible page table.
+    /// - `entry` must be a present huge page entry at `table.entries[index]`.
+    unsafe fn split_huge_page(
+        &self,
+        table: &mut PageTable,
+        index: usize,
+        entry: PageTableEntry,
+        intermediate_flags: PageTableFlags,
+        alloc: &mut (impl FnMut() -> PhysFrame<Size4KiB> + ?Sized),
+    ) -> PhysAddr {
+        let huge_phys = entry.address();
+        // Carry over the original flags minus HUGE_PAGE for 2MiB→4KiB splits.
+        // For 1GiB→2MiB splits, sub-entries keep HUGE_PAGE.
+        let orig_flags = entry.flags();
+        let sub_flags = PageTableFlags::from_bits_truncate(
+            orig_flags.bits() & !PageTableFlags::HUGE_PAGE.bits(),
+        );
+
+        let new_frame = alloc().start_address();
+        // SAFETY: Frame is freshly allocated and HHDM-accessible.
+        unsafe {
+            core::ptr::write_bytes(self.phys_to_virt(new_frame), 0, PAGE_SIZE);
+        }
+
+        let new_table = unsafe { self.table_at(new_frame) };
+
+        // Determine stride: if original was a 1 GiB page being split into
+        // 2 MiB entries, stride is 2 MiB and sub-entries keep HUGE_PAGE.
+        // If original was a 2 MiB page being split into 4 KiB entries,
+        // stride is 4 KiB and sub-entries drop HUGE_PAGE.
+        //
+        // We detect which level by checking the alignment of the huge page:
+        // 1 GiB pages are 0x4000_0000-aligned, 2 MiB pages are 0x20_0000-aligned.
+        let is_1gib = huge_phys.is_aligned(0x4000_0000);
+        if is_1gib {
+            // 1 GiB → 512 × 2 MiB (sub-entries are still huge pages).
+            let stride = 0x20_0000_u64; // 2 MiB
+            for i in 0..512 {
+                // SAFETY: Each sub-address is within the original 1 GiB range.
+                let sub_phys = unsafe { PhysAddr::new_unchecked(huge_phys.as_u64() + i * stride) };
+                new_table.entries[i as usize] =
+                    PageTableEntry::new(sub_phys, sub_flags | PageTableFlags::HUGE_PAGE);
+            }
+        } else {
+            // 2 MiB → 512 × 4 KiB (sub-entries are regular pages).
+            let stride = 4096_u64;
+            for i in 0..512 {
+                // SAFETY: Each sub-address is within the original 2 MiB range.
+                let sub_phys = unsafe { PhysAddr::new_unchecked(huge_phys.as_u64() + i * stride) };
+                new_table.entries[i as usize] = PageTableEntry::new(sub_phys, sub_flags);
+            }
+        }
+
+        // Replace the huge page entry with a pointer to the new table.
+        table.entries[index] = PageTableEntry::new(new_frame, intermediate_flags);
+        new_frame
     }
 
     /// Maps a 2 MiB huge page.

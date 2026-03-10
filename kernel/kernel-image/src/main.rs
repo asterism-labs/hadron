@@ -10,30 +10,53 @@
 
 extern crate hadron_kernel;
 
+use hadron_kernel::arch::x86_64::structures::machine_state::MachineState;
+
 // Force the linker to retain `kernel_init` (the entry point declared in the
 // linker script) even though nothing in *this* crate references it directly.
 core::arch::global_asm!(".global kernel_init");
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    // Write panic info to COM1 for debugging.
+    let mut out = SerialWriter;
+
+    // Header with location.
     serial_str("KERNEL PANIC: ");
     if let Some(loc) = info.location() {
         serial_str(loc.file());
         serial_str(":");
-        // Simple decimal formatting for line number.
         let mut buf = [0u8; 10];
         let s = fmt_u32(loc.line(), &mut buf);
         serial_str(s);
     }
     serial_str("\n");
+
+    // Print the panic message (contains CR2, error code for page faults).
+    use core::fmt::Write;
+    let _ = write!(out, "{}\n", info.message());
+
+    // Machine state snapshot.
+    let state = MachineState::capture();
+    let _ = core::fmt::write(&mut out, format_args!("{state}\n"));
+
     loop {
         core::hint::spin_loop();
     }
 }
 
+/// Minimal `core::fmt::Write` implementation that writes to COM1.
+struct SerialWriter;
+
+impl core::fmt::Write for SerialWriter {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        serial_str(s);
+        Ok(())
+    }
+}
+
 fn serial_str(s: &str) {
     for b in s.bytes() {
+        // SAFETY: Port 0x3F8 is the standard COM1 data register.
         unsafe {
             core::arch::asm!(
                 "out dx, al",

@@ -56,18 +56,34 @@ unsafe fn syscall1_noreturn(nr: usize, a0: usize) -> ! {
     }
 }
 
-/// Entry point — linked as `_start` by the default linker script.
+/// Entry point — pure assembly to avoid any compiler-generated prologue.
+///
+/// Issues `SYS_DEBUG_LOG` with the address and length of the embedded message,
+/// then `SYS_TASK_EXIT(0)`.
+#[unsafe(naked)]
 #[unsafe(no_mangle)]
-pub extern "C" fn _start() -> ! {
-    let msg = b"Hello from userspace\n";
-    // SAFETY: SYS_DEBUG_LOG expects a pointer and length in user address space.
-    unsafe {
-        syscall2(SYS_DEBUG_LOG, msg.as_ptr() as usize, msg.len());
-    }
-    // SAFETY: SYS_TASK_EXIT terminates the current task and never returns.
-    unsafe {
-        syscall1_noreturn(SYS_TASK_EXIT, 0);
-    }
+pub unsafe extern "C" fn _start() -> ! {
+    core::arch::naked_asm!(
+        // SYS_DEBUG_LOG(msg_ptr, msg_len)
+        "mov rax, {debug_log}",
+        "lea rdi, [rip + 2f]",  // pointer to message string
+        "mov rsi, {msg_len}",
+        "syscall",
+
+        // SYS_TASK_EXIT(0)
+        "mov rax, {task_exit}",
+        "xor rdi, rdi",
+        "syscall",
+        "ud2",
+
+        // Embedded message string.
+        "2:",
+        ".ascii \"Hello from userspace\\n\"",
+
+        debug_log = const SYS_DEBUG_LOG,
+        task_exit = const SYS_TASK_EXIT,
+        msg_len = const 21,
+    );
 }
 
 #[panic_handler]
