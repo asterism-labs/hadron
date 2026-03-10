@@ -7,13 +7,43 @@
 #![no_std]
 #![warn(missing_docs)]
 
+/// Flags for boot-time page mapping requests.
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy)]
+pub struct BootMapFlags(pub u64);
+
+impl BootMapFlags {
+    /// Map pages as writable.
+    pub const WRITABLE: Self = Self(1 << 0);
+    /// Map pages as non-executable.
+    pub const NO_EXECUTE: Self = Self(1 << 1);
+}
+
+/// Boot services vtable. Valid only while the stub's page tables are in CR3.
+///
+/// This uses a manual `#[repr(C)]` vtable (not `dyn Trait`) because boot-info
+/// is compiled for both UEFI (COFF) and kernel (ELF) targets, and Rust vtable
+/// layout is not ABI-stable across targets.
+#[repr(C)]
+pub struct BootServices {
+    /// Opaque context pointer passed to all callbacks.
+    pub ctx: *mut (),
+    /// Map `count` physical pages starting at `phys` into the HHDM.
+    /// Returns the HHDM virtual address on success, or 0 on failure.
+    pub map_pages:
+        unsafe extern "C" fn(ctx: *mut (), phys: u64, count: u64, flags: BootMapFlags) -> u64,
+}
+
+// SAFETY: BootServices is only used during single-threaded early boot.
+unsafe impl Send for BootServices {}
+unsafe impl Sync for BootServices {}
+
 /// Boot information passed from the UEFI stub to the kernel entry point.
 ///
 /// The stub fills every field before calling `kernel_init`. The kernel must
 /// not modify `BootInfo` after entry — it may reside in UEFI loader data
 /// pages that the PMM will reclaim once the memory map is consumed.
 #[repr(C)]
-#[derive(Debug)]
 pub struct BootInfo {
     /// Pointer to the UEFI memory descriptor array (physical address).
     pub memory_map_ptr: u64,
@@ -54,6 +84,26 @@ pub struct BootInfo {
 
     /// Number of pages in the boot page table pool.
     pub boot_pt_pool_pages: u64,
+
+    /// Boot services vtable. Valid until the kernel switches CR3. Null after.
+    pub boot_services: *const BootServices,
+}
+
+// SAFETY: BootInfo is only shared during single-threaded early boot.
+unsafe impl Send for BootInfo {}
+unsafe impl Sync for BootInfo {}
+
+impl core::fmt::Debug for BootInfo {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("BootInfo")
+            .field("hhdm_offset", &self.hhdm_offset)
+            .field("kaslr_slide", &self.kaslr_slide)
+            .field("regions_base", &self.regions_base)
+            .field("kernel_phys", &self.kernel_phys)
+            .field("kernel_size", &self.kernel_size)
+            .field("boot_services", &self.boot_services)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Linear framebuffer descriptor provided by the UEFI GOP.

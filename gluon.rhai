@@ -153,6 +153,7 @@ kernel_libs.add("hadron-pci", "kernel/pci");
 kernel_libs.add("hadron-mm", "kernel/mm")
     .deps(#{
         bitflags: "bitflags",
+        hadron_boot_info: "hadron-boot-info",
         hadron_core: "hadron-core",
         planck_noalloc: "planck-noalloc"
     });

@@ -8,7 +8,7 @@
 
 use core::fmt::Write;
 
-use hadron_boot_info::{BootInfo, FramebufferInfo, PixelFormat};
+use hadron_boot_info::{BootInfo, BootMapFlags, BootServices, FramebufferInfo, PixelFormat};
 use hadron_elf::{
     Elf64SectionHeader, ElfFile, R_X86_64_RELATIVE, RelaIter, RelocValue, SHT_RELA,
     compute_x86_64_reloc,
@@ -156,6 +156,106 @@ fn ensure_entry(table: &mut [u64; 512], index: usize, pool: &mut PagePool) -> u6
     table[index] & !0xFFF
 }
 
+/// Map a single 4 KiB page at `vaddr` → `paddr` in the PML4 at `pml4`.
+///
+/// # Safety
+///
+/// `pml4` must point to a valid PML4 table. `pool` must have capacity.
+unsafe fn map_4k_page(pml4: &mut [u64; 512], vaddr: u64, paddr: u64, pool: &mut PagePool) {
+    let pml4_idx = ((vaddr >> 39) & 0x1FF) as usize;
+    let pdpt_idx = ((vaddr >> 30) & 0x1FF) as usize;
+    let pd_idx = ((vaddr >> 21) & 0x1FF) as usize;
+    let pt_idx = ((vaddr >> 12) & 0x1FF) as usize;
+
+    // SAFETY: ensure_entry returns valid page table physical addresses from the pool.
+    let pdpt_phys = ensure_entry(pml4, pml4_idx, pool);
+    let pdpt = unsafe { pt_at(pdpt_phys) };
+    let pd_phys = ensure_entry(pdpt, pdpt_idx, pool);
+    let pd = unsafe { pt_at(pd_phys) };
+    let pt_phys = ensure_entry(pd, pd_idx, pool);
+    let pt = unsafe { pt_at(pt_phys) };
+
+    pt[pt_idx] = paddr | PTE_PRESENT | PTE_WRITABLE;
+}
+
+/// Check whether a virtual address is already mapped in the given PML4.
+///
+/// # Safety
+///
+/// `pml4_phys` must point to a valid PML4 table.
+unsafe fn is_mapped(pml4_phys: u64, vaddr: u64) -> bool {
+    let pml4_idx = ((vaddr >> 39) & 0x1FF) as usize;
+    let pdpt_idx = ((vaddr >> 30) & 0x1FF) as usize;
+    let pd_idx = ((vaddr >> 21) & 0x1FF) as usize;
+    let pt_idx = ((vaddr >> 12) & 0x1FF) as usize;
+
+    // SAFETY: Caller guarantees pml4_phys is valid.
+    let pml4 = unsafe { pt_at(pml4_phys) };
+    if pml4[pml4_idx] & PTE_PRESENT == 0 {
+        return false;
+    }
+    let pdpt = unsafe { pt_at(pml4[pml4_idx] & !0xFFF) };
+    if pdpt[pdpt_idx] & PTE_PRESENT == 0 {
+        return false;
+    }
+    // Check for 1 GiB huge page
+    if pdpt[pdpt_idx] & PTE_HUGE != 0 {
+        return true;
+    }
+    let pd = unsafe { pt_at(pdpt[pdpt_idx] & !0xFFF) };
+    if pd[pd_idx] & PTE_PRESENT == 0 {
+        return false;
+    }
+    // Check for 2 MiB huge page
+    if pd[pd_idx] & PTE_HUGE != 0 {
+        return true;
+    }
+    let pt = unsafe { pt_at(pd[pd_idx] & !0xFFF) };
+    pt[pt_idx] & PTE_PRESENT != 0
+}
+
+// ── Boot services callback ──────────────────────────────────────────
+
+/// State for the boot services callback. Lives at its physical address
+/// via the identity map so it remains accessible from both identity-mapped
+/// stub code and HHDM.
+#[repr(C)]
+struct BootServicesState {
+    pool: PagePool,
+    pml4_phys: u64,
+    hhdm_offset: u64,
+}
+
+/// Boot services `map_pages` callback implementation.
+///
+/// Maps `count` physical pages starting at `phys` into the HHDM region.
+/// Skips pages that are already mapped (e.g. within the initial 4 GiB).
+///
+/// # Safety
+///
+/// `ctx` must point to a valid `BootServicesState`. The stub's page tables
+/// must be in CR3.
+unsafe extern "C" fn boot_map_pages(
+    ctx: *mut (),
+    phys: u64,
+    count: u64,
+    _flags: BootMapFlags,
+) -> u64 {
+    // SAFETY: ctx was set to point to BootServicesState during setup.
+    let state = unsafe { &mut *(ctx as *mut BootServicesState) };
+    for i in 0..count {
+        let pa = phys + i * PAGE_SIZE;
+        let va = state.hhdm_offset + pa;
+        // SAFETY: pml4_phys points to the PML4 we built.
+        if !unsafe { is_mapped(state.pml4_phys, va) } {
+            // SAFETY: PML4 is valid, pool has capacity.
+            let pml4 = unsafe { pt_at(state.pml4_phys) };
+            unsafe { map_4k_page(pml4, va, pa, &mut state.pool) };
+        }
+    }
+    state.hhdm_offset + phys
+}
+
 // ── Fatal halt ───────────────────────────────────────────────────────
 
 fn halt() -> ! {
@@ -280,8 +380,8 @@ extern "efiapi" fn efi_main(handle: EfiHandle, system_table: *mut table::SystemT
         }
     };
 
-    // Page table pages (32 should be plenty for identity + HHDM + kernel mapping)
-    let pt_pool_pages: usize = 32;
+    // Page table pages (128 to accommodate identity + HHDM + kernel + on-demand mappings)
+    let pt_pool_pages: usize = 128;
     let pt_pool_phys = match bs.allocate_pages(
         EfiAllocateType::AllocateAnyPages,
         EfiMemoryType::LoaderData,
@@ -307,6 +407,23 @@ extern "efiapi" fn efi_main(handle: EfiHandle, system_table: *mut table::SystemT
         Ok(addr) => addr,
         Err(e) => {
             let _ = write!(console, "FATAL: allocate stack pages failed: {:?}\n", e);
+            halt();
+        }
+    };
+
+    // BootServicesState + BootServices vtable (1 page holds both)
+    let boot_svc_state_phys = match bs.allocate_pages(
+        EfiAllocateType::AllocateAnyPages,
+        EfiMemoryType::LoaderData,
+        1,
+    ) {
+        Ok(addr) => addr,
+        Err(e) => {
+            let _ = write!(
+                console,
+                "FATAL: allocate boot_svc_state page failed: {:?}\n",
+                e
+            );
             halt();
         }
     };
@@ -392,11 +509,13 @@ extern "efiapi" fn efi_main(handle: EfiHandle, system_table: *mut table::SystemT
             if rela.r_type != R_X86_64_RELATIVE {
                 continue;
             }
-            let (target_vaddr, value) =
-                match compute_x86_64_reloc(&rela, 0, KERNEL_VADDR, rela.r_offset) {
-                    Ok(v) => v,
-                    Err(_) => continue,
-                };
+            // base_addr = 0 because the ELF is linked at KERNEL_VADDR and loaded
+            // at KERNEL_VADDR — no offset adjustment needed. The addends already
+            // contain the correct absolute addresses.
+            let (target_vaddr, value) = match compute_x86_64_reloc(&rela, 0, 0, rela.r_offset) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
 
             // target_vaddr is the virtual address where the relocation should be written.
             // Map it to the physical address in our allocated kernel memory.
@@ -456,32 +575,39 @@ extern "efiapi" fn efi_main(handle: EfiHandle, system_table: *mut table::SystemT
         }
 
         // --- Kernel mapping: KERNEL_VADDR → kernel_phys with 4 KiB pages ---
-        // PML4 index: (0xFFFF_FFFF_8000_0000 >> 39) & 0x1FF = 511
-        // PDPT index: (0xFFFF_FFFF_8000_0000 >> 30) & 0x1FF = 510
-        let kernel_pml4_idx = ((KERNEL_VADDR >> 39) & 0x1FF) as usize;
-        let kernel_pdpt_idx = ((KERNEL_VADDR >> 30) & 0x1FF) as usize;
-
-        let pdpt_kernel_phys = ensure_entry(pml4, kernel_pml4_idx, &mut pool);
-        let pdpt_kernel = pt_at(pdpt_kernel_phys);
-        let pd_kernel_phys = ensure_entry(pdpt_kernel, kernel_pdpt_idx, &mut pool);
-        let pd_kernel = pt_at(pd_kernel_phys);
-
-        // Map each 4 KiB page of the kernel
         for page_idx in 0..kernel_pages {
             let vaddr = KERNEL_VADDR + (page_idx as u64) * PAGE_SIZE;
             let paddr = kernel_phys + (page_idx as u64) * PAGE_SIZE;
-
-            let pd_idx = ((vaddr >> 21) & 0x1FF) as usize;
-            let pt_phys = ensure_entry(pd_kernel, pd_idx, &mut pool);
-            let pt = pt_at(pt_phys);
-            let pt_idx = ((vaddr >> 12) & 0x1FF) as usize;
-            pt[pt_idx] = paddr | PTE_PRESENT | PTE_WRITABLE;
+            map_4k_page(pml4, vaddr, paddr, &mut pool);
         }
     }
 
     serial_str("[boot] Page tables built\n");
 
-    // ── 10. Build BootInfo ────────────────────────────────────────────
+    // ── 10. Set up boot services callback ─────────────────────────────
+
+    // SAFETY: boot_svc_state_phys was allocated by UEFI and is identity-mapped.
+    let boot_svc_state = unsafe { &mut *(boot_svc_state_phys as *mut BootServicesState) };
+    *boot_svc_state = BootServicesState {
+        pool,
+        pml4_phys,
+        hhdm_offset: HHDM_OFFSET,
+    };
+
+    // Place the BootServices vtable right after the state in the same page.
+    let vtable_offset = core::mem::size_of::<BootServicesState>();
+    let vtable_ptr = (boot_svc_state_phys + vtable_offset as u64) as *mut BootServices;
+    // SAFETY: vtable_ptr is within the allocated page and properly aligned for BootServices.
+    unsafe {
+        vtable_ptr.write(BootServices {
+            ctx: boot_svc_state_phys as *mut (),
+            map_pages: boot_map_pages,
+        });
+    }
+
+    serial_str("[boot] Boot services callback ready\n");
+
+    // ── 11. Build BootInfo ────────────────────────────────────────────
 
     let mmap_ptr = memory_map
         .iter()
@@ -509,7 +635,8 @@ extern "efiapi" fn efi_main(handle: EfiHandle, system_table: *mut table::SystemT
         kernel_phys,
         kernel_size: kernel_size_aligned,
         boot_pt_pool_phys: pt_pool_phys,
-        boot_pt_pool_pages: pool.pages_used(),
+        boot_pt_pool_pages: boot_svc_state.pool.pages_used(),
+        boot_services: vtable_ptr as *const BootServices,
     };
 
     serial_str("[boot] BootInfo ready\n");

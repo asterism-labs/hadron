@@ -8,6 +8,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+hadron-boot-info = { workspace = true }
 hadron-core = { workspace = true }
 planck-noalloc = { workspace = true }
 bitflags = { workspace = true }

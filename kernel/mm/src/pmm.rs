@@ -110,7 +110,11 @@ impl BitmapAllocator {
             .next()
             .ok_or(PmmError::NoBitmapRegion)?;
 
-        // 3. Map bitmap via HHDM and create a mutable slice.
+        // 3. Ensure the bitmap region is mapped in the HHDM (may extend
+        //    beyond the initial 4 GiB mapped by the boot stub).
+        crate::hhdm::ensure_mapped(bitmap_phys_start, bitmap_bytes as u64);
+
+        // 4. Map bitmap via HHDM and create a mutable slice.
         // SAFETY: The HHDM offset is valid, and bitmap_phys_start points to a
         // usable physical region large enough for bitmap_words * 8 bytes. The
         // region is not aliased because we are the sole consumer during boot.
@@ -119,10 +123,10 @@ impl BitmapAllocator {
             core::slice::from_raw_parts_mut(ptr, bitmap_words)
         };
 
-        // 4. Set ALL bits to 1 (all frames reserved by default).
+        // 5. Set ALL bits to 1 (all frames reserved by default).
         bitmap.fill(u64::MAX);
 
-        // 5. Clear bits for usable regions (mark them free).
+        // 6. Clear bits for usable regions (mark them free).
         let mut free_count = 0usize;
         for region in regions.iter().filter(|r| r.usable) {
             let region_start_frame = (region.start.as_u64() / FRAME_SIZE) as usize;
@@ -139,7 +143,7 @@ impl BitmapAllocator {
             }
         }
 
-        // 6. Re-set bits for the bitmap's own frames (they're now in use).
+        // 7. Re-set bits for the bitmap's own frames (they're now in use).
         let bitmap_start_frame = (bitmap_phys_start.as_u64() / FRAME_SIZE) as usize;
         for i in 0..bitmap_frame_count as usize {
             let frame_idx = bitmap_start_frame + i;
@@ -154,7 +158,7 @@ impl BitmapAllocator {
             }
         }
 
-        // 7. Re-set bits for boot-reserved regions (kernel image, PT pool, etc.).
+        // 8. Re-set bits for boot-reserved regions (kernel image, PT pool, etc.).
         for &(phys_start, size) in boot_reserved {
             if size == 0 {
                 continue;
