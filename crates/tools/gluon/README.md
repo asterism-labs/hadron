@@ -14,6 +14,7 @@ Gluon is the custom build system for the Hadron kernel project. Named after the 
 - **Artifact generation** -- produces initrd archives (CPIO), bootable ISO images (via xorriso), HBTF backtrace tables, and HKIF kernel info files
 - **QEMU integration** -- `gluon run` builds and launches the kernel in QEMU with configurable machine type, memory, core count, and extra arguments
 - **Testing and benchmarking** -- host-side unit tests, QEMU-based kernel integration tests with timeout and exit-code validation, and kernel benchmarks with baseline comparison and regression detection
+- **Scripted QEMU testing** -- `gluon script` boots the kernel with PTY serial capture and QMP control, then evaluates a Rhai script with VM automation bindings (`wait_serial`, `send_serial`, `screenshot`, `send_key`, `quit`); supports both file-based scripts and an interactive REPL
 - **Profiling support** -- `perf record` captures serial profiling data from QEMU, `perf report` analyzes HPRF data with symbol resolution via DWARF, producing flat reports or folded stacks for flamegraphs
 - **rust-project.json generation** -- `configure` produces a rust-analyzer project file so IDE features work across all kernel and userspace crates
 - **Source formatting** -- `fmt` runs rustfmt on project crates with `--check` support for CI
@@ -39,4 +40,5 @@ Gluon is structured as a pipeline that flows from script evaluation to artifact 
 - **`menuconfig`** -- interactive TUI configuration editor built on ratatui/crossterm
 - **`analyzer`** -- generates `rust-project.json` for rust-analyzer IDE support
 - **`fmt`** -- source formatting via rustfmt
+- **`script`** -- boots QEMU with PTY serial + QMP, evaluates Rhai scripts with VM automation bindings or runs an interactive REPL
 - **`perf` / `perf_cmd`** -- profiling data analysis and QEMU serial capture

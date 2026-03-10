@@ -53,6 +53,8 @@ just test --kernel-only  # Kernel integration tests only (QEMU)
 just check               # Type-check without linking
 just clippy              # Run clippy lints
 just fmt                 # Format source files
+just script <file.rhai>  # Run Rhai script against booted QEMU
+just script              # Interactive REPL for QEMU scripting
 ```
 
 A `justfile` at the project root wraps `gluon` (auto-bootstrapped on first run). Build configuration lives in `gluon.rhai` (Rhai scripting).

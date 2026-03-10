@@ -17,6 +17,8 @@ just clippy             # Run clippy lints on project crates
 just fmt                # Format source files
 just fmt --check        # Check formatting (CI)
 just bench              # Run kernel benchmarks
+just script <file.rhai> # Run Rhai script against booted QEMU instance
+just script             # Interactive REPL for ad-hoc QEMU scripting
 just configure          # Resolve config + generate rust-project.json
 just menuconfig         # TUI configuration editor
 just vendor             # Fetch/sync vendored dependencies
