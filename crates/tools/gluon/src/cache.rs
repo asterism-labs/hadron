@@ -506,10 +506,7 @@ pub fn parse_dep_info(path: &Path) -> Result<Vec<PathBuf>> {
 
         // Split on whitespace, handling simple escaped spaces.
         for token in split_dep_tokens(deps_part) {
-            let p = PathBuf::from(token);
-            if p.extension().is_some() {
-                paths.push(p);
-            }
+            paths.push(PathBuf::from(token));
         }
     }
 
@@ -679,20 +676,26 @@ mod tests {
     }
 
     #[test]
-    fn parse_dep_info_extension_filtering() {
+    fn parse_dep_info_includes_extensionless_binaries() {
         let dir = make_test_dir("dep_info_ext_filter");
         let dep_file = dir.join("test.d");
-        // Paths without extensions (e.g. bare directory names) are excluded.
-        fs::write(&dep_file, "target.rlib: foo.rs /usr/lib bar.rs\n")
-            .expect("failed to write dep file");
+        // Extensionless paths (binary artifacts) must be included — rustc dep-info
+        // entries are always files, so there is no need to filter by extension.
+        fs::write(
+            &dep_file,
+            "target.rlib: foo.rs /some/path/userboot bar.rs\n",
+        )
+        .expect("failed to write dep file");
 
         let result = parse_dep_info(&dep_file).expect("parse_dep_info failed");
         assert_eq!(
             result,
-            vec![PathBuf::from("foo.rs"), PathBuf::from("bar.rs")]
+            vec![
+                PathBuf::from("foo.rs"),
+                PathBuf::from("/some/path/userboot"),
+                PathBuf::from("bar.rs"),
+            ]
         );
-        // `/usr/lib` has no extension so it must NOT appear.
-        assert!(!result.contains(&PathBuf::from("/usr/lib")));
 
         let _ = fs::remove_dir_all(&dir);
     }

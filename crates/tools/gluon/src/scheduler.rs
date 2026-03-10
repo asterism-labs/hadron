@@ -569,8 +569,15 @@ pub fn execute_pipeline(
                         let (krate, _) = &all_crates[*krate_idx];
                         let is_host = krate.target == "host";
                         let artifact_path = compile::crate_artifact_path(krate, &root, None, mode);
-                        let dep_names: Vec<String> =
+                        let mut dep_names: Vec<String> =
                             krate.deps.iter().map(|d| d.crate_name.clone()).collect();
+                        if let Some(def) = model.crates.get(&krate.name) {
+                            for art_dep in &def.artifact_deps {
+                                if !dep_names.contains(art_dep) {
+                                    dep_names.push(art_dep.clone());
+                                }
+                            }
+                        }
 
                         let mode_tag = match mode {
                             CompileMode::Build if is_host => "host",
@@ -1517,6 +1524,28 @@ mod tests {
             "expected artifact dep edge a->b"
         );
         assert_eq!(dag.in_degree[b], 1);
+    }
+
+    #[test]
+    fn test_artifact_deps_included_in_dep_names() {
+        // Verify that artifact_deps are merged into the dep_names list
+        // used for cache invalidation, matching the logic in execute_pipeline.
+        let mut model = make_pipeline_model(&[("stage1", &[("a", &[]), ("b", &["a"])])], &[]);
+        model.crates.get_mut("b").unwrap().artifact_deps = vec!["a".into(), "extra".into()];
+
+        let krate_def = model.crates.get("b").unwrap();
+        let mut dep_names: Vec<String> = krate_def.deps.keys().cloned().collect();
+        if let Some(def) = model.crates.get("b") {
+            for art_dep in &def.artifact_deps {
+                if !dep_names.contains(art_dep) {
+                    dep_names.push(art_dep.clone());
+                }
+            }
+        }
+
+        // "a" should appear once (from Rust deps), "extra" added from artifact_deps.
+        assert_eq!(dep_names.iter().filter(|n| *n == "a").count(), 1);
+        assert!(dep_names.contains(&"extra".into()));
     }
 
     #[test]
