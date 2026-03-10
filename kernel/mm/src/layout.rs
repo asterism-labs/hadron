@@ -147,7 +147,27 @@ impl MemoryLayout {
 
     /// Creates a new `MemoryLayout` with a custom regions base (for KASLR).
     pub fn with_regions_base(hhdm_offset: VirtAddr, max_phys: u64, regions_base: u64) -> Self {
-        let rb = VirtAddr::new_truncate(regions_base);
+        Self::from_boot_info(hhdm_offset, max_phys, regions_base, 0)
+    }
+
+    /// Creates a new `MemoryLayout` from boot info parameters.
+    ///
+    /// - `regions_base`: base address for kernel regions (0 uses default).
+    /// - `kaslr_slide`: offset applied to the kernel image base (0 = disabled).
+    pub fn from_boot_info(
+        hhdm_offset: VirtAddr,
+        max_phys: u64,
+        regions_base: u64,
+        kaslr_slide: u64,
+    ) -> Self {
+        let rb_addr = if regions_base != 0 {
+            regions_base
+        } else {
+            DEFAULT_REGIONS_BASE
+        };
+        let rb = VirtAddr::new_truncate(rb_addr);
+        let kernel_base = KERNEL_IMAGE_BASE + kaslr_slide;
+
         Self {
             hhdm_base: hhdm_offset,
             hhdm_size: max_phys,
@@ -158,7 +178,7 @@ impl MemoryLayout {
             percpu: VirtRegion::new(rb + PERCPU_OFFSET, PERCPU_MAX_SIZE),
             vdso: VirtRegion::new(rb + VDSO_OFFSET, VDSO_MAX_SIZE),
             kernel_image: VirtRegion::new(
-                VirtAddr::new_truncate(KERNEL_IMAGE_BASE),
+                VirtAddr::new_truncate(kernel_base),
                 KERNEL_IMAGE_MAX_SIZE,
             ),
         }
@@ -316,5 +336,52 @@ mod tests {
         let layout = MemoryLayout::new(VirtAddr::new(0xFFFF_8000_0000_0000), 0x1_0000_0000);
         let addr = VirtAddr::new(0x1000);
         assert_eq!(layout.identify_region(addr), FaultRegion::Unknown);
+    }
+
+    #[test]
+    fn from_boot_info_zero_slide() {
+        let layout = MemoryLayout::from_boot_info(
+            VirtAddr::new(0xFFFF_8000_0000_0000),
+            0x1_0000_0000,
+            DEFAULT_REGIONS_BASE,
+            0,
+        );
+        assert_eq!(
+            layout.kernel_image.base().as_u64(),
+            VirtAddr::new_truncate(KERNEL_IMAGE_BASE).as_u64()
+        );
+        assert_eq!(
+            layout.regions_base.as_u64(),
+            VirtAddr::new_truncate(DEFAULT_REGIONS_BASE).as_u64()
+        );
+    }
+
+    #[test]
+    fn from_boot_info_with_slide() {
+        let slide = 0x20_0000; // 2 MiB slide
+        let layout = MemoryLayout::from_boot_info(
+            VirtAddr::new(0xFFFF_8000_0000_0000),
+            0x1_0000_0000,
+            DEFAULT_REGIONS_BASE,
+            slide,
+        );
+        assert_eq!(
+            layout.kernel_image.base().as_u64(),
+            VirtAddr::new_truncate(KERNEL_IMAGE_BASE + slide).as_u64()
+        );
+    }
+
+    #[test]
+    fn from_boot_info_zero_regions_base_uses_default() {
+        let layout = MemoryLayout::from_boot_info(
+            VirtAddr::new(0xFFFF_8000_0000_0000),
+            0x1_0000_0000,
+            0, // zero means use default
+            0,
+        );
+        assert_eq!(
+            layout.regions_base.as_u64(),
+            VirtAddr::new_truncate(DEFAULT_REGIONS_BASE).as_u64()
+        );
     }
 }

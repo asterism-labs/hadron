@@ -74,7 +74,7 @@ fn serial_str(s: &str) {
 }
 
 /// Write a u64 as hex to COM1.
-fn serial_hex(mut val: u64) {
+fn serial_hex(val: u64) {
     serial_str("0x");
     if val == 0 {
         serial_byte(b'0');
@@ -115,6 +115,11 @@ impl PagePool {
         }
     }
 
+    /// Returns the number of pages used from this pool.
+    fn pages_used(&self) -> u64 {
+        (self.next - self.base) / PAGE_SIZE
+    }
+
     /// Allocate one zeroed 4 KiB page. Panics if the pool is exhausted.
     fn alloc_page(&mut self) -> u64 {
         if self.next >= self.end {
@@ -137,7 +142,8 @@ impl PagePool {
 ///
 /// `phys` must point to a valid, 4 KiB-aligned, writable page.
 unsafe fn pt_at(phys: u64) -> &'static mut [u64; 512] {
-    &mut *(phys as *mut [u64; 512])
+    // SAFETY: Caller guarantees `phys` points to a valid, 4 KiB-aligned, writable page.
+    unsafe { &mut *(phys as *mut [u64; 512]) }
 }
 
 /// Ensure a page-table entry exists at `table[index]`, allocating from `pool` if absent.
@@ -484,6 +490,11 @@ extern "efiapi" fn efi_main(handle: EfiHandle, system_table: *mut table::SystemT
 
     // SAFETY: boot_info_phys was allocated above and is valid for one page.
     let boot_info = unsafe { &mut *(boot_info_phys as *mut BootInfo) };
+    /// Default base address for kernel virtual regions (must match `hadron_mm::layout`).
+    const DEFAULT_REGIONS_BASE: u64 = 0xFFFF_C000_0000_0000;
+
+    let kernel_size_aligned = (kernel_pages as u64) * PAGE_SIZE;
+
     *boot_info = BootInfo {
         memory_map_ptr: mmap_ptr,
         memory_map_len: memory_map.len(),
@@ -493,6 +504,12 @@ extern "efiapi" fn efi_main(handle: EfiHandle, system_table: *mut table::SystemT
         initrd_phys: 0,
         initrd_len: 0,
         hhdm_offset: HHDM_OFFSET,
+        kaslr_slide: 0,
+        regions_base: DEFAULT_REGIONS_BASE,
+        kernel_phys,
+        kernel_size: kernel_size_aligned,
+        boot_pt_pool_phys: pt_pool_phys,
+        boot_pt_pool_pages: pool.pages_used(),
     };
 
     serial_str("[boot] BootInfo ready\n");

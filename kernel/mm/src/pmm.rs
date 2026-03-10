@@ -70,6 +70,9 @@ impl BitmapAllocator {
 
     /// Creates a new bitmap allocator from a slice of physical memory regions.
     ///
+    /// `boot_reserved` lists physical ranges that must remain reserved (e.g.
+    /// kernel image, boot page table pool). Each entry is `(phys_start, size)`.
+    ///
     /// # Safety
     ///
     /// - `hhdm_offset` must be the correct HHDM offset.
@@ -78,6 +81,7 @@ impl BitmapAllocator {
     pub unsafe fn new(
         regions: &[PhysMemoryRegion],
         hhdm_offset: VirtAddr,
+        boot_reserved: &[(u64, u64)],
     ) -> Result<Self, PmmError> {
         // 1. Find highest usable physical address to determine bitmap size.
         // We only need to track frames up to the end of the last usable region,
@@ -146,6 +150,26 @@ impl BitmapAllocator {
                     // Was marked free, now mark used
                     bitmap[word_idx] |= 1u64 << bit_idx;
                     free_count -= 1;
+                }
+            }
+        }
+
+        // 7. Re-set bits for boot-reserved regions (kernel image, PT pool, etc.).
+        for &(phys_start, size) in boot_reserved {
+            if size == 0 {
+                continue;
+            }
+            let start_frame = (phys_start / FRAME_SIZE) as usize;
+            let frame_count = ((size + FRAME_SIZE - 1) / FRAME_SIZE) as usize;
+            for i in 0..frame_count {
+                let frame_idx = start_frame + i;
+                if frame_idx < total_frames {
+                    let word_idx = frame_idx / BITS_PER_WORD;
+                    let bit_idx = frame_idx % BITS_PER_WORD;
+                    if bitmap[word_idx] & (1u64 << bit_idx) == 0 {
+                        bitmap[word_idx] |= 1u64 << bit_idx;
+                        free_count -= 1;
+                    }
                 }
             }
         }
@@ -428,11 +452,15 @@ static PMM: SpinLock<Option<BitmapAllocator>> = SpinLock::leveled("PMM", 3, None
 
 /// Initializes the PMM from a slice of physical memory regions.
 ///
+/// `boot_reserved` lists physical ranges that must remain reserved (e.g.
+/// kernel image, boot page table pool). Each entry is `(phys_start, size)`.
+///
 /// The caller is responsible for converting bootloader-specific memory maps
 /// into [`PhysMemoryRegion`] descriptors before calling this function.
-pub fn init(regions: &[PhysMemoryRegion], hhdm_offset: VirtAddr) {
-    let allocator =
-        unsafe { BitmapAllocator::new(regions, hhdm_offset).expect("failed to initialize PMM") };
+pub fn init(regions: &[PhysMemoryRegion], hhdm_offset: VirtAddr, boot_reserved: &[(u64, u64)]) {
+    let allocator = unsafe {
+        BitmapAllocator::new(regions, hhdm_offset, boot_reserved).expect("failed to initialize PMM")
+    };
 
     let mut pmm = PMM.lock();
     assert!(pmm.is_none(), "PMM already initialized");
