@@ -59,10 +59,11 @@ Clippy lints are applied by `gluon clippy` to project crates (kernel/, crates/, 
 - One concern per module
 
 ### Hardware Abstraction
-- Key subsystems define traits: `InterruptController`, `ClockSource`, `Timer`
-- Traits in `hadron_kernel::driver_api`, implementations in `hadron-drivers`
-- Drivers register via linker-section macros (`pci_driver_entry!`, `platform_driver_entry!`, `block_fs_entry!`, etc.)
-- Access hardware through trait interfaces where feasible
+- Hardware drivers run in userspace (ring 3) as isolated driver-host processes
+- Drivers receive capability handles (MMIO VMO, Interrupt, Bti) via initial handle table
+- In-kernel hardware code uses hadron-mmio `register_block!` macro for typed MMIO access
+- Kernel object system (hadron-objects) mediates all resource access through handles and rights
+- `linkset!` macros used for kernel-internal registration (ktest, alternatives), not driver registration
 
 ### Userspace Code
 - `hadron-libc` stubs match POSIX signatures (C ABI) for compatibility with existing applications

@@ -1,6 +1,6 @@
 # Hadron
 
-Hadron is an x86_64 kernel written in Rust. The kernel follows a two-crate model: a monolithic **hadron-kernel** (arch primitives, driver API traits, memory management, scheduler, VFS, PCI core, device registry) and a pluggable **hadron-drivers** (hardware drivers registered via linker sections). Both run in ring 0.
+Hadron is a capability-based microkernel for x86_64, written in Rust. The kernel is organized as a multi-crate workspace under `kernel/`, `crates/`, and `userspace/`. All kernel resources are typed objects implementing the **KernelObject** trait, accessed through capability handles with explicit rights. The ring-0 kernel (`hadron-kernel`) provides object lifecycle management, IPC, memory management (VMO/VMAR), and scheduling via a per-CPU async executor. Hardware drivers, filesystems, and networking run in userspace (ring 3) as isolated processes that receive capability handles to access hardware resources.
 
 ## Build Commands
 

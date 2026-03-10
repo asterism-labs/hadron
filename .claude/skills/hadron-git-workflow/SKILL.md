@@ -52,22 +52,19 @@ BREAKING CHANGE: description of what breaks (only when applicable)
 Scope is **required** on every commit. Use the most specific scope that covers the primary change. Cross-cutting changes use the parent scope.
 
 ### Kernel
-`hadron-kernel`, `hadron-kernel/arch`, `hadron-kernel/mm`, `hadron-kernel/sched`, `hadron-kernel/fs`, `hadron-kernel/ipc`, `hadron-kernel/proc`, `hadron-kernel/syscall`, `hadron-kernel/pci`, `hadron-kernel/driver_api`, `hadron-kernel/profiling`, `hadron-kernel/boot`
-
-### Drivers
-`hadron-drivers`, `hadron-drivers/ahci`, `hadron-drivers/virtio`, `hadron-drivers/serial`, `hadron-drivers/input`, `hadron-drivers/display`, `hadron-drivers/timer`, `hadron-drivers/pci`, `hadron-drivers/fs`
+`hadron-kernel`, `hadron-kernel/arch`, `hadron-kernel/boot`, `hadron-kernel/hw`
 
 ### Crates
-`hadron-acpi`, `hadron-elf`, `hadron-dwarf`, `hadron-test`, `hadron-core`, `hadron-bench`, `hadron-codegen`, `hadron-binparse`, `hadron-mmio`, `hadron-syscall`, `hadron-driver-macros`, `planck-noalloc`, `linkset`, `limine`
+`hadron-core`, `hadron-objects`, `hadron-mm`, `hadron-sched`, `hadron-pci`, `hadron-mmio`, `hadron-intrinsics`, `hadron-acpi`, `hadron-elf`, `hadron-dwarf`, `hadron-binparse`, `hadron-fdt`, `hadron-linkset`, `hadron-log`, `hadron-boot-info`, `hadron-bench`, `hadron-test`, `hadron-ktest`, `hadron-utest`
 
 ### Userspace
-`lepton-init`, `lsh`, `lepton-syslib`, `lepton-coreutils`, `hadron-libc`, `lepton-wayland`, `lepton-gfx`, `lepton-compositor`, `lepton-terminal`, `lepton-sysmon`, `lepton-display-client`
+`lepton-syslib`, `hadron-libc`
 
 ### Tools
-`gluon`, `gluon/vendor`, `gluon/config`
+`gluon`, `gluon/vendor`, `gluon/config`, `hadron-perf`, `hadron-runner`
 
 ### Other
-`workspace`, `boot/limine`, `docs`, `ci`
+`workspace`, `boot/uefi`, `docs`, `ci`
 
 ## Rules
 
@@ -97,7 +94,7 @@ fix(hadron-kernel/arch): correct off-by-one in page table walk
 ```
 
 ```
-refactor(hadron-drivers): extract GDT setup into dedicated module
+refactor(hadron-kernel/arch): extract GDT setup into dedicated module
 
 ### Changed
 - GDT initialization moved from boot.rs to gdt.rs
