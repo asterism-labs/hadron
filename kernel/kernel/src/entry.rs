@@ -21,6 +21,9 @@ pub extern "C" fn kernel_init(boot_info: *const BootInfo) -> ! {
     // SAFETY: boot_info was set up by the UEFI stub and is in HHDM-mapped memory.
     let bi = unsafe { &*boot_info };
 
+    // ── 0. Record boot TSC ──────────────────────────────────────────────
+    crate::time::record_boot_tsc();
+
     // ── 1. Initialize HHDM offset ──────────────────────────────────────
     let hhdm_offset = VirtAddr::new_truncate(bi.hhdm_offset);
     hadron_mm::hhdm::init(hhdm_offset);
@@ -42,6 +45,11 @@ pub extern "C" fn kernel_init(boot_info: *const BootInfo) -> ! {
     // ── 4. IDT init ────────────────────────────────────────────────────
     // SAFETY: Called after GDT init, CS is valid.
     unsafe { crate::arch::x86_64::idt::init() };
+
+    // ── 4b. Calibrate TSC frequency ────────────────────────────────────
+    // Uses PIT channel 2 (I/O ports only, available after GDT/IDT).
+    // SAFETY: Interrupts are still disabled; PIT is not in use.
+    unsafe { crate::time::calibrate_tsc() };
 
     // ── 5. Register TLB flush callback ─────────────────────────────────
     hadron_mm::mapper::register_tlb_flush(crate::arch::x86_64::instructions::tlb::flush);

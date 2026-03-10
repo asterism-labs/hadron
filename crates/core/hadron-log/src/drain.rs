@@ -27,9 +27,13 @@ pub(crate) fn drain_all() {
             }
         };
 
+        let tsc_nanos = crate::tsc_to_nanos(record.timestamp);
+
         let mut line_buf = [0u8; MAX_FMT_BUF];
         let line_len = format_full_line(
             &mut line_buf,
+            record.timestamp,
+            tsc_nanos,
             record.level,
             record.subsystem,
             &record.spans,
@@ -62,15 +66,17 @@ pub(crate) fn drain_all() {
 /// Formats a log line prefix + message into a buffer.
 ///
 /// Returns the number of bytes written. Format:
-/// `[LEVEL subsystem] {spans} message\n`
+/// `[timestamp LEVEL subsystem] {spans} message\n`
 pub(crate) fn format_full_line(
     buf: &mut [u8; MAX_FMT_BUF],
+    timestamp: u64,
+    tsc_nanos: Option<u64>,
     level: crate::Level,
     subsystem: &str,
     spans: &crate::span::SpanSnapshot,
     message: &str,
 ) -> usize {
-    let mut pos = crate::fmt::format_prefix(buf, level, subsystem, spans);
+    let mut pos = crate::fmt::format_prefix(buf, timestamp, tsc_nanos, level, subsystem, spans);
 
     let remaining = MAX_FMT_BUF.saturating_sub(pos);
     let msg_bytes = message.as_bytes();

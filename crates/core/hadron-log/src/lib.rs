@@ -42,7 +42,38 @@ pub use record::{LogRecord, RecordMessage};
 pub use sink::{FormattedRecord, LogSink};
 pub use span::{SpanGuard, SpanSnapshot, enter_span};
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+
+// ── TSC-to-nanoseconds converter ─────────────────────────────────────────
+
+/// Function pointer that converts a raw TSC delta to nanoseconds.
+///
+/// Registered by the kernel once TSC frequency is calibrated. Before
+/// registration, timestamps are rendered as raw hex TSC values.
+static TSC_CONVERTER: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
+
+/// Registers a TSC-to-nanoseconds converter function.
+///
+/// The converter receives a raw TSC value (already offset from boot TSC)
+/// and returns nanoseconds. Call this once after calibrating TSC frequency.
+pub fn set_tsc_converter(f: fn(u64) -> u64) {
+    TSC_CONVERTER.store(f as *mut (), Ordering::Release);
+}
+
+/// Converts a raw TSC value to nanoseconds using the registered converter.
+///
+/// Returns `None` if no converter has been registered yet (pre-calibration).
+pub(crate) fn tsc_to_nanos(tsc: u64) -> Option<u64> {
+    let ptr = TSC_CONVERTER.load(Ordering::Acquire);
+    if ptr.is_null() {
+        None
+    } else {
+        // SAFETY: The pointer was stored via `set_tsc_converter` which takes
+        // a `fn(u64) -> u64`. We cast it back to the same function type.
+        let f: fn(u64) -> u64 = unsafe { core::mem::transmute(ptr) };
+        Some(f(tsc))
+    }
+}
 
 // ── Auto-flush control ──────────────────────────────────────────────────
 
