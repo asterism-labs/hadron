@@ -8,6 +8,7 @@ use alloc::sync::Arc;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use crate::object::{KernelObject, Koid, ObjectType, Signals};
+use crate::observer::{ObserverList, PortDispatch};
 
 /// The kind of backing store for a VMO.
 pub enum VmoKind {
@@ -60,6 +61,8 @@ pub struct Vmo {
     kind: VmoKind,
     /// Current signal state.
     signals: AtomicU32,
+    /// Registered observers for signal notifications.
+    observers: ObserverList,
 }
 
 impl Vmo {
@@ -74,6 +77,7 @@ impl Vmo {
             size: AtomicU64::new(aligned_size),
             kind: VmoKind::Paged,
             signals: AtomicU32::new(0),
+            observers: ObserverList::new(),
         })
     }
 
@@ -86,6 +90,7 @@ impl Vmo {
             size: AtomicU64::new(aligned_size),
             kind: VmoKind::Contiguous,
             signals: AtomicU32::new(0),
+            observers: ObserverList::new(),
         })
     }
 
@@ -104,6 +109,7 @@ impl Vmo {
                 offset,
             },
             signals: AtomicU32::new(0),
+            observers: ObserverList::new(),
         })
     }
 
@@ -149,12 +155,12 @@ impl KernelObject for Vmo {
         Signals::from_bits_truncate(self.signals.load(Ordering::Relaxed))
     }
 
-    fn add_observer(&self, _port: &Arc<dyn KernelObject>, _key: u64, _signals: Signals) {
-        // Phase 2: implement port observer registration
+    fn add_observer(&self, port: Arc<dyn PortDispatch>, key: u64, signals: Signals) {
+        self.observers.add(port, key, signals);
     }
 
-    fn remove_observer(&self, _port: &Arc<dyn KernelObject>) {
-        // Phase 2: implement port observer removal
+    fn remove_observer(&self, port: &Arc<dyn PortDispatch>) {
+        self.observers.remove_by_port(port);
     }
 }
 

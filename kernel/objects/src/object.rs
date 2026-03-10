@@ -8,6 +8,8 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use bitflags::bitflags;
 
+use crate::observer::PortDispatch;
+
 /// Globally unique kernel object identifier.
 ///
 /// Every kernel object receives a unique `Koid` at creation time. Koids are
@@ -141,8 +143,16 @@ pub trait KernelObject: Send + Sync + 'static {
     ///
     /// When any of the specified `signals` become asserted, a packet is queued
     /// to the given `port` with the provided `key`.
-    fn add_observer(&self, port: &Arc<dyn KernelObject>, key: u64, signals: Signals);
+    fn add_observer(&self, port: Arc<dyn PortDispatch>, key: u64, signals: Signals);
 
     /// Remove a previously registered port observer.
-    fn remove_observer(&self, port: &Arc<dyn KernelObject>);
+    fn remove_observer(&self, port: &Arc<dyn PortDispatch>);
+
+    /// Called when the last handle to this object is closed.
+    ///
+    /// Used by paired objects (Channel, Socket, EventPair, Fifo) to assert
+    /// `PEER_CLOSED` on the surviving peer.
+    fn on_zero_handles(&self) {
+        // Default: no-op. Override for paired objects.
+    }
 }

@@ -327,9 +327,15 @@ mod tests {
             Signals::from_bits_truncate(self.signals.load(core::sync::atomic::Ordering::Relaxed))
         }
 
-        fn add_observer(&self, _port: &Arc<dyn KernelObject>, _key: u64, _signals: Signals) {}
+        fn add_observer(
+            &self,
+            _port: Arc<dyn crate::observer::PortDispatch>,
+            _key: u64,
+            _signals: Signals,
+        ) {
+        }
 
-        fn remove_observer(&self, _port: &Arc<dyn KernelObject>) {}
+        fn remove_observer(&self, _port: &Arc<dyn crate::observer::PortDispatch>) {}
     }
 
     #[test]

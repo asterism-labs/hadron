@@ -13,6 +13,7 @@ use bitflags::bitflags;
 use hadron_core::sync::SpinLock;
 
 use crate::object::{KernelObject, Koid, ObjectType, Signals};
+use crate::observer::{ObserverList, PortDispatch};
 use crate::vmo::Vmo;
 
 bitflags! {
@@ -84,6 +85,8 @@ pub struct Vmar {
     children: SpinLock<Vec<VmarChild>>,
     /// Signal state.
     signals: AtomicU32,
+    /// Registered observers for signal notifications.
+    observers: ObserverList,
 }
 
 impl Vmar {
@@ -97,6 +100,7 @@ impl Vmar {
             mappings: SpinLock::new(Vec::new()),
             children: SpinLock::new(Vec::new()),
             signals: AtomicU32::new(0),
+            observers: ObserverList::new(),
         })
     }
 
@@ -133,6 +137,7 @@ impl Vmar {
             mappings: SpinLock::new(Vec::new()),
             children: SpinLock::new(Vec::new()),
             signals: AtomicU32::new(0),
+            observers: ObserverList::new(),
         });
 
         self.children.lock().push(VmarChild {
@@ -234,12 +239,12 @@ impl KernelObject for Vmar {
         Signals::from_bits_truncate(self.signals.load(Ordering::Relaxed))
     }
 
-    fn add_observer(&self, _port: &Arc<dyn KernelObject>, _key: u64, _signals: Signals) {
-        // Phase 2: implement port observer registration
+    fn add_observer(&self, port: Arc<dyn PortDispatch>, key: u64, signals: Signals) {
+        self.observers.add(port, key, signals);
     }
 
-    fn remove_observer(&self, _port: &Arc<dyn KernelObject>) {
-        // Phase 2: implement port observer removal
+    fn remove_observer(&self, port: &Arc<dyn PortDispatch>) {
+        self.observers.remove_by_port(port);
     }
 }
 

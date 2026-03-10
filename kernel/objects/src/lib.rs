@@ -11,9 +11,21 @@
 
 extern crate alloc;
 
+pub mod channel;
+pub mod event;
+pub mod event_pair;
+pub mod fifo;
 pub mod handle;
+pub mod interrupt;
+pub mod job;
 pub mod object;
+pub mod observer;
+pub mod port;
+pub mod port_packet;
 pub mod process;
+pub mod resource;
+pub mod socket;
 pub mod thread;
+pub mod timer;
 pub mod vmar;
 pub mod vmo;

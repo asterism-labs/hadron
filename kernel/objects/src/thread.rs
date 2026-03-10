@@ -10,6 +10,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use hadron_core::sync::SpinLock;
 
 use crate::object::{KernelObject, Koid, ObjectType, Signals};
+use crate::observer::{ObserverList, PortDispatch, signal_update};
 use crate::process::Process;
 
 /// Thread execution state.
@@ -45,6 +46,8 @@ pub struct Thread {
     state: SpinLock<ThreadState>,
     /// Current signal state.
     signals: AtomicU32,
+    /// Registered observers for signal notifications.
+    observers: ObserverList,
 }
 
 impl Thread {
@@ -60,6 +63,7 @@ impl Thread {
             process: Arc::downgrade(process),
             state: SpinLock::new(ThreadState::Initial),
             signals: AtomicU32::new(0),
+            observers: ObserverList::new(),
         })
     }
 
@@ -92,8 +96,13 @@ impl Thread {
     /// Mark the thread as dead and set the TERMINATED signal.
     pub fn exit(&self) {
         *self.state.lock() = ThreadState::Dead;
-        self.signals
-            .fetch_or(Signals::TERMINATED.bits(), Ordering::Release);
+        signal_update(
+            &self.signals,
+            Signals::TERMINATED,
+            Signals::empty(),
+            &self.observers,
+            self.koid,
+        );
     }
 }
 
@@ -110,12 +119,12 @@ impl KernelObject for Thread {
         Signals::from_bits_truncate(self.signals.load(Ordering::Relaxed))
     }
 
-    fn add_observer(&self, _port: &Arc<dyn KernelObject>, _key: u64, _signals: Signals) {
-        // Phase 2: implement port observer registration
+    fn add_observer(&self, port: Arc<dyn PortDispatch>, key: u64, signals: Signals) {
+        self.observers.add(port, key, signals);
     }
 
-    fn remove_observer(&self, _port: &Arc<dyn KernelObject>) {
-        // Phase 2: implement port observer removal
+    fn remove_observer(&self, port: &Arc<dyn PortDispatch>) {
+        self.observers.remove_by_port(port);
     }
 }
 

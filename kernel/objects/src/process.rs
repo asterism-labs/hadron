@@ -14,6 +14,7 @@ use hadron_core::sync::SpinLock;
 
 use crate::handle::HandleTable;
 use crate::object::{KernelObject, Koid, ObjectType, Signals};
+use crate::observer::{ObserverList, PortDispatch, signal_update};
 use crate::thread::Thread;
 use crate::vmar::Vmar;
 
@@ -41,6 +42,8 @@ pub struct Process {
     return_code: AtomicI64,
     /// Current signal state.
     signals: AtomicU32,
+    /// Registered observers for signal notifications.
+    observers: ObserverList,
 }
 
 impl Process {
@@ -59,6 +62,7 @@ impl Process {
             job: SpinLock::new(None),
             return_code: AtomicI64::new(0),
             signals: AtomicU32::new(0),
+            observers: ObserverList::new(),
         })
     }
 
@@ -108,9 +112,13 @@ impl Process {
     /// Set the return code and signal termination.
     pub fn exit(&self, code: i64) {
         self.return_code.store(code, Ordering::Release);
-        // Set TERMINATED signal.
-        self.signals
-            .fetch_or(Signals::TERMINATED.bits(), Ordering::Release);
+        signal_update(
+            &self.signals,
+            Signals::TERMINATED,
+            Signals::empty(),
+            &self.observers,
+            self.koid,
+        );
     }
 
     /// The process return code (meaningful only after TERMINATED signal).
@@ -133,12 +141,12 @@ impl KernelObject for Process {
         Signals::from_bits_truncate(self.signals.load(Ordering::Relaxed))
     }
 
-    fn add_observer(&self, _port: &Arc<dyn KernelObject>, _key: u64, _signals: Signals) {
-        // Phase 2: implement port observer registration
+    fn add_observer(&self, port: Arc<dyn PortDispatch>, key: u64, signals: Signals) {
+        self.observers.add(port, key, signals);
     }
 
-    fn remove_observer(&self, _port: &Arc<dyn KernelObject>) {
-        // Phase 2: implement port observer removal
+    fn remove_observer(&self, port: &Arc<dyn PortDispatch>) {
+        self.observers.remove_by_port(port);
     }
 }
 
