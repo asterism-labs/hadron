@@ -26,12 +26,10 @@ pub use hadron_core::task::{Priority, TaskMeta};
 
 use hadron_core::sync::atomic::{AtomicBool, Ordering};
 
-use hadron_core::cpu_local::{CpuLocal, MAX_CPUS};
 use hadron_core::task::TaskId;
 
 /// Per-CPU preemption flag.
-static PREEMPT_PENDING: CpuLocal<AtomicBool> =
-    CpuLocal::new([const { AtomicBool::new(false) }; MAX_CPUS]);
+hadron_core::percpu_static!(static PREEMPT_PENDING: AtomicBool = AtomicBool::new(false));
 
 /// Returns a reference to the current CPU's executor.
 pub fn executor() -> &'static Executor {

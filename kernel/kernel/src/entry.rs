@@ -98,10 +98,14 @@ pub extern "C" fn kernel_init(boot_info: *const BootInfo) -> ! {
     // ── 9. Store VMM globally ──────────────────────────────────────────
     crate::vmm::init(vmm);
 
-    // ── 10. Per-CPU init (GS base) ─────────────────────────────────────
+    // ── 10a. Per-CPU phase 1 (PERCPU_BASES[0] = template) ───────────────
+    // SAFETY: Called once before init_gs_base, single-threaded BSP init.
+    unsafe { crate::percpu::percpu_init_phase1() };
+
+    // ── 10b. Per-CPU init (GS base) ─────────────────────────────────────
     // After this, cpu_is_initialized() returns true and span tracking
     // becomes available for log records.
-    // SAFETY: Called once after GDT, before any code that reads GS-relative data.
+    // SAFETY: Called once after GDT + phase1, before any code that reads GS-relative data.
     unsafe { crate::percpu::init_gs_base() };
     crate::kinfo!("boot", "BSP per-CPU state initialized");
 
@@ -150,6 +154,13 @@ pub extern "C" fn kernel_init(boot_info: *const BootInfo) -> ! {
         if count > 0 {
             hadron_log::kinfo!("iommu", "IOMMU: created {} Iommu object(s)", count);
         }
+    }
+
+    // ── 11e. Per-CPU phase 2 (allocate AP percpu regions) ───────────────
+    #[cfg(hadron_smp)]
+    {
+        let total_cpus = crate::arch::x86_64::smp::madt_cpu_count();
+        crate::percpu::percpu_init_phase2(total_cpus);
     }
 
     // ── 12. Boot APs (SMP) ──────────────────────────────────────────────

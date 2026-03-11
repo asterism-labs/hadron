@@ -16,7 +16,6 @@ use core::pin::Pin;
 use core::task::{Context, Poll};
 use hadron_core::sync::atomic::{AtomicU64, Ordering};
 
-use hadron_core::cpu_local::{CpuLocal, MAX_CPUS};
 use hadron_core::id::CpuId;
 use hadron_core::sync::{IrqSpinLock, LazyLock};
 use hadron_core::task::{Priority, TaskId, TaskMeta};
@@ -32,8 +31,8 @@ static NEXT_TASK_ID: AtomicU64 = AtomicU64::new(0);
 pub use hadron_core::sched::ReadyQueues;
 
 /// Per-CPU executor instances, initialized on first access.
-static EXECUTORS: CpuLocal<LazyLock<Executor>> =
-    CpuLocal::new([const { LazyLock::new(Executor::new as fn() -> Executor) }; MAX_CPUS]);
+hadron_core::percpu_static!(static EXECUTORS: LazyLock<Executor> =
+    LazyLock::new(Executor::new as fn() -> Executor));
 
 /// Returns a reference to the current CPU's executor.
 pub fn global() -> &'static Executor {

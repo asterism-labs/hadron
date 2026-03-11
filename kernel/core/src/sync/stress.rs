@@ -14,8 +14,6 @@
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-use crate::cpu_local::{CpuLocal, MAX_CPUS};
-
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
@@ -27,7 +25,7 @@ static MAX_US: AtomicU32 = AtomicU32::new(10);
 static NANOS_FN: super::AtomicFn<fn() -> u64> = super::AtomicFn::null();
 
 /// Per-CPU xorshift64 PRNG state.
-static PRNG_STATE: CpuLocal<AtomicU64> = CpuLocal::new([const { AtomicU64::new(0) }; MAX_CPUS]);
+crate::percpu_static!(static PRNG_STATE: AtomicU64 = AtomicU64::new(0));
 
 // ---------------------------------------------------------------------------
 // Initialization
@@ -38,7 +36,8 @@ static PRNG_STATE: CpuLocal<AtomicU64> = CpuLocal::new([const { AtomicU64::new(0
 /// - `max_us`: maximum random delay in microseconds (from `LOCK_STRESS_MAX_US`).
 /// - `seed`: initial PRNG seed (e.g., `boot_nanos()`). If 0, a fallback
 ///   constant is used to avoid a stuck-at-zero xorshift.
-pub fn init(max_us: u32, seed: u64) {
+/// - `cpu_count`: total number of CPUs to seed.
+pub fn init(max_us: u32, seed: u64, cpu_count: u32) {
     MAX_US.store(max_us, Ordering::Relaxed);
 
     let base = if seed == 0 {
@@ -48,7 +47,7 @@ pub fn init(max_us: u32, seed: u64) {
     };
 
     // Seed each CPU with a divergent value.
-    for i in 0..MAX_CPUS {
+    for i in 0..cpu_count as usize {
         let cpu_seed = base
             .wrapping_add(i as u64)
             .wrapping_mul(0x9E37_79B9_7F4A_7C15);

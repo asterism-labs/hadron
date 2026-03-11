@@ -7,8 +7,6 @@
 use core::cell::UnsafeCell;
 use core::marker::PhantomData;
 
-use hadron_core::cpu_local::CpuLocal;
-
 /// Maximum nesting depth for span labels.
 pub const MAX_SPAN_DEPTH: usize = 8;
 
@@ -98,12 +96,8 @@ impl Drop for SpanGuard {
 // SAFETY: Each CPU accesses only its own slot. ISRs on the same CPU see
 // the interrupted code's span stack and may push/pop their own spans.
 // This is safe because spans are strictly nested (RAII guards).
-static SPAN_STACKS: CpuLocal<UnsafeCell<SpanStack>> = {
-    // SAFETY: `UnsafeCell<SpanStack>` is init with const `SpanStack::new()`.
-    // Each CPU slot is independent.
-    const INIT: UnsafeCell<SpanStack> = UnsafeCell::new(SpanStack::new());
-    CpuLocal::new([INIT; hadron_core::cpu_local::MAX_CPUS])
-};
+hadron_core::percpu_static!(static SPAN_STACKS: UnsafeCell<SpanStack> =
+    UnsafeCell::new(SpanStack::new()));
 
 /// Pushes a span label onto the current CPU's span stack.
 ///

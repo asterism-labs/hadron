@@ -138,19 +138,16 @@ impl FpuSaveArea {
     }
 }
 
-#[cfg(hadron_kernel_fpu)]
-use crate::percpu::{CpuLocal, MAX_CPUS};
-
 /// Per-CPU FPU save areas. Each CPU has its own slot so `KernelFpuGuard`
 /// can save/restore without heap allocation.
 #[cfg(hadron_kernel_fpu)]
-static FPU_SAVE_AREAS: CpuLocal<UnsafeCell<FpuSaveArea>> =
-    CpuLocal::new([const { UnsafeCell::new(FpuSaveArea::new()) }; MAX_CPUS]);
+hadron_core::percpu_static!(static FPU_SAVE_AREAS: UnsafeCell<FpuSaveArea> =
+    UnsafeCell::new(FpuSaveArea::new()));
 
 // Debug-only nesting guard.
 #[cfg(all(hadron_kernel_fpu, debug_assertions))]
-static FPU_DEPTH: CpuLocal<hadron_core::sync::atomic::AtomicU32> =
-    CpuLocal::new([const { hadron_core::sync::atomic::AtomicU32::new(0) }; MAX_CPUS]);
+hadron_core::percpu_static!(static FPU_DEPTH: hadron_core::sync::atomic::AtomicU32 =
+    hadron_core::sync::atomic::AtomicU32::new(0));
 
 // ---------------------------------------------------------------------------
 // KernelFpuGuard

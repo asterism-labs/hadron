@@ -1,9 +1,11 @@
 //! Per-CPU state and storage.
 //!
-//! Re-exports `CpuLocal` and `MAX_CPUS` from `hadron_core` and provides
-//! kernel-specific per-CPU state (GS-base setup, early kernel RSP).
+//! Re-exports per-CPU primitives from `hadron_core` and provides kernel-specific
+//! per-CPU state (GS-base setup, early kernel RSP, `.percpu` section init).
 
-pub use hadron_core::cpu_local::{CpuLocal, MAX_CPUS};
+pub use hadron_core::cpu_local::{CpuLocal, MAX_CPUS_HARD};
+#[cfg(all(target_os = "none", target_arch = "x86_64"))]
+pub use hadron_core::cpu_local::{PERCPU_BASES, percpu_section_size, percpu_start};
 
 use crate::arch::x86_64::registers::model_specific::IA32_GS_BASE;
 
@@ -13,6 +15,7 @@ use crate::arch::x86_64::registers::model_specific::IA32_GS_BASE;
 /// - `gs:[0]`  → `self_ptr`
 /// - `gs:[24]` → `cpu_id`
 /// - `gs:[29]` → `initialized`
+/// - `gs:[32]` → `percpu_base`
 #[repr(C)]
 pub struct PerCpuState {
     /// Pointer to self (for GS-relative addressing validation).
@@ -29,8 +32,10 @@ pub struct PerCpuState {
     pub initialized: u8,
     /// Padding to 32 bytes.
     pub _pad2: [u8; 2],
-    /// Padding from offset 32 to offset 56.
-    pub _pad3: [u8; 24],
+    /// Per-CPU section base address for this CPU (read at `gs:[32]`).
+    pub percpu_base: u64,
+    /// Padding from offset 40 to offset 56.
+    pub _pad3: [u8; 16],
     /// Pointer to this CPU's `SyscallSavedRegs` (read by syscall entry at `GS:[56]`).
     pub saved_regs_ptr: u64,
 }
@@ -41,6 +46,7 @@ const _: () = assert!(core::mem::offset_of!(PerCpuState, kernel_rsp) == 8);
 const _: () = assert!(core::mem::offset_of!(PerCpuState, user_rsp) == 16);
 const _: () = assert!(core::mem::offset_of!(PerCpuState, cpu_id) == 24);
 const _: () = assert!(core::mem::offset_of!(PerCpuState, initialized) == 29);
+const _: () = assert!(core::mem::offset_of!(PerCpuState, percpu_base) == 32);
 const _: () = assert!(core::mem::offset_of!(PerCpuState, saved_regs_ptr) == 56);
 
 /// BSP per-CPU state, allocated statically.
@@ -52,9 +58,25 @@ static mut BSP_PERCPU: PerCpuState = PerCpuState {
     _pad: 0,
     initialized: 0,
     _pad2: [0; 2],
-    _pad3: [0; 24],
+    percpu_base: 0,
+    _pad3: [0; 16],
     saved_regs_ptr: 0,
 };
+
+/// Phase 1 per-CPU init: set BSP's PERCPU_BASES entry to the linker template.
+///
+/// Called early in `kernel_init()`, before `init_gs_base()`. This ensures
+/// that `CpuLocal::get_for(0)` works before GS is set up.
+///
+/// # Safety
+///
+/// Must be called exactly once during early BSP init, before `init_gs_base()`.
+#[cfg(all(target_os = "none", target_arch = "x86_64"))]
+pub unsafe fn percpu_init_phase1() {
+    use core::sync::atomic::Ordering;
+
+    PERCPU_BASES[0].store(percpu_start(), Ordering::Release);
+}
 
 /// Initialize GS base to point at the BSP's per-CPU data.
 ///
@@ -63,7 +85,8 @@ static mut BSP_PERCPU: PerCpuState = PerCpuState {
 ///
 /// # Safety
 ///
-/// Must be called exactly once during early BSP init, after the GDT is loaded.
+/// Must be called exactly once during early BSP init, after the GDT is loaded
+/// and after `percpu_init_phase1()`.
 pub unsafe fn init_gs_base() {
     // SAFETY: Single-threaded BSP init — no concurrent access to BSP_PERCPU.
     unsafe {
@@ -73,6 +96,7 @@ pub unsafe fn init_gs_base() {
         (*ptr).user_rsp = 0;
         (*ptr).cpu_id = 0;
         (*ptr).initialized = 1;
+        (*ptr).percpu_base = percpu_start() as u64;
 
         // Set saved_regs_ptr to the BSP's SyscallSavedRegs for the syscall
         // entry stub (reads GS:[56]).
@@ -83,6 +107,43 @@ pub unsafe fn init_gs_base() {
         // SAFETY: IA32_GS_BASE is a valid MSR. Writing the per-CPU state
         // address establishes GS-relative addressing for this CPU.
         IA32_GS_BASE.write(ptr as u64);
+    }
+}
+
+/// Phase 2 per-CPU init: allocate per-CPU copies for APs.
+///
+/// Copies the `.percpu` template section for each AP (cpu 1..cpu_count).
+/// Must be called after the heap is ready and ACPI has enumerated CPUs,
+/// before `boot_aps()`.
+#[cfg(all(target_os = "none", target_arch = "x86_64"))]
+pub fn percpu_init_phase2(cpu_count: u32) {
+    use core::sync::atomic::Ordering;
+
+    let size = percpu_section_size();
+    let start = percpu_start();
+
+    crate::kinfo!(
+        "percpu",
+        ".percpu: {} bytes template x {} CPUs = {} bytes total",
+        size,
+        cpu_count,
+        size * cpu_count as usize,
+    );
+
+    for cpu in 1..cpu_count {
+        let layout =
+            core::alloc::Layout::from_size_align(size, 4096).expect("invalid percpu layout");
+        // SAFETY: Layout is valid (size > 0, alignment is page-aligned).
+        let ptr = unsafe { alloc::alloc::alloc(layout) };
+        assert!(
+            !ptr.is_null(),
+            "failed to allocate percpu region for CPU {cpu}"
+        );
+        // SAFETY: src is the .percpu template, dst is freshly allocated, non-overlapping.
+        unsafe {
+            core::ptr::copy_nonoverlapping(start as *const u8, ptr, size);
+        }
+        PERCPU_BASES[cpu as usize].store(ptr as usize, Ordering::Release);
     }
 }
 
@@ -98,6 +159,7 @@ pub unsafe fn init_gs_base() {
 pub fn init_ap_percpu(cpu_id: u32, kernel_rsp: u64) -> *mut PerCpuState {
     extern crate alloc;
     use alloc::boxed::Box;
+    use core::sync::atomic::Ordering;
 
     let state = Box::new(PerCpuState {
         self_ptr: 0, // filled below
@@ -107,7 +169,8 @@ pub fn init_ap_percpu(cpu_id: u32, kernel_rsp: u64) -> *mut PerCpuState {
         _pad: 0,
         initialized: 0, // set to 1 by the AP after full init
         _pad2: [0; 2],
-        _pad3: [0; 24],
+        percpu_base: PERCPU_BASES[cpu_id as usize].load(Ordering::Acquire) as u64,
+        _pad3: [0; 16],
         saved_regs_ptr: crate::arch::x86_64::syscall::SYSCALL_SAVED_REGS
             .get_for(cpu_id)
             .get() as u64,
@@ -133,4 +196,26 @@ pub fn early_kernel_rsp() -> u64 {
     // Stack grows downward; return the top.
     let base = &EARLY_STACK as *const _ as u64;
     base + 65536
+}
+
+// ── Kernel integration tests ────────────────────────────────────────
+
+#[cfg(ktest)]
+mod ktest {
+    use hadron_ktest::kernel_test;
+
+    /// Verifies .percpu section has non-zero size.
+    #[kernel_test(stage = "before_executor")]
+    fn test_percpu_section_size() {
+        let size = super::percpu_section_size();
+        assert!(size > 0, "expected non-zero .percpu section size, got 0");
+    }
+
+    /// Verifies BSP percpu base is initialized.
+    #[kernel_test(stage = "before_executor")]
+    fn test_percpu_bsp_base_initialized() {
+        use core::sync::atomic::Ordering;
+        let base = super::PERCPU_BASES[0].load(Ordering::Relaxed);
+        assert!(base != 0, "expected non-zero PERCPU_BASES[0]");
+    }
 }

@@ -19,7 +19,6 @@ use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
 
-use hadron_core::cpu_local::CpuLocal;
 use hadron_core::sync::SpinLock;
 use hadron_mm::address_space::AddressSpace;
 use hadron_syscall::constants::{POLLIN, POLLOUT};
@@ -34,7 +33,6 @@ use hadron_objects::thread::{Thread, ThreadState};
 use crate::arch::x86_64::paging::PageTableMapper;
 use crate::arch::x86_64::syscall::SYSCALL_SAVED_REGS;
 use crate::arch::x86_64::userspace::{self, UserRegisters};
-use crate::percpu::MAX_CPUS;
 
 // ── Blocking operations ─────────────────────────────────────────────
 
@@ -98,8 +96,7 @@ pub enum BlockingOp {
 ///
 /// Set by a syscall handler before calling `restore_kernel_context`.
 /// Read by `process_task` after returning from userspace.
-static PENDING_OP: CpuLocal<SpinLock<Option<BlockingOp>>> =
-    CpuLocal::new([const { SpinLock::new(None) }; MAX_CPUS]);
+hadron_core::percpu_static!(static PENDING_OP: SpinLock<Option<BlockingOp>> = SpinLock::new(None));
 
 /// Store a blocking operation (called from syscall handlers before longjmp).
 pub fn set_blocking_op(op: BlockingOp) {
@@ -114,8 +111,8 @@ fn take_blocking_op() -> Option<BlockingOp> {
 // ── Per-CPU current process context ─────────────────────────────────
 
 /// Per-CPU current process reference.
-static CURRENT_PROCESS: CpuLocal<SpinLock<Option<Arc<Process>>>> =
-    CpuLocal::new([const { SpinLock::new(None) }; MAX_CPUS]);
+hadron_core::percpu_static!(static CURRENT_PROCESS: SpinLock<Option<Arc<Process>>> =
+    SpinLock::new(None));
 
 /// Execute a closure with the current CPU's active process.
 pub fn with_current_process<R>(f: impl FnOnce(&Arc<Process>) -> R) -> Option<R> {

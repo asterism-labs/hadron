@@ -108,6 +108,15 @@ SECTIONS {
         *(.dynamic)
     } :data :dynamic
 
+    /* Per-CPU template section — single instance copied per CPU at boot */
+    . = ALIGN(4K);
+    .percpu : AT(ADDR(.percpu) - KERNEL_VADDR) {
+        __percpu_start = .;
+        KEEP(*(.percpu))
+        . = ALIGN(64);
+        __percpu_end = .;
+    } :data
+
     .bss : AT(ADDR(.bss) - KERNEL_VADDR) {
         __bss_start = .;
         *(.bss .bss.*)

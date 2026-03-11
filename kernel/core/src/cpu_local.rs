@@ -1,53 +1,217 @@
-//! Minimal per-CPU storage for host-testable primitives.
+//! Per-CPU storage via the `.percpu` linker section.
 //!
-//! Provides [`CpuLocal`] indexed by CPU ID. On kernel targets, reads
-//! the CPU ID from the GS-based per-CPU data structure. On host targets,
-//! always returns index 0 (single-threaded test assumption).
+//! On kernel targets, each [`CpuLocal<T>`] places a single template `T` in the
+//! `.percpu` section. At boot, `percpu_init_phase2` allocates per-CPU copies
+//! from the heap. Access is via `per_cpu_base[cpu_id] + section_offset`.
+//!
+//! On host targets, [`CpuLocal<T>`] wraps a single `T` for unit testing.
 
-/// Maximum supported CPUs. Matches the Kconfig upper bound.
-pub const MAX_CPUS: usize = 256;
+/// Hard cap for the global base pointer array. Only this constant
+/// remains as a compile-time limit; actual CPU count is runtime.
+pub const MAX_CPUS_HARD: usize = 256;
 
-/// Per-CPU storage. Wraps `[T; MAX_CPUS]`, indexed by current CPU ID.
-pub struct CpuLocal<T> {
-    data: [T; MAX_CPUS],
-}
+// ── Kernel target ────────────────────────────────────────────────────
 
-impl<T> CpuLocal<T> {
-    /// Creates a new `CpuLocal` wrapping the given array.
-    pub const fn new(data: [T; MAX_CPUS]) -> Self {
-        Self { data }
+#[cfg(all(target_os = "none", target_arch = "x86_64"))]
+mod kernel {
+    use core::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::MAX_CPUS_HARD;
+
+    /// Per-CPU base addresses, indexed by cpu_id.
+    /// `PERCPU_BASES[i]` = start of CPU i's percpu region.
+    pub static PERCPU_BASES: [AtomicUsize; MAX_CPUS_HARD] =
+        [const { AtomicUsize::new(0) }; MAX_CPUS_HARD];
+
+    /// Per-CPU variable handle. Stores a pointer to the template in `.percpu`.
+    pub struct CpuLocal<T> {
+        template: *const T,
     }
 
-    /// Returns a reference to the current CPU's instance.
-    ///
-    /// If the GS base is not yet initialized (e.g. during AP early boot),
-    /// `current_cpu_id()` may return garbage. In that case, falls back to
-    /// CPU 0's slot to prevent an out-of-bounds panic. This is acceptable
-    /// for the atomic counters (IRQ lock depth, lockdep) that are the
-    /// primary users of `CpuLocal`.
-    pub fn get(&self) -> &T {
-        let id = current_cpu_id() as usize;
-        if id < MAX_CPUS {
-            &self.data[id]
-        } else {
-            &self.data[0]
+    // SAFETY: CpuLocal<T> is designed for per-CPU access. Each CPU only
+    // accesses its own copy of the data.
+    unsafe impl<T: Send> Send for CpuLocal<T> {}
+    unsafe impl<T: Send> Sync for CpuLocal<T> {}
+
+    impl<T> CpuLocal<T> {
+        /// Create a `CpuLocal` from a pointer to the template in `.percpu`.
+        ///
+        /// # Safety
+        ///
+        /// `ptr` must point to a static in the `.percpu` linker section.
+        pub const unsafe fn from_template_ptr(ptr: *const T) -> Self {
+            Self { template: ptr }
+        }
+
+        /// Returns a reference to the current CPU's instance.
+        ///
+        /// Reads the per-CPU base from `gs:[32]` (`PerCpuState::percpu_base`)
+        /// and adds the template's section offset.
+        ///
+        /// Falls back to the `.percpu` template before GS is initialized
+        /// or before `percpu_init_phase1()`. Uses the same `cpu_is_initialized()`
+        /// guard as the old `CpuLocal::get()`.
+        #[inline]
+        pub fn get(&self) -> &T {
+            let id = super::current_cpu_id() as usize;
+            if id >= super::MAX_CPUS_HARD {
+                // GS not yet initialized — cpu_id is garbage.
+                // SAFETY: template points to a valid static in .percpu.
+                return unsafe { &*self.template };
+            }
+            let base = PERCPU_BASES[id].load(Ordering::Relaxed);
+            if base == 0 {
+                // percpu region not yet allocated for this CPU.
+                // SAFETY: template points to a valid static in .percpu.
+                return unsafe { &*self.template };
+            }
+            let offset = self.template as usize - percpu_start();
+            // SAFETY: base + offset points into a valid per-CPU copy.
+            unsafe { &*((base + offset) as *const T) }
+        }
+
+        /// Returns a reference to a specific CPU's instance.
+        ///
+        /// # Panics
+        ///
+        /// Panics if the per-CPU region for `cpu_id` has not been initialized.
+        #[inline]
+        pub fn get_for(&self, cpu_id: u32) -> &T {
+            let base = PERCPU_BASES[cpu_id as usize].load(Ordering::Relaxed);
+            debug_assert!(base != 0, "per-CPU region not initialized for CPU {cpu_id}");
+            if base == 0 {
+                // SAFETY: template points to a valid static in .percpu.
+                return unsafe { &*self.template };
+            }
+            let offset = self.template as usize - percpu_start();
+            // SAFETY: base + offset points into a valid per-CPU copy.
+            unsafe { &*((base + offset) as *const T) }
         }
     }
 
-    /// Returns a reference to a specific CPU's instance.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `cpu_id >= MAX_CPUS`.
-    pub fn get_for(&self, cpu_id: u32) -> &T {
-        &self.data[cpu_id as usize]
+    /// Returns the virtual address of the `.percpu` section start.
+    #[inline]
+    pub fn percpu_start() -> usize {
+        unsafe extern "C" {
+            static __percpu_start: u8;
+        }
+        // Linker-defined symbol; we only take its address.
+        (&raw const __percpu_start) as usize
+    }
+
+    /// Returns the size of the `.percpu` template section in bytes.
+    #[inline]
+    pub fn percpu_section_size() -> usize {
+        unsafe extern "C" {
+            static __percpu_start: u8;
+            static __percpu_end: u8;
+        }
+        // Linker-defined symbols; we only take their addresses.
+        (&raw const __percpu_end) as usize - (&raw const __percpu_start) as usize
     }
 }
 
-// SAFETY: CpuLocal<T> is designed for per-CPU access. Send/Sync are safe
-// because each CPU only accesses its own slot.
-unsafe impl<T: Send> Send for CpuLocal<T> {}
-unsafe impl<T: Send> Sync for CpuLocal<T> {}
+#[cfg(all(target_os = "none", target_arch = "x86_64"))]
+pub use kernel::*;
+
+// ── Host target (testing) ────────────────────────────────────────────
+
+#[cfg(not(all(target_os = "none", target_arch = "x86_64")))]
+mod host {
+    /// Host-mode per-CPU variable. Wraps a single `T` (single-CPU assumption).
+    pub struct CpuLocal<T> {
+        data: T,
+    }
+
+    // SAFETY: Host mode is single-threaded for per-CPU purposes.
+    unsafe impl<T: Send> Send for CpuLocal<T> {}
+    unsafe impl<T: Send> Sync for CpuLocal<T> {}
+
+    impl<T> CpuLocal<T> {
+        /// Creates a host-mode `CpuLocal` wrapping the given value.
+        pub const fn new_host(data: T) -> Self {
+            Self { data }
+        }
+
+        /// Returns a reference to the wrapped value.
+        pub fn get(&self) -> &T {
+            &self.data
+        }
+
+        /// Returns a reference to the wrapped value (ignores `cpu_id`).
+        pub fn get_for(&self, _cpu_id: u32) -> &T {
+            &self.data
+        }
+    }
+}
+
+#[cfg(not(all(target_os = "none", target_arch = "x86_64")))]
+pub use host::*;
+
+// ── percpu_static! macro ─────────────────────────────────────────────
+
+/// Wrapper to make a `T: Send` usable as a `static` template.
+///
+/// Per-CPU templates are only accessed via pointer arithmetic (never
+/// through the static directly), so `Sync` is not required for safety.
+/// This wrapper provides the `Sync` impl the compiler demands for statics.
+#[repr(transparent)]
+pub struct PercpuTemplate<T>(T);
+
+// SAFETY: The template static is never accessed concurrently. It serves
+// only as a byte pattern that is copied to per-CPU regions at boot.
+unsafe impl<T: Send> Sync for PercpuTemplate<T> {}
+
+impl<T> PercpuTemplate<T> {
+    /// Creates a new template wrapper.
+    pub const fn new(val: T) -> Self {
+        Self(val)
+    }
+}
+
+/// Declares a per-CPU static variable.
+///
+/// On kernel targets, places the template in the `.percpu` linker section.
+/// On host targets, wraps a single value for unit testing.
+///
+/// # Examples
+///
+/// ```ignore
+/// use core::sync::atomic::AtomicU32;
+/// percpu_static!(static MY_COUNTER: AtomicU32 = AtomicU32::new(0));
+/// ```
+#[cfg(all(target_os = "none", target_arch = "x86_64"))]
+#[macro_export]
+macro_rules! percpu_static {
+    ($vis:vis static $name:ident : $ty:ty = $init:expr) => {
+        $vis static $name: $crate::cpu_local::CpuLocal<$ty> = {
+            #[unsafe(link_section = ".percpu")]
+            #[used]
+            static TEMPLATE: $crate::cpu_local::PercpuTemplate<$ty> =
+                $crate::cpu_local::PercpuTemplate::new($init);
+            // SAFETY: TEMPLATE is placed in the .percpu section by the linker.
+            // The pointer to the inner T is at the same address as the wrapper
+            // due to #[repr(transparent)].
+            unsafe {
+                $crate::cpu_local::CpuLocal::from_template_ptr(
+                    &raw const TEMPLATE as *const $ty
+                )
+            }
+        };
+    };
+}
+
+/// Host-mode `percpu_static!` — wraps a single value.
+#[cfg(not(all(target_os = "none", target_arch = "x86_64")))]
+#[macro_export]
+macro_rules! percpu_static {
+    ($vis:vis static $name:ident : $ty:ty = $init:expr) => {
+        $vis static $name: $crate::cpu_local::CpuLocal<$ty> =
+            $crate::cpu_local::CpuLocal::new_host($init);
+    };
+}
+
+// ── Utility functions (shared) ───────────────────────────────────────
 
 /// Returns the current CPU ID.
 ///
@@ -101,5 +265,24 @@ pub fn cpu_is_initialized() -> bool {
     #[cfg(not(all(target_os = "none", target_arch = "x86_64")))]
     {
         true
+    }
+}
+
+// ── Host tests ───────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use core::sync::atomic::{AtomicU32, Ordering};
+
+    percpu_static!(static TEST_COUNTER: AtomicU32 = AtomicU32::new(42));
+
+    #[test]
+    fn test_percpu_static_get_returns_init_value() {
+        assert_eq!(TEST_COUNTER.get().load(Ordering::Relaxed), 42);
+    }
+
+    #[test]
+    fn test_percpu_static_get_for_zero() {
+        assert_eq!(TEST_COUNTER.get_for(0).load(Ordering::Relaxed), 42);
     }
 }

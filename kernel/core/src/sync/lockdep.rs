@@ -29,8 +29,6 @@ use core::sync::atomic::{
     AtomicBool, AtomicU8, AtomicU16, AtomicU32, AtomicU64, AtomicUsize, Ordering,
 };
 
-use crate::cpu_local::{CpuLocal, MAX_CPUS};
-
 // ---------------------------------------------------------------------------
 // Reporting callback (for hadron_lockdep_warn mode)
 // ---------------------------------------------------------------------------
@@ -467,13 +465,12 @@ impl HeldLocks {
 }
 
 /// Per-CPU held-lock stacks.
-static HELD: CpuLocal<core::cell::UnsafeCell<HeldLocks>> =
-    CpuLocal::new([const { core::cell::UnsafeCell::new(HeldLocks::new()) }; MAX_CPUS]);
+crate::percpu_static!(static HELD: core::cell::UnsafeCell<HeldLocks> =
+    core::cell::UnsafeCell::new(HeldLocks::new()));
 
 /// Per-CPU reentrancy guard. Prevents infinite recursion when lockdep
 /// hooks trigger allocation or logging that re-enters lock acquisition.
-static IN_LOCKDEP: CpuLocal<AtomicBool> =
-    CpuLocal::new([const { AtomicBool::new(false) }; MAX_CPUS]);
+crate::percpu_static!(static IN_LOCKDEP: AtomicBool = AtomicBool::new(false));
 
 // ---------------------------------------------------------------------------
 // Early-boot guard

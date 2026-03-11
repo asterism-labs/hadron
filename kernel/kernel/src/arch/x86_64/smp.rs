@@ -21,13 +21,13 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use hadron_core::addr::VirtAddr;
 
 use crate::arch::x86_64::hw::local_apic::LocalApic;
-use crate::percpu::MAX_CPUS;
+use crate::percpu::MAX_CPUS_HARD;
 
 /// Physical address of the AP trampoline code (must be page-aligned, < 1 MiB).
 const AP_TRAMPOLINE_PHYS: u64 = 0x8000;
 
 /// Maximum number of CPUs supported.
-const MAX_AP_COUNT: usize = MAX_CPUS - 1;
+const MAX_AP_COUNT: usize = MAX_CPUS_HARD - 1;
 
 // ── Shared AP startup state ─────────────────────────────────────────
 
@@ -41,7 +41,7 @@ static AP_STARTED_COUNT: AtomicU32 = AtomicU32::new(0);
 static AP_RELEASE: AtomicBool = AtomicBool::new(false);
 
 /// Per-AP `PerCpuState` pointers, indexed by logical CPU ID (1..N).
-static AP_PERCPU_TABLE: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
+static AP_PERCPU_TABLE: [AtomicU64; MAX_CPUS_HARD] = [const { AtomicU64::new(0) }; MAX_CPUS_HARD];
 
 /// Total CPU count (BSP + APs), set during boot_aps.
 static CPU_COUNT: AtomicU32 = AtomicU32::new(1);
@@ -254,7 +254,7 @@ pub unsafe fn boot_aps() {
 
     // Allocate per-CPU state for each AP.
     for ap in &aps {
-        if ap.cpu_id as usize >= MAX_CPUS {
+        if ap.cpu_id as usize >= MAX_CPUS_HARD {
             continue;
         }
         let percpu = crate::percpu::init_ap_percpu(ap.cpu_id, 0);
@@ -297,6 +297,28 @@ pub unsafe fn boot_aps() {
 /// Returns the total number of online CPUs.
 pub fn cpu_count() -> u32 {
     CPU_COUNT.load(Ordering::Acquire)
+}
+
+/// Returns the total CPU count from the MADT (BSP + enabled APs).
+///
+/// Used before `boot_aps()` to pre-allocate per-CPU regions.
+/// Falls back to 1 (BSP only) if no MADT is available.
+#[cfg(hadron_smp)]
+pub fn madt_cpu_count() -> u32 {
+    use hadron_acpi::madt;
+
+    let mut count = 0u32;
+    crate::arch::x86_64::acpi::Acpi::with_madt(|madt_data| {
+        for entry in madt_data.entries() {
+            if let madt::MadtEntry::LocalApic { flags, .. } = entry {
+                if flags & 1 != 0 {
+                    count += 1;
+                }
+            }
+        }
+    });
+    // At minimum 1 (BSP), even if MADT parsing fails.
+    count.max(1)
 }
 
 /// Collect AP information from the MADT.
