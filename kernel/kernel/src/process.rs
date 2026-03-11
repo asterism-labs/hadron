@@ -276,6 +276,10 @@ pub async fn process_task(
 
                 let exit_code = child.return_code();
 
+                // Restore CURRENT_PROCESS — another process_task may have
+                // overwritten it while we were suspended.
+                *CURRENT_PROCESS.get().lock() = Some(Arc::clone(&process));
+
                 // Reload our CR3 — another process may have loaded its own.
                 // SAFETY: process_cr3 is valid.
                 unsafe {
@@ -311,7 +315,8 @@ pub async fn process_task(
         }
     }
 
-    // Clean up.
+    // Clean up: close all handles (triggers on_zero_handles for each object).
+    process.with_handle_table(|table| table.close_all());
     unregister_process(pid);
     *CURRENT_PROCESS.get().lock() = None;
 

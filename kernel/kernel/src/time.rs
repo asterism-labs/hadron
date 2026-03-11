@@ -82,6 +82,14 @@ impl Time {
     pub fn register_hpet(_hpet: crate::arch::x86_64::hw::hpet::Hpet) {}
 }
 
+/// Returns nanoseconds elapsed since boot.
+///
+/// Uses the calibrated TSC frequency. Returns 0 if uncalibrated.
+pub fn nanos_since_boot() -> u64 {
+    let tsc = crate::arch::x86_64::hw::tsc::read_tsc();
+    tsc_to_nanos_impl(tsc)
+}
+
 // ── TSC converter ────────────────────────────────────────────────────────
 
 /// Converts a raw TSC value to nanoseconds relative to boot.

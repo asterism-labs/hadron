@@ -15,6 +15,10 @@ static USERBOOT_ELF: &[u8] =
 static TEST_CHILD_ELF: &[u8] =
     include_bytes!("../../../build/kernel/x86_64-unknown-hadron-user/debug/test_child");
 
+/// Raw bytes of the test-receiver ELF binary.
+static TEST_RECEIVER_ELF: &[u8] =
+    include_bytes!("../../../build/kernel/x86_64-unknown-hadron-user/debug/test_receiver");
+
 /// Returns the embedded userboot ELF binary.
 pub fn elf_bytes() -> &'static [u8] {
     USERBOOT_ELF
@@ -22,7 +26,7 @@ pub fn elf_bytes() -> &'static [u8] {
 
 /// Look up an embedded binary by path.
 ///
-/// Phase 2b: simple match on known binary names.
+/// Phase 2: simple match on known binary names.
 /// Phase 3+: parse CPIO initrd archive.
 pub fn lookup_initrd_binary(path: &str) -> Option<&'static [u8]> {
     // Strip leading path components to get the binary name.
@@ -30,6 +34,7 @@ pub fn lookup_initrd_binary(path: &str) -> Option<&'static [u8]> {
 
     match name {
         "test-child" | "test_child" => Some(TEST_CHILD_ELF),
+        "test-receiver" | "test_receiver" => Some(TEST_RECEIVER_ELF),
         _ => None,
     }
 }

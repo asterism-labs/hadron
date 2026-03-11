@@ -1,5 +1,6 @@
 //! Handle syscall handlers: close, dup, pipe.
 
+use hadron_objects::object::KernelObject;
 use hadron_syscall::*;
 
 use super::validate::UserPtrMut;
@@ -13,9 +14,8 @@ pub fn sys_handle_close(fd: usize) -> isize {
 
     match result {
         Ok(entry) => {
-            // Trigger on_zero_handles if this was the last Arc reference
-            // (the entry is dropped when this scope ends).
-            let _ = entry;
+            // Notify the object that a handle was closed.
+            entry.object().on_zero_handles();
             0
         }
         Err(_) => -EBADF,

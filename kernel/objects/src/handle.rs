@@ -272,6 +272,32 @@ impl HandleTable {
         self.insert(new_entry)
     }
 
+    /// Insert a handle entry at a specific handle value.
+    ///
+    /// Used by `task_spawn` to place inherited handles at the slots
+    /// specified by the parent's fd_map.
+    ///
+    /// If the slot is already occupied, the existing entry is replaced.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HandleError::TableFull`] if the table is at capacity and
+    /// the slot is not already occupied.
+    pub fn insert_at(&mut self, value: HandleValue, entry: HandleEntry) -> Result<(), HandleError> {
+        if !self.entries.contains_key(&value) && self.entries.len() >= Self::MAX_HANDLES {
+            return Err(HandleError::TableFull);
+        }
+        self.entries.insert(value, entry);
+        // Advance next_value past this slot to avoid collisions.
+        if value.0 >= self.next_value {
+            self.next_value = value.0.wrapping_add(1);
+            if self.next_value == 0 {
+                self.next_value = 1;
+            }
+        }
+        Ok(())
+    }
+
     /// The number of handles currently in the table.
     #[must_use]
     pub fn len(&self) -> usize {
@@ -282,6 +308,17 @@ impl HandleTable {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// Close all handles, calling `on_zero_handles` on each object.
+    ///
+    /// Used during process cleanup to notify objects (e.g. Channel
+    /// endpoints) that all handles have been closed.
+    pub fn close_all(&mut self) {
+        let entries = core::mem::take(&mut self.entries);
+        for (_, entry) in entries {
+            entry.object.on_zero_handles();
+        }
     }
 }
 

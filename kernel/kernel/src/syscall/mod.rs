@@ -7,11 +7,14 @@
 extern crate alloc;
 
 pub mod channel;
+pub mod event;
 pub mod handle;
 pub mod memory;
+pub mod net;
 pub mod system;
 pub mod task;
 pub mod validate;
+pub mod vnode;
 
 use hadron_objects::handle::HandleTable;
 use hadron_syscall::*;
@@ -56,10 +59,45 @@ pub fn dispatch(nr: usize, a0: usize, a1: usize, a2: usize, a3: usize, a4: usize
         SYS_CHANNEL_SEND_FD => channel::sys_channel_send_fd(a0, a1, a2, a3),
         SYS_CHANNEL_RECV_FD => channel::sys_channel_recv_fd(a0, a1, a2, a3),
 
+        // ── Vnode ───────────────────────────────────────────────
+        SYS_VNODE_OPEN => vnode::sys_vnode_open(a0, a1, a2),
+        SYS_VNODE_READ => vnode::sys_vnode_read(a0, a1, a2),
+        SYS_VNODE_WRITE => vnode::sys_vnode_write(a0, a1, a2),
+        SYS_VNODE_STAT => vnode::sys_vnode_stat(a0, a1),
+        SYS_VNODE_READDIR => vnode::sys_vnode_readdir(a0, a1, a2),
+        SYS_VNODE_UNLINK => vnode::sys_vnode_unlink(a0, a1),
+        SYS_VNODE_SEEK => vnode::sys_vnode_seek(a0, a1, a2),
+        SYS_VNODE_MKDIR => vnode::sys_vnode_mkdir(a0, a1, a2),
+        SYS_VNODE_RENAME => vnode::sys_vnode_rename(a0, a1, a2, a3),
+        SYS_VNODE_SYMLINK => vnode::sys_vnode_symlink(a0, a1, a2, a3),
+        SYS_VNODE_LINK => vnode::sys_vnode_link(a0, a1, a2, a3),
+        SYS_VNODE_READLINK => vnode::sys_vnode_readlink(a0, a1, a2),
+        SYS_VNODE_TRUNCATE => vnode::sys_vnode_truncate(a0, a1),
+        SYS_VNODE_FSTATAT => vnode::sys_vnode_fstatat(a0, a1, a2, a3),
+
         // ── Memory ───────────────────────────────────────────────
         SYS_MEM_MAP => memory::sys_mem_map(a0, a1, a2, a3, a4),
         SYS_MEM_UNMAP => memory::sys_mem_unmap(a0, a1),
         SYS_MEM_BRK => memory::sys_mem_brk(a0),
+
+        // ── Event / Timer ────────────────────────────────────────
+        SYS_EVENT_CREATE => event::sys_event_create(),
+        SYS_EVENT_SIGNAL => event::sys_event_signal(a0, a1, a2),
+        SYS_EVENT_WAIT => event::sys_event_wait(a0, a1),
+        SYS_EVENT_WAIT_MANY => event::sys_event_wait_many(a0, a1, a2),
+        SYS_CLOCK_GETTIME => event::sys_clock_gettime(a0, a1),
+        SYS_CLOCK_NANOSLEEP => event::sys_clock_nanosleep(a0, a1, a2, a3),
+        SYS_FUTEX => event::sys_futex(a0, a1, a2, a3),
+
+        // ── Network ──────────────────────────────────────────────
+        SYS_NET_SOCKET => net::sys_net_socket(a0, a1, a2),
+        SYS_NET_BIND => net::sys_net_bind(a0, a1, a2),
+        SYS_NET_LISTEN => net::sys_net_listen(a0, a1),
+        SYS_NET_ACCEPT => net::sys_net_accept(a0, a1, a2),
+        SYS_NET_CONNECT => net::sys_net_connect(a0, a1, a2),
+        SYS_NET_SENDMSG => net::sys_net_sendmsg(a0, a1, a2),
+        SYS_NET_RECVMSG => net::sys_net_recvmsg(a0, a1, a2),
+        SYS_NET_SHUTDOWN => net::sys_net_shutdown(a0, a1),
 
         // ── System ───────────────────────────────────────────────
         SYS_DEBUG_LOG => system::sys_debug_log(a0, a1),

@@ -249,7 +249,7 @@ kernel_main.add("hadron-kernel-image", "kernel/kernel-image")
     .deps(#{
         hadron_kernel: "hadron-kernel"
     })
-    .artifact_deps(["userboot", "test-child"]);
+    .artifact_deps(["userboot", "test-child", "test-receiver"]);
 
 // ===========================================================================
 // Userspace library crates (user target)
@@ -277,6 +277,17 @@ userboot.add("userboot", "userspace/userboot")
 let test_child = group("test-child").target("x86_64-unknown-hadron-user").edition("2024");
 
 test_child.add("test-child", "userspace/test-child")
+    .crate_type(BIN)
+    .root("src/main.rs")
+    .deps(#{ hadron_syscall: "hadron-syscall-user" });
+
+// ===========================================================================
+// Test receiver (spawned by userboot during Phase 2c verification)
+// ===========================================================================
+
+let test_receiver = group("test-receiver").target("x86_64-unknown-hadron-user").edition("2024");
+
+test_receiver.add("test-receiver", "userspace/test-receiver")
     .crate_type(BIN)
     .root("src/main.rs")
     .deps(#{ hadron_syscall: "hadron-syscall-user" });
@@ -324,7 +335,7 @@ pipeline()
     .barrier("sysroot-ready")
     .stage("host", ["host"])
     .barrier("host-ready")
-    .stage("kernel", ["vendored", "vendored-uefi", "kernel-libs", "uefi-libs", "user-libs", "userboot", "test-child"])
+    .stage("kernel", ["vendored", "vendored-uefi", "kernel-libs", "uefi-libs", "user-libs", "userboot", "test-child", "test-receiver"])
     .barrier("kernel-ready")
     .stage("link", ["kernel-main"])
     .barrier("link-ready")

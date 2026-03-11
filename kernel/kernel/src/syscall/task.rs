@@ -58,11 +58,15 @@ pub fn sys_task_exit(code: usize) -> isize {
     }
 }
 
+/// Maximum number of fd_map entries allowed per spawn.
+const MAX_FD_MAP_ENTRIES: usize = 64;
+
 /// `SYS_TASK_SPAWN(info_ptr, info_len)` — spawn a new process.
 ///
-/// For Phase 2b, `info_ptr` points to a path string (the binary name in
-/// the initrd), and `info_len` is the path length. The binary is looked
-/// up in the embedded initrd table.
+/// `info_ptr` points to a [`SpawnInfo`] struct. `info_len` must equal
+/// `size_of::<SpawnInfo>()`. The binary is looked up in the embedded
+/// initrd table. Handle inheritance is controlled by the `fd_map` array
+/// in `SpawnInfo`.
 ///
 /// Returns the child's PID (koid) on success, or a negative error code.
 #[expect(
@@ -70,17 +74,58 @@ pub fn sys_task_exit(code: usize) -> isize {
     reason = "koid raw value fits in isize on x86_64"
 )]
 pub fn sys_task_spawn(info_ptr: usize, info_len: usize) -> isize {
-    // Validate and read the path from user memory.
-    let slice = match UserSlice::new(info_ptr, info_len) {
+    use hadron_syscall::types::{FdMapEntry, SpawnInfo};
+
+    // Validate and read SpawnInfo from user memory.
+    if info_len != core::mem::size_of::<SpawnInfo>() {
+        return -EINVAL;
+    }
+    let info_uptr = match super::validate::UserPtr::<SpawnInfo>::new(info_ptr) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    // SAFETY: Pointer was range-validated and size matches.
+    let info = unsafe { info_uptr.read() };
+
+    // Read the path string.
+    let path_slice = match UserSlice::new(info.path_ptr, info.path_len) {
         Ok(s) => s,
         Err(e) => return e,
     };
-
     // SAFETY: User buffer was range-validated.
-    let path_bytes = unsafe { slice.read_to_vec() };
+    let path_bytes = unsafe { path_slice.read_to_vec() };
     let path = match core::str::from_utf8(&path_bytes) {
         Ok(p) => p,
         Err(_) => return -EINVAL,
+    };
+
+    // Read fd_map entries (if any).
+    let fd_map = if info.fd_map_count > 0 {
+        if info.fd_map_count > MAX_FD_MAP_ENTRIES {
+            return -EINVAL;
+        }
+        let fd_map_size = info.fd_map_count * core::mem::size_of::<FdMapEntry>();
+        let fd_slice = match UserSlice::new(info.fd_map_ptr, fd_map_size) {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        // SAFETY: User buffer was range-validated.
+        let fd_bytes = unsafe { fd_slice.read_to_vec() };
+        // SAFETY: FdMapEntry is repr(C) with no padding concerns for u32 fields.
+        let entries: alloc::vec::Vec<FdMapEntry> = fd_bytes
+            .chunks_exact(core::mem::size_of::<FdMapEntry>())
+            .map(|chunk| {
+                let child_fd = u32::from_ne_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                let parent_fd = u32::from_ne_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]);
+                FdMapEntry {
+                    child_fd,
+                    parent_fd,
+                }
+            })
+            .collect();
+        entries
+    } else {
+        alloc::vec::Vec::new()
     };
 
     crate::kinfo!("syscall", "task_spawn: \"{}\"", path);
@@ -207,6 +252,36 @@ pub fn sys_task_spawn(info_ptr: usize, info_len: usize) -> isize {
     child_process.add_thread(Arc::clone(&child_thread));
 
     let child_pid = child_process.koid().raw();
+
+    // Process fd_map: duplicate parent handles into child's handle table.
+    if !fd_map.is_empty() {
+        let result = super::with_handle_table(|parent_table| {
+            child_process.with_handle_table(|child_table| {
+                for entry in &fd_map {
+                    let parent_hv = hadron_objects::handle::HandleValue::from_raw(entry.parent_fd);
+                    let child_hv = hadron_objects::handle::HandleValue::from_raw(entry.child_fd);
+
+                    let parent_entry = match parent_table.get(parent_hv) {
+                        Ok(e) => e,
+                        Err(_) => return -EBADF,
+                    };
+
+                    let new_entry = hadron_objects::handle::HandleEntry::new(
+                        Arc::clone(parent_entry.object()),
+                        parent_entry.rights(),
+                    );
+
+                    if child_table.insert_at(child_hv, new_entry).is_err() {
+                        return -EMFILE;
+                    }
+                }
+                0
+            })
+        });
+        if result != 0 {
+            return result;
+        }
+    }
 
     // Register in global process table.
     process::register_process(&child_process);
