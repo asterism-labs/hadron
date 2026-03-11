@@ -59,7 +59,7 @@ pub const SYS_HANDLE_FCNTL: usize = 0x17;
 /// Create a pipe with flags.
 pub const SYS_HANDLE_PIPE2: usize = 0x18;
 
-// ── Channel (0x20) ───────────────────────────────────────────────────
+// ── Channel / IPC (0x20) ─────────────────────────────────────────────
 
 /// Create a bidirectional channel pair.
 pub const SYS_CHANNEL_CREATE: usize = 0x20;
@@ -73,6 +73,16 @@ pub const SYS_CHANNEL_ACCEPT: usize = 0x23;
 pub const SYS_CHANNEL_SEND_FD: usize = 0x24;
 /// Receive a message with an attached handle.
 pub const SYS_CHANNEL_RECV_FD: usize = 0x25;
+/// Create an event pair (two linked event endpoints).
+pub const SYS_EVENT_PAIR_CREATE: usize = 0x26;
+/// Signal the peer of an event pair.
+pub const SYS_EVENT_PAIR_SIGNAL_PEER: usize = 0x27;
+/// Create a FIFO pair.
+pub const SYS_FIFO_CREATE: usize = 0x28;
+/// Write elements to a FIFO.
+pub const SYS_FIFO_WRITE: usize = 0x29;
+/// Read elements from a FIFO.
+pub const SYS_FIFO_READ: usize = 0x2A;
 
 // ── Vnode (0x30) ─────────────────────────────────────────────────────
 
@@ -136,6 +146,18 @@ pub const SYS_CLOCK_GETTIME: usize = 0x54;
 pub const SYS_CLOCK_NANOSLEEP: usize = 0x55;
 /// Futex operations (wait/wake).
 pub const SYS_FUTEX: usize = 0x56;
+/// Create a port (async event aggregator).
+pub const SYS_PORT_CREATE: usize = 0x57;
+/// Wait for a packet on a port.
+pub const SYS_PORT_WAIT: usize = 0x58;
+/// Queue a user packet on a port.
+pub const SYS_PORT_QUEUE: usize = 0x59;
+/// Create a timer object.
+pub const SYS_TIMER_CREATE: usize = 0x5A;
+/// Set a timer deadline.
+pub const SYS_TIMER_SET: usize = 0x5B;
+/// Cancel a pending timer.
+pub const SYS_TIMER_CANCEL: usize = 0x5C;
 
 // ── Network (0x60) ───────────────────────────────────────────────────
 

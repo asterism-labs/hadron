@@ -114,6 +114,43 @@ bitflags! {
 
         /// Default rights for a PMT (Pinned Memory Token) handle.
         const PMT_DEFAULT = Self::READ.bits();
+
+        /// Default rights for a Port handle.
+        const PORT_DEFAULT = Self::READ.bits()
+            | Self::WRITE.bits()
+            | Self::DUPLICATE.bits()
+            | Self::TRANSFER.bits()
+            | Self::WAIT.bits();
+
+        /// Default rights for an EventPair endpoint.
+        const EVENT_PAIR_DEFAULT = Self::READ.bits()
+            | Self::WRITE.bits()
+            | Self::DUPLICATE.bits()
+            | Self::TRANSFER.bits()
+            | Self::SIGNAL.bits()
+            | Self::WAIT.bits();
+
+        /// Default rights for a Timer handle.
+        const TIMER_DEFAULT = Self::READ.bits()
+            | Self::WRITE.bits()
+            | Self::DUPLICATE.bits()
+            | Self::TRANSFER.bits()
+            | Self::SIGNAL.bits()
+            | Self::WAIT.bits();
+
+        /// Default rights for a FIFO endpoint.
+        const FIFO_DEFAULT = Self::READ.bits()
+            | Self::WRITE.bits()
+            | Self::DUPLICATE.bits()
+            | Self::TRANSFER.bits()
+            | Self::WAIT.bits();
+
+        /// Default rights for a Socket endpoint.
+        const SOCKET_DEFAULT = Self::READ.bits()
+            | Self::WRITE.bits()
+            | Self::DUPLICATE.bits()
+            | Self::TRANSFER.bits()
+            | Self::WAIT.bits();
     }
 }
 

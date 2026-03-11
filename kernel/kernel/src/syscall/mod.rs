@@ -8,13 +8,17 @@ extern crate alloc;
 
 pub mod channel;
 pub mod event;
+pub mod event_pair;
+pub mod fifo;
 pub mod handle;
 #[cfg(hadron_iommu)]
 pub mod iommu;
 pub mod memory;
 pub mod net;
+pub mod port;
 pub mod system;
 pub mod task;
+pub mod timer;
 pub mod validate;
 pub mod vnode;
 
@@ -54,12 +58,18 @@ pub fn dispatch(nr: usize, a0: usize, a1: usize, a2: usize, a3: usize, a4: usize
         SYS_HANDLE_TCSETPGRP => handle::sys_handle_tcsetpgrp(a0, a1),
         SYS_HANDLE_TCGETPGRP => handle::sys_handle_tcgetpgrp(a0),
 
-        // ── Channel ──────────────────────────────────────────────
+        // ── Channel / IPC ────────────────────────────────────────
         SYS_CHANNEL_CREATE => channel::sys_channel_create(a0),
         SYS_CHANNEL_SEND => channel::sys_channel_send(a0, a1, a2),
         SYS_CHANNEL_RECV => channel::sys_channel_recv(a0, a1, a2),
+        SYS_CHANNEL_ACCEPT => -ENOSYS, // Phase 5+: service namespace
         SYS_CHANNEL_SEND_FD => channel::sys_channel_send_fd(a0, a1, a2, a3),
         SYS_CHANNEL_RECV_FD => channel::sys_channel_recv_fd(a0, a1, a2, a3),
+        SYS_EVENT_PAIR_CREATE => event_pair::sys_event_pair_create(a0),
+        SYS_EVENT_PAIR_SIGNAL_PEER => event_pair::sys_event_pair_signal_peer(a0, a1, a2),
+        SYS_FIFO_CREATE => fifo::sys_fifo_create(a0, a1, a2),
+        SYS_FIFO_WRITE => fifo::sys_fifo_write(a0, a1, a2),
+        SYS_FIFO_READ => fifo::sys_fifo_read(a0, a1, a2),
 
         // ── Vnode ───────────────────────────────────────────────
         SYS_VNODE_OPEN => vnode::sys_vnode_open(a0, a1, a2),
@@ -90,6 +100,12 @@ pub fn dispatch(nr: usize, a0: usize, a1: usize, a2: usize, a3: usize, a4: usize
         SYS_CLOCK_GETTIME => event::sys_clock_gettime(a0, a1),
         SYS_CLOCK_NANOSLEEP => event::sys_clock_nanosleep(a0, a1, a2, a3),
         SYS_FUTEX => event::sys_futex(a0, a1, a2, a3),
+        SYS_PORT_CREATE => port::sys_port_create(),
+        SYS_PORT_WAIT => port::sys_port_wait(a0, a1),
+        SYS_PORT_QUEUE => port::sys_port_queue(a0, a1, a2),
+        SYS_TIMER_CREATE => timer::sys_timer_create(),
+        SYS_TIMER_SET => timer::sys_timer_set(a0, a1, a2),
+        SYS_TIMER_CANCEL => timer::sys_timer_cancel(a0),
 
         // ── Network ──────────────────────────────────────────────
         SYS_NET_SOCKET => net::sys_net_socket(a0, a1, a2),

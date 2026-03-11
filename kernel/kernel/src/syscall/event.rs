@@ -172,9 +172,42 @@ pub fn sys_event_signal(fd: usize, set_mask: usize, clear_mask: usize) -> isize 
     })
 }
 
-/// `SYS_EVENT_WAIT(fd, signals)` — stub (not yet implemented).
-pub fn sys_event_wait(_fd: usize, _signals: usize) -> isize {
-    -ENOSYS
+/// `SYS_EVENT_WAIT(fd, signals)` — wait for signals on a single object.
+///
+/// Returns immediately if any of the requested signals are already set.
+/// Otherwise, blocks until at least one signal in the mask becomes set.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "signal bitmask fits in u32"
+)]
+pub fn sys_event_wait(fd: usize, signals: usize) -> isize {
+    let hv = hadron_objects::handle::HandleValue::from_raw(fd as u32);
+    let mask = Signals::from_bits_truncate(signals as u32);
+
+    super::with_handle_table(|table| {
+        let entry = match table.get_with_rights(hv, Rights::WAIT) {
+            Ok(e) => e,
+            Err(_) => return -EBADF,
+        };
+
+        let current = entry.object().get_signals();
+        if current.intersects(mask) {
+            return current.bits() as isize;
+        }
+
+        // Not ready — block.
+        crate::process::set_blocking_op(crate::process::BlockingOp::EventWait {
+            fd,
+            signals: signals as u32,
+        });
+        let saved_rsp: u64;
+        // SAFETY: GS is kernel; gs:[8] was set by enter_userspace_save.
+        unsafe { core::arch::asm!("mov {}, gs:[8]", out(reg) saved_rsp) };
+        // SAFETY: saved_rsp is valid.
+        unsafe {
+            crate::arch::x86_64::userspace::restore_kernel_context(saved_rsp);
+        }
+    })
 }
 
 /// `SYS_CLOCK_GETTIME(clockid, tp_ptr)` — get current time.

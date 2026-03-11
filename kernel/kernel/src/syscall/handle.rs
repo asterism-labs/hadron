@@ -66,13 +66,37 @@ pub fn sys_handle_dup_lowest(fd: usize) -> isize {
 
 /// `SYS_HANDLE_PIPE(fds_ptr)` — create a socket pair.
 ///
-/// Phase 2a stub: returns ENOSYS (sockets not yet implemented).
+/// Writes `[fd_a, fd_b]` to the user buffer at `fds_ptr`.
 pub fn sys_handle_pipe(fds_ptr: usize) -> isize {
-    let _fds_out = match UserPtrMut::<[usize; 2]>::new(fds_ptr) {
+    use hadron_objects::handle::{HandleEntry, Rights};
+    use hadron_objects::socket::{DEFAULT_MAX_BUFFER, Socket};
+
+    let fds_out = match UserPtrMut::<[usize; 2]>::new(fds_ptr) {
         Ok(p) => p,
         Err(e) => return e,
     };
-    -ENOSYS // Phase 2b: implement with Socket::create_pair()
+
+    let (s0, s1) = Socket::create_pair(DEFAULT_MAX_BUFFER);
+
+    let result = with_handle_table(|table| {
+        let hv0 = table.insert(HandleEntry::new(s0, Rights::SOCKET_DEFAULT))?;
+        match table.insert(HandleEntry::new(s1, Rights::SOCKET_DEFAULT)) {
+            Ok(hv1) => Ok((hv0, hv1)),
+            Err(e) => {
+                let _ = table.remove(hv0);
+                Err(e)
+            }
+        }
+    });
+
+    match result {
+        Ok((hv0, hv1)) => {
+            // SAFETY: fds_ptr was validated by UserPtrMut::new.
+            unsafe { fds_out.write([hv0.raw() as usize, hv1.raw() as usize]) };
+            0
+        }
+        Err(_) => -EMFILE,
+    }
 }
 
 /// `SYS_HANDLE_TCSETPGRP` — stub (not yet implemented).

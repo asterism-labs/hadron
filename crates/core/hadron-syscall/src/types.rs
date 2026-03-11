@@ -112,6 +112,23 @@ pub struct SpawnInfo {
     pub cwd_len: usize,
 }
 
+/// Port packet returned by [`SYS_PORT_WAIT`](super::numbers::SYS_PORT_WAIT).
+///
+/// Mirrors the kernel-internal `PortPacket` in a layout-stable form suitable
+/// for crossing the syscall boundary.
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct UserPortPacket {
+    /// Caller-supplied key for demultiplexing.
+    pub key: u64,
+    /// Signal state at the time of delivery.
+    pub signals: u32,
+    /// Koid of the object that generated this packet.
+    pub koid: u64,
+    /// Packet type (0 = signal observer, 1 = user-queued).
+    pub packet_type: u32,
+}
+
 /// Poll file descriptor for [`SYS_EVENT_WAIT_MANY`].
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]

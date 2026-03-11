@@ -243,6 +243,86 @@ pub fn sys_channel_recv_fd(ch_fd: usize, buf_ptr: usize, len: usize, fd_out_ptr:
     syscall4(SYS_CHANNEL_RECV_FD, ch_fd, buf_ptr, len, fd_out_ptr)
 }
 
+// ── EventPair ────────────────────────────────────────────────────
+
+/// Create an event pair. `fds_ptr` points to `[usize; 2]`.
+pub fn sys_event_pair_create(fds_ptr: usize) -> isize {
+    syscall1(SYS_EVENT_PAIR_CREATE, fds_ptr)
+}
+
+/// Signal the peer endpoint of an event pair.
+pub fn sys_event_pair_signal_peer(fd: usize, set_mask: usize, clear_mask: usize) -> isize {
+    syscall3(SYS_EVENT_PAIR_SIGNAL_PEER, fd, set_mask, clear_mask)
+}
+
+// ── FIFO ─────────────────────────────────────────────────────────
+
+/// Create a FIFO pair. `fds_ptr` points to `[usize; 2]`.
+pub fn sys_fifo_create(fds_ptr: usize, elem_count: usize, elem_size: usize) -> isize {
+    syscall3(SYS_FIFO_CREATE, fds_ptr, elem_count, elem_size)
+}
+
+/// Write elements to a FIFO.
+pub fn sys_fifo_write(fd: usize, buf_ptr: usize, len: usize) -> isize {
+    syscall3(SYS_FIFO_WRITE, fd, buf_ptr, len)
+}
+
+/// Read elements from a FIFO.
+pub fn sys_fifo_read(fd: usize, buf_ptr: usize, len: usize) -> isize {
+    syscall3(SYS_FIFO_READ, fd, buf_ptr, len)
+}
+
+// ── Port ─────────────────────────────────────────────────────────
+
+/// Create a port (async event aggregator).
+pub fn sys_port_create() -> isize {
+    syscall0(SYS_PORT_CREATE)
+}
+
+/// Wait for a packet on a port. `packet_ptr` points to a `UserPortPacket`.
+pub fn sys_port_wait(fd: usize, packet_ptr: usize) -> isize {
+    syscall2(SYS_PORT_WAIT, fd, packet_ptr)
+}
+
+/// Queue a user packet on a port.
+pub fn sys_port_queue(fd: usize, key: usize, signals: usize) -> isize {
+    syscall3(SYS_PORT_QUEUE, fd, key, signals)
+}
+
+// ── Timer ────────────────────────────────────────────────────────
+
+/// Create a timer object.
+pub fn sys_timer_create() -> isize {
+    syscall0(SYS_TIMER_CREATE)
+}
+
+/// Set a timer deadline (nanoseconds since boot).
+pub fn sys_timer_set(fd: usize, deadline_ns: usize, slack_ns: usize) -> isize {
+    syscall3(SYS_TIMER_SET, fd, deadline_ns, slack_ns)
+}
+
+/// Cancel a pending timer.
+pub fn sys_timer_cancel(fd: usize) -> isize {
+    syscall1(SYS_TIMER_CANCEL, fd)
+}
+
+// ── Event ────────────────────────────────────────────────────────
+
+/// Create an event object.
+pub fn sys_event_create() -> isize {
+    syscall0(SYS_EVENT_CREATE)
+}
+
+/// Signal an event object (set/clear signal bits).
+pub fn sys_event_signal(fd: usize, set_mask: usize, clear_mask: usize) -> isize {
+    syscall3(SYS_EVENT_SIGNAL, fd, set_mask, clear_mask)
+}
+
+/// Wait for signals on a single object.
+pub fn sys_event_wait(fd: usize, signals: usize) -> isize {
+    syscall2(SYS_EVENT_WAIT, fd, signals)
+}
+
 // ── Vnode ────────────────────────────────────────────────────────────
 
 /// Open a file.

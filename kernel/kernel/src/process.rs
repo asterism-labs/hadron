@@ -90,6 +90,29 @@ pub enum BlockingOp {
         /// Optional timeout in nanoseconds since boot (`u64::MAX` = no timeout).
         timeout_ns: u64,
     },
+    /// Blocking port wait: dequeue a packet.
+    PortWait {
+        /// Port handle fd.
+        fd: usize,
+        /// User pointer to write the `UserPortPacket`.
+        packet_out_ptr: usize,
+    },
+    /// Blocking event wait: wait for signals on a single object.
+    EventWait {
+        /// Object handle fd.
+        fd: usize,
+        /// Signal mask to wait for.
+        signals: u32,
+    },
+    /// Blocking FIFO read: wait for data.
+    FifoRead {
+        /// FIFO handle fd.
+        fd: usize,
+        /// User buffer pointer.
+        buf_ptr: usize,
+        /// User buffer length.
+        buf_len: usize,
+    },
 }
 
 /// Per-CPU pending blocking operation.
@@ -510,6 +533,92 @@ pub async fn process_task(
                 unsafe { core::arch::asm!("cli") };
                 hadron_log::enable_auto_flush();
             }
+            BlockingOp::PortWait { fd, packet_out_ptr } => {
+                let obj = get_object_from_fd(&process, fd);
+
+                WaitObjectReadable::new(Arc::clone(&obj)).await;
+
+                // Restore context after suspension.
+                *CURRENT_PROCESS.get().lock() = Some(Arc::clone(&process));
+                // SAFETY: process_cr3 is valid.
+                unsafe {
+                    crate::arch::x86_64::registers::control::Cr3::write(process_cr3);
+                }
+
+                // Retry the dequeue.
+                let result = do_port_wait(&*obj, packet_out_ptr);
+                let regs = build_resume_regs(&user_state, result);
+
+                hadron_log::flush();
+                hadron_log::disable_auto_flush();
+
+                // SAFETY: regs has valid user-mode RIP/RSP. GS is kernel.
+                unsafe {
+                    userspace::enter_userspace_resume(&regs, &mut saved_rsp);
+                }
+                // SAFETY: cli is safe in ring 0.
+                unsafe { core::arch::asm!("cli") };
+                hadron_log::enable_auto_flush();
+            }
+            BlockingOp::EventWait { fd, signals } => {
+                let obj = get_object_from_fd(&process, fd);
+                let mask = Signals::from_bits_truncate(signals);
+
+                WaitObjectSignals::new(Arc::clone(&obj), mask).await;
+
+                // Restore context after suspension.
+                *CURRENT_PROCESS.get().lock() = Some(Arc::clone(&process));
+                // SAFETY: process_cr3 is valid.
+                unsafe {
+                    crate::arch::x86_64::registers::control::Cr3::write(process_cr3);
+                }
+
+                // Return the current signal state.
+                let current = obj.get_signals().bits() as isize;
+                let regs = build_resume_regs(&user_state, current);
+
+                hadron_log::flush();
+                hadron_log::disable_auto_flush();
+
+                // SAFETY: regs has valid user-mode RIP/RSP. GS is kernel.
+                unsafe {
+                    userspace::enter_userspace_resume(&regs, &mut saved_rsp);
+                }
+                // SAFETY: cli is safe in ring 0.
+                unsafe { core::arch::asm!("cli") };
+                hadron_log::enable_auto_flush();
+            }
+            BlockingOp::FifoRead {
+                fd,
+                buf_ptr,
+                buf_len,
+            } => {
+                let obj = get_object_from_fd(&process, fd);
+
+                WaitObjectReadable::new(Arc::clone(&obj)).await;
+
+                // Restore context after suspension.
+                *CURRENT_PROCESS.get().lock() = Some(Arc::clone(&process));
+                // SAFETY: process_cr3 is valid.
+                unsafe {
+                    crate::arch::x86_64::registers::control::Cr3::write(process_cr3);
+                }
+
+                // Retry the read.
+                let result = do_fifo_read(&*obj, buf_ptr, buf_len);
+                let regs = build_resume_regs(&user_state, result);
+
+                hadron_log::flush();
+                hadron_log::disable_auto_flush();
+
+                // SAFETY: regs has valid user-mode RIP/RSP. GS is kernel.
+                unsafe {
+                    userspace::enter_userspace_resume(&regs, &mut saved_rsp);
+                }
+                // SAFETY: cli is safe in ring 0.
+                unsafe { core::arch::asm!("cli") };
+                hadron_log::enable_auto_flush();
+            }
         }
     }
 
@@ -775,6 +884,19 @@ impl Future for WaitAnyReady {
 ///
 /// Panics if the fd is invalid or does not refer to a Channel. The syscall
 /// handler validated the fd before setting the blocking op.
+/// Look up any kernel object by fd.
+///
+/// Used by the generic blocking ops (PortWait, EventWait, FifoRead).
+fn get_object_from_fd(process: &Arc<Process>, fd: usize) -> Arc<dyn KernelObject> {
+    let hv = HandleValue::from_raw(fd as u32);
+    process.with_handle_table(|table| {
+        let entry = table
+            .get(hv)
+            .expect("blocking op: invalid fd after suspension");
+        Arc::clone(entry.object())
+    })
+}
+
 fn get_channel_from_fd(process: &Arc<Process>, fd: usize) -> Arc<dyn KernelObject> {
     let hv = HandleValue::from_raw(fd as u32);
     process.with_handle_table(|table| {
@@ -823,6 +945,7 @@ fn do_channel_recv(obj: &dyn KernelObject, buf_ptr: usize, buf_len: usize) -> is
 }
 
 /// Performs channel read with handle transfer, installing received handles.
+///
 #[expect(
     clippy::cast_possible_truncation,
     reason = "message lengths fit in isize"
@@ -861,6 +984,148 @@ fn do_channel_recv_fd(
         }
         Err(ChannelError::ShouldWait) => -hadron_syscall::EAGAIN,
         Err(ChannelError::PeerClosed) => -hadron_syscall::EPIPE,
+        Err(_) => -hadron_syscall::EIO,
+    }
+}
+
+// ── WaitObjectReadable future ──────────────────────────────────────
+
+/// A future that resolves when a kernel object has the READABLE signal set.
+///
+/// Generic version of [`WaitChannelReadable`], usable for Port, Fifo, or
+/// any object that asserts READABLE when data is available.
+struct WaitObjectReadable {
+    /// The kernel object to wait on.
+    object: Arc<dyn KernelObject>,
+}
+
+impl WaitObjectReadable {
+    fn new(object: Arc<dyn KernelObject>) -> Self {
+        Self { object }
+    }
+}
+
+impl Future for WaitObjectReadable {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        if self.object.get_signals().contains(Signals::READABLE) {
+            Poll::Ready(())
+        } else {
+            let dispatch = Arc::new(WakerDispatch::new(cx.waker().clone()));
+            self.object.add_observer(dispatch, 0, Signals::READABLE);
+            // Re-check after registration to avoid missed wake-up.
+            if self.object.get_signals().contains(Signals::READABLE) {
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
+        }
+    }
+}
+
+// ── WaitObjectSignals future ───────────────────────────────────────
+
+/// A future that resolves when any signal in a mask is set on an object.
+///
+/// Used by `BlockingOp::EventWait` to wait for arbitrary signals.
+struct WaitObjectSignals {
+    /// The kernel object to wait on.
+    object: Arc<dyn KernelObject>,
+    /// Signal mask — resolves when `(obj.get_signals() & mask) != 0`.
+    mask: Signals,
+}
+
+impl WaitObjectSignals {
+    fn new(object: Arc<dyn KernelObject>, mask: Signals) -> Self {
+        Self { object, mask }
+    }
+}
+
+impl Future for WaitObjectSignals {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        if self.object.get_signals().intersects(self.mask) {
+            Poll::Ready(())
+        } else {
+            let dispatch = Arc::new(WakerDispatch::new(cx.waker().clone()));
+            self.object.add_observer(dispatch, 0, self.mask);
+            // Re-check after registration to avoid missed wake-up.
+            if self.object.get_signals().intersects(self.mask) {
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
+        }
+    }
+}
+
+// ── Port/Fifo retry helpers ────────────────────────────────────────
+
+/// Retry a port dequeue after waking from `WaitObjectReadable`.
+///
+/// Writes the dequeued packet to user memory at `packet_out_ptr`.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "signal bitmasks and koid fit in their respective types"
+)]
+fn do_port_wait(obj: &dyn KernelObject, packet_out_ptr: usize) -> isize {
+    use hadron_objects::port::Port;
+    use hadron_syscall::types::UserPortPacket;
+
+    let port = obj
+        .as_any()
+        .downcast_ref::<Port>()
+        .expect("port_wait: object is not a Port");
+
+    match port.try_wait() {
+        Ok(pkt) => {
+            let user_pkt = UserPortPacket {
+                key: pkt.key,
+                signals: pkt.signals.bits(),
+                koid: pkt.koid.raw(),
+                packet_type: match pkt.packet_type {
+                    hadron_objects::port_packet::PacketType::SignalOne => 0,
+                    hadron_objects::port_packet::PacketType::User => 1,
+                },
+            };
+            // SAFETY: packet_out_ptr was validated before the blocking op. CR3 restored.
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    &user_pkt as *const UserPortPacket as *const u8,
+                    packet_out_ptr as *mut u8,
+                    core::mem::size_of::<UserPortPacket>(),
+                );
+            }
+            0
+        }
+        Err(_) => -hadron_syscall::EAGAIN,
+    }
+}
+
+/// Retry a FIFO read after waking from `WaitObjectReadable`.
+///
+/// Reads data from the FIFO and copies it to the user buffer.
+fn do_fifo_read(obj: &dyn KernelObject, buf_ptr: usize, buf_len: usize) -> isize {
+    use hadron_objects::fifo::Fifo;
+
+    let fifo = obj
+        .as_any()
+        .downcast_ref::<Fifo>()
+        .expect("fifo_read: object is not a Fifo");
+
+    let mut buf = alloc::vec![0u8; buf_len];
+    match fifo.read(&mut buf) {
+        Ok(n) => {
+            // SAFETY: buf_ptr was validated before the blocking op. CR3 restored.
+            unsafe {
+                core::ptr::copy_nonoverlapping(buf.as_ptr(), buf_ptr as *mut u8, n);
+            }
+            n as isize
+        }
+        Err(hadron_objects::fifo::FifoError::ShouldWait) => -hadron_syscall::EAGAIN,
+        Err(hadron_objects::fifo::FifoError::PeerClosed) => -hadron_syscall::EPIPE,
         Err(_) => -hadron_syscall::EIO,
     }
 }
