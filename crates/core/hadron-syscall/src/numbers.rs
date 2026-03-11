@@ -156,6 +156,17 @@ pub const SYS_NET_RECVMSG: usize = 0x66;
 /// Shut down a socket.
 pub const SYS_NET_SHUTDOWN: usize = 0x67;
 
+// ── Device / IOMMU (0x70) ────────────────────────────────────────────
+
+/// Create a BTI (Bus Transaction Initiator) from an IOMMU handle.
+pub const SYS_BTI_CREATE: usize = 0x70;
+/// Pin physical pages for DMA through a BTI.
+pub const SYS_BTI_PIN: usize = 0x71;
+/// Release BTI quarantine after error recovery.
+pub const SYS_BTI_RELEASE_QUARANTINE: usize = 0x72;
+/// Unpin a PMT (Pinned Memory Token), freeing the DMA mapping.
+pub const SYS_PMT_UNPIN: usize = 0x73;
+
 // ── System (0xF0) ────────────────────────────────────────────────────
 
 /// Query system information.

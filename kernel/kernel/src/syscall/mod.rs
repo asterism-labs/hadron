@@ -9,6 +9,8 @@ extern crate alloc;
 pub mod channel;
 pub mod event;
 pub mod handle;
+#[cfg(hadron_iommu)]
+pub mod iommu;
 pub mod memory;
 pub mod net;
 pub mod system;
@@ -98,6 +100,16 @@ pub fn dispatch(nr: usize, a0: usize, a1: usize, a2: usize, a3: usize, a4: usize
         SYS_NET_SENDMSG => net::sys_net_sendmsg(a0, a1, a2),
         SYS_NET_RECVMSG => net::sys_net_recvmsg(a0, a1, a2),
         SYS_NET_SHUTDOWN => net::sys_net_shutdown(a0, a1),
+
+        // ── Device / IOMMU ──────────────────────────────────────
+        #[cfg(hadron_iommu)]
+        SYS_BTI_CREATE => iommu::sys_bti_create(a0, a1),
+        #[cfg(hadron_iommu)]
+        SYS_BTI_PIN => iommu::sys_bti_pin(a0, a1, a2, a3, a4),
+        #[cfg(hadron_iommu)]
+        SYS_BTI_RELEASE_QUARANTINE => iommu::sys_bti_release_quarantine(a0),
+        #[cfg(hadron_iommu)]
+        SYS_PMT_UNPIN => iommu::sys_pmt_unpin(a0),
 
         // ── System ───────────────────────────────────────────────
         SYS_DEBUG_LOG => system::sys_debug_log(a0, a1),
