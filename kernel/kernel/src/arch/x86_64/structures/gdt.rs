@@ -11,56 +11,14 @@
 
 use core::mem::size_of;
 
+pub use hadron_arch_x86_64::structures::{DescriptorTablePointer, SegmentSelector};
+
 /// Bit positions and masks for x86_64 segment descriptors.
 mod segment_bits {
-    /// Shift to convert a GDT index to a selector value (skip TI and RPL bits).
-    pub const SELECTOR_INDEX_SHIFT: u16 = 3;
-    /// Mask for the 2-bit requested privilege level field.
-    pub const RPL_MASK: u16 = 0b11;
     /// Bit position of the DPL field in a segment descriptor.
     pub const DPL_SHIFT: u64 = 45;
     /// Mask for the 2-bit DPL field (after shifting).
     pub const DPL_MASK: u64 = 0b11;
-}
-
-/// A segment selector value for the GDT.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(transparent)]
-pub struct SegmentSelector(u16);
-
-impl SegmentSelector {
-    /// Creates a new segment selector.
-    ///
-    /// `index` is the GDT entry index (0-based), `rpl` is the requested
-    /// privilege level (0-3).
-    #[inline]
-    pub const fn new(index: u16, rpl: u16) -> Self {
-        Self((index << segment_bits::SELECTOR_INDEX_SHIFT) | (rpl & segment_bits::RPL_MASK))
-    }
-
-    /// Creates a segment selector from a raw `u16` value.
-    #[inline]
-    pub const fn from_raw(raw: u16) -> Self {
-        Self(raw)
-    }
-
-    /// Returns the raw u16 value.
-    #[inline]
-    pub const fn as_u16(self) -> u16 {
-        self.0
-    }
-
-    /// Returns the GDT index (bits 3..15).
-    #[inline]
-    pub const fn index(self) -> u16 {
-        self.0 >> segment_bits::SELECTOR_INDEX_SHIFT
-    }
-
-    /// Returns the requested privilege level (bits 0..1).
-    #[inline]
-    pub const fn rpl(self) -> u16 {
-        self.0 & segment_bits::RPL_MASK
-    }
 }
 
 /// A GDT descriptor entry.
@@ -156,16 +114,6 @@ impl Descriptor {
     }
 }
 
-/// Pointer to the GDT or IDT, used by `lgdt` / `lidt`.
-#[derive(Debug, Clone, Copy)]
-#[repr(C, packed)]
-pub struct DescriptorTablePointer {
-    /// Size of the table minus one.
-    pub limit: u16,
-    /// Linear base address of the table.
-    pub base: u64,
-}
-
 /// Global Descriptor Table with a fixed maximum capacity of `N` 64-bit slots.
 ///
 /// The default capacity of 8 supports: null + kernel_code + kernel_data +
@@ -224,13 +172,8 @@ impl<const N: usize> GlobalDescriptorTable<N> {
             limit: (self.len * size_of::<u64>() - 1) as u16,
             base: self.table.as_ptr() as u64,
         };
-        unsafe {
-            core::arch::asm!(
-                "lgdt [{}]",
-                in(reg) &ptr,
-                options(readonly, nostack, preserves_flags),
-            );
-        }
+        // SAFETY: Caller guarantees the GDT is 'static and descriptors are valid.
+        unsafe { hadron_arch_x86_64::instructions::tables::lgdt(&ptr) };
     }
 }
 

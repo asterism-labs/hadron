@@ -293,13 +293,8 @@ impl InterruptDescriptorTable {
             limit: (core::mem::size_of::<Self>() - 1) as u16,
             base: self as *const _ as u64,
         };
-        unsafe {
-            core::arch::asm!(
-                "lidt [{}]",
-                in(reg) &ptr,
-                options(readonly, nostack, preserves_flags),
-            );
-        }
+        // SAFETY: Caller guarantees the IDT is 'static and entries are valid.
+        unsafe { hadron_arch_x86_64::instructions::tables::lidt(&ptr) };
     }
 }
 
