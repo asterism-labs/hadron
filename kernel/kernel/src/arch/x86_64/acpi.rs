@@ -118,6 +118,43 @@ pub struct EcamInfo {
     pub end_bus: u8,
 }
 
+/// Parsed DRHD (DMA Remapping Hardware Unit Definition) entry from the DMAR table.
+#[derive(Clone, Copy, Debug)]
+pub struct DrhdInfo {
+    /// DRHD flags (bit 0 = INCLUDE_PCI_ALL).
+    pub flags: u8,
+    /// PCI segment number.
+    pub segment: u16,
+    /// Physical base address of the VT-d register block.
+    pub register_base_address: u64,
+}
+
+/// Parsed RMRR (Reserved Memory Region Reporting) entry from the DMAR table.
+#[derive(Clone, Copy, Debug)]
+pub struct RmrrInfo {
+    /// PCI segment number.
+    pub segment: u16,
+    /// Physical base address of the reserved region.
+    pub base_address: u64,
+    /// Physical limit address (inclusive) of the reserved region.
+    pub limit_address: u64,
+}
+
+/// Parsed DMAR table information: host address width, flags, and per-unit entries.
+pub struct DmarInfo {
+    /// Maximum DMA physical address width minus one (e.g. 38 = 39-bit addressing).
+    pub host_address_width: u8,
+    /// DMAR table flags.
+    pub flags: u8,
+    /// DMA Remapping Hardware Unit Definitions.
+    pub drhds: alloc::vec::Vec<DrhdInfo>,
+    /// Reserved Memory Region Reporting entries.
+    pub rmrrs: alloc::vec::Vec<RmrrInfo>,
+}
+
+/// Parsed DMAR info, populated during ACPI init.
+static DMAR_INFO: IrqSpinLock<Option<DmarInfo>> = IrqSpinLock::leveled("DMAR_INFO", 13, None);
+
 /// Zero-sized facade type for ACPI platform services.
 ///
 /// Groups the public query/accessor functions as associated functions on a
@@ -135,6 +172,13 @@ impl Acpi {
     /// Runs a closure with access to the ECAM info, if available.
     pub fn with_ecam<R>(f: impl FnOnce(&EcamInfo) -> R) -> Option<R> {
         let lock = ECAM_INFO.lock();
+        let info = lock.as_ref()?;
+        Some(f(info))
+    }
+
+    /// Runs a closure with access to the parsed DMAR info, if available.
+    pub fn with_dmar<R>(f: impl FnOnce(&DmarInfo) -> R) -> Option<R> {
+        let lock = DMAR_INFO.lock();
         let info = lock.as_ref()?;
         Some(f(info))
     }
@@ -475,17 +519,19 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
         }
     }
 
-    // Parse DMAR (Intel VT-d)
+    // Parse DMAR (Intel VT-d) — store parsed info for IOMMU init.
     match tables.dmar() {
         Ok(dmar) => {
-            let mut drhd_count = 0u32;
-            let mut rmrr_count = 0u32;
+            let mut drhds = alloc::vec::Vec::new();
+            let mut rmrrs = alloc::vec::Vec::new();
+
             crate::kdebug!(
                 "acpi",
                 "ACPI: DMAR: host address width {}, flags {:#x}",
                 dmar.host_address_width,
                 dmar.flags
             );
+
             for entry in dmar.entries() {
                 match entry {
                     hadron_acpi::DmarEntry::Drhd {
@@ -494,7 +540,6 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
                         register_base_address,
                         ..
                     } => {
-                        drhd_count += 1;
                         crate::kdebug!(
                             "acpi",
                             "ACPI: DMAR: DRHD segment {} base {:#x} flags {:#x}",
@@ -502,6 +547,11 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
                             register_base_address,
                             flags
                         );
+                        drhds.push(DrhdInfo {
+                            flags,
+                            segment,
+                            register_base_address,
+                        });
                     }
                     hadron_acpi::DmarEntry::Rmrr {
                         segment,
@@ -509,7 +559,6 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
                         limit_address,
                         ..
                     } => {
-                        rmrr_count += 1;
                         crate::kdebug!(
                             "acpi",
                             "ACPI: DMAR: RMRR segment {} range {:#x}-{:#x}",
@@ -517,6 +566,11 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
                             base_address,
                             limit_address
                         );
+                        rmrrs.push(RmrrInfo {
+                            segment,
+                            base_address,
+                            limit_address,
+                        });
                     }
                     hadron_acpi::DmarEntry::Atsr { flags, segment, .. } => {
                         crate::kdebug!(
@@ -529,12 +583,20 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
                     hadron_acpi::DmarEntry::Unknown { .. } => {}
                 }
             }
+
             crate::kinfo!(
                 "acpi",
                 "ACPI: DMAR: {} DRHDs, {} RMRRs",
-                drhd_count,
-                rmrr_count
+                drhds.len(),
+                rmrrs.len()
             );
+
+            *DMAR_INFO.lock() = Some(DmarInfo {
+                host_address_width: dmar.host_address_width,
+                flags: dmar.flags,
+                drhds,
+                rmrrs,
+            });
         }
         Err(_) => {
             crate::kdebug!("acpi", "ACPI: DMAR not present");
@@ -636,10 +698,15 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
 
     let lapic_phys = PhysAddr::new(u64::from(madt.local_apic_address));
 
-    // Map LAPIC MMIO region (permanent hardware mapping).
-    let mapping = crate::mm::vmm::map_mmio_region(lapic_phys, crate::mm::PAGE_SIZE as u64);
-    let lapic_virt = mapping.virt_base();
-    core::mem::forget(mapping); // permanent hardware mapping
+    // Map LAPIC MMIO region (permanent hardware mapping, cleanup=None).
+    let lapic_virt = crate::vmm::with(|vmm| {
+        hadron_mm::pmm::with(|pmm| {
+            let mut alloc = hadron_mm::pmm::BitmapFrameAllocRef(pmm);
+            vmm.map_mmio(lapic_phys, crate::mm::PAGE_SIZE as u64, &mut alloc, None)
+                .expect("failed to map LAPIC MMIO")
+                .virt_base()
+        })
+    });
 
     // SAFETY: lapic_virt was just mapped to the LAPIC MMIO region.
     let lapic = unsafe { LocalApic::new(lapic_virt) };
@@ -670,10 +737,15 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
         {
             let ioapic_phys = PhysAddr::new(u64::from(io_apic_address));
 
-            // Map I/O APIC MMIO region (permanent hardware mapping).
-            let mapping = crate::mm::vmm::map_mmio_region(ioapic_phys, crate::mm::PAGE_SIZE as u64);
-            let ioapic_virt = mapping.virt_base();
-            core::mem::forget(mapping); // permanent hardware mapping
+            // Map I/O APIC MMIO region (permanent hardware mapping, cleanup=None).
+            let ioapic_virt = crate::vmm::with(|vmm| {
+                hadron_mm::pmm::with(|pmm| {
+                    let mut alloc = hadron_mm::pmm::BitmapFrameAllocRef(pmm);
+                    vmm.map_mmio(ioapic_phys, crate::mm::PAGE_SIZE as u64, &mut alloc, None)
+                        .expect("failed to map I/O APIC MMIO")
+                        .virt_base()
+                })
+            });
 
             // SAFETY: ioapic_virt was just mapped to the I/O APIC MMIO region.
             let ioapic = unsafe { IoApic::new(ioapic_virt, gsi_base) };
@@ -717,10 +789,15 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
     // --- 5. Initialize HPET ---
     let hpet = hpet_info.and_then(|info| {
         let hpet_phys = PhysAddr::new(info.base_address.address);
-        // Map HPET MMIO region (permanent hardware mapping).
-        let mapping = crate::mm::vmm::map_mmio_region(hpet_phys, crate::mm::PAGE_SIZE as u64);
-        let hpet_virt = mapping.virt_base();
-        core::mem::forget(mapping); // permanent hardware mapping
+        // Map HPET MMIO region (permanent hardware mapping, cleanup=None).
+        let hpet_virt = crate::vmm::with(|vmm| {
+            hadron_mm::pmm::with(|pmm| {
+                let mut alloc = hadron_mm::pmm::BitmapFrameAllocRef(pmm);
+                vmm.map_mmio(hpet_phys, crate::mm::PAGE_SIZE as u64, &mut alloc, None)
+                    .expect("failed to map HPET MMIO")
+                    .virt_base()
+            })
+        });
 
         let hpet = unsafe { Hpet::new(hpet_virt) };
         hpet.enable();
