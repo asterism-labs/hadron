@@ -8,6 +8,7 @@ publish = false
 anyhow = { workspace = true }
 hadris-iso = { workspace = true, features = ["std", "write", "sync"] }
 libc = "0.2"
+regex = { workspace = true }
 serde_json = { workspace = true }
 
 [lints]

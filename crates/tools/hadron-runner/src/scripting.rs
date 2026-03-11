@@ -151,6 +151,31 @@ impl ScriptableVm {
         Ok(())
     }
 
+    /// Waits for a serial line matching the given regex pattern, with a
+    /// timeout in seconds.
+    ///
+    /// Returns the full matching line.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the regex is invalid or no match before timeout.
+    pub fn wait_serial_regex(&self, pattern: &str, timeout_secs: i64) -> Result<String> {
+        let re = regex::Regex::new(pattern)
+            .map_err(|e| anyhow::anyhow!("invalid regex '{pattern}': {e}"))?;
+        let timeout = Duration::from_secs(timeout_secs.unsigned_abs());
+        self.serial.wait_pattern_regex(&re, timeout)
+    }
+
+    /// Returns the last `n` lines from the serial log (for error context).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the serial log mutex is poisoned.
+    #[must_use]
+    pub fn last_serial_lines(&self, n: usize) -> Vec<String> {
+        self.serial.last_lines(n)
+    }
+
     /// Returns all captured serial output lines.
     ///
     /// # Panics

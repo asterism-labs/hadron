@@ -410,4 +410,6 @@ tests()
     .shuttle_testable(["hadron-core", "hadron-objects", "hadron-sched"])
     .kernel_tests_dir("kernel/kernel/tests")
     .kernel_tests_crate("hadron-kernel")
-    .kernel_tests_linker_script("targets/x86_64-unknown-hadron.ld");
+    .kernel_tests_linker_script("targets/x86_64-unknown-hadron.ld")
+    .script_tests_dir("tests/scripts")
+    .script_default_timeout(30);

@@ -17,6 +17,7 @@ hadron-dwarf = { workspace = true }
 hadron-elf = { workspace = true }
 hadron-perf = { workspace = true }
 ratatui = { workspace = true }
+regex = { workspace = true }
 rhai = { workspace = true }
 rustc-demangle = { workspace = true }
 semver = { workspace = true }

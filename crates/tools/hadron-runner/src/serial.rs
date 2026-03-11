@@ -217,6 +217,52 @@ impl SerialPty {
         }
     }
 
+    /// Waits for a line matching the given regex pattern.
+    ///
+    /// Returns the first matching line, or an error on timeout.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no matching line appears before the timeout.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal line buffer mutex is poisoned.
+    pub fn wait_pattern_regex(&self, re: &regex::Regex, timeout: Duration) -> Result<String> {
+        let start = Instant::now();
+
+        loop {
+            {
+                let mut lines = self.lines.lock().unwrap();
+                if let Some(idx) = lines.iter().position(|l| re.is_match(l)) {
+                    let matched = lines.remove(idx);
+                    return Ok(matched);
+                }
+            }
+
+            if start.elapsed() >= timeout {
+                bail!(
+                    "timeout waiting for regex '{}' after {timeout:?}",
+                    re.as_str()
+                );
+            }
+
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// Returns the last `n` lines from the serial log (for error context).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the serial log mutex is poisoned.
+    #[must_use]
+    pub fn last_lines(&self, n: usize) -> Vec<String> {
+        let log = self.log.lock().unwrap();
+        let start = log.len().saturating_sub(n);
+        log[start..].to_vec()
+    }
+
     /// Sends data through the serial port.
     ///
     /// # Errors

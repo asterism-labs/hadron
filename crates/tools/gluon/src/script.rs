@@ -15,7 +15,7 @@ use crate::cli::ScriptArgs;
 use crate::config::ResolvedConfig;
 
 /// Boots QEMU with serial PTY + QMP and returns a `ScriptableVm`.
-fn boot_vm(
+pub(crate) fn boot_vm(
     config: &ResolvedConfig,
     kernel_binary: &std::path::Path,
     extra_args: &[String],
@@ -81,7 +81,7 @@ fn boot_vm(
 }
 
 /// Registers VM automation functions on the Rhai engine.
-fn register_vm_bindings(engine: &mut rhai::Engine, vm: &Arc<ScriptableVm>) {
+pub(crate) fn register_vm_bindings(engine: &mut rhai::Engine, vm: &Arc<ScriptableVm>) {
     engine.register_type_with_name::<Arc<ScriptableVm>>("Vm");
 
     engine.register_fn("wait_serial", {
@@ -144,6 +144,24 @@ fn register_vm_bindings(engine: &mut rhai::Engine, vm: &Arc<ScriptableVm>) {
         }
     });
 
+    engine.register_fn("wait_serial_regex", {
+        let vm = Arc::clone(vm);
+        move |pattern: &str, timeout: i64| -> Result<String, Box<rhai::EvalAltResult>> {
+            vm.wait_serial_regex(pattern, timeout)
+                .map_err(|e| e.to_string().into())
+        }
+    });
+
+    engine.register_fn("last_serial_lines", {
+        let vm = Arc::clone(vm);
+        move |n: i64| -> rhai::Array {
+            vm.last_serial_lines(n.unsigned_abs() as usize)
+                .into_iter()
+                .map(rhai::Dynamic::from)
+                .collect()
+        }
+    });
+
     engine.register_fn("boot", {
         let vm = Arc::clone(vm);
         move || -> rhai::Dynamic { rhai::Dynamic::from(Arc::clone(&vm)) }
@@ -152,6 +170,84 @@ fn register_vm_bindings(engine: &mut rhai::Engine, vm: &Arc<ScriptableVm>) {
     engine.register_fn("sleep", |secs: i64| {
         std::thread::sleep(std::time::Duration::from_secs(secs.unsigned_abs()));
     });
+}
+
+/// Registers assertion primitives on the Rhai engine for test scripts.
+pub(crate) fn register_assertion_bindings(engine: &mut rhai::Engine) {
+    engine.register_fn(
+        "assert",
+        |condition: bool, message: &str| -> Result<(), Box<rhai::EvalAltResult>> {
+            if !condition {
+                Err(format!("assertion failed: {message}").into())
+            } else {
+                Ok(())
+            }
+        },
+    );
+
+    engine.register_fn(
+        "assert_eq",
+        |actual: rhai::Dynamic, expected: rhai::Dynamic| -> Result<(), Box<rhai::EvalAltResult>> {
+            let a = format!("{actual}");
+            let e = format!("{expected}");
+            if a != e {
+                Err(format!("assert_eq failed:\n  actual:   {a}\n  expected: {e}").into())
+            } else {
+                Ok(())
+            }
+        },
+    );
+
+    engine.register_fn(
+        "assert_ne",
+        |actual: rhai::Dynamic, expected: rhai::Dynamic| -> Result<(), Box<rhai::EvalAltResult>> {
+            let a = format!("{actual}");
+            let e = format!("{expected}");
+            if a == e {
+                Err(format!("assert_ne failed: both sides equal '{a}'").into())
+            } else {
+                Ok(())
+            }
+        },
+    );
+
+    engine.register_fn(
+        "assert_contains",
+        |haystack: &str, needle: &str| -> Result<(), Box<rhai::EvalAltResult>> {
+            if !haystack.contains(needle) {
+                Err(format!(
+                    "assert_contains failed:\n  haystack: {haystack:?}\n  needle:   {needle:?}"
+                )
+                .into())
+            } else {
+                Ok(())
+            }
+        },
+    );
+
+    engine.register_fn(
+        "assert_matches",
+        |string: &str, pattern: &str| -> Result<(), Box<rhai::EvalAltResult>> {
+            let re = regex::Regex::new(pattern).map_err(|e| -> Box<rhai::EvalAltResult> {
+                format!("invalid regex '{pattern}': {e}").into()
+            })?;
+            if !re.is_match(string) {
+                Err(format!(
+                    "assert_matches failed:\n  string:  {string:?}\n  pattern: {pattern:?}"
+                )
+                .into())
+            } else {
+                Ok(())
+            }
+        },
+    );
+
+    engine.register_fn(
+        "fail",
+        |message: &str| -> Result<(), Box<rhai::EvalAltResult>> {
+            Err(format!("test failure: {message}").into())
+        },
+    );
 }
 
 /// Runs the script subcommand: build, boot, evaluate script or REPL.

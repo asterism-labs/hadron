@@ -122,6 +122,14 @@ pub struct TestArgs {
     #[arg(long)]
     pub userspace_only: bool,
 
+    /// Only run script-based integration tests.
+    #[arg(long)]
+    pub script_only: bool,
+
+    /// Run a single script test by name substring.
+    #[arg(long)]
+    pub script_filter: Option<String>,
+
     /// Extra arguments passed to the test harness after `--`.
     #[arg(last = true)]
     pub extra_args: Vec<String>,

@@ -439,6 +439,10 @@ pub struct TestsDef {
     /// Directory containing userspace test `.rs` files.
     pub userspace_tests_dir: Option<String>,
     pub crash_tests: Vec<CrashTestDef>,
+    /// Directory containing script test `.rhai` files.
+    pub script_tests_dir: Option<String>,
+    /// Default timeout in seconds for script tests.
+    pub script_default_timeout: Option<u64>,
 }
 
 /// A crash test definition.

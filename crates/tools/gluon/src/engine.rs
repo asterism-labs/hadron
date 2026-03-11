@@ -1408,6 +1408,24 @@ fn register_tests_api(engine: &mut Engine, model: SharedModel) {
             model.tests.userspace_tests_dir = Some(dir.into());
         }
     );
+
+    builder_method!(
+        engine,
+        "script_tests_dir",
+        TestsBuilder,
+        |builder, model, dir: &str| {
+            model.tests.script_tests_dir = Some(dir.into());
+        }
+    );
+
+    builder_method!(
+        engine,
+        "script_default_timeout",
+        TestsBuilder,
+        |builder, model, secs: i64| {
+            model.tests.script_default_timeout = Some(secs as u64);
+        }
+    );
 }
 
 #[derive(Debug, Clone)]

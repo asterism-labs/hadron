@@ -29,6 +29,7 @@ mod rustc_cmd;
 mod rustc_info;
 mod scheduler;
 mod script;
+mod script_test;
 mod shuttle;
 mod sysroot;
 mod test;
@@ -263,20 +264,23 @@ fn cmd_test(cli: &cli::Cli, args: &cli::TestArgs) -> Result<()> {
         || args.kernel_only
         || args.crash_only
         || args.ktest_only
-        || args.userspace_only;
+        || args.userspace_only
+        || args.script_only;
 
     let run_host = (args.host_only) || (!any_exclusive);
     let run_kernel = (args.kernel_only) || (!any_exclusive);
     let run_ktest = (args.ktest_only) || (!any_exclusive);
     let run_userspace = (args.userspace_only) || (!any_exclusive);
+    let run_script = (args.script_only) || (!any_exclusive) || args.script_filter.is_some();
 
     if run_host {
         let (resolved, _model) = resolve_config(cli)?;
         test::run_host_tests(&resolved, cli.jobs.unwrap_or(0))?;
     }
 
-    // Kernel integration tests, ktest, and userspace tests all share the build step.
-    if run_kernel || run_ktest || run_userspace {
+    // Kernel integration tests, ktest, userspace tests, and script tests
+    // all share the build step.
+    if run_kernel || run_ktest || run_userspace || run_script {
         let (mut state, model) = do_build(cli)?;
 
         if run_kernel {
@@ -301,6 +305,18 @@ fn cmd_test(cli: &cli::Cli, args: &cli::TestArgs) -> Result<()> {
                 &kernel_binary,
                 &utest_binaries,
                 &args.extra_args,
+            )?;
+        }
+
+        if run_script {
+            let kernel_binary = state
+                .kernel_binary
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("kernel binary not found after build"))?;
+            script_test::run_all_script_tests(
+                &state.config,
+                kernel_binary,
+                args.script_filter.as_deref(),
             )?;
         }
     }

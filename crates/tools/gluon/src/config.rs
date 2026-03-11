@@ -74,6 +74,10 @@ pub struct TestsConfig {
     pub userspace_tests_dir: Option<String>,
     #[allow(dead_code)] // future: crash test execution
     pub crash: Vec<CrashTest>,
+    /// Directory containing script test `.rhai` files.
+    pub script_tests_dir: Option<String>,
+    /// Default timeout in seconds for script tests.
+    pub script_default_timeout: Option<u64>,
 }
 
 /// A crash test definition.
@@ -274,6 +278,8 @@ pub fn resolve_from_model(
                 expect_output: ct.expect_output.clone(),
             })
             .collect(),
+        script_tests_dir: model.tests.script_tests_dir.clone(),
+        script_default_timeout: model.tests.script_default_timeout,
     };
 
     let benchmarks = BenchmarksConfig {
