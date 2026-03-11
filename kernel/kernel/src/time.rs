@@ -90,6 +90,35 @@ pub fn nanos_since_boot() -> u64 {
     tsc_to_nanos_impl(tsc)
 }
 
+/// Sleeps until the given monotonic deadline (nanoseconds since boot).
+///
+/// Returns immediately if the deadline has already passed.
+#[cfg(ktest)]
+pub(crate) async fn sleep_until(deadline_ns: u64) {
+    use core::future::Future;
+    use core::pin::Pin;
+    use core::task::{Context, Poll};
+
+    struct SleepUntil {
+        deadline_ns: u64,
+    }
+
+    impl Future for SleepUntil {
+        type Output = ();
+
+        fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+            if nanos_since_boot() >= self.deadline_ns {
+                Poll::Ready(())
+            } else {
+                hadron_sched::timer::register_sleep_waker(self.deadline_ns, cx.waker().clone());
+                Poll::Pending
+            }
+        }
+    }
+
+    SleepUntil { deadline_ns }.await;
+}
+
 // ── TSC converter ────────────────────────────────────────────────────────
 
 /// Converts a raw TSC value to nanoseconds relative to boot.
@@ -105,4 +134,30 @@ fn tsc_to_nanos_impl(tsc: u64) -> u64 {
     // nanos = delta * 1_000_000 / freq_khz
     // Use u128 to avoid overflow for large TSC values.
     ((u128::from(delta) * 1_000_000) / u128::from(freq_khz)) as u64
+}
+
+// ── Kernel integration tests ────────────────────────────────────────
+
+#[cfg(ktest)]
+mod ktest {
+    use hadron_ktest::kernel_test;
+
+    /// Verifies that `sleep_until` suspends for approximately 50 ms.
+    #[kernel_test(stage = "with_executor")]
+    async fn test_sleep_50ms() {
+        let before = crate::time::nanos_since_boot();
+        crate::time::sleep_until(before + 50_000_000).await;
+        let elapsed = crate::time::nanos_since_boot() - before;
+        assert!(
+            elapsed >= 40_000_000 && elapsed < 200_000_000,
+            "sleep_50ms: elapsed {elapsed}ns out of range"
+        );
+    }
+
+    /// Verifies that `sleep_until` with a past deadline returns immediately.
+    #[kernel_test(stage = "with_executor")]
+    async fn test_sleep_past_deadline() {
+        crate::time::sleep_until(0).await;
+        // Should return immediately — no assertion needed beyond not hanging.
+    }
 }

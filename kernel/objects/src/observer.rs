@@ -291,4 +291,243 @@ mod tests {
 
         assert!(port.take_packets().is_empty());
     }
+
+    #[test]
+    fn waker_dispatch_wakes_on_packet() {
+        let (waker, count) = crate::test_util::counting_waker();
+        let dispatch = Arc::new(WakerDispatch::new(waker));
+        let packet = PortPacket {
+            key: 0,
+            signals: Signals::READABLE,
+            koid: Koid::alloc(),
+            packet_type: PacketType::SignalOne,
+        };
+        dispatch.queue_packet(packet);
+        assert_eq!(count.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn waker_dispatch_is_one_shot() {
+        let (waker, count) = crate::test_util::counting_waker();
+        let dispatch = Arc::new(WakerDispatch::new(waker));
+        let packet = PortPacket {
+            key: 0,
+            signals: Signals::READABLE,
+            koid: Koid::alloc(),
+            packet_type: PacketType::SignalOne,
+        };
+        dispatch.queue_packet(packet.clone());
+        dispatch.queue_packet(packet);
+        assert_eq!(count.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn observer_list_with_waker_dispatch() {
+        let (waker, count) = crate::test_util::counting_waker();
+        let dispatch: Arc<dyn PortDispatch> = Arc::new(WakerDispatch::new(waker));
+        let list = ObserverList::new();
+        list.add(dispatch, 42, Signals::READABLE);
+        list.notify(Signals::READABLE, Koid::alloc());
+        assert_eq!(count.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn signal_update_fires_waker_dispatch() {
+        let (waker, count) = crate::test_util::counting_waker();
+        let dispatch: Arc<dyn PortDispatch> = Arc::new(WakerDispatch::new(waker));
+        let signals = AtomicU32::new(0);
+        let observers = ObserverList::new();
+        observers.add(dispatch, 0, Signals::READABLE);
+        signal_update(
+            &signals,
+            Signals::READABLE,
+            Signals::empty(),
+            &observers,
+            Koid::alloc(),
+        );
+        assert_eq!(count.load(Ordering::Relaxed), 1);
+    }
+}
+
+#[cfg(kani)]
+mod kani_proofs {
+    use super::*;
+    extern crate alloc;
+    use alloc::sync::Arc;
+    use alloc::vec::Vec;
+    use hadron_core::sync::SpinLock;
+
+    use crate::object::{Koid, Signals};
+    use crate::port_packet::{PacketType, PortPacket};
+
+    /// Mock port that collects delivered packets (duplicated for Kani since
+    /// `#[cfg(test)]` items are not available under `#[cfg(kani)]`).
+    struct MockPort {
+        packets: SpinLock<Vec<PortPacket>>,
+    }
+
+    impl MockPort {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                packets: SpinLock::new(Vec::new()),
+            })
+        }
+
+        fn take_packets(&self) -> Vec<PortPacket> {
+            core::mem::take(&mut *self.packets.lock())
+        }
+    }
+
+    impl PortDispatch for MockPort {
+        fn queue_packet(&self, packet: PortPacket) {
+            self.packets.lock().push(packet);
+        }
+    }
+
+    #[kani::proof]
+    fn kani_observer_no_lost_notification() {
+        let signals: u32 = kani::any();
+        kani::assume(signals != 0 && signals <= 0xFF);
+        let signals = Signals::from_bits_truncate(signals);
+
+        let mask: u32 = kani::any();
+        kani::assume(mask != 0 && mask <= 0xFF);
+        let mask = Signals::from_bits_truncate(mask);
+
+        let port = MockPort::new();
+        let list = ObserverList::new();
+        list.add(port.clone(), 1, mask);
+        list.notify(signals, Koid::alloc());
+
+        if mask.intersects(signals) {
+            assert_eq!(port.take_packets().len(), 1);
+        } else {
+            assert!(port.take_packets().is_empty());
+        }
+    }
+
+    #[kani::proof]
+    fn kani_observer_one_shot_removes() {
+        let port = MockPort::new();
+        let list = ObserverList::new();
+        list.add(port.clone(), 1, Signals::READABLE);
+        list.notify(Signals::READABLE, Koid::alloc());
+        assert_eq!(port.take_packets().len(), 1);
+        // Second notify should not fire (one-shot removes observer)
+        list.notify(Signals::READABLE, Koid::alloc());
+        assert!(port.take_packets().is_empty());
+    }
+
+    #[kani::proof]
+    fn kani_signal_update_monotonic() {
+        let initial: u32 = kani::any();
+        kani::assume(initial <= 0xFF);
+        let set: u32 = kani::any();
+        kani::assume(set <= 0xFF);
+        let clear: u32 = kani::any();
+        kani::assume(clear <= 0xFF);
+
+        let signals = AtomicU32::new(initial);
+        let observers = ObserverList::new();
+        signal_update(
+            &signals,
+            Signals::from_bits_truncate(set),
+            Signals::from_bits_truncate(clear),
+            &observers,
+            Koid::alloc(),
+        );
+        let result = signals.load(Ordering::Relaxed);
+        let expected = (initial | set) & !clear;
+        assert_eq!(result, expected);
+    }
+}
+
+#[cfg(shuttle)]
+mod shuttle_tests {
+    use alloc::sync::Arc;
+    use core::sync::atomic::{AtomicU32, Ordering};
+    use shuttle::sync::Arc as ShuttleArc;
+    use shuttle::thread;
+
+    use super::*;
+    use crate::object::{Koid, Signals};
+    use crate::port_packet::PortPacket;
+
+    struct MockPort {
+        count: AtomicU32,
+    }
+    impl MockPort {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                count: AtomicU32::new(0),
+            })
+        }
+    }
+    impl PortDispatch for MockPort {
+        fn queue_packet(&self, _packet: PortPacket) {
+            self.count.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[test]
+    fn shuttle_observer_add_notify_concurrent() {
+        shuttle::check_random(
+            || {
+                let list = ShuttleArc::new(ObserverList::new());
+                let port = MockPort::new();
+
+                let list2 = list.clone();
+                let port2 = port.clone();
+                let t1 = thread::spawn(move || {
+                    for i in 0..3 {
+                        list2.add(port2.clone(), i, Signals::READABLE);
+                    }
+                });
+
+                let list3 = list.clone();
+                let t2 = thread::spawn(move || {
+                    for _ in 0..3 {
+                        list3.notify(Signals::READABLE, Koid::alloc());
+                    }
+                });
+
+                t1.join().unwrap();
+                t2.join().unwrap();
+
+                // Each observer fires at most once (one-shot), total
+                // should be <= 3 observers added.
+                assert!(port.count.load(Ordering::Relaxed) <= 3);
+            },
+            200,
+        );
+    }
+
+    #[test]
+    fn shuttle_observer_add_remove_concurrent() {
+        shuttle::check_random(
+            || {
+                let list = ShuttleArc::new(ObserverList::new());
+                let port = MockPort::new();
+
+                let list2 = list.clone();
+                let port2 = port.clone();
+                let t1 = thread::spawn(move || {
+                    list2.add(port2.clone(), 1, Signals::READABLE);
+                    list2.add(port2, 2, Signals::WRITABLE);
+                });
+
+                let list3 = list.clone();
+                let port3 = port.clone();
+                let t2 = thread::spawn(move || {
+                    list3.remove_by_port(&(port3 as Arc<dyn PortDispatch>));
+                });
+
+                t1.join().unwrap();
+                t2.join().unwrap();
+
+                // No panics = success. State depends on scheduling.
+            },
+            200,
+        );
+    }
 }

@@ -226,6 +226,7 @@ kernel_main.add("hadron-kernel", "kernel/kernel")
         hadron_core: "hadron-core",
         hadron_elf: "hadron-elf",
         hadron_intrinsics: "hadron-intrinsics",
+        hadron_ktest: "hadron-ktest",
         hadron_linkset: "hadron-linkset",
         hadron_log: "hadron-log",
         hadron_mm: "hadron-mm",
@@ -387,8 +388,8 @@ tests()
         "hadron-sched",
         "hadron-pci"
     ])
-    .kani_verifiable(["hadron-core"])
-    .shuttle_testable(["hadron-core"])
+    .kani_verifiable(["hadron-core", "hadron-objects", "hadron-sched"])
+    .shuttle_testable(["hadron-core", "hadron-objects", "hadron-sched"])
     .kernel_tests_dir("kernel/kernel/tests")
     .kernel_tests_crate("hadron-kernel")
     .kernel_tests_linker_script("targets/x86_64-unknown-hadron.ld");

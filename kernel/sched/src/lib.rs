@@ -16,6 +16,7 @@
 extern crate alloc;
 
 pub mod executor;
+pub mod futex;
 pub mod primitives;
 pub mod timer;
 pub mod waker;

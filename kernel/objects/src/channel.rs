@@ -306,4 +306,139 @@ mod tests {
         ch0.write(make_msg(&data)).unwrap();
         assert_eq!(ch1.read().unwrap().data.len(), MAX_MSG_DATA);
     }
+
+    // --- Observer integration tests ---
+
+    use crate::observer::WakerDispatch;
+    use crate::port_packet::{PacketType, PortPacket};
+
+    /// Mock port that collects delivered packets for assertion.
+    struct MockPort {
+        packets: SpinLock<Vec<PortPacket>>,
+    }
+
+    impl MockPort {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                packets: SpinLock::new(Vec::new()),
+            })
+        }
+
+        fn take_packets(&self) -> Vec<PortPacket> {
+            core::mem::take(&mut *self.packets.lock())
+        }
+    }
+
+    impl PortDispatch for MockPort {
+        fn queue_packet(&self, packet: PortPacket) {
+            self.packets.lock().push(packet);
+        }
+    }
+
+    #[test]
+    fn channel_write_fires_readable_observer() {
+        let (ch0, ch1) = Channel::create_pair();
+        let port = MockPort::new();
+
+        ch1.add_observer(port.clone(), 99, Signals::READABLE);
+        ch0.write(make_msg(b"ping")).unwrap();
+
+        let packets = port.take_packets();
+        assert_eq!(packets.len(), 1);
+        assert_eq!(packets[0].key, 99);
+        assert_eq!(packets[0].koid, ch1.koid());
+        assert!(packets[0].signals.contains(Signals::READABLE));
+        assert_eq!(packets[0].packet_type, PacketType::SignalOne);
+    }
+
+    #[test]
+    fn channel_close_fires_peer_closed_observer() {
+        let (ch0, ch1) = Channel::create_pair();
+        let port = MockPort::new();
+
+        ch1.add_observer(port.clone(), 7, Signals::PEER_CLOSED);
+        ch0.on_zero_handles();
+        drop(ch0);
+
+        let packets = port.take_packets();
+        assert_eq!(packets.len(), 1);
+        assert_eq!(packets[0].key, 7);
+        assert_eq!(packets[0].koid, ch1.koid());
+        assert!(packets[0].signals.contains(Signals::PEER_CLOSED));
+    }
+
+    #[test]
+    fn channel_write_wakes_waker_dispatch() {
+        let (ch0, ch1) = Channel::create_pair();
+        let (waker, counter) = crate::test_util::counting_waker();
+        let dispatch = Arc::new(WakerDispatch::new(waker));
+
+        ch1.add_observer(dispatch, 0, Signals::READABLE);
+        ch0.write(make_msg(b"wake")).unwrap();
+
+        assert_eq!(counter.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn channel_read_clears_readable() {
+        let (ch0, ch1) = Channel::create_pair();
+
+        ch0.write(make_msg(b"one")).unwrap();
+        assert!(ch1.get_signals().contains(Signals::READABLE));
+
+        let _msg = ch1.read().unwrap();
+        assert!(!ch1.get_signals().contains(Signals::READABLE));
+    }
+}
+
+#[cfg(shuttle)]
+mod shuttle_tests {
+    use shuttle::thread;
+
+    use super::*;
+    use crate::object::Signals;
+
+    #[test]
+    fn shuttle_channel_producer_consumer() {
+        shuttle::check_random(
+            || {
+                let (ch0, ch1) = Channel::create_pair();
+
+                let ch0_clone = ch0.clone();
+                let producer = thread::spawn(move || {
+                    for i in 0u8..3 {
+                        ch0_clone
+                            .write(ChannelMessage {
+                                data: alloc::vec![i],
+                                handles: alloc::vec![],
+                            })
+                            .unwrap();
+                    }
+                });
+
+                let ch1_clone = ch1.clone();
+                let consumer = thread::spawn(move || {
+                    let mut received = 0u32;
+                    // Spin-read until we get all 3 messages.
+                    while received < 3 {
+                        match ch1_clone.read() {
+                            Ok(msg) => {
+                                assert_eq!(msg.data.len(), 1);
+                                received += 1;
+                            }
+                            Err(ChannelError::ShouldWait) => {
+                                shuttle::thread::yield_now();
+                            }
+                            Err(e) => panic!("unexpected error: {e:?}"),
+                        }
+                    }
+                    assert_eq!(received, 3);
+                });
+
+                producer.join().unwrap();
+                consumer.join().unwrap();
+            },
+            200,
+        );
+    }
 }

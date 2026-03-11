@@ -210,4 +210,71 @@ mod tests {
         proc.set_name("renamed".to_string());
         assert_eq!(proc.name(), "renamed");
     }
+
+    // ------------------------------------------------------------------
+    // Observer notification tests
+    // ------------------------------------------------------------------
+
+    use crate::observer::WakerDispatch;
+    use crate::port_packet::PortPacket;
+
+    /// Mock port that collects delivered packets (local to process tests).
+    struct MockPort {
+        packets: SpinLock<Vec<PortPacket>>,
+    }
+
+    impl MockPort {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                packets: SpinLock::new(Vec::new()),
+            })
+        }
+
+        fn take_packets(&self) -> Vec<PortPacket> {
+            core::mem::take(&mut *self.packets.lock())
+        }
+    }
+
+    impl PortDispatch for MockPort {
+        fn queue_packet(&self, packet: PortPacket) {
+            self.packets.lock().push(packet);
+        }
+    }
+
+    #[test]
+    fn process_exit_notifies_observer() {
+        let proc = make_process("observer-test");
+        let mock_port = MockPort::new();
+
+        proc.add_observer(
+            mock_port.clone() as Arc<dyn PortDispatch>,
+            42,
+            Signals::TERMINATED,
+        );
+
+        proc.exit(99);
+
+        let packets = mock_port.take_packets();
+        assert_eq!(packets.len(), 1);
+        assert_eq!(packets[0].key, 42);
+        assert_eq!(packets[0].koid, proc.koid());
+        assert!(packets[0].signals.contains(Signals::TERMINATED));
+    }
+
+    #[test]
+    fn process_exit_wakes_waker_dispatch() {
+        let proc = make_process("waker-test");
+        let (waker, count) = crate::test_util::counting_waker();
+        let dispatch = WakerDispatch::new(waker);
+
+        proc.add_observer(
+            Arc::new(dispatch) as Arc<dyn PortDispatch>,
+            0,
+            Signals::TERMINATED,
+        );
+
+        proc.exit(1);
+
+        assert_eq!(count.load(Ordering::Relaxed), 1);
+    }
 }

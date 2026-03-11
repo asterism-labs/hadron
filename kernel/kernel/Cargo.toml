@@ -18,6 +18,7 @@ bitflags = { workspace = true }
 hadron-boot-info = { workspace = true }
 hadron-core = { workspace = true }
 hadron-intrinsics = { workspace = true }
+hadron-ktest = { workspace = true }
 hadron-mm = { workspace = true }
 planck-noalloc = { workspace = true }
 

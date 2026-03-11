@@ -11,5 +11,17 @@ publish.workspace = true
 bitflags = { workspace = true }
 hadron-core = { workspace = true }
 
-[lints]
-workspace = true
+[lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+missing_docs = "warn"
+
+[lints.rust.unexpected_cfgs]
+level = "warn"
+check-cfg = ['cfg(kani)', 'cfg(shuttle)']
+
+[dev-dependencies]
+shuttle = "0.8"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
