@@ -146,3 +146,52 @@ impl Cr4 {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cr0_flags_construction() {
+        let flags = Cr0Flags::PROTECTED_MODE | Cr0Flags::PAGING;
+        assert!(flags.contains(Cr0Flags::PROTECTED_MODE));
+        assert!(flags.contains(Cr0Flags::PAGING));
+        assert!(!flags.contains(Cr0Flags::WRITE_PROTECT));
+        assert_eq!(flags.bits(), (1 << 0) | (1 << 31));
+    }
+
+    #[test]
+    fn cr4_flags_construction() {
+        let flags = Cr4Flags::PAE | Cr4Flags::PGE;
+        assert!(flags.contains(Cr4Flags::PAE));
+        assert!(flags.contains(Cr4Flags::PGE));
+        assert!(!flags.contains(Cr4Flags::PSE));
+        assert_eq!(flags.bits(), (1 << 5) | (1 << 7));
+    }
+
+    #[test]
+    fn cr0_flags_empty() {
+        let flags = Cr0Flags::empty();
+        assert_eq!(flags.bits(), 0);
+        assert!(!flags.contains(Cr0Flags::PAGING));
+    }
+
+    #[test]
+    fn cr4_flags_all_distinct() {
+        // Verify no two flags share the same bit.
+        let all = [
+            Cr4Flags::PSE,
+            Cr4Flags::PAE,
+            Cr4Flags::PGE,
+            Cr4Flags::OSFXSR,
+            Cr4Flags::OSXMMEXCPT,
+            Cr4Flags::LA57,
+            Cr4Flags::OSXSAVE,
+        ];
+        for (i, a) in all.iter().enumerate() {
+            for b in &all[i + 1..] {
+                assert!(!a.intersects(*b), "CR4 flags overlap: {a:?} and {b:?}");
+            }
+        }
+    }
+}

@@ -61,3 +61,43 @@ pub struct DescriptorTablePointer {
     /// Linear base address of the table.
     pub base: u64,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::mem;
+
+    #[test]
+    fn segment_selector_bit_packing_round_trip() {
+        let sel = SegmentSelector::new(3, 0);
+        assert_eq!(sel.index(), 3);
+        assert_eq!(sel.rpl(), 0);
+        assert_eq!(sel.as_u16(), 3 << 3);
+
+        let sel_rpl = SegmentSelector::new(5, 3);
+        assert_eq!(sel_rpl.index(), 5);
+        assert_eq!(sel_rpl.rpl(), 3);
+        assert_eq!(sel_rpl.as_u16(), (5 << 3) | 3);
+    }
+
+    #[test]
+    fn segment_selector_from_raw_round_trip() {
+        let raw = 0x28_u16; // GDT index 5, RPL 0
+        let sel = SegmentSelector::from_raw(raw);
+        assert_eq!(sel.as_u16(), raw);
+        assert_eq!(sel.index(), 5);
+        assert_eq!(sel.rpl(), 0);
+    }
+
+    #[test]
+    fn segment_selector_rpl_mask() {
+        // RPL should be masked to 2 bits
+        let sel = SegmentSelector::new(0, 0xFF);
+        assert_eq!(sel.rpl(), 3);
+    }
+
+    #[test]
+    fn descriptor_table_pointer_size() {
+        assert_eq!(mem::size_of::<DescriptorTablePointer>(), 10);
+    }
+}

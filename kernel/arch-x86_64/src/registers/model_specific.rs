@@ -106,3 +106,34 @@ impl Msr {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn msr_new_addr_round_trip() {
+        let msr = Msr::new(0xC000_0080);
+        assert_eq!(msr.addr(), 0xC000_0080);
+    }
+
+    #[test]
+    fn msr_constants_have_expected_addresses() {
+        assert_eq!(IA32_EFER.addr(), 0xC000_0080);
+        assert_eq!(IA32_PAT.addr(), 0x0000_0277);
+        assert_eq!(MSR_STAR.addr(), 0xC000_0081);
+        assert_eq!(MSR_LSTAR.addr(), 0xC000_0082);
+        assert_eq!(MSR_SFMASK.addr(), 0xC000_0084);
+        assert_eq!(IA32_FS_BASE.addr(), 0xC000_0100);
+        assert_eq!(IA32_GS_BASE.addr(), 0xC000_0101);
+        assert_eq!(IA32_KERNEL_GS_BASE.addr(), 0xC000_0102);
+    }
+
+    #[test]
+    fn efer_flags_construction() {
+        let flags = EferFlags::SYSTEM_CALL_ENABLE | EferFlags::LONG_MODE_ENABLE;
+        assert!(flags.contains(EferFlags::SYSTEM_CALL_ENABLE));
+        assert!(flags.contains(EferFlags::LONG_MODE_ENABLE));
+        assert!(!flags.contains(EferFlags::NO_EXECUTE_ENABLE));
+    }
+}

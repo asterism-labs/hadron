@@ -261,3 +261,35 @@ impl<T: PortWrite> WriteOnlyPort<T> {
         unsafe { T::write_to_port(self.port, value) }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn port_new_and_port_number() {
+        let p = Port::<u8>::new(0x3F8);
+        assert_eq!(p.port(), 0x3F8);
+    }
+
+    #[test]
+    fn port_equality() {
+        let a = Port::<u16>::new(0x60);
+        let b = Port::<u16>::new(0x60);
+        let c = Port::<u16>::new(0x64);
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn read_only_port_construction() {
+        let p = ReadOnlyPort::<u32>::new(0xCF8);
+        assert_eq!(p.port(), 0xCF8);
+    }
+
+    #[test]
+    fn write_only_port_construction() {
+        let p = WriteOnlyPort::<u8>::new(0x20);
+        assert_eq!(p.port(), 0x20);
+    }
+}
