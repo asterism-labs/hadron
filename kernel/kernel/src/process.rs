@@ -22,7 +22,9 @@ use core::task::{Context, Poll, Waker};
 use hadron_core::cpu_local::CpuLocal;
 use hadron_core::sync::SpinLock;
 use hadron_mm::address_space::AddressSpace;
-use hadron_objects::object::{KernelObject, Signals};
+use hadron_objects::channel::{Channel, ChannelError};
+use hadron_objects::handle::HandleValue;
+use hadron_objects::object::{KernelObject, ObjectType, Signals};
 use hadron_objects::process::Process;
 use hadron_objects::thread::{Thread, ThreadState};
 
@@ -43,6 +45,26 @@ pub enum BlockingOp {
         pid: u64,
         /// User pointer to write exit status (0 = ignore).
         status_ptr: usize,
+    },
+    /// Blocking channel recv (no handle transfer).
+    ChannelRecv {
+        /// Channel handle fd.
+        fd: usize,
+        /// User buffer pointer.
+        buf_ptr: usize,
+        /// User buffer length.
+        buf_len: usize,
+    },
+    /// Blocking channel recv with handle transfer.
+    ChannelRecvFd {
+        /// Channel handle fd.
+        ch_fd: usize,
+        /// User buffer pointer.
+        buf_ptr: usize,
+        /// User buffer length.
+        buf_len: usize,
+        /// User pointer to write the received fd.
+        fd_out_ptr: usize,
     },
 }
 
@@ -110,6 +132,22 @@ static CHILD_EXIT_WAKER: CpuLocal<SpinLock<Option<Waker>>> =
 /// Wake any parent waiting for a child exit on this CPU.
 pub fn wake_child_exit_waiter() {
     if let Some(waker) = CHILD_EXIT_WAKER.get().lock().take() {
+        waker.wake();
+    }
+}
+
+// ── Channel recv waker (Phase 2 simple mechanism) ───────────────────
+
+/// Per-CPU waker storage for a process waiting on a channel read.
+///
+/// Phase 2: only one channel-recv waiter per CPU. A more scalable
+/// approach (per-channel waiters) is deferred to Phase 3.
+static CHANNEL_RECV_WAKER: CpuLocal<SpinLock<Option<Waker>>> =
+    CpuLocal::new([const { SpinLock::new(None) }; MAX_CPUS]);
+
+/// Wake any process waiting for a channel recv on this CPU.
+pub fn wake_channel_recv_waiter() {
+    if let Some(waker) = CHANNEL_RECV_WAKER.get().lock().take() {
         waker.wake();
     }
 }
@@ -312,6 +350,69 @@ pub async fn process_task(
                 unsafe { core::arch::asm!("cli") };
                 hadron_log::enable_auto_flush();
             }
+            BlockingOp::ChannelRecv {
+                fd,
+                buf_ptr,
+                buf_len,
+            } => {
+                let ch_obj = get_channel_from_fd(&process, fd);
+
+                WaitChannelReadable::new(Arc::clone(&ch_obj)).await;
+
+                // Restore context after suspension.
+                *CURRENT_PROCESS.get().lock() = Some(Arc::clone(&process));
+                // SAFETY: process_cr3 is valid.
+                unsafe {
+                    crate::arch::x86_64::registers::control::Cr3::write(process_cr3);
+                }
+
+                // Retry the read.
+                let result = do_channel_recv(&*ch_obj, buf_ptr, buf_len);
+                let regs = build_resume_regs(&user_state, result);
+
+                hadron_log::flush();
+                hadron_log::disable_auto_flush();
+
+                // SAFETY: regs has valid user-mode RIP/RSP. GS is kernel.
+                unsafe {
+                    userspace::enter_userspace_resume(&regs, &mut saved_rsp);
+                }
+                // SAFETY: cli is safe in ring 0.
+                unsafe { core::arch::asm!("cli") };
+                hadron_log::enable_auto_flush();
+            }
+            BlockingOp::ChannelRecvFd {
+                ch_fd,
+                buf_ptr,
+                buf_len,
+                fd_out_ptr,
+            } => {
+                let ch_obj = get_channel_from_fd(&process, ch_fd);
+
+                WaitChannelReadable::new(Arc::clone(&ch_obj)).await;
+
+                // Restore context after suspension.
+                *CURRENT_PROCESS.get().lock() = Some(Arc::clone(&process));
+                // SAFETY: process_cr3 is valid.
+                unsafe {
+                    crate::arch::x86_64::registers::control::Cr3::write(process_cr3);
+                }
+
+                // Retry the read with handle transfer.
+                let result = do_channel_recv_fd(&process, &*ch_obj, buf_ptr, buf_len, fd_out_ptr);
+                let regs = build_resume_regs(&user_state, result);
+
+                hadron_log::flush();
+                hadron_log::disable_auto_flush();
+
+                // SAFETY: regs has valid user-mode RIP/RSP. GS is kernel.
+                unsafe {
+                    userspace::enter_userspace_resume(&regs, &mut saved_rsp);
+                }
+                // SAFETY: cli is safe in ring 0.
+                unsafe { core::arch::asm!("cli") };
+                hadron_log::enable_auto_flush();
+            }
         }
     }
 
@@ -356,5 +457,132 @@ impl Future for WaitChild {
             *CHILD_EXIT_WAKER.get().lock() = Some(cx.waker().clone());
             Poll::Pending
         }
+    }
+}
+
+// ── WaitChannelReadable future ──────────────────────────────────────
+
+/// A future that resolves when a kernel object has the READABLE signal set.
+struct WaitChannelReadable {
+    /// The channel object to wait on.
+    object: Arc<dyn KernelObject>,
+}
+
+impl WaitChannelReadable {
+    fn new(object: Arc<dyn KernelObject>) -> Self {
+        Self { object }
+    }
+}
+
+impl Future for WaitChannelReadable {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        if self.object.get_signals().contains(Signals::READABLE) {
+            Poll::Ready(())
+        } else {
+            *CHANNEL_RECV_WAKER.get().lock() = Some(cx.waker().clone());
+            Poll::Pending
+        }
+    }
+}
+
+// ── Channel recv helpers ────────────────────────────────────────────
+
+/// Looks up a channel object from the process handle table by fd.
+///
+/// Returns the `Arc<dyn KernelObject>` for the channel.
+///
+/// # Panics
+///
+/// Panics if the fd is invalid or does not refer to a Channel. The syscall
+/// handler validated the fd before setting the blocking op.
+fn get_channel_from_fd(process: &Arc<Process>, fd: usize) -> Arc<dyn KernelObject> {
+    let hv = HandleValue::from_raw(fd as u32);
+    process.with_handle_table(|table| {
+        let entry = table
+            .get(hv)
+            .expect("channel_recv: invalid fd after blocking op");
+        assert_eq!(
+            entry.object().object_type(),
+            ObjectType::Channel,
+            "channel_recv: fd is not a channel"
+        );
+        Arc::clone(entry.object())
+    })
+}
+
+/// Downcasts a `dyn KernelObject` to `&Channel`.
+fn as_channel(obj: &dyn KernelObject) -> &Channel {
+    obj.as_any()
+        .downcast_ref::<Channel>()
+        .expect("channel_recv: object is not a channel")
+}
+
+/// Performs the actual channel read, copying data to the user buffer.
+///
+/// Returns the message length on success, or a negative errno.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "message lengths fit in isize"
+)]
+fn do_channel_recv(obj: &dyn KernelObject, buf_ptr: usize, buf_len: usize) -> isize {
+    let channel = as_channel(obj);
+    match channel.read() {
+        Ok(msg) => {
+            let copy_len = msg.data.len().min(buf_len);
+            // SAFETY: buf_ptr was validated by the syscall handler before
+            // the blocking op was set. CR3 has been restored.
+            unsafe {
+                core::ptr::copy_nonoverlapping(msg.data.as_ptr(), buf_ptr as *mut u8, copy_len);
+            }
+            msg.data.len() as isize
+        }
+        Err(ChannelError::ShouldWait) => -hadron_syscall::EAGAIN,
+        Err(ChannelError::PeerClosed) => -hadron_syscall::EPIPE,
+        Err(_) => -hadron_syscall::EIO,
+    }
+}
+
+/// Performs channel read with handle transfer, installing received handles.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "message lengths fit in isize"
+)]
+fn do_channel_recv_fd(
+    process: &Arc<Process>,
+    obj: &dyn KernelObject,
+    buf_ptr: usize,
+    buf_len: usize,
+    fd_out_ptr: usize,
+) -> isize {
+    let channel = as_channel(obj);
+    match channel.read() {
+        Ok(msg) => {
+            let copy_len = msg.data.len().min(buf_len);
+            // SAFETY: buf_ptr was validated before the blocking op. CR3 restored.
+            unsafe {
+                core::ptr::copy_nonoverlapping(msg.data.as_ptr(), buf_ptr as *mut u8, copy_len);
+            }
+
+            // Install transferred handles into the receiver's table.
+            let received_fd = if let Some(handle) = msg.handles.into_iter().next() {
+                process.with_handle_table(|table| match table.insert(handle) {
+                    Ok(hv) => hv.raw() as usize,
+                    Err(_) => usize::MAX,
+                })
+            } else {
+                usize::MAX // No handle attached
+            };
+
+            // SAFETY: fd_out_ptr was validated before the blocking op. CR3 restored.
+            unsafe {
+                *(fd_out_ptr as *mut usize) = received_fd;
+            }
+            msg.data.len() as isize
+        }
+        Err(ChannelError::ShouldWait) => -hadron_syscall::EAGAIN,
+        Err(ChannelError::PeerClosed) => -hadron_syscall::EPIPE,
+        Err(_) => -hadron_syscall::EIO,
     }
 }

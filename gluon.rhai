@@ -249,7 +249,7 @@ kernel_main.add("hadron-kernel-image", "kernel/kernel-image")
     .deps(#{
         hadron_kernel: "hadron-kernel"
     })
-    .artifact_deps(["userboot", "test-child", "test-receiver"]);
+    .artifact_deps(["initrd"]);
 
 // ===========================================================================
 // Userspace library crates (user target)
@@ -327,6 +327,14 @@ bench_deps.add("hadron-bench", "crates/test/hadron-bench")
     .deps(#{});
 
 // ===========================================================================
+// Initrd rule — packages userspace binaries into build/initrd.cpio
+// ===========================================================================
+
+rule("initrd")
+    .inputs(["userboot", "test-child", "test-receiver"])
+    .output("build/initrd.cpio");
+
+// ===========================================================================
 // Pipeline
 // ===========================================================================
 
@@ -337,6 +345,8 @@ pipeline()
     .barrier("host-ready")
     .stage("kernel", ["vendored", "vendored-uefi", "kernel-libs", "uefi-libs", "user-libs", "userboot", "test-child", "test-receiver"])
     .barrier("kernel-ready")
+    .rule("initrd")
+    .barrier("initrd-ready")
     .stage("link", ["kernel-main"])
     .barrier("link-ready")
     .stage("boot", ["uefi-boot"]);

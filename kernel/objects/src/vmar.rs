@@ -16,6 +16,11 @@ use crate::object::{KernelObject, Koid, ObjectType, Signals};
 use crate::observer::{ObserverList, PortDispatch};
 use crate::vmo::Vmo;
 
+/// Aligns `addr` up to the next multiple of `align` (must be a power of two).
+const fn align_up(addr: u64, align: u64) -> u64 {
+    (addr + align - 1) & !(align - 1)
+}
+
 bitflags! {
     /// Permissions for a VMO mapping within a VMAR.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -224,6 +229,39 @@ impl Vmar {
     pub fn child_count(&self) -> usize {
         self.children.lock().len()
     }
+
+    /// Finds a free region of `size` bytes with the given alignment.
+    ///
+    /// Walks existing mappings sorted by address and returns the first gap
+    /// that satisfies the size and alignment requirements.
+    #[must_use]
+    pub fn find_free_region(&self, size: u64, align: u64) -> Option<u64> {
+        let mappings = self.mappings.lock();
+
+        // Collect and sort mappings by address.
+        let mut sorted: Vec<(u64, u64)> = mappings.iter().map(|m| (m.addr, m.len)).collect();
+        sorted.sort_unstable_by_key(|&(addr, _)| addr);
+
+        // Start searching from the VMAR base.
+        let mut candidate = align_up(self.base, align);
+        let vmar_end = self.base + self.size;
+
+        for &(map_addr, map_len) in &sorted {
+            let map_end = map_addr + map_len;
+            if candidate + size <= map_addr {
+                return Some(candidate);
+            }
+            // Move past this mapping.
+            candidate = align_up(map_end, align);
+        }
+
+        // Check the gap after the last mapping.
+        if candidate + size <= vmar_end {
+            Some(candidate)
+        } else {
+            None
+        }
+    }
 }
 
 impl KernelObject for Vmar {
@@ -327,6 +365,38 @@ mod tests {
             root.map(vmo, 0, USER_BASE, 0x2000, VmarFlags::RW),
             Err(VmarError::OutOfRange),
         ));
+    }
+
+    #[test]
+    fn find_free_region_empty_vmar() {
+        let root = Vmar::new_root(USER_BASE, USER_SIZE);
+        let addr = root.find_free_region(0x1000, 0x1000);
+        assert_eq!(addr, Some(USER_BASE));
+    }
+
+    #[test]
+    fn find_free_region_skips_mappings() {
+        let root = Vmar::new_root(USER_BASE, USER_SIZE);
+        let vmo = Vmo::new_paged(0x4000);
+
+        root.map(vmo, 0, USER_BASE, 0x4000, VmarFlags::RW)
+            .expect("map failed");
+
+        let addr = root.find_free_region(0x1000, 0x1000);
+        assert_eq!(addr, Some(USER_BASE + 0x4000));
+    }
+
+    #[test]
+    fn find_free_region_alignment() {
+        let root = Vmar::new_root(USER_BASE, USER_SIZE);
+        let vmo = Vmo::new_paged(0x3000);
+
+        root.map(vmo, 0, USER_BASE, 0x3000, VmarFlags::RW)
+            .expect("map failed");
+
+        // Request 64KiB alignment — should skip past the mapping and align up.
+        let addr = root.find_free_region(0x1000, 0x1_0000);
+        assert_eq!(addr, Some(USER_BASE + 0x1_0000));
     }
 
     #[test]

@@ -75,7 +75,10 @@ pub fn sys_channel_send(fd: usize, buf_ptr: usize, len: usize) -> isize {
         };
 
         match channel.write(msg) {
-            Ok(()) => len as isize,
+            Ok(()) => {
+                crate::process::wake_channel_recv_waiter();
+                len as isize
+            }
             Err(ChannelError::PeerClosed) => -EPIPE,
             Err(ChannelError::MessageTooLarge) => -EINVAL,
             Err(_) => -EIO,
@@ -84,6 +87,9 @@ pub fn sys_channel_send(fd: usize, buf_ptr: usize, len: usize) -> isize {
 }
 
 /// `SYS_CHANNEL_RECV(fd, buf_ptr, len)` — receive a message from a channel.
+///
+/// If the channel is empty, blocks until a message is available by longjmping
+/// back to the process task.
 pub fn sys_channel_recv(fd: usize, buf_ptr: usize, buf_len: usize) -> isize {
     let out_slice = match UserSlice::new(buf_ptr, buf_len) {
         Ok(s) => s,
@@ -110,7 +116,21 @@ pub fn sys_channel_recv(fd: usize, buf_ptr: usize, buf_len: usize) -> isize {
                 unsafe { out_slice.write_from_slice(&msg.data[..copy_len]) };
                 msg.data.len() as isize
             }
-            Err(ChannelError::ShouldWait) => -EAGAIN,
+            Err(ChannelError::ShouldWait) => {
+                // Block: set up blocking op and longjmp to process_task.
+                crate::process::set_blocking_op(crate::process::BlockingOp::ChannelRecv {
+                    fd,
+                    buf_ptr,
+                    buf_len,
+                });
+                let saved_rsp: u64;
+                // SAFETY: GS is kernel; gs:[8] was set by enter_userspace_save.
+                unsafe { core::arch::asm!("mov {}, gs:[8]", out(reg) saved_rsp) };
+                // SAFETY: saved_rsp is valid.
+                unsafe {
+                    crate::arch::x86_64::userspace::restore_kernel_context(saved_rsp);
+                }
+            }
             Err(ChannelError::PeerClosed) => -EPIPE,
             Err(_) => -EIO,
         }
@@ -163,7 +183,10 @@ pub fn sys_channel_send_fd(ch_fd: usize, fd: usize, buf_ptr: usize, len: usize) 
         };
 
         match channel.write(msg) {
-            Ok(()) => len as isize,
+            Ok(()) => {
+                crate::process::wake_channel_recv_waiter();
+                len as isize
+            }
             Err(ChannelError::PeerClosed) => -EPIPE,
             Err(ChannelError::MessageTooLarge) => -EINVAL,
             Err(_) => -EIO,
@@ -220,7 +243,22 @@ pub fn sys_channel_recv_fd(
                 unsafe { fd_out.write(received_fd) };
                 msg.data.len() as isize
             }
-            Err(ChannelError::ShouldWait) => -EAGAIN,
+            Err(ChannelError::ShouldWait) => {
+                // Block: set up blocking op and longjmp to process_task.
+                crate::process::set_blocking_op(crate::process::BlockingOp::ChannelRecvFd {
+                    ch_fd,
+                    buf_ptr,
+                    buf_len,
+                    fd_out_ptr,
+                });
+                let saved_rsp: u64;
+                // SAFETY: GS is kernel; gs:[8] was set by enter_userspace_save.
+                unsafe { core::arch::asm!("mov {}, gs:[8]", out(reg) saved_rsp) };
+                // SAFETY: saved_rsp is valid.
+                unsafe {
+                    crate::arch::x86_64::userspace::restore_kernel_context(saved_rsp);
+                }
+            }
             Err(ChannelError::PeerClosed) => -EPIPE,
             Err(_) => -EIO,
         }
