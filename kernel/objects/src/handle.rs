@@ -99,6 +99,21 @@ bitflags! {
             | Self::DUPLICATE.bits()
             | Self::TRANSFER.bits()
             | Self::WAIT.bits();
+
+        /// Default rights for an IOMMU handle.
+        const IOMMU_DEFAULT = Self::READ.bits()
+            | Self::WRITE.bits()
+            | Self::DUPLICATE.bits()
+            | Self::TRANSFER.bits();
+
+        /// Default rights for a BTI (Bus Transaction Initiator) handle.
+        const BTI_DEFAULT = Self::READ.bits()
+            | Self::WRITE.bits()
+            | Self::DUPLICATE.bits()
+            | Self::TRANSFER.bits();
+
+        /// Default rights for a PMT (Pinned Memory Token) handle.
+        const PMT_DEFAULT = Self::READ.bits();
     }
 }
 
