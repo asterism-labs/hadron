@@ -1,0 +1,20 @@
+[package]
+name = "hadron-arch-x86_64"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "x86_64 CPU instruction and register wrappers for the Hadron kernel"
+
+[lib]
+bench = false
+doctest = false
+
+[dependencies]
+hadron-core = { workspace = true }
+bitflags = { workspace = true }
+
+[lints]
+workspace = true

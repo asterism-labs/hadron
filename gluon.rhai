@@ -149,6 +149,8 @@ kernel_libs.add("hadron-linkset", "crates/core/linkset");
 kernel_libs.add("hadron-syscall", "crates/core/hadron-syscall");
 kernel_libs.add("hadron-log", "crates/core/hadron-log")
     .deps(#{ hadron_core: "hadron-core", hadron_linkset: "hadron-linkset" });
+kernel_libs.add("hadron-arch-x86_64", "kernel/arch-x86_64")
+    .deps(#{ hadron_core: "hadron-core", bitflags: "bitflags" });
 kernel_libs.add("hadron-intrinsics", "kernel/intrinsics")
     .rustc_flags(["-Ctarget-feature=+sse,+sse2,-soft-float"]);
 kernel_libs.add("hadron-binparse", "crates/parse/binparse")
@@ -231,6 +233,7 @@ kernel_main.add("hadron-kernel", "kernel/kernel")
     .deps(#{
         bitflags: "bitflags",
         hadron_acpi: "hadron-acpi",
+        hadron_arch_x86_64: "hadron-arch-x86_64",
         hadron_boot_info: "hadron-boot-info",
         hadron_core: "hadron-core",
         hadron_elf: "hadron-elf",

@@ -25,6 +25,9 @@ hadron-core = { path = "kernel/core" }
 hadron-intrinsics = { path = "kernel/intrinsics" }
 hadron-linkset = { path = "crates/core/linkset" }
 
+# Internal crates — architecture
+hadron-arch-x86_64 = { path = "kernel/arch-x86_64" }
+
 # Internal crates — kernel subsystems
 hadron-kernel = { path = "kernel/kernel" }
 hadron-kernel-image = { path = "kernel/kernel-image" }
