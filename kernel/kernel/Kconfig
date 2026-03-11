@@ -35,6 +35,11 @@ config SMP
     default y
     depends on APIC
 
+config IOMMU
+    bool "IOMMU (Intel VT-d) support"
+    default y
+    depends on ACPI
+
 endmenu
 
 menu "CPU Features"
@@ -57,6 +62,7 @@ preset debug
     set ALT_INSTRUCTIONS y
     set KERNEL_FPU y
     set SMP y
+    set IOMMU y
 
 preset release
     set KERNEL_DEBUG n
@@ -66,3 +72,4 @@ preset release
     set ALT_INSTRUCTIONS y
     set KERNEL_FPU y
     set SMP y
+    set IOMMU y
