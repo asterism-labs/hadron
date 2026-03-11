@@ -83,6 +83,72 @@ struct CompileJob {
     mode: CompileMode,
 }
 
+// ---------------------------------------------------------------------------
+// Artifact stubs for Check/Clippy mode
+// ---------------------------------------------------------------------------
+
+/// Create an empty stub file at `path` if it does not already exist.
+///
+/// This prevents `include_bytes!` from failing during type-check or lint
+/// passes where the real artifact has never been built.
+fn create_stub_if_missing(path: &Path) -> Result<()> {
+    if !path.exists() {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, b"")?;
+    }
+    Ok(())
+}
+
+/// In Check/Clippy mode, create empty stub files for artifacts that pipeline
+/// rules and `artifact_deps` would normally produce during a full build.
+///
+/// Without stubs, `include_bytes!("../../build/initrd.cpio")` and similar
+/// paths cause compilation failures when no prior `just build` has run.
+fn ensure_artifact_stubs(
+    model: &BuildModel,
+    all_crates: &[(crate_graph::ResolvedCrate, bool)],
+    root: &Path,
+    mode: CompileMode,
+) -> Result<()> {
+    if mode == CompileMode::Build {
+        return Ok(());
+    }
+
+    // Stub pipeline rule outputs (e.g. build/initrd.cpio).
+    for step in &model.pipeline.steps {
+        if let PipelineStep::Rule(name) = step {
+            if let Some(rule) = model.rules.get(name) {
+                for output in &rule.outputs {
+                    create_stub_if_missing(&root.join(output))?;
+                }
+            }
+        }
+    }
+
+    // Stub binary artifacts referenced by artifact_deps.
+    // Collect all crate names that appear in any artifact_deps list.
+    let mut needed: HashSet<&str> = HashSet::new();
+    for crate_def in model.crates.values() {
+        for dep_name in &crate_def.artifact_deps {
+            needed.insert(dep_name.as_str());
+        }
+    }
+
+    // For each needed crate that resolves to a Bin, create a stub at the
+    // path a full Build would produce.
+    for (krate, _has_config) in all_crates {
+        if needed.contains(krate.name.as_str()) && krate.crate_type == crate::model::CrateType::Bin
+        {
+            let artifact = compile::crate_artifact_path(krate, root, None, CompileMode::Build);
+            create_stub_if_missing(&artifact)?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Execute the build pipeline using a unified global DAG.
 pub fn execute_pipeline(
     model: &BuildModel,
@@ -117,6 +183,10 @@ pub fn execute_pipeline(
     if all_crates.is_empty() {
         return Ok(());
     }
+
+    // In Check/Clippy mode, create empty stubs for artifacts that would
+    // normally be produced by pipeline rules (e.g. initrd, kernel ELF).
+    ensure_artifact_stubs(model, &all_crates, &root, mode)?;
 
     // Collect the set of non-host targets and config-enabled targets.
     let mut sysroot_targets: HashSet<String> = HashSet::new();
