@@ -129,6 +129,10 @@ pub trait KernelObject: Send + Sync + 'static {
     /// The globally unique identifier for this object.
     fn koid(&self) -> Koid;
 
+    /// Downcast support — returns `self` as `&dyn Any` for type-safe
+    /// downcasting in syscall handlers.
+    fn as_any(&self) -> &dyn core::any::Any;
+
     /// The koid of a related/peer object (e.g., the other end of a channel).
     ///
     /// Returns [`Koid::INVALID`] if there is no related object.

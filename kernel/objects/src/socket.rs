@@ -179,6 +179,10 @@ impl Socket {
 }
 
 impl KernelObject for Socket {
+    fn as_any(&self) -> &dyn core::any::Any {
+        self
+    }
+
     fn object_type(&self) -> ObjectType {
         ObjectType::Socket
     }

@@ -61,6 +61,9 @@ pub mod percpu;
 pub mod serial_sink;
 
 #[cfg(target_os = "none")]
+pub mod syscall;
+
+#[cfg(target_os = "none")]
 pub mod time;
 
 #[cfg(target_os = "none")]

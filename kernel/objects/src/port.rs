@@ -108,6 +108,10 @@ impl PortDispatch for Port {
 }
 
 impl KernelObject for Port {
+    fn as_any(&self) -> &dyn core::any::Any {
+        self
+    }
+
     fn object_type(&self) -> ObjectType {
         ObjectType::Port
     }

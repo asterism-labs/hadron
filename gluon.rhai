@@ -146,6 +146,7 @@ kernel_libs.add("hadron-boot-info", "crates/boot/boot-info");
 kernel_libs.add("hadron-core", "kernel/core")
     .deps(#{ bitflags: "bitflags", hadron_linkset: "hadron-linkset", planck_noalloc: "planck-noalloc" });
 kernel_libs.add("hadron-linkset", "crates/core/linkset");
+kernel_libs.add("hadron-syscall", "crates/core/hadron-syscall");
 kernel_libs.add("hadron-log", "crates/core/hadron-log")
     .deps(#{ hadron_core: "hadron-core", hadron_linkset: "hadron-linkset" });
 kernel_libs.add("hadron-intrinsics", "kernel/intrinsics")
@@ -231,6 +232,7 @@ kernel_main.add("hadron-kernel", "kernel/kernel")
         hadron_mmio: "hadron-mmio",
         hadron_objects: "hadron-objects",
         hadron_pci: "hadron-pci",
+        hadron_syscall: "hadron-syscall",
         hadron_sched: "hadron-sched",
         planck_noalloc: "planck-noalloc"
     })
@@ -250,6 +252,14 @@ kernel_main.add("hadron-kernel-image", "kernel/kernel-image")
     .artifact_deps(["userboot"]);
 
 // ===========================================================================
+// Userspace library crates (user target)
+// ===========================================================================
+
+let user_libs = group("user-libs").target("x86_64-unknown-hadron-user").edition("2024");
+
+user_libs.add("hadron-syscall-user", "crates/core/hadron-syscall");
+
+// ===========================================================================
 // Userboot (first userspace binary)
 // ===========================================================================
 
@@ -257,7 +267,8 @@ let userboot = group("userboot").target("x86_64-unknown-hadron-user").edition("2
 
 userboot.add("userboot", "userspace/userboot")
     .crate_type(BIN)
-    .root("src/main.rs");
+    .root("src/main.rs")
+    .deps(#{ hadron_syscall: "hadron-syscall-user" });
 
 // ===========================================================================
 // UEFI boot binary
@@ -302,7 +313,7 @@ pipeline()
     .barrier("sysroot-ready")
     .stage("host", ["host"])
     .barrier("host-ready")
-    .stage("kernel", ["vendored", "vendored-uefi", "kernel-libs", "uefi-libs", "userboot"])
+    .stage("kernel", ["vendored", "vendored-uefi", "kernel-libs", "uefi-libs", "user-libs", "userboot"])
     .barrier("kernel-ready")
     .stage("link", ["kernel-main"])
     .barrier("link-ready")

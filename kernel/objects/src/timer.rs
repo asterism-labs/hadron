@@ -103,6 +103,10 @@ impl Timer {
 }
 
 impl KernelObject for Timer {
+    fn as_any(&self) -> &dyn core::any::Any {
+        self
+    }
+
     fn object_type(&self) -> ObjectType {
         ObjectType::Timer
     }

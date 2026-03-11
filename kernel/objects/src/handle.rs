@@ -171,7 +171,7 @@ impl HandleTable {
 
     /// Create an empty handle table.
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             entries: BTreeMap::new(),
             next_value: 1,
@@ -315,6 +315,10 @@ mod tests {
     }
 
     impl KernelObject for TestObject {
+        fn as_any(&self) -> &dyn core::any::Any {
+            self
+        }
+
         fn object_type(&self) -> ObjectType {
             ObjectType::Event
         }

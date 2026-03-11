@@ -124,8 +124,7 @@ impl SerialPty {
                 libc::fcntl(reader_fd, libc::F_SETFL, flags & !libc::O_NONBLOCK);
             }
             // SAFETY: reader_fd is a valid, open file descriptor.
-            let file: std::fs::File =
-                unsafe { std::os::fd::FromRawFd::from_raw_fd(reader_fd) };
+            let file: std::fs::File = unsafe { std::os::fd::FromRawFd::from_raw_fd(reader_fd) };
             let reader = BufReader::new(file);
 
             for line_result in reader.lines() {
@@ -226,8 +225,7 @@ impl SerialPty {
     pub fn send(&self, data: &str) -> Result<()> {
         let bytes = data.as_bytes();
         // SAFETY: master_fd is a valid file descriptor; write is atomic for small data.
-        let written =
-            unsafe { libc::write(self.master_fd, bytes.as_ptr().cast(), bytes.len()) };
+        let written = unsafe { libc::write(self.master_fd, bytes.as_ptr().cast(), bytes.len()) };
         if written < 0 {
             bail!("serial write failed: {}", std::io::Error::last_os_error());
         }

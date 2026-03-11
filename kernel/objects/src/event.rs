@@ -44,6 +44,10 @@ impl Event {
 }
 
 impl KernelObject for Event {
+    fn as_any(&self) -> &dyn core::any::Any {
+        self
+    }
+
     fn object_type(&self) -> ObjectType {
         ObjectType::Event
     }

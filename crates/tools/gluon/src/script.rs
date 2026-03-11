@@ -130,8 +130,7 @@ fn register_vm_bindings(engine: &mut rhai::Engine, vm: &Arc<ScriptableVm>) {
     engine.register_fn("assert_exit", {
         let vm = Arc::clone(vm);
         move |expected: i64| -> Result<(), Box<rhai::EvalAltResult>> {
-            vm.assert_exit(expected)
-                .map_err(|e| e.to_string().into())
+            vm.assert_exit(expected).map_err(|e| e.to_string().into())
         }
     });
 
