@@ -258,4 +258,82 @@ mod shuttle_tests {
             200,
         );
     }
+
+    /// Two waiters on same address, wake(count=1) fires exactly one.
+    #[test]
+    fn shuttle_futex_wake_one() {
+        shuttle::check_random(
+            || {
+                let table = Arc::new(shuttle::sync::Mutex::new(FutexTableInner::new()));
+
+                // Thread 1: register two waiters.
+                let table2 = table.clone();
+                let t1 = thread::spawn(move || {
+                    let mut t = table2.lock().unwrap();
+                    t.wait(1, 0x2000, noop_waker());
+                    t.wait(1, 0x2000, noop_waker());
+                });
+
+                // Thread 2: wake exactly 1.
+                let table3 = table.clone();
+                let t2 = thread::spawn(move || {
+                    let mut t = table3.lock().unwrap();
+                    let (count, wakers) = t.wake(1, 0x2000, 1);
+                    for w in &wakers {
+                        w.wake_by_ref();
+                    }
+                    (count, wakers.len())
+                });
+
+                t1.join().unwrap();
+                let (count, waker_count) = t2.join().unwrap();
+
+                // If wake ran after both waits, exactly 1 should be woken.
+                // If wake ran before waits, 0 woken.
+                assert!(count <= 1, "wake(1) woke more than 1: {count}");
+                assert_eq!(count, waker_count);
+            },
+            200,
+        );
+    }
+
+    /// Concurrent wait + wake with no lost wakeups (all waiters eventually
+    /// accounted for).
+    #[test]
+    fn shuttle_futex_no_lost_wakeups() {
+        shuttle::check_random(
+            || {
+                let table = Arc::new(shuttle::sync::Mutex::new(FutexTableInner::new()));
+
+                // Thread 1: add 3 waiters under lock.
+                let t1_table = table.clone();
+                let t1 = thread::spawn(move || {
+                    let mut t = t1_table.lock().unwrap();
+                    for _ in 0..3 {
+                        t.wait(1, 0x3000, noop_waker());
+                    }
+                });
+
+                // Thread 2: wake all (up to 10).
+                let t2_table = table.clone();
+                let t2 = thread::spawn(move || {
+                    let mut t = t2_table.lock().unwrap();
+                    let (count, wakers) = t.wake(1, 0x3000, 10);
+                    for w in &wakers {
+                        w.wake_by_ref();
+                    }
+                    count
+                });
+
+                t1.join().unwrap();
+                let woken = t2.join().unwrap();
+
+                // Depending on schedule: either 0 or 3 woken.
+                // No partial: both threads hold the lock for their full
+                // operation.
+                assert!(woken == 0 || woken == 3, "unexpected wake count: {woken}");
+            },
+            200,
+        );
+    }
 }
