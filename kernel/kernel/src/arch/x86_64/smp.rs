@@ -426,7 +426,8 @@ unsafe fn setup_trampoline(kernel_cr3: u64) {
     }
 
     // Write data area: CR3, entry point, temporary stack.
-    let data_base = trampoline_virt.add(TRAMPOLINE_DATA_OFFSET);
+    // SAFETY: Offset is within the trampoline page we own.
+    let data_base = unsafe { trampoline_virt.add(TRAMPOLINE_DATA_OFFSET) };
     // SAFETY: Writing to our data area within the trampoline page.
     unsafe {
         // CR3 for long mode.
