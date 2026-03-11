@@ -116,18 +116,25 @@ pub extern "C" fn kernel_init(boot_info: *const BootInfo) -> ! {
     load_and_run_userboot();
 }
 
-/// Parses the embedded userboot ELF, maps it into user address space,
-/// allocates a user stack, and jumps to ring 3.
-///
-/// This function never returns.
+/// Parses the embedded userboot ELF, maps it into the shared address space,
+/// creates Process/Thread objects, spawns a `process_task` on the executor,
+/// and starts the executor loop (which never returns).
 #[expect(
     clippy::cast_possible_truncation,
     reason = "ELF vaddr fits in usize on x86_64"
 )]
 fn load_and_run_userboot() -> ! {
+    use alloc::string::ToString;
+    use alloc::sync::Arc;
+
     use hadron_core::addr::VirtAddr;
     use hadron_core::paging::{Page, Size4KiB};
     use hadron_mm::mapper::MapFlags;
+    use hadron_objects::object::KernelObject;
+    use hadron_objects::process::Process;
+    use hadron_objects::thread::Thread;
+    use hadron_objects::vmar::Vmar;
+    use hadron_sched::executor::ArchHalt;
 
     /// Page size in bytes.
     const PAGE_SIZE: u64 = 4096;
@@ -141,6 +148,9 @@ fn load_and_run_userboot() -> ! {
     const USER_STACK_TOP: u64 = 0x0000_7FFF_FFFF_0000;
     /// Number of pages for the user stack (64 KiB).
     const USER_STACK_PAGES: u64 = 16;
+    /// User address space base and size for VMAR.
+    const USER_BASE: u64 = 0x0000_0010_0000_0000;
+    const USER_SIZE: u64 = 0x0000_7FEF_0000_0000;
 
     crate::kinfo!("boot", "loading userboot ELF");
 
@@ -150,13 +160,14 @@ fn load_and_run_userboot() -> ! {
     let entry = elf.entry_point();
 
     // ── Map PT_LOAD segments ─────────────────────────────────────────
+    // Phase 2b: still uses the kernel's shared CR3 for userboot.
+    // Per-process address spaces are used for spawned children.
     for seg in elf.load_segments() {
         let seg_vaddr = seg.vaddr;
         let seg_memsz = seg.memsz;
         let page_start = seg_vaddr & !PAGE_MASK;
         let page_end = (seg_vaddr + seg_memsz + PAGE_MASK) & !PAGE_MASK;
 
-        // Determine mapping flags from ELF segment flags.
         let mut flags = MapFlags::USER;
         if seg.flags & PF_W != 0 {
             flags |= MapFlags::WRITABLE;
@@ -173,18 +184,14 @@ fn load_and_run_userboot() -> ! {
                     .expect("PMM: out of frames for userboot")
             });
 
-            // Zero the page via HHDM, then copy any overlapping segment data.
             let hhdm_ptr = hadron_mm::hhdm::phys_to_virt(frame.start_address());
-            // SAFETY: Frame was just allocated and is HHDM-mapped. We zero
-            // PAGE_SIZE bytes which is exactly one frame.
+            // SAFETY: Frame was just allocated and is HHDM-mapped.
             let page_slice = unsafe {
                 core::slice::from_raw_parts_mut(hhdm_ptr.as_u64() as *mut u8, PAGE_SIZE as usize)
             };
             page_slice.fill(0);
 
-            // Copy file-backed data that overlaps this page.
             let copy_start = page_addr.max(seg_vaddr);
-            // Data only covers seg_vaddr..seg_vaddr+filesz; the rest is BSS.
             let data_end = seg_vaddr + seg.data.len() as u64;
             let copy_end = (page_addr + PAGE_SIZE).min(data_end);
             if copy_start < copy_end {
@@ -195,7 +202,6 @@ fn load_and_run_userboot() -> ! {
                     .copy_from_slice(&seg.data[src_offset..src_offset + len]);
             }
 
-            // Map the page into the current address space.
             crate::vmm::with(|vmm| {
                 hadron_mm::pmm::with(|pmm| {
                     let mut alloc = hadron_mm::pmm::BitmapFrameAllocRef(pmm);
@@ -219,7 +225,6 @@ fn load_and_run_userboot() -> ! {
                 .expect("PMM: out of frames for user stack")
         });
 
-        // Zero the stack page via HHDM.
         let hhdm_ptr = hadron_mm::hhdm::phys_to_virt(frame.start_address());
         // SAFETY: Frame was just allocated and is HHDM-mapped.
         let page_slice = unsafe {
@@ -238,23 +243,47 @@ fn load_and_run_userboot() -> ! {
         });
     }
 
-    crate::kinfo!("boot", "entering userspace at {:#x}", entry);
+    // ── Create Process and Thread objects ─────────────────────────────
+    let root_vmar = Vmar::new_root(USER_BASE, USER_SIZE);
+    let process = Process::new("userboot".to_string(), root_vmar);
+    let thread = Thread::new("main".to_string(), &process);
+    process.add_thread(Arc::clone(&thread));
 
-    // Flush all log messages before leaving the kernel.
-    hadron_log::flush();
+    // Register in the global process table.
+    crate::process::register_process(&process);
 
-    // Disable auto-flush — syscall handlers will manage flushing.
-    hadron_log::disable_auto_flush();
+    crate::kinfo!(
+        "boot",
+        "userboot process created (pid={}), entering executor",
+        process.koid().raw()
+    );
 
-    // Swap GS to "user" state. The syscall entry stub does `swapgs` to get
-    // kernel GS, so GS must be in user state before entering ring 3.
-    // SAFETY: swapgs is valid here — kernel GS was set by init_gs_base.
-    unsafe { core::arch::asm!("swapgs") };
+    // ── Spawn process_task on the executor ───────────────────────────
+    // Userboot uses the shared CR3 (no per-process address space).
+    hadron_sched::spawn(crate::process::process_task(
+        process,
+        thread,
+        None, // shared CR3
+        entry,
+        USER_STACK_TOP,
+    ));
 
-    // SAFETY: entry is a valid user-mode entry point (from the ELF), and
-    // USER_STACK_TOP points to a mapped, zeroed user stack. GDT has user
-    // segments at the expected indices. CR3 has user-accessible mappings.
-    unsafe {
-        crate::arch::x86_64::userspace::jump_to_userspace(entry, USER_STACK_TOP);
+    // ── Start the executor (never returns) ───────────────────────────
+    struct HltHalt;
+    impl ArchHalt for HltHalt {
+        fn enable_interrupts_and_halt(&self) {
+            // SAFETY: sti + hlt is safe; an interrupt will resume execution.
+            unsafe { core::arch::asm!("sti", "hlt", "cli") };
+        }
     }
+
+    fn no_steal() -> Option<(
+        hadron_core::task::TaskId,
+        hadron_core::task::Priority,
+        hadron_sched::executor::TaskEntry,
+    )> {
+        None // Phase 2b: single CPU, no work stealing.
+    }
+
+    hadron_sched::executor().run(&HltHalt, no_steal);
 }

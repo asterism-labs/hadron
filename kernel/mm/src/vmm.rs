@@ -145,6 +145,11 @@ impl<M: PageMapper<Size4KiB> + PageTranslator> Vmm<M> {
         }
     }
 
+    /// Returns the root page table physical address.
+    pub fn root_phys(&self) -> PhysAddr {
+        self.root_phys
+    }
+
     /// Returns a reference to the memory layout.
     pub fn layout(&self) -> &MemoryLayout {
         &self.layout

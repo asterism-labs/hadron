@@ -58,6 +58,9 @@ pub mod entry;
 pub mod percpu;
 
 #[cfg(target_os = "none")]
+pub mod process;
+
+#[cfg(target_os = "none")]
 pub mod serial_sink;
 
 #[cfg(target_os = "none")]

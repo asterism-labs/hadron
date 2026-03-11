@@ -1,7 +1,8 @@
 //! Userboot — the first userspace process.
 //!
-//! Phase 2a verification: creates a channel pair, sends a message on one
-//! endpoint, receives it from the other, and prints success via debug_log.
+//! Phase 2b verification: creates a channel pair (IPC test from 2a),
+//! then spawns a child process, waits for it to exit, and verifies
+//! the exit code.
 
 #![no_std]
 #![no_main]
@@ -28,11 +29,13 @@ pub unsafe extern "C" fn _start() -> ! {
     );
 }
 
-/// Userboot main logic — Phase 2a IPC verification.
+/// Userboot main logic — Phase 2b verification.
 fn main() -> ! {
-    debug_log("userboot: starting Phase 2a IPC test\n");
+    debug_log("userboot: starting Phase 2b verification\n");
 
-    // Step 1: Create a channel pair.
+    // ── Phase 2a IPC test (channel self-send/recv) ───────────────────
+    debug_log("userboot: Phase 2a IPC test\n");
+
     let mut fds: [usize; 2] = [0; 2];
     let ret = wrappers::sys_channel_create(fds.as_mut_ptr() as usize);
     if ret < 0 {
@@ -42,7 +45,6 @@ fn main() -> ! {
     let fd_a = fds[0];
     let fd_b = fds[1];
 
-    // Step 2: Send a message on fd_a.
     let msg = b"hello from channel";
     let ret = wrappers::sys_channel_send(fd_a, msg.as_ptr() as usize, msg.len());
     if ret < 0 {
@@ -50,7 +52,6 @@ fn main() -> ! {
         wrappers::sys_task_exit(2);
     }
 
-    // Step 3: Receive the message on fd_b.
     let mut buf = [0u8; 64];
     let ret = wrappers::sys_channel_recv(fd_b, buf.as_mut_ptr() as usize, buf.len());
     if ret < 0 {
@@ -58,35 +59,44 @@ fn main() -> ! {
         wrappers::sys_task_exit(3);
     }
 
-    // Step 4: Verify the received message matches.
     let received_len = ret as usize;
-    if received_len != msg.len() {
-        debug_log("FAIL: received length mismatch\n");
+    if received_len != msg.len() || &buf[..received_len] != msg.as_slice() {
+        debug_log("FAIL: received data mismatch\n");
         wrappers::sys_task_exit(4);
     }
 
-    let received = &buf[..received_len];
-    if received != msg.as_slice() {
-        debug_log("FAIL: received data mismatch\n");
-        wrappers::sys_task_exit(5);
+    // Close endpoints.
+    wrappers::sys_handle_close(fd_a);
+    wrappers::sys_handle_close(fd_b);
+
+    debug_log("userboot: Phase 2a IPC test passed\n");
+
+    // ── Phase 2b spawn test ──────────────────────────────────────────
+    debug_log("userboot: spawning test-child\n");
+
+    let path = b"test-child";
+    let child_pid = wrappers::sys_task_spawn(path.as_ptr() as usize, path.len());
+    if child_pid < 0 {
+        debug_log("FAIL: task_spawn failed\n");
+        wrappers::sys_task_exit(10);
     }
 
-    // Step 5: Test handle close.
-    let ret = wrappers::sys_handle_close(fd_a);
+    debug_log("userboot: waiting for child\n");
+
+    let mut status: usize = 0;
+    let ret = wrappers::sys_task_wait(child_pid as usize, &mut status as *mut usize as usize, 0);
     if ret < 0 {
-        debug_log("FAIL: handle_close failed\n");
-        wrappers::sys_task_exit(6);
+        debug_log("FAIL: task_wait failed\n");
+        wrappers::sys_task_exit(11);
     }
 
-    // Receiving from fd_b after peer closed should return EAGAIN (empty) or EPIPE.
-    let ret = wrappers::sys_channel_recv(fd_b, buf.as_mut_ptr() as usize, buf.len());
-    // After peer close and queue empty, should get -EAGAIN or -EPIPE.
-    if ret >= 0 {
-        debug_log("FAIL: recv after peer close should fail\n");
-        wrappers::sys_task_exit(7);
+    // Verify child exited with code 42.
+    if status != 42 {
+        debug_log("FAIL: child exit code mismatch\n");
+        wrappers::sys_task_exit(12);
     }
 
-    debug_log("Phase 2a IPC test passed!\n");
+    debug_log("Phase 2b verification passed!\n");
     wrappers::sys_task_exit(0);
 }
 

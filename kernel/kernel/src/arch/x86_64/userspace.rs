@@ -121,12 +121,14 @@ pub unsafe extern "C" fn jump_to_userspace(entry: u64, user_rsp: u64) -> ! {
 ///
 /// This is the setjmp half of the setjmp/longjmp pair. It:
 /// 1. Pushes callee-saved registers (rbp, rbx, r12-r15) on the current stack
-/// 2. Saves RSP to `*saved_rsp_ptr`
-/// 3. Builds an `iretq` frame and transitions to ring 3
+/// 2. Saves RSP to `*saved_rsp_ptr` and updates `percpu.kernel_rsp` (`GS:[8]`)
+/// 3. Performs `swapgs` to switch GS to user state
+/// 4. Builds an `iretq` frame and transitions to ring 3
 ///
 /// When a syscall handler or fault handler calls [`restore_kernel_context`]
 /// with the saved RSP, execution "returns" from this function back to the
-/// caller (the process task in the executor).
+/// caller (the process task in the executor). At that point GS is in kernel
+/// state (restored by the syscall entry stub's `swapgs`).
 ///
 /// # Safety
 ///
@@ -135,6 +137,7 @@ pub unsafe extern "C" fn jump_to_userspace(entry: u64, user_rsp: u64) -> ! {
 /// - `saved_rsp_ptr` must point to a valid `u64` for storing the kernel RSP.
 /// - The GDT must have user segments at the expected indices.
 /// - CR3 must already be loaded with the user address space.
+/// - GS must be in kernel state (pointing to `PerCpuState`).
 /// - Interrupts must be disabled.
 #[unsafe(naked)]
 pub unsafe extern "C" fn enter_userspace_save(entry: u64, user_rsp: u64, saved_rsp_ptr: *mut u64) {
@@ -149,6 +152,14 @@ pub unsafe extern "C" fn enter_userspace_save(entry: u64, user_rsp: u64, saved_r
 
         // Save RSP to *saved_rsp_ptr (rdx = 3rd argument).
         "mov [rdx], rsp",
+
+        // Update percpu.kernel_rsp so syscall_entry starts its stack here.
+        // This preserves the executor's frames above this point.
+        "mov gs:[8], rsp",
+
+        // Switch GS to user state before entering ring 3.
+        // syscall_entry will swapgs back to kernel GS on re-entry.
+        "swapgs",
 
         // Build iretq frame on the current stack.
         "push {user_ds}",   // SS
@@ -187,11 +198,11 @@ pub unsafe extern "C" fn enter_userspace_save(entry: u64, user_rsp: u64, saved_r
 ///
 /// Like [`enter_userspace_save`], this saves callee-saved registers and
 /// the kernel RSP so that [`restore_kernel_context`] can "return" here.
-/// Then it builds an `iretq` frame from the saved user registers and
-/// restores all GPRs before transitioning to ring 3.
+/// Then it performs `swapgs`, builds an `iretq` frame from the saved user
+/// registers, and restores all GPRs before transitioning to ring 3.
 ///
-/// Used when re-entering a preempted process whose state was saved by
-/// the timer preemption stub.
+/// Used when re-entering a process after a blocking syscall completes or
+/// after timer preemption.
 ///
 /// # Safety
 ///
@@ -199,6 +210,7 @@ pub unsafe extern "C" fn enter_userspace_save(entry: u64, user_rsp: u64, saved_r
 /// - `saved_rsp_ptr` must point to a valid `u64` for storing the kernel RSP.
 /// - The GDT must have user segments at the expected indices.
 /// - CR3 must already be loaded with the user address space.
+/// - GS must be in kernel state (pointing to `PerCpuState`).
 /// - Interrupts must be disabled.
 #[unsafe(naked)]
 pub unsafe extern "C" fn enter_userspace_resume(
@@ -217,6 +229,12 @@ pub unsafe extern "C" fn enter_userspace_resume(
 
         // Save kernel RSP to *saved_rsp_ptr (rsi = 2nd argument).
         "mov [rsi], rsp",
+
+        // Update percpu.kernel_rsp for syscall_entry.
+        "mov gs:[8], rsp",
+
+        // Switch GS to user state before entering ring 3.
+        "swapgs",
 
         // Build iretq frame from UserRegisters fields.
         // UserRegisters layout: rax(0), rbx(8), rcx(16), rdx(24), rsi(32),

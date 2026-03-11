@@ -75,3 +75,13 @@ pub fn sys_handle_pipe(fds_ptr: usize) -> isize {
     };
     -ENOSYS // Phase 2b: implement with Socket::create_pair()
 }
+
+/// `SYS_HANDLE_TCSETPGRP` — stub (not yet implemented).
+pub fn sys_handle_tcsetpgrp(_fd: usize, _pgid: usize) -> isize {
+    -ENOSYS
+}
+
+/// `SYS_HANDLE_TCGETPGRP` — stub (not yet implemented).
+pub fn sys_handle_tcgetpgrp(_fd: usize) -> isize {
+    -ENOSYS
+}

@@ -249,7 +249,7 @@ kernel_main.add("hadron-kernel-image", "kernel/kernel-image")
     .deps(#{
         hadron_kernel: "hadron-kernel"
     })
-    .artifact_deps(["userboot"]);
+    .artifact_deps(["userboot", "test-child"]);
 
 // ===========================================================================
 // Userspace library crates (user target)
@@ -266,6 +266,17 @@ user_libs.add("hadron-syscall-user", "crates/core/hadron-syscall");
 let userboot = group("userboot").target("x86_64-unknown-hadron-user").edition("2024");
 
 userboot.add("userboot", "userspace/userboot")
+    .crate_type(BIN)
+    .root("src/main.rs")
+    .deps(#{ hadron_syscall: "hadron-syscall-user" });
+
+// ===========================================================================
+// Test child (spawned by userboot during Phase 2b verification)
+// ===========================================================================
+
+let test_child = group("test-child").target("x86_64-unknown-hadron-user").edition("2024");
+
+test_child.add("test-child", "userspace/test-child")
     .crate_type(BIN)
     .root("src/main.rs")
     .deps(#{ hadron_syscall: "hadron-syscall-user" });
@@ -313,7 +324,7 @@ pipeline()
     .barrier("sysroot-ready")
     .stage("host", ["host"])
     .barrier("host-ready")
-    .stage("kernel", ["vendored", "vendored-uefi", "kernel-libs", "uefi-libs", "user-libs", "userboot"])
+    .stage("kernel", ["vendored", "vendored-uefi", "kernel-libs", "uefi-libs", "user-libs", "userboot", "test-child"])
     .barrier("kernel-ready")
     .stage("link", ["kernel-main"])
     .barrier("link-ready")
