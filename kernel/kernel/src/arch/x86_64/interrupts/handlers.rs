@@ -80,11 +80,7 @@ pub extern "x86-interrupt" fn general_protection(frame: InterruptStackFrame, err
 pub extern "x86-interrupt" fn page_fault(frame: InterruptStackFrame, error_code: u64) {
     use crate::arch::x86_64::structures::paging::PageFaultErrorCode;
 
-    let cr2: u64;
-    // SAFETY: Reading CR2 is always safe during a page fault handler.
-    unsafe {
-        core::arch::asm!("mov {}, cr2", out(reg) cr2, options(nomem, nostack, preserves_flags));
-    }
+    let cr2 = crate::arch::x86_64::registers::control::Cr2::read();
 
     let error = PageFaultErrorCode::from_bits_truncate(error_code);
 

@@ -147,8 +147,8 @@ unsafe extern "C" fn ap_entry(lapic_id: u64) {
     );
 
     // Enable interrupts and enter the executor loop.
-    // SAFETY: All per-CPU state is initialized.
-    unsafe { core::arch::asm!("sti") };
+    // SAFETY: All per-CPU state is initialized; IDT is loaded.
+    unsafe { crate::arch::x86_64::instructions::interrupts::enable() };
 
     let halt = crate::entry::HltHalt;
     let steal = crate::entry::make_steal_fn();
@@ -201,9 +201,7 @@ pub unsafe fn boot_aps() {
     );
 
     // Store kernel CR3 for trampoline.
-    let cr3: u64;
-    // SAFETY: Reading CR3 is always safe in ring 0.
-    unsafe { core::arch::asm!("mov {}, cr3", out(reg) cr3) };
+    let cr3 = crate::arch::x86_64::registers::control::Cr3::read().as_u64();
     AP_KERNEL_CR3.store(cr3, Ordering::Release);
 
     // Set up LAPIC-to-CPU mapping.

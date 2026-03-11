@@ -15,42 +15,7 @@ use core::cell::UnsafeCell;
 
 use super::cpuid::{self, CpuFeatures};
 use super::registers::control::{Cr4, Cr4Flags};
-
-// ---------------------------------------------------------------------------
-// XCR0 helpers
-// ---------------------------------------------------------------------------
-
-/// Reads XCR0 (Extended Control Register 0) via XGETBV with ECX=0.
-#[inline]
-unsafe fn xgetbv() -> u64 {
-    let (lo, hi): (u32, u32);
-    unsafe {
-        core::arch::asm!(
-            "xgetbv",
-            in("ecx") 0u32,
-            out("eax") lo,
-            out("edx") hi,
-            options(nomem, nostack, preserves_flags),
-        );
-    }
-    (hi as u64) << 32 | lo as u64
-}
-
-/// Writes XCR0 via XSETBV with ECX=0.
-#[inline]
-unsafe fn xsetbv(val: u64) {
-    let lo = val as u32;
-    let hi = (val >> 32) as u32;
-    unsafe {
-        core::arch::asm!(
-            "xsetbv",
-            in("ecx") 0u32,
-            in("eax") lo,
-            in("edx") hi,
-            options(nomem, nostack, preserves_flags),
-        );
-    }
-}
+use hadron_arch_x86_64::registers::xcr0::{self, Xcr0Flags};
 
 // ---------------------------------------------------------------------------
 // FPU enablement (called per-CPU during boot)
@@ -83,17 +48,20 @@ pub unsafe fn enable_fpu_support() {
     if features.contains(CpuFeatures::XSAVE) {
         // Enable XSAVE family of instructions.
         cr4 |= Cr4Flags::OSXSAVE;
+        // SAFETY: CR4 flags are valid — we just added OSFXSR/OSXMMEXCPT/OSXSAVE.
         unsafe { Cr4::write(cr4) };
 
-        // Configure XCR0: enable x87 (bit 0) + SSE (bit 1).
-        let mut xcr0 = unsafe { xgetbv() };
-        xcr0 |= 0x1 | 0x2; // x87 + SSE/XMM
+        // Configure XCR0: enable x87 + SSE.
+        // SAFETY: CR4.OSXSAVE is now set.
+        let mut xcr0_val = unsafe { xcr0::xgetbv() };
+        xcr0_val |= Xcr0Flags::X87 | Xcr0Flags::SSE;
 
         if features.contains(CpuFeatures::AVX) {
-            xcr0 |= 0x4; // AVX/YMM upper halves
+            xcr0_val |= Xcr0Flags::AVX;
         }
 
-        unsafe { xsetbv(xcr0) };
+        // SAFETY: CR4.OSXSAVE is set and the flags are valid for this CPU.
+        unsafe { xcr0::xsetbv(xcr0_val) };
 
         // Validate that the XSAVE area fits in our static buffer.
         #[cfg(hadron_kernel_fpu)]
@@ -107,6 +75,7 @@ pub unsafe fn enable_fpu_support() {
             );
         }
     } else {
+        // SAFETY: CR4 flags are valid — we just added OSFXSR/OSXMMEXCPT.
         unsafe { Cr4::write(cr4) };
     }
 }
@@ -153,6 +122,10 @@ hadron_core::percpu_static!(static FPU_DEPTH: hadron_core::sync::atomic::AtomicU
 // KernelFpuGuard
 // ---------------------------------------------------------------------------
 
+/// All managed XSAVE components (x87 + SSE + AVX).
+#[cfg(hadron_kernel_fpu)]
+const RFBM_ALL: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+
 /// RAII guard that saves the current FPU state and disables interrupts,
 /// allowing the kernel to use XMM/YMM registers safely.
 ///
@@ -176,6 +149,7 @@ impl KernelFpuGuard {
     /// Saves FPU state and disables interrupts.
     pub fn new() -> Self {
         use super::instructions::interrupts;
+        use hadron_arch_x86_64::instructions::misc;
 
         let irq_was_enabled = interrupts::are_enabled();
         if irq_was_enabled {
@@ -191,28 +165,17 @@ impl KernelFpuGuard {
 
         // Save current FPU state to the per-CPU buffer.
         let area = FPU_SAVE_AREAS.get();
-        let ptr = area.get();
+        let ptr = area.get().cast::<u8>();
 
         if cpuid::has_feature(CpuFeatures::XSAVE) {
-            // XSAVE64 with RFBM = all managed components (x87 + SSE + AVX).
-            unsafe {
-                core::arch::asm!(
-                    "xsave64 [{}]",
-                    in(reg) ptr,
-                    in("eax") 0xFFFF_FFFFu32,
-                    in("edx") 0xFFFF_FFFFu32,
-                    options(nostack),
-                );
-            }
+            // SAFETY: ptr is 64-byte aligned (FpuSaveArea is repr(align(64))),
+            // points to FPU_SAVE_AREA_SIZE bytes, and CR4.OSXSAVE is set.
+            // Interrupts are disabled so no concurrent FPU use.
+            unsafe { misc::xsave64(ptr, RFBM_ALL) };
         } else {
-            // FXSAVE64 (SSE only, 512-byte area).
-            unsafe {
-                core::arch::asm!(
-                    "fxsave64 [{}]",
-                    in(reg) ptr,
-                    options(nostack),
-                );
-            }
+            // SAFETY: ptr is 64-byte aligned (exceeds 16-byte requirement),
+            // points to at least 512 bytes. Interrupts are disabled.
+            unsafe { misc::fxsave64(ptr) };
         }
 
         Self { irq_was_enabled }
@@ -222,28 +185,20 @@ impl KernelFpuGuard {
 #[cfg(hadron_kernel_fpu)]
 impl Drop for KernelFpuGuard {
     fn drop(&mut self) {
+        use hadron_arch_x86_64::instructions::misc;
+
         // Restore FPU state from the per-CPU buffer.
         let area = FPU_SAVE_AREAS.get();
-        let ptr = area.get();
+        let ptr = area.get().cast::<u8>();
 
         if cpuid::has_feature(CpuFeatures::XSAVE) {
-            unsafe {
-                core::arch::asm!(
-                    "xrstor64 [{}]",
-                    in(reg) ptr,
-                    in("eax") 0xFFFF_FFFFu32,
-                    in("edx") 0xFFFF_FFFFu32,
-                    options(nostack),
-                );
-            }
+            // SAFETY: ptr is 64-byte aligned, points to valid XSAVE data,
+            // and CR4.OSXSAVE is set. Interrupts are still disabled.
+            unsafe { misc::xrstor64(ptr.cast_const(), RFBM_ALL) };
         } else {
-            unsafe {
-                core::arch::asm!(
-                    "fxrstor64 [{}]",
-                    in(reg) ptr,
-                    options(nostack),
-                );
-            }
+            // SAFETY: ptr is 64-byte aligned, points to valid FXSAVE data.
+            // Interrupts are still disabled.
+            unsafe { misc::fxrstor64(ptr.cast_const()) };
         }
 
         #[cfg(debug_assertions)]
@@ -253,6 +208,7 @@ impl Drop for KernelFpuGuard {
         }
 
         if self.irq_was_enabled {
+            // SAFETY: Interrupts were previously enabled, so re-enabling is safe.
             unsafe { super::instructions::interrupts::enable() };
         }
     }

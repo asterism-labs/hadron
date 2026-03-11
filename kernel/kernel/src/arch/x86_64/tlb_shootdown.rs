@@ -29,10 +29,7 @@ pub fn shootdown_page(vaddr: u64) {
     use crate::arch::x86_64::interrupts::dispatch::vectors;
 
     // Flush local TLB first.
-    // SAFETY: invlpg is always safe for any virtual address.
-    unsafe {
-        core::arch::asm!("invlpg [{}]", in(reg) vaddr, options(nostack, preserves_flags));
-    }
+    crate::arch::x86_64::instructions::tlb::flush(crate::addr::VirtAddr::new_truncate(vaddr));
 
     let total_cpus = crate::arch::x86_64::smp::cpu_count();
     if total_cpus <= 1 {
@@ -75,10 +72,7 @@ pub fn shootdown_page(vaddr: u64) {
 pub fn handle_shootdown_ipi() {
     let vaddr = SHOOTDOWN_VADDR.load(Ordering::Acquire);
     if vaddr != 0 {
-        // SAFETY: invlpg is always safe for any virtual address.
-        unsafe {
-            core::arch::asm!("invlpg [{}]", in(reg) vaddr, options(nostack, preserves_flags));
-        }
+        crate::arch::x86_64::instructions::tlb::flush(crate::addr::VirtAddr::new_truncate(vaddr));
     }
     SHOOTDOWN_ACK.fetch_add(1, Ordering::Release);
 }
