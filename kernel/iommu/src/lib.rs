@@ -51,3 +51,11 @@ pub fn init_vtd(host_address_width: u8, drhds: &[DrhdEntry]) {
 pub fn unit_count() -> usize {
     VTD_UNITS.lock().len()
 }
+
+/// Execute a closure with exclusive access to the VT-d unit at `index`.
+///
+/// Returns `None` if `index` is out of bounds.
+pub fn with_unit<R>(index: usize, f: impl FnOnce(&mut vtd::VtdUnit) -> R) -> Option<R> {
+    let mut units = VTD_UNITS.lock();
+    units.get_mut(index).map(f)
+}

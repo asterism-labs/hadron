@@ -138,6 +138,7 @@ fn init_unit(index: usize, drhd: &DrhdEntry) -> Result<VtdUnit, &'static str> {
         root_table_phys,
         domains,
         context_tables: alloc::vec![None; tables::ROOT_TABLE_ENTRIES],
+        slpts: alloc::collections::BTreeMap::new(),
     })
 }
 

@@ -63,16 +63,18 @@ pub enum IommuError {
 /// Abstract IOMMU hardware interface.
 ///
 /// Each backend (VT-d, AMD-Vi) implements this trait to provide DMA isolation.
+/// Methods take `&mut self` because they mutate internal state (domain allocator,
+/// page tables). The global unit lock provides exclusive access.
 pub trait IommuHardware: Send + Sync {
     /// Allocate a new DMA domain, returning its domain ID.
-    fn alloc_domain(&self) -> Result<DomainId, IommuError>;
+    fn alloc_domain(&mut self) -> Result<DomainId, IommuError>;
 
     /// Free a DMA domain and all its mappings.
-    fn free_domain(&self, domain: DomainId) -> Result<(), IommuError>;
+    fn free_domain(&mut self, domain: DomainId) -> Result<(), IommuError>;
 
     /// Map an IOVA range to physical frames in a domain's second-level page table.
     fn map_pages(
-        &self,
+        &mut self,
         domain: DomainId,
         iova: u64,
         frames: &[PhysAddr],
@@ -80,12 +82,16 @@ pub trait IommuHardware: Send + Sync {
     ) -> Result<(), IommuError>;
 
     /// Unmap an IOVA range from a domain.
-    fn unmap_pages(&self, domain: DomainId, iova: u64, page_count: usize)
-    -> Result<(), IommuError>;
+    fn unmap_pages(
+        &mut self,
+        domain: DomainId,
+        iova: u64,
+        page_count: usize,
+    ) -> Result<(), IommuError>;
 
     /// Assign a PCI device (BDF) to a domain.
-    fn attach_device(&self, domain: DomainId, bdf: PciBdf) -> Result<(), IommuError>;
+    fn attach_device(&mut self, domain: DomainId, bdf: PciBdf) -> Result<(), IommuError>;
 
     /// Detach a PCI device from its domain.
-    fn detach_device(&self, bdf: PciBdf) -> Result<(), IommuError>;
+    fn detach_device(&mut self, bdf: PciBdf) -> Result<(), IommuError>;
 }
