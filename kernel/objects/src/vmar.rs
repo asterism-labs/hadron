@@ -412,3 +412,55 @@ mod tests {
         assert_eq!(root.mapping_count(), 0);
     }
 }
+
+#[cfg(kani)]
+mod kani_proofs {
+    use super::*;
+
+    /// Two successful child allocations never produce overlapping ranges.
+    #[kani::proof]
+    fn kani_overlap_detection() {
+        let base: u64 = 0x1000;
+        let total_size: u64 = 0x10000;
+        let root = Vmar::new_root(base, total_size);
+
+        let off1: u64 = kani::any();
+        let sz1: u64 = kani::any();
+        let off2: u64 = kani::any();
+        let sz2: u64 = kani::any();
+
+        // Bound inputs to reasonable ranges within the VMAR.
+        kani::assume(sz1 > 0 && sz1 <= total_size);
+        kani::assume(sz2 > 0 && sz2 <= total_size);
+        kani::assume(off1 < total_size);
+        kani::assume(off2 < total_size);
+
+        if let Ok(c1) = root.allocate(off1, sz1) {
+            if let Ok(c2) = root.allocate(off2, sz2) {
+                let start1 = c1.base();
+                let end1 = start1 + c1.size();
+                let start2 = c2.base();
+                let end2 = start2 + c2.size();
+                // No overlap: one must end before the other starts.
+                assert!(end1 <= start2 || end2 <= start1);
+            }
+        }
+    }
+
+    /// `align_up` returns a value >= addr and divisible by align for
+    /// power-of-two alignment values.
+    #[kani::proof]
+    fn kani_alignment_invariant() {
+        let addr: u64 = kani::any();
+        let shift: u32 = kani::any();
+        kani::assume(shift < 32);
+        let align: u64 = 1u64 << shift;
+
+        // Guard against overflow in align_up.
+        kani::assume(addr <= u64::MAX - align);
+
+        let result = align_up(addr, align);
+        assert!(result >= addr);
+        assert_eq!(result % align, 0);
+    }
+}

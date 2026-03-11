@@ -222,3 +222,30 @@ mod tests {
         assert_eq!(vmo.object_type(), ObjectType::Vmo);
     }
 }
+
+#[cfg(kani)]
+mod kani_proofs {
+    use super::*;
+
+    const PAGE_SIZE: u64 = 4096;
+
+    /// The size of a paged VMO is always page-aligned.
+    #[kani::proof]
+    fn kani_vmo_size_page_aligned() {
+        let size: u64 = kani::any();
+        // Bound input to avoid overflow in alignment math.
+        kani::assume(size <= 1 << 40);
+        let vmo = Vmo::new_paged(size);
+        assert_eq!(vmo.size() % PAGE_SIZE, 0);
+    }
+
+    /// The size of a paged VMO is at least the requested size (when the input
+    /// does not cause overflow).
+    #[kani::proof]
+    fn kani_vmo_size_at_least_input() {
+        let size: u64 = kani::any();
+        kani::assume(size <= 1 << 40);
+        let vmo = Vmo::new_paged(size);
+        assert!(vmo.size() >= size);
+    }
+}

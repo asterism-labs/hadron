@@ -497,3 +497,118 @@ mod tests {
         ));
     }
 }
+
+#[cfg(kani)]
+mod kani_proofs {
+    use super::*;
+    extern crate alloc;
+    use alloc::sync::Arc;
+    use core::sync::atomic::AtomicU32;
+
+    use crate::object::{Koid, ObjectType, Signals};
+
+    /// Minimal test object for Kani proofs.
+    struct TestObject {
+        koid: Koid,
+        signals: AtomicU32,
+    }
+
+    impl TestObject {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                koid: Koid::alloc(),
+                signals: AtomicU32::new(0),
+            })
+        }
+    }
+
+    impl KernelObject for TestObject {
+        fn as_any(&self) -> &dyn core::any::Any {
+            self
+        }
+
+        fn object_type(&self) -> ObjectType {
+            ObjectType::Event
+        }
+
+        fn koid(&self) -> Koid {
+            self.koid
+        }
+
+        fn get_signals(&self) -> Signals {
+            Signals::from_bits_truncate(self.signals.load(core::sync::atomic::Ordering::Relaxed))
+        }
+
+        fn add_observer(
+            &self,
+            _port: Arc<dyn crate::observer::PortDispatch>,
+            _key: u64,
+            _signals: Signals,
+        ) {
+        }
+
+        fn remove_observer(&self, _port: &Arc<dyn crate::observer::PortDispatch>) {}
+    }
+
+    /// Inserting into a handle table never returns INVALID.
+    #[kani::proof]
+    fn kani_insert_never_returns_invalid() {
+        let mut table = HandleTable::new();
+        let obj = TestObject::new();
+        let entry = HandleEntry::new(obj, Rights::ALL);
+        if let Ok(hv) = table.insert(entry) {
+            assert_ne!(hv, HandleValue::INVALID);
+        }
+    }
+
+    /// For any two Rights values, the contains/intersection relationship holds:
+    /// if `a.contains(b)` then `(a & b) == b`.
+    #[kani::proof]
+    fn kani_rights_masking_subset() {
+        let a_bits: u32 = kani::any();
+        let b_bits: u32 = kani::any();
+        kani::assume(a_bits <= 0xFFF);
+        kani::assume(b_bits <= 0xFFF);
+
+        let a = Rights::from_bits_truncate(a_bits);
+        let b = Rights::from_bits_truncate(b_bits);
+
+        if a.contains(b) {
+            assert_eq!(a & b, b);
+        }
+    }
+
+    /// Duplicating with rights not subset of source always fails with
+    /// `AccessDenied`.
+    #[kani::proof]
+    fn kani_duplicate_cannot_amplify() {
+        let src_bits: u32 = kani::any();
+        let req_bits: u32 = kani::any();
+        kani::assume(src_bits <= 0xFFF);
+        kani::assume(req_bits <= 0xFFF);
+        // Ensure DUPLICATE right is present so we test the subset check, not
+        // the "requires DUPLICATE right" check.
+        kani::assume(src_bits & Rights::DUPLICATE.bits() != 0);
+
+        let src = Rights::from_bits_truncate(src_bits);
+        let req = Rights::from_bits_truncate(req_bits);
+
+        let mut table = HandleTable::new();
+        let obj = TestObject::new();
+        let hv = table.insert(HandleEntry::new(obj, src)).unwrap();
+
+        match table.duplicate(hv, req) {
+            Ok(hv2) => {
+                // Success means req must be a subset of src.
+                assert!(src.contains(req));
+                let entry = table.get(hv2).unwrap();
+                assert_eq!(entry.rights(), req);
+            }
+            Err(HandleError::AccessDenied) => {
+                // Failure means req is NOT a subset of src.
+                assert!(!src.contains(req));
+            }
+            Err(_) => panic!("unexpected error variant"),
+        }
+    }
+}
