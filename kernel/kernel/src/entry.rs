@@ -110,6 +110,35 @@ pub extern "C" fn kernel_init(boot_info: *const BootInfo) -> ! {
     unsafe { crate::arch::x86_64::syscall::init() };
     crate::kinfo!("boot", "SYSCALL/SYSRET initialized");
 
+    // ── 11b. ACPI platform init ─────────────────────────────────────────
+    #[cfg(hadron_acpi)]
+    {
+        let rsdp = if bi.rsdp_phys != 0 {
+            Some(hadron_core::addr::PhysAddr::new(bi.rsdp_phys))
+        } else {
+            None
+        };
+        crate::arch::x86_64::acpi::init(rsdp);
+    }
+
+    // ── 11c. IOMMU init ────────────────────────────────────────────────
+    #[cfg(hadron_iommu)]
+    {
+        use crate::arch::x86_64::acpi::Acpi;
+        Acpi::with_dmar(|dmar| {
+            let drhds: alloc::vec::Vec<hadron_iommu::DrhdEntry> = dmar
+                .drhds
+                .iter()
+                .map(|d| hadron_iommu::DrhdEntry {
+                    flags: d.flags,
+                    segment: d.segment,
+                    register_base_address: d.register_base_address,
+                })
+                .collect();
+            hadron_iommu::init_vtd(dmar.host_address_width, &drhds);
+        });
+    }
+
     // ── 12. Boot APs (SMP) ──────────────────────────────────────────────
     #[cfg(hadron_smp)]
     {
@@ -324,4 +353,46 @@ fn steal_from_other_cpus() -> Option<(
         }
     }
     None
+}
+
+// ── Kernel integration tests ────────────────────────────────────────
+
+#[cfg(ktest)]
+mod ktest {
+    use hadron_ktest::kernel_test;
+
+    /// Verifies that VT-d IOMMU units were initialized from ACPI DMAR.
+    #[kernel_test(stage = "before_executor")]
+    fn test_iommu_vtd_initialized() {
+        // With intel-iommu device in QEMU, we expect at least one DRHD.
+        let count = hadron_iommu::unit_count();
+        assert!(count > 0, "expected at least 1 VT-d unit, got {count}");
+    }
+
+    /// Verifies DMAR info was parsed and stored in the ACPI subsystem.
+    #[kernel_test(stage = "before_executor")]
+    fn test_dmar_info_stored() {
+        use crate::arch::x86_64::acpi::Acpi;
+        let has_dmar = Acpi::with_dmar(|dmar| {
+            assert!(!dmar.drhds.is_empty(), "DMAR has no DRHD entries");
+            dmar.drhds.len()
+        });
+        assert!(has_dmar.is_some(), "DMAR info not stored");
+    }
+
+    /// Verifies domain allocation and freeing works.
+    #[kernel_test(stage = "before_executor")]
+    fn test_iommu_domain_alloc_free() {
+        use hadron_iommu::domain::DomainAllocator;
+        let mut alloc = DomainAllocator::new(64);
+        let d1 = alloc.alloc().expect("failed to allocate domain");
+        assert_eq!(d1.as_u16(), 1); // Domain 0 is reserved
+        let d2 = alloc.alloc().expect("failed to allocate domain");
+        assert_eq!(d2.as_u16(), 2);
+        alloc.free(d1).expect("failed to free domain");
+        let d3 = alloc.alloc().expect("failed to allocate domain");
+        assert_eq!(d3.as_u16(), 1); // Reused
+        alloc.free(d2).expect("failed to free domain");
+        alloc.free(d3).expect("failed to free domain");
+    }
 }
