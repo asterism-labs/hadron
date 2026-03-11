@@ -79,3 +79,108 @@ pub const ENOTCONN: isize = 107;
 pub const ETIMEDOUT: isize = 110;
 /// Operation already in progress.
 pub const EALREADY: isize = 114;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn all_errors_positive() {
+        let all: &[(&str, isize)] = &[
+            ("EPERM", EPERM),
+            ("ENOENT", ENOENT),
+            ("ESRCH", ESRCH),
+            ("EINTR", EINTR),
+            ("EIO", EIO),
+            ("ENXIO", ENXIO),
+            ("E2BIG", E2BIG),
+            ("ENOEXEC", ENOEXEC),
+            ("EBADF", EBADF),
+            ("ECHILD", ECHILD),
+            ("EAGAIN", EAGAIN),
+            ("ENOMEM", ENOMEM),
+            ("EACCES", EACCES),
+            ("EFAULT", EFAULT),
+            ("EBUSY", EBUSY),
+            ("EEXIST", EEXIST),
+            ("EXDEV", EXDEV),
+            ("ENODEV", ENODEV),
+            ("ENOTDIR", ENOTDIR),
+            ("EISDIR", EISDIR),
+            ("EINVAL", EINVAL),
+            ("ENFILE", ENFILE),
+            ("EMFILE", EMFILE),
+            ("ENOTTY", ENOTTY),
+            ("EFBIG", EFBIG),
+            ("ENOSPC", ENOSPC),
+            ("ESPIPE", ESPIPE),
+            ("EROFS", EROFS),
+            ("EPIPE", EPIPE),
+            ("ERANGE", ERANGE),
+            ("ENOSYS", ENOSYS),
+            ("ENAMETOOLONG", ENAMETOOLONG),
+            ("ENOMSG", ENOMSG),
+            ("ECONNREFUSED", ECONNREFUSED),
+            ("ECONNRESET", ECONNRESET),
+            ("ENOTCONN", ENOTCONN),
+            ("ETIMEDOUT", ETIMEDOUT),
+            ("EALREADY", EALREADY),
+        ];
+
+        for (name, val) in all {
+            assert!(*val > 0, "error {name} has non-positive value {val}");
+        }
+    }
+
+    #[test]
+    fn all_errors_unique() {
+        let all: &[isize] = &[
+            EPERM,
+            ENOENT,
+            ESRCH,
+            EINTR,
+            EIO,
+            ENXIO,
+            E2BIG,
+            ENOEXEC,
+            EBADF,
+            ECHILD,
+            EAGAIN,
+            ENOMEM,
+            EACCES,
+            EFAULT,
+            EBUSY,
+            EEXIST,
+            EXDEV,
+            ENODEV,
+            ENOTDIR,
+            EISDIR,
+            EINVAL,
+            ENFILE,
+            EMFILE,
+            ENOTTY,
+            EFBIG,
+            ENOSPC,
+            ESPIPE,
+            EROFS,
+            EPIPE,
+            ERANGE,
+            ENOSYS,
+            ENAMETOOLONG,
+            ENOMSG,
+            ECONNREFUSED,
+            ECONNRESET,
+            ENOTCONN,
+            ETIMEDOUT,
+            EALREADY,
+        ];
+
+        for (i, a) in all.iter().enumerate() {
+            for (j, b) in all.iter().enumerate() {
+                if i != j {
+                    assert_ne!(a, b, "duplicate error value {a} at indices {i} and {j}");
+                }
+            }
+        }
+    }
+}

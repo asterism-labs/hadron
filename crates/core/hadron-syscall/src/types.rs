@@ -123,3 +123,63 @@ pub struct PollFd {
     /// Returned events (filled by kernel).
     pub revents: u16,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::mem;
+
+    #[test]
+    fn memory_info_layout() {
+        assert_eq!(mem::size_of::<MemoryInfo>(), 24);
+        assert_eq!(mem::align_of::<MemoryInfo>(), 8);
+    }
+
+    #[test]
+    fn uptime_info_layout() {
+        assert_eq!(mem::size_of::<UptimeInfo>(), 16);
+        assert_eq!(mem::align_of::<UptimeInfo>(), 8);
+    }
+
+    #[test]
+    fn kernel_version_info_layout() {
+        assert_eq!(mem::size_of::<KernelVersionInfo>(), 16);
+        assert_eq!(mem::align_of::<KernelVersionInfo>(), 4);
+    }
+
+    #[test]
+    fn process_info_layout() {
+        assert_eq!(mem::size_of::<ProcessInfo>(), 8);
+        assert_eq!(mem::align_of::<ProcessInfo>(), 4);
+    }
+
+    #[test]
+    fn timespec_layout() {
+        assert_eq!(mem::size_of::<Timespec>(), 16);
+        assert_eq!(mem::align_of::<Timespec>(), 8);
+    }
+
+    #[test]
+    fn spawn_arg_layout() {
+        assert_eq!(mem::size_of::<SpawnArg>(), 16);
+        assert_eq!(mem::align_of::<SpawnArg>(), 8);
+    }
+
+    #[test]
+    fn fd_map_entry_layout() {
+        assert_eq!(mem::size_of::<FdMapEntry>(), 8);
+        assert_eq!(mem::align_of::<FdMapEntry>(), 4);
+    }
+
+    #[test]
+    fn spawn_info_layout() {
+        assert_eq!(mem::size_of::<SpawnInfo>(), 80);
+        assert_eq!(mem::align_of::<SpawnInfo>(), 8);
+    }
+
+    #[test]
+    fn poll_fd_layout() {
+        assert_eq!(mem::size_of::<PollFd>(), 8);
+        assert_eq!(mem::align_of::<PollFd>(), 4);
+    }
+}

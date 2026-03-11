@@ -403,7 +403,8 @@ tests()
         "hadron-mm",
         "hadron-objects",
         "hadron-sched",
-        "hadron-pci"
+        "hadron-pci",
+        "hadron-syscall"
     ])
     .kani_verifiable(["hadron-core", "hadron-objects", "hadron-sched"])
     .shuttle_testable(["hadron-core", "hadron-objects", "hadron-sched"])

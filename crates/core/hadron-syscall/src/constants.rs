@@ -100,3 +100,80 @@ pub const POLLERR: u16 = 0x008;
 pub const POLLHUP: u16 = 0x010;
 /// Invalid request (fd not open).
 pub const POLLNVAL: u16 = 0x020;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prot_flags_no_overlap() {
+        let flags: &[usize] = &[PROT_READ, PROT_WRITE, PROT_EXEC];
+        for (i, a) in flags.iter().enumerate() {
+            for b in &flags[i + 1..] {
+                assert_eq!(a & b, 0, "PROT flags overlap: {a:#x} and {b:#x}");
+            }
+        }
+    }
+
+    #[test]
+    fn map_flags_no_overlap() {
+        let flags: &[usize] = &[MAP_SHARED, MAP_PRIVATE, MAP_FIXED, MAP_ANONYMOUS];
+        for (i, a) in flags.iter().enumerate() {
+            for b in &flags[i + 1..] {
+                assert_eq!(a & b, 0, "MAP flags overlap: {a:#x} and {b:#x}");
+            }
+        }
+    }
+
+    #[test]
+    fn open_flags_no_overlap() {
+        // Access modes (low 2 bits) are allowed to overlap — test creation/mode flags only.
+        let flags: &[u32] = &[OPEN_CREAT, OPEN_TRUNC, OPEN_APPEND, OPEN_DIRECTORY];
+        for (i, a) in flags.iter().enumerate() {
+            for b in &flags[i + 1..] {
+                assert_eq!(a & b, 0, "OPEN flags overlap: {a:#x} and {b:#x}");
+            }
+        }
+    }
+
+    #[test]
+    fn poll_flags_no_overlap() {
+        let flags: &[u16] = &[POLLIN, POLLOUT, POLLERR, POLLHUP, POLLNVAL];
+        for (i, a) in flags.iter().enumerate() {
+            for b in &flags[i + 1..] {
+                assert_eq!(a & b, 0, "POLL flags overlap: {a:#x} and {b:#x}");
+            }
+        }
+    }
+
+    #[test]
+    fn query_types_unique() {
+        let types: &[u32] = &[
+            QUERY_MEMORY,
+            QUERY_UPTIME,
+            QUERY_KERNEL_VERSION,
+            QUERY_PROCESSES,
+        ];
+        for (i, a) in types.iter().enumerate() {
+            for (j, b) in types.iter().enumerate() {
+                if i != j {
+                    assert_ne!(a, b, "duplicate query type {a} at indices {i} and {j}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn signal_numbers_unique() {
+        let sigs: &[usize] = &[
+            SIGINT, SIGQUIT, SIGKILL, SIGSEGV, SIGPIPE, SIGTERM, SIGCHLD, SIGSTOP,
+        ];
+        for (i, a) in sigs.iter().enumerate() {
+            for (j, b) in sigs.iter().enumerate() {
+                if i != j {
+                    assert_ne!(a, b, "duplicate signal number {a} at indices {i} and {j}");
+                }
+            }
+        }
+    }
+}
