@@ -187,6 +187,15 @@ kernel_libs.add("hadron-acpi", "crates/parse/acpi")
 kernel_libs.add("hadron-fdt", "crates/parse/fdt")
     .deps(#{ hadron_binparse: "hadron-binparse" });
 
+kernel_libs.add("hadron-iommu", "kernel/iommu")
+    .deps(#{
+        hadron_core: "hadron-core",
+        hadron_mm: "hadron-mm",
+        hadron_mmio: #{ "crate": "hadron-mmio" },
+        hadron_mmio_macros: #{ "crate": "hadron-mmio-macros", proc_macro: true },
+        hadron_log: "hadron-log",
+    });
+
 kernel_libs.add("hadron-ktest", "crates/test/hadron-ktest")
     .deps(#{
         hadron_linkset: "hadron-linkset",
@@ -225,6 +234,7 @@ kernel_main.add("hadron-kernel", "kernel/kernel")
         hadron_boot_info: "hadron-boot-info",
         hadron_core: "hadron-core",
         hadron_elf: "hadron-elf",
+        hadron_iommu: "hadron-iommu",
         hadron_intrinsics: "hadron-intrinsics",
         hadron_ktest: "hadron-ktest",
         hadron_linkset: "hadron-linkset",
@@ -357,7 +367,11 @@ pipeline()
 // ===========================================================================
 
 qemu("q35", 256)
-    .extra_args(["-serial", "stdio", "-no-reboot"])
+    .extra_args([
+        "-serial", "stdio",
+        "-no-reboot",
+        "-device", "intel-iommu,intremap=on,device-iotlb=on",
+    ])
     .test_success_code(33)
     .test_timeout(30)
     .test_extra_args([
