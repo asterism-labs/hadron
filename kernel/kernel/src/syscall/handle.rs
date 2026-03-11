@@ -1,6 +1,5 @@
 //! Handle syscall handlers: close, dup, pipe.
 
-use hadron_objects::object::KernelObject;
 use hadron_syscall::*;
 
 use super::validate::UserPtrMut;

@@ -10,3 +10,6 @@
 pub mod bti;
 pub mod iommu;
 pub mod pmt;
+
+#[cfg(ktest)]
+mod ktest;
