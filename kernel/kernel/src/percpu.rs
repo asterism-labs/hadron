@@ -109,7 +109,7 @@ pub fn init_ap_percpu(cpu_id: u32, kernel_rsp: u64) -> *mut PerCpuState {
         _pad2: [0; 2],
         _pad3: [0; 24],
         saved_regs_ptr: crate::arch::x86_64::syscall::SYSCALL_SAVED_REGS
-            .get_for(cpu_id as usize)
+            .get_for(cpu_id)
             .get() as u64,
     });
     let ptr = Box::into_raw(state);

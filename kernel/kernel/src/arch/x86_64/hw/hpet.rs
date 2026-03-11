@@ -4,7 +4,6 @@
 //! and calibration.
 
 use crate::addr::VirtAddr;
-use crate::time::ClockSource;
 
 // Register offsets.
 const REG_CAPABILITIES: u64 = 0x000;
@@ -112,10 +111,7 @@ impl Hpet {
     }
 }
 
-impl ClockSource for Hpet {
-    fn read_nanos(&self) -> u64 {
-        let counter = self.read_counter();
-        // ticks * period_fs / 1_000_000 = nanoseconds
-        (counter as u128 * self.period_fs as u128 / 1_000_000) as u64
-    }
-}
+// Phase 4+: ClockSource trait not yet defined; HPET nanos accessed via
+// `Time::init_hpet()` in crate::time instead.
+//
+// impl ClockSource for Hpet { ... }

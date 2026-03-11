@@ -14,8 +14,8 @@ use crate::arch::x86_64::structures::idt::InterruptDescriptorTable;
 use crate::sync::LazyLock;
 
 use super::gdt::DOUBLE_FAULT_IST_INDEX;
-#[cfg(hadron_apic)]
-use super::interrupts::timer_stub;
+// Phase 4+: timer_stub module not yet implemented; LAPIC timer uses
+// dispatch::register_handler() in acpi::calibrate_and_start_timer() instead.
 use super::interrupts::{dispatch, exception_table::exception_table, handlers};
 
 /// Static Interrupt Descriptor Table with all exception and hardware interrupt
@@ -68,15 +68,8 @@ static IDT: LazyLock<InterruptDescriptorTable> = LazyLock::new(|| {
         unsafe { idt.interrupts[i].set_naked_stub(*stub) };
     }
 
-    // Override vector 254 (LAPIC timer) with the custom preemption-aware
-    // stub that saves user register state on ring-3 interrupts.
-    // SAFETY: timer_preempt_stub follows the interrupt stub convention with
-    // additional full-register-state save for userspace preemption.
-    #[cfg(hadron_apic)]
-    unsafe {
-        idt.interrupts[dispatch::vectors::TIMER.table_index()]
-            .set_naked_stub(timer_stub::timer_preempt_stub);
-    }
+    // Phase 4+: timer_preempt_stub not yet implemented; LAPIC timer uses
+    // the generic dispatch stub. Override with preemption-aware stub later.
 
     idt
 });

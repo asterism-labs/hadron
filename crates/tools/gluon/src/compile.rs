@@ -395,6 +395,11 @@ fn compile_crate_cross(
         for (name, value) in &config.options {
             let opt_bindings = config.bindings.get(name);
 
+            // Lowercase the option name for cfg flags: ACPI → acpi, SMP → smp.
+            // Kconfig uses uppercase names by convention, but Rust cfg attributes
+            // use lowercase (`#[cfg(hadron_acpi)]`).
+            let name_lower = name.to_ascii_lowercase();
+
             // Legacy behavior: options with no bindings emit cfg for Bool(true).
             let has_cfg = opt_bindings.map_or(false, |bs| bs.contains(&Binding::Cfg));
             let has_cfg_cumulative =
@@ -404,29 +409,29 @@ fn compile_crate_cross(
             if has_cfg {
                 match value {
                     ResolvedValue::Bool(true) => {
-                        cmd.cfg(&format!("hadron_{name}"));
+                        cmd.cfg(&format!("hadron_{name_lower}"));
                     }
                     ResolvedValue::Tristate(TristateVal::Yes) => {
-                        cmd.cfg(&format!("hadron_{name}"));
+                        cmd.cfg(&format!("hadron_{name_lower}"));
                     }
                     ResolvedValue::Tristate(TristateVal::Module) => {
-                        cmd.cfg(&format!("hadron_{name}_module"));
+                        cmd.cfg(&format!("hadron_{name_lower}_module"));
                     }
                     ResolvedValue::Choice(v) | ResolvedValue::Str(v) => {
-                        cmd.cfg(&format!("hadron_{name}=\"{v}\""));
+                        cmd.cfg(&format!("hadron_{name_lower}=\"{v}\""));
                     }
                     _ => {}
                 }
             } else if has_cfg_cumulative {
                 // Emit cfg for all choice values up to and including the selected one.
                 if let ResolvedValue::Choice(selected) = value {
-                    cmd.cfg(&format!("hadron_{name}=\"{selected}\""));
+                    cmd.cfg(&format!("hadron_{name_lower}=\"{selected}\""));
 
                     // Use the choice variants from the config definition for ordering.
                     if let Some(variants) = config.choices.get(name) {
                         if let Some(selected_idx) = variants.iter().position(|v| v == selected) {
                             for variant in &variants[..=selected_idx] {
-                                cmd.cfg(&format!("hadron_{name}_{variant}"));
+                                cmd.cfg(&format!("hadron_{name_lower}_{variant}"));
                             }
                         }
                     }
@@ -434,7 +439,7 @@ fn compile_crate_cross(
             } else if is_legacy {
                 // Backwards compatibility: emit hadron_<name> for Bool(true).
                 if let ResolvedValue::Bool(true) = value {
-                    cmd.cfg(&format!("hadron_{name}"));
+                    cmd.cfg(&format!("hadron_{name_lower}"));
                 }
             }
         }

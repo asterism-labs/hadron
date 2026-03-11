@@ -62,7 +62,7 @@ static LAPIC_TO_CPU: [AtomicU32; 256] = [const { AtomicU32::new(u32::MAX) }; 256
 /// # Safety
 ///
 /// Called only from the AP trampoline code. Must not be called from Rust.
-#[no_mangle]
+#[unsafe(no_mangle)]
 #[cfg(hadron_smp)]
 unsafe extern "C" fn ap_entry(lapic_id: u64) {
     let lapic_id = lapic_id as u8;
@@ -411,8 +411,8 @@ const TRAMPOLINE_STACK_OFFSET: usize = TRAMPOLINE_DATA_OFFSET + 16;
 #[cfg(hadron_smp)]
 unsafe fn setup_trampoline(kernel_cr3: u64) {
     // Map the trampoline physical page into kernel virtual space via HHDM.
-    let hhdm_offset = crate::mm::hhdm::offset();
-    let trampoline_virt = (AP_TRAMPOLINE_PHYS + hhdm_offset) as *mut u8;
+    let hhdm_offset = hadron_mm::hhdm::offset();
+    let trampoline_virt = (AP_TRAMPOLINE_PHYS + hhdm_offset.as_u64()) as *mut u8;
 
     // Write the trampoline machine code.
     let trampoline_code = build_trampoline();
