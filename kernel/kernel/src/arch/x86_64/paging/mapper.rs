@@ -1,11 +1,16 @@
 //! Page table mapper: walks and builds x86_64 page tables via the HHDM.
+//!
+//! All raw pointer manipulation is delegated to [`TableWalker`] (and its
+//! underlying [`HhdmAccessor`]). This file contains only the public API
+//! and flag conversion logic — no direct `unsafe` pointer arithmetic.
 
 use crate::addr::{PhysAddr, VirtAddr};
-use crate::arch::x86_64::structures::paging::{PageTable, PageTableEntry, PageTableFlags};
-use crate::mm::PAGE_SIZE;
+use crate::arch::x86_64::structures::paging::{PageTableEntry, PageTableFlags};
 use crate::mm::mapper::{self, MapFlags, MapFlush};
 use crate::paging::{Page, PhysFrame, Size1GiB, Size2MiB, Size4KiB};
 use hadron_core::assert_unsafe_precondition;
+
+use super::table::TableWalker;
 
 /// Result of translating a virtual address.
 #[derive(Debug, Clone, Copy)]
@@ -47,159 +52,17 @@ pub enum UnmapError {
 /// Utility for walking and building page tables via the HHDM.
 ///
 /// All physical addresses are accessed through `hhdm_offset + phys_addr`.
+/// Raw pointer manipulation is delegated to the internal [`TableWalker`].
 pub struct PageTableMapper {
-    hhdm_offset: VirtAddr,
+    walker: TableWalker,
 }
 
 impl PageTableMapper {
     /// Creates a new mapper with the given HHDM offset.
     pub fn new(hhdm_offset: VirtAddr) -> Self {
-        Self { hhdm_offset }
-    }
-
-    /// Converts a physical address to its HHDM virtual address.
-    fn phys_to_virt(&self, phys: PhysAddr) -> *mut u8 {
-        let p = phys.as_u64();
-        assert!(
-            p <= u64::MAX - self.hhdm_offset.as_u64(),
-            "phys_to_virt: physical address {:#x} overflows HHDM (offset {:#x})",
-            p,
-            self.hhdm_offset.as_u64(),
-        );
-        (self.hhdm_offset + p).as_mut_ptr::<u8>()
-    }
-
-    /// Returns a mutable reference to the [`PageTable`] at `phys`.
-    ///
-    /// # Safety
-    /// `phys` must point to a valid, 4 KiB-aligned physical frame that is
-    /// accessible through the HHDM.
-    unsafe fn table_at(&self, phys: PhysAddr) -> &mut PageTable {
-        assert_unsafe_precondition!(
-            phys.is_aligned(4096),
-            "table_at: physical address {:#x} is not page-aligned",
-            phys.as_u64()
-        );
-        unsafe { &mut *(self.phys_to_virt(phys) as *mut PageTable) }
-    }
-
-    /// Ensures the entry at `table[index]` points to a valid next-level table,
-    /// allocating one if it is not present. Returns the physical address of the
-    /// next-level table.
-    ///
-    /// `intermediate_flags` are applied to the entry (e.g. `PRESENT | WRITABLE`,
-    /// with `USER` added for user-accessible mappings). If the entry already
-    /// exists, any missing flags from `intermediate_flags` are OR'd in.
-    ///
-    /// If the entry is a huge page (2 MiB in a PD, or 1 GiB in a PDPT), the
-    /// huge page is split into 512 entries at the next level, preserving the
-    /// existing mapping at finer granularity.
-    ///
-    /// Newly allocated frames are zeroed before use so that no stale data is
-    /// misinterpreted as present page table entries.
-    ///
-    /// # Safety
-    /// The caller must ensure `table_phys` is valid and accessible through the HHDM.
-    unsafe fn ensure_table(
-        &self,
-        table_phys: PhysAddr,
-        index: usize,
-        intermediate_flags: PageTableFlags,
-        alloc: &mut (impl FnMut() -> PhysFrame<Size4KiB> + ?Sized),
-    ) -> PhysAddr {
-        let table = unsafe { self.table_at(table_phys) };
-        let entry = table.entries[index];
-        if entry.is_present() {
-            if entry.flags().contains(PageTableFlags::HUGE_PAGE) {
-                // Split the huge page into a next-level table with 512 entries
-                // that preserve the original mapping at finer granularity.
-                // SAFETY: The new frame is allocated and HHDM-accessible.
-                return unsafe {
-                    self.split_huge_page(table, index, entry, intermediate_flags, alloc)
-                };
-            }
-            // OR in any new flags (e.g. USER for mixed kernel/user subtrees).
-            let combined = entry.flags() | intermediate_flags;
-            if combined != entry.flags() {
-                table.entries[index] = PageTableEntry::new(entry.address(), combined);
-            }
-            entry.address()
-        } else {
-            let new_frame = alloc().start_address();
-            // SAFETY: The frame was just allocated and is accessible through the HHDM.
-            // Zeroing ensures no stale PTEs are misinterpreted as present entries.
-            // Dispatched via compiler builtin → alt-fn (ERMS/SSE2 after patching).
-            unsafe {
-                core::ptr::write_bytes(self.phys_to_virt(new_frame), 0, PAGE_SIZE);
-            }
-            table.entries[index] = PageTableEntry::new(new_frame, intermediate_flags);
-            new_frame
+        Self {
+            walker: TableWalker::new(hhdm_offset),
         }
-    }
-
-    /// Splits a huge page entry into a next-level page table with 512 entries,
-    /// preserving the existing mapping at finer granularity.
-    ///
-    /// For a 2 MiB PD entry → 512 × 4 KiB PT entries.
-    /// For a 1 GiB PDPT entry → 512 × 2 MiB PD entries (each still huge).
-    ///
-    /// # Safety
-    /// - `table` must be a valid, HHDM-accessible page table.
-    /// - `entry` must be a present huge page entry at `table.entries[index]`.
-    unsafe fn split_huge_page(
-        &self,
-        table: &mut PageTable,
-        index: usize,
-        entry: PageTableEntry,
-        intermediate_flags: PageTableFlags,
-        alloc: &mut (impl FnMut() -> PhysFrame<Size4KiB> + ?Sized),
-    ) -> PhysAddr {
-        let huge_phys = entry.address();
-        // Carry over the original flags minus HUGE_PAGE for 2MiB→4KiB splits.
-        // For 1GiB→2MiB splits, sub-entries keep HUGE_PAGE.
-        let orig_flags = entry.flags();
-        let sub_flags = PageTableFlags::from_bits_truncate(
-            orig_flags.bits() & !PageTableFlags::HUGE_PAGE.bits(),
-        );
-
-        let new_frame = alloc().start_address();
-        // SAFETY: Frame is freshly allocated and HHDM-accessible.
-        unsafe {
-            core::ptr::write_bytes(self.phys_to_virt(new_frame), 0, PAGE_SIZE);
-        }
-
-        let new_table = unsafe { self.table_at(new_frame) };
-
-        // Determine stride: if original was a 1 GiB page being split into
-        // 2 MiB entries, stride is 2 MiB and sub-entries keep HUGE_PAGE.
-        // If original was a 2 MiB page being split into 4 KiB entries,
-        // stride is 4 KiB and sub-entries drop HUGE_PAGE.
-        //
-        // We detect which level by checking the alignment of the huge page:
-        // 1 GiB pages are 0x4000_0000-aligned, 2 MiB pages are 0x20_0000-aligned.
-        let is_1gib = huge_phys.is_aligned(0x4000_0000);
-        if is_1gib {
-            // 1 GiB → 512 × 2 MiB (sub-entries are still huge pages).
-            let stride = 0x20_0000_u64; // 2 MiB
-            for i in 0..512 {
-                // SAFETY: Each sub-address is within the original 1 GiB range.
-                let sub_phys = unsafe { PhysAddr::new_unchecked(huge_phys.as_u64() + i * stride) };
-                new_table.entries[i as usize] =
-                    PageTableEntry::new(sub_phys, sub_flags | PageTableFlags::HUGE_PAGE);
-            }
-        } else {
-            // 2 MiB → 512 × 4 KiB (sub-entries are regular pages).
-            let stride = 4096_u64;
-            for i in 0..512 {
-                // SAFETY: Each sub-address is within the original 2 MiB range.
-                let sub_phys = unsafe { PhysAddr::new_unchecked(huge_phys.as_u64() + i * stride) };
-                new_table.entries[i as usize] = PageTableEntry::new(sub_phys, sub_flags);
-            }
-        }
-
-        // Replace the huge page entry with a pointer to the new table.
-        table.entries[index] = PageTableEntry::new(new_frame, intermediate_flags);
-        new_frame
     }
 
     /// Maps a 2 MiB huge page.
@@ -222,23 +85,25 @@ impl PageTableMapper {
             "map_2mib: physical address {:#x} is not 2 MiB aligned",
             phys_addr.as_u64()
         );
-        let pml4_idx = virt_addr.pml4_index().as_usize();
-        let pdpt_idx = virt_addr.pdpt_index().as_usize();
         let pd_idx = virt_addr.pd_index().as_usize();
-
-        // Derive intermediate flags: PRESENT | WRITABLE, plus USER if leaf has USER.
         let intermediate = Self::intermediate_flags_for(flags);
-        let pdpt_phys = unsafe { self.ensure_table(pml4_phys, pml4_idx, intermediate, alloc) };
-        let pd_phys = unsafe { self.ensure_table(pdpt_phys, pdpt_idx, intermediate, alloc) };
 
-        let pd = unsafe { self.table_at(pd_phys) };
-        pd.entries[pd_idx] = PageTableEntry::new(phys_addr, flags | PageTableFlags::HUGE_PAGE);
+        // SAFETY: Caller guarantees pml4_phys is valid.
+        let pd_phys = unsafe {
+            self.walker
+                .walk_to_pd(pml4_phys, virt_addr, intermediate, alloc)
+        };
+        // SAFETY: pd_phys was just ensured to be valid.
+        let mut pd = unsafe { self.walker.table_at(pd_phys) };
+        pd.set_entry(
+            pd_idx,
+            PageTableEntry::new(phys_addr, flags | PageTableFlags::HUGE_PAGE),
+        );
     }
 
     /// Maps a 1 GiB huge page.
     ///
     /// Walks PML4 -> PDPT, allocating the intermediate PDPT table as needed.
-    /// Writes a 1 GiB huge page entry directly into the PDPT.
     ///
     /// # Safety
     /// - `pml4_phys` must point to a valid PML4 table.
@@ -257,16 +122,20 @@ impl PageTableMapper {
             "map_1gib: physical address {:#x} is not 1 GiB aligned",
             phys_addr.as_u64()
         );
-        let pml4_idx = virt_addr.pml4_index().as_usize();
         let pdpt_idx = virt_addr.pdpt_index().as_usize();
-
         let intermediate = Self::intermediate_flags_for(flags);
-        // SAFETY: Caller guarantees pml4_phys is valid.
-        let pdpt_phys = unsafe { self.ensure_table(pml4_phys, pml4_idx, intermediate, alloc) };
 
-        // SAFETY: pdpt_phys was just ensured to be a valid PDPT table.
-        let pdpt = unsafe { self.table_at(pdpt_phys) };
-        pdpt.entries[pdpt_idx] = PageTableEntry::new(phys_addr, flags | PageTableFlags::HUGE_PAGE);
+        // SAFETY: Caller guarantees pml4_phys is valid.
+        let pdpt_phys = unsafe {
+            self.walker
+                .walk_to_pdpt(pml4_phys, virt_addr, intermediate, alloc)
+        };
+        // SAFETY: pdpt_phys was just ensured to be valid.
+        let mut pdpt = unsafe { self.walker.table_at(pdpt_phys) };
+        pdpt.set_entry(
+            pdpt_idx,
+            PageTableEntry::new(phys_addr, flags | PageTableFlags::HUGE_PAGE),
+        );
     }
 
     /// Maps a 4 KiB page.
@@ -289,18 +158,17 @@ impl PageTableMapper {
             "map_4k: physical address {:#x} is not 4 KiB aligned",
             phys_addr.as_u64()
         );
-        let pml4_idx = virt_addr.pml4_index().as_usize();
-        let pdpt_idx = virt_addr.pdpt_index().as_usize();
-        let pd_idx = virt_addr.pd_index().as_usize();
         let pt_idx = virt_addr.pt_index().as_usize();
-
         let intermediate = Self::intermediate_flags_for(flags);
-        let pdpt_phys = unsafe { self.ensure_table(pml4_phys, pml4_idx, intermediate, alloc) };
-        let pd_phys = unsafe { self.ensure_table(pdpt_phys, pdpt_idx, intermediate, alloc) };
-        let pt_phys = unsafe { self.ensure_table(pd_phys, pd_idx, intermediate, alloc) };
 
-        let pt = unsafe { self.table_at(pt_phys) };
-        pt.entries[pt_idx] = PageTableEntry::new(phys_addr, flags);
+        // SAFETY: Caller guarantees pml4_phys is valid.
+        let pt_phys = unsafe {
+            self.walker
+                .walk_to_pt(pml4_phys, virt_addr, intermediate, alloc)
+        };
+        // SAFETY: pt_phys was just ensured to be valid.
+        let mut pt = unsafe { self.walker.table_at(pt_phys) };
+        pt.set_entry(pt_idx, PageTableEntry::new(phys_addr, flags));
     }
 
     /// Unmaps a 4 KiB page and returns the physical frame that was mapped.
@@ -320,14 +188,16 @@ impl PageTableMapper {
         let pd_idx = virt_addr.pd_index().as_usize();
         let pt_idx = virt_addr.pt_index().as_usize();
 
-        let pml4 = unsafe { self.table_at(pml4_phys) };
-        let pml4e = pml4.entries[pml4_idx];
+        // SAFETY: Caller guarantees pml4_phys is valid.
+        let pml4 = unsafe { self.walker.table_at(pml4_phys) };
+        let pml4e = pml4.entry(pml4_idx);
         if !pml4e.is_present() {
             return Err(UnmapError::NotMapped);
         }
 
-        let pdpt = unsafe { self.table_at(pml4e.address()) };
-        let pdpte = pdpt.entries[pdpt_idx];
+        // SAFETY: pml4e is present so its address is a valid PDPT.
+        let pdpt = unsafe { self.walker.table_at(pml4e.address()) };
+        let pdpte = pdpt.entry(pdpt_idx);
         if !pdpte.is_present() {
             return Err(UnmapError::NotMapped);
         }
@@ -335,8 +205,9 @@ impl PageTableMapper {
             return Err(UnmapError::HugePage); // 1 GiB page
         }
 
-        let pd = unsafe { self.table_at(pdpte.address()) };
-        let pde = pd.entries[pd_idx];
+        // SAFETY: pdpte is present and not huge, so its address is a valid PD.
+        let pd = unsafe { self.walker.table_at(pdpte.address()) };
+        let pde = pd.entry(pd_idx);
         if !pde.is_present() {
             return Err(UnmapError::NotMapped);
         }
@@ -344,14 +215,15 @@ impl PageTableMapper {
             return Err(UnmapError::HugePage); // 2 MiB page
         }
 
-        let pt = unsafe { self.table_at(pde.address()) };
-        let pte = pt.entries[pt_idx];
+        // SAFETY: pde is present and not huge, so its address is a valid PT.
+        let mut pt = unsafe { self.walker.table_at(pde.address()) };
+        let pte = pt.entry(pt_idx);
         if !pte.is_present() {
             return Err(UnmapError::NotMapped);
         }
 
         let frame = PhysFrame::containing_address(pte.address());
-        pt.entries[pt_idx] = PageTableEntry::empty();
+        pt.clear_entry(pt_idx);
         Ok(frame)
     }
 
@@ -365,14 +237,16 @@ impl PageTableMapper {
         let pd_idx = virt_addr.pd_index().as_usize();
         let pt_idx = virt_addr.pt_index().as_usize();
 
-        let pml4 = unsafe { self.table_at(pml4_phys) };
-        let pml4e = pml4.entries[pml4_idx];
+        // SAFETY: Caller guarantees pml4_phys is valid.
+        let pml4 = unsafe { self.walker.table_at(pml4_phys) };
+        let pml4e = pml4.entry(pml4_idx);
         if !pml4e.is_present() {
             return TranslateResult::NotMapped;
         }
 
-        let pdpt = unsafe { self.table_at(pml4e.address()) };
-        let pdpte = pdpt.entries[pdpt_idx];
+        // SAFETY: pml4e is present.
+        let pdpt = unsafe { self.walker.table_at(pml4e.address()) };
+        let pdpte = pdpt.entry(pdpt_idx);
         if !pdpte.is_present() {
             return TranslateResult::NotMapped;
         }
@@ -383,8 +257,9 @@ impl PageTableMapper {
             };
         }
 
-        let pd = unsafe { self.table_at(pdpte.address()) };
-        let pde = pd.entries[pd_idx];
+        // SAFETY: pdpte is present and not huge.
+        let pd = unsafe { self.walker.table_at(pdpte.address()) };
+        let pde = pd.entry(pd_idx);
         if !pde.is_present() {
             return TranslateResult::NotMapped;
         }
@@ -395,8 +270,9 @@ impl PageTableMapper {
             };
         }
 
-        let pt = unsafe { self.table_at(pde.address()) };
-        let pte = pt.entries[pt_idx];
+        // SAFETY: pde is present and not huge.
+        let pt = unsafe { self.walker.table_at(pde.address()) };
+        let pte = pt.entry(pt_idx);
         if !pte.is_present() {
             return TranslateResult::NotMapped;
         }
@@ -417,6 +293,7 @@ impl PageTableMapper {
         pml4_phys: PhysAddr,
         virt_addr: VirtAddr,
     ) -> Option<PhysAddr> {
+        // SAFETY: Caller guarantees pml4_phys is valid.
         match unsafe { self.translate(pml4_phys, virt_addr) } {
             TranslateResult::Page4KiB { frame, .. } => {
                 Some(frame.start_address() + virt_addr.page_offset())
@@ -451,14 +328,16 @@ impl PageTableMapper {
         let pd_idx = virt_addr.pd_index().as_usize();
         let pt_idx = virt_addr.pt_index().as_usize();
 
-        let pml4 = unsafe { self.table_at(pml4_phys) };
-        let pml4e = pml4.entries[pml4_idx];
+        // SAFETY: Caller guarantees pml4_phys is valid.
+        let pml4 = unsafe { self.walker.table_at(pml4_phys) };
+        let pml4e = pml4.entry(pml4_idx);
         if !pml4e.is_present() {
             return Err(UnmapError::NotMapped);
         }
 
-        let pdpt = unsafe { self.table_at(pml4e.address()) };
-        let pdpte = pdpt.entries[pdpt_idx];
+        // SAFETY: pml4e is present.
+        let pdpt = unsafe { self.walker.table_at(pml4e.address()) };
+        let pdpte = pdpt.entry(pdpt_idx);
         if !pdpte.is_present() {
             return Err(UnmapError::NotMapped);
         }
@@ -466,8 +345,9 @@ impl PageTableMapper {
             return Err(UnmapError::HugePage);
         }
 
-        let pd = unsafe { self.table_at(pdpte.address()) };
-        let pde = pd.entries[pd_idx];
+        // SAFETY: pdpte is present and not huge.
+        let pd = unsafe { self.walker.table_at(pdpte.address()) };
+        let pde = pd.entry(pd_idx);
         if !pde.is_present() {
             return Err(UnmapError::NotMapped);
         }
@@ -475,13 +355,14 @@ impl PageTableMapper {
             return Err(UnmapError::HugePage);
         }
 
-        let pt = unsafe { self.table_at(pde.address()) };
-        let pte = pt.entries[pt_idx];
+        // SAFETY: pde is present and not huge.
+        let mut pt = unsafe { self.walker.table_at(pde.address()) };
+        let pte = pt.entry(pt_idx);
         if !pte.is_present() {
             return Err(UnmapError::NotMapped);
         }
 
-        pt.entries[pt_idx] = PageTableEntry::new(pte.address(), new_flags);
+        pt.set_entry(pt_idx, PageTableEntry::new(pte.address(), new_flags));
         Ok(())
     }
 
@@ -501,14 +382,16 @@ impl PageTableMapper {
         let pdpt_idx = virt_addr.pdpt_index().as_usize();
         let pd_idx = virt_addr.pd_index().as_usize();
 
-        let pml4 = unsafe { self.table_at(pml4_phys) };
-        let pml4e = pml4.entries[pml4_idx];
+        // SAFETY: Caller guarantees pml4_phys is valid.
+        let pml4 = unsafe { self.walker.table_at(pml4_phys) };
+        let pml4e = pml4.entry(pml4_idx);
         if !pml4e.is_present() {
             return Err(UnmapError::NotMapped);
         }
 
-        let pdpt = unsafe { self.table_at(pml4e.address()) };
-        let pdpte = pdpt.entries[pdpt_idx];
+        // SAFETY: pml4e is present.
+        let pdpt = unsafe { self.walker.table_at(pml4e.address()) };
+        let pdpte = pdpt.entry(pdpt_idx);
         if !pdpte.is_present() {
             return Err(UnmapError::NotMapped);
         }
@@ -516,8 +399,9 @@ impl PageTableMapper {
             return Err(UnmapError::HugePage); // 1 GiB page, not 2 MiB
         }
 
-        let pd = unsafe { self.table_at(pdpte.address()) };
-        let pde = pd.entries[pd_idx];
+        // SAFETY: pdpte is present and not huge.
+        let mut pd = unsafe { self.walker.table_at(pdpte.address()) };
+        let pde = pd.entry(pd_idx);
         if !pde.is_present() {
             return Err(UnmapError::NotMapped);
         }
@@ -526,7 +410,7 @@ impl PageTableMapper {
         }
 
         let frame = PhysFrame::containing_address(pde.address());
-        pd.entries[pd_idx] = PageTableEntry::empty();
+        pd.clear_entry(pd_idx);
         Ok(frame)
     }
 
@@ -545,14 +429,16 @@ impl PageTableMapper {
         let pml4_idx = virt_addr.pml4_index().as_usize();
         let pdpt_idx = virt_addr.pdpt_index().as_usize();
 
-        let pml4 = unsafe { self.table_at(pml4_phys) };
-        let pml4e = pml4.entries[pml4_idx];
+        // SAFETY: Caller guarantees pml4_phys is valid.
+        let pml4 = unsafe { self.walker.table_at(pml4_phys) };
+        let pml4e = pml4.entry(pml4_idx);
         if !pml4e.is_present() {
             return Err(UnmapError::NotMapped);
         }
 
-        let pdpt = unsafe { self.table_at(pml4e.address()) };
-        let pdpte = pdpt.entries[pdpt_idx];
+        // SAFETY: pml4e is present.
+        let mut pdpt = unsafe { self.walker.table_at(pml4e.address()) };
+        let pdpte = pdpt.entry(pdpt_idx);
         if !pdpte.is_present() {
             return Err(UnmapError::NotMapped);
         }
@@ -561,7 +447,7 @@ impl PageTableMapper {
         }
 
         let frame = PhysFrame::containing_address(pdpte.address());
-        pdpt.entries[pdpt_idx] = PageTableEntry::empty();
+        pdpt.clear_entry(pdpt_idx);
         Ok(frame)
     }
 
@@ -582,14 +468,16 @@ impl PageTableMapper {
         let pdpt_idx = virt_addr.pdpt_index().as_usize();
         let pd_idx = virt_addr.pd_index().as_usize();
 
-        let pml4 = unsafe { self.table_at(pml4_phys) };
-        let pml4e = pml4.entries[pml4_idx];
+        // SAFETY: Caller guarantees pml4_phys is valid.
+        let pml4 = unsafe { self.walker.table_at(pml4_phys) };
+        let pml4e = pml4.entry(pml4_idx);
         if !pml4e.is_present() {
             return Err(UnmapError::NotMapped);
         }
 
-        let pdpt = unsafe { self.table_at(pml4e.address()) };
-        let pdpte = pdpt.entries[pdpt_idx];
+        // SAFETY: pml4e is present.
+        let pdpt = unsafe { self.walker.table_at(pml4e.address()) };
+        let pdpte = pdpt.entry(pdpt_idx);
         if !pdpte.is_present() {
             return Err(UnmapError::NotMapped);
         }
@@ -597,8 +485,9 @@ impl PageTableMapper {
             return Err(UnmapError::HugePage); // 1 GiB page, not 2 MiB
         }
 
-        let pd = unsafe { self.table_at(pdpte.address()) };
-        let pde = pd.entries[pd_idx];
+        // SAFETY: pdpte is present and not huge.
+        let mut pd = unsafe { self.walker.table_at(pdpte.address()) };
+        let pde = pd.entry(pd_idx);
         if !pde.is_present() {
             return Err(UnmapError::NotMapped);
         }
@@ -606,8 +495,10 @@ impl PageTableMapper {
             return Err(UnmapError::HugePage); // 4 KiB pages, not 2 MiB
         }
 
-        pd.entries[pd_idx] =
-            PageTableEntry::new(pde.address(), new_flags | PageTableFlags::HUGE_PAGE);
+        pd.set_entry(
+            pd_idx,
+            PageTableEntry::new(pde.address(), new_flags | PageTableFlags::HUGE_PAGE),
+        );
         Ok(())
     }
 
@@ -627,14 +518,16 @@ impl PageTableMapper {
         let pml4_idx = virt_addr.pml4_index().as_usize();
         let pdpt_idx = virt_addr.pdpt_index().as_usize();
 
-        let pml4 = unsafe { self.table_at(pml4_phys) };
-        let pml4e = pml4.entries[pml4_idx];
+        // SAFETY: Caller guarantees pml4_phys is valid.
+        let pml4 = unsafe { self.walker.table_at(pml4_phys) };
+        let pml4e = pml4.entry(pml4_idx);
         if !pml4e.is_present() {
             return Err(UnmapError::NotMapped);
         }
 
-        let pdpt = unsafe { self.table_at(pml4e.address()) };
-        let pdpte = pdpt.entries[pdpt_idx];
+        // SAFETY: pml4e is present.
+        let mut pdpt = unsafe { self.walker.table_at(pml4e.address()) };
+        let pdpte = pdpt.entry(pdpt_idx);
         if !pdpte.is_present() {
             return Err(UnmapError::NotMapped);
         }
@@ -642,8 +535,10 @@ impl PageTableMapper {
             return Err(UnmapError::HugePage); // not a 1 GiB page
         }
 
-        pdpt.entries[pdpt_idx] =
-            PageTableEntry::new(pdpte.address(), new_flags | PageTableFlags::HUGE_PAGE);
+        pdpt.set_entry(
+            pdpt_idx,
+            PageTableEntry::new(pdpte.address(), new_flags | PageTableFlags::HUGE_PAGE),
+        );
         Ok(())
     }
 
