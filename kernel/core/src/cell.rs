@@ -31,6 +31,7 @@ impl<T> RacyCell<T> {
 
     /// Returns a raw pointer to the underlying data.
     #[inline]
+    #[must_use]
     pub const fn get(&self) -> *mut T {
         self.0.get()
     }

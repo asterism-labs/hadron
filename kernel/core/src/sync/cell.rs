@@ -43,6 +43,7 @@ impl<T: ?Sized> UnsafeCell<T> {
     ///
     /// For use by infrastructure that is never loom-tested.
     #[inline]
+    #[must_use]
     pub fn get(&self) -> *mut T {
         self.0.get()
     }
