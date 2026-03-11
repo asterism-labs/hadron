@@ -13,22 +13,20 @@ use hadron_syscall::constants::*;
 use hadron_syscall::types::{PollFd, Timespec};
 use hadron_syscall::*;
 
-use super::validate::{UserPtrMut, UserSlice};
+use super::validate::{UserPtr, UserPtrMut, UserSlice};
 
 /// `SYS_EVENT_WAIT_MANY(fds_ptr, nfds, timeout_ms)` — poll multiple handles.
 ///
 /// Checks each handle's current signals against the requested events.
 /// If any handle is ready, fills `revents` and returns the count of ready
 /// handles. If none are ready and `timeout_ms == 0`, returns 0 (non-blocking).
-///
-/// For Phase 2c: only non-blocking poll is implemented (timeout_ms is
-/// accepted but blocking is not yet supported). This suffices for the
-/// verification test which polls after data has been sent.
+/// If none are ready and `timeout_ms != 0`, blocks until an fd becomes ready
+/// or the timeout expires.
 #[expect(
     clippy::cast_possible_truncation,
     reason = "poll fd/count values fit in u16/u32"
 )]
-pub fn sys_event_wait_many(fds_ptr: usize, nfds: usize, _timeout_ms: usize) -> isize {
+pub fn sys_event_wait_many(fds_ptr: usize, nfds: usize, timeout_ms: usize) -> isize {
     if nfds == 0 {
         return 0;
     }
@@ -112,6 +110,24 @@ pub fn sys_event_wait_many(fds_ptr: usize, nfds: usize, _timeout_ms: usize) -> i
     // SAFETY: User buffer was range-validated; same size as input.
     unsafe { slice.write_from_slice(&out_bytes) };
 
+    // If nothing is ready and caller wants to block, set up blocking op.
+    if ready_count == 0 && timeout_ms != 0 {
+        crate::process::set_blocking_op(crate::process::BlockingOp::EventWaitMany {
+            fds_ptr,
+            nfds,
+            timeout_ms: timeout_ms as u64,
+        });
+
+        // Longjmp back to the process task.
+        let saved_rsp: u64;
+        // SAFETY: GS is kernel; gs:[8] was set by enter_userspace_save.
+        unsafe { core::arch::asm!("mov {}, gs:[8]", out(reg) saved_rsp) };
+        // SAFETY: saved_rsp is valid.
+        unsafe {
+            crate::arch::x86_64::userspace::restore_kernel_context(saved_rsp);
+        }
+    }
+
     ready_count
 }
 
@@ -185,17 +201,109 @@ pub fn sys_clock_gettime(clockid: usize, tp_ptr: usize) -> isize {
     0
 }
 
-/// `SYS_CLOCK_NANOSLEEP` — stub (not yet implemented).
+/// `SYS_CLOCK_NANOSLEEP` — sleep until an absolute monotonic deadline.
+///
+/// `clockid` must be `CLOCK_MONOTONIC`. `flags` is reserved (must be 0).
+/// `req_ptr` points to a `Timespec` with the absolute deadline.
+/// Returns 0 on success, negative errno on error.
 pub fn sys_clock_nanosleep(
-    _clockid: usize,
+    clockid: usize,
     _flags: usize,
-    _req_ptr: usize,
+    req_ptr: usize,
     _rem_ptr: usize,
 ) -> isize {
-    -ENOSYS
+    if clockid != CLOCK_MONOTONIC as usize {
+        return -EINVAL;
+    }
+
+    // Read the requested sleep time from user memory.
+    let ptr = match UserPtr::<Timespec>::new(req_ptr) {
+        Ok(ptr) => ptr,
+        Err(e) => return e,
+    };
+    // SAFETY: the pointer was validated to be in the user address range.
+    let ts = unsafe { ptr.read() };
+
+    // Validate nanoseconds field.
+    if ts.tv_nsec >= 1_000_000_000 {
+        return -EINVAL;
+    }
+
+    // Compute absolute deadline in nanoseconds since boot.
+    let deadline_ns = ts
+        .tv_sec
+        .saturating_mul(1_000_000_000)
+        .saturating_add(ts.tv_nsec);
+
+    // If the deadline has already passed, return immediately.
+    if crate::time::nanos_since_boot() >= deadline_ns {
+        return 0;
+    }
+
+    crate::process::set_blocking_op(crate::process::BlockingOp::ClockNanosleep { deadline_ns });
+
+    // Longjmp back to the process task.
+    let saved_rsp: u64;
+    // SAFETY: GS is kernel; gs:[8] was set by enter_userspace_save.
+    unsafe { core::arch::asm!("mov {}, gs:[8]", out(reg) saved_rsp) };
+    // SAFETY: saved_rsp is valid.
+    unsafe {
+        crate::arch::x86_64::userspace::restore_kernel_context(saved_rsp);
+    }
 }
 
-/// `SYS_FUTEX` — stub (not yet implemented).
-pub fn sys_futex(_addr: usize, _op: usize, _val: usize, _timeout: usize) -> isize {
-    -ENOSYS
+/// `SYS_FUTEX(addr, op, val, timeout)` — userspace synchronization primitive.
+///
+/// `FUTEX_WAIT`: if `*addr == val`, block until woken or timeout expires.
+/// `FUTEX_WAKE`: wake up to `val` waiters on `addr`, returns count woken.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "futex val and wake count fit in u32"
+)]
+pub fn sys_futex(addr: usize, op: usize, val: usize, timeout: usize) -> isize {
+    // Validate address: must be in user space and 4-byte aligned.
+    if addr < 0x1000 || addr >= 0x0000_8000_0000_0000 || addr & 3 != 0 {
+        return -EINVAL;
+    }
+
+    let koid = crate::process::with_current_process(|p| p.koid().raw()).unwrap_or(0);
+
+    match op as u32 {
+        FUTEX_WAIT => {
+            // Read the current value at the futex address.
+            // SAFETY: addr was validated to be in user range and aligned.
+            let current: u32 = unsafe { *(addr as *const u32) };
+
+            if current != val as u32 {
+                return -EAGAIN;
+            }
+
+            // Compute timeout deadline.
+            let timeout_ns = if timeout == 0 || timeout == usize::MAX {
+                u64::MAX
+            } else {
+                crate::time::nanos_since_boot().saturating_add(timeout as u64 * 1_000_000)
+            };
+
+            crate::process::set_blocking_op(crate::process::BlockingOp::FutexWait {
+                addr: addr as u64,
+                val: val as u32,
+                timeout_ns,
+            });
+
+            // Longjmp back to the process task.
+            let saved_rsp: u64;
+            // SAFETY: GS is kernel; gs:[8] was set by enter_userspace_save.
+            unsafe { core::arch::asm!("mov {}, gs:[8]", out(reg) saved_rsp) };
+            // SAFETY: saved_rsp is valid.
+            unsafe {
+                crate::arch::x86_64::userspace::restore_kernel_context(saved_rsp);
+            }
+        }
+        FUTEX_WAKE => {
+            let woken = crate::futex::futex_wake(koid, addr as u64, val as u32);
+            woken as isize
+        }
+        _ => -EINVAL,
+    }
 }

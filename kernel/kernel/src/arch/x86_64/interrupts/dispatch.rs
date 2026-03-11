@@ -248,6 +248,13 @@ pub mod vectors {
     /// Last IPI vector.
     pub const IPI_END: HwIrqVector = HwIrqVector::new(253);
 
+    /// Wakeup IPI: wake a CPU from HLT after enqueueing a task.
+    pub const WAKEUP_IPI: HwIrqVector = HwIrqVector::new(240);
+    /// TLB shootdown IPI: invalidate virtual addresses on remote CPUs.
+    pub const TLB_SHOOTDOWN_IPI: HwIrqVector = HwIrqVector::new(241);
+    /// Reschedule IPI: hint a CPU to check for work-stealing opportunities.
+    pub const RESCHEDULE_IPI: HwIrqVector = HwIrqVector::new(242);
+
     /// Returns the interrupt vector for an ISA IRQ (0-15).
     #[must_use]
     pub const fn isa_irq_vector(irq: u8) -> HwIrqVector {

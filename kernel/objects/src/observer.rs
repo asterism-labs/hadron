@@ -13,6 +13,7 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
+use core::task::Waker;
 
 use hadron_core::sync::SpinLock;
 
@@ -137,6 +138,33 @@ pub fn signal_update(
         let newly_set = set_mask.difference(old_signals);
         if !newly_set.is_empty() {
             observers.notify(newly_set, koid);
+        }
+    }
+}
+
+/// A one-shot waker dispatch for async futures waiting on object signals.
+///
+/// Implements [`PortDispatch`] so it can be registered as an observer on any
+/// kernel object. When a matching signal fires, `queue_packet` takes the
+/// stored waker and calls `wake()`, unblocking the async future.
+pub struct WakerDispatch {
+    waker: SpinLock<Option<Waker>>,
+}
+
+impl WakerDispatch {
+    /// Create a new `WakerDispatch` storing the given waker.
+    #[must_use]
+    pub fn new(waker: Waker) -> Self {
+        Self {
+            waker: SpinLock::new(Some(waker)),
+        }
+    }
+}
+
+impl PortDispatch for WakerDispatch {
+    fn queue_packet(&self, _packet: PortPacket) {
+        if let Some(waker) = self.waker.lock().take() {
+            waker.wake();
         }
     }
 }

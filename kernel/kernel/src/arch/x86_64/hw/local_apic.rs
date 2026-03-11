@@ -111,6 +111,23 @@ impl LocalApic {
         }
     }
 
+    /// Write the ICR registers directly with full control over delivery mode.
+    ///
+    /// Used by SMP startup for INIT and SIPI delivery modes.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure the target APIC ID is valid and the ICR low
+    /// value encodes a valid delivery mode, vector, and flags.
+    pub unsafe fn write_icr(&self, target_apic_id: u8, icr_low: u32) {
+        self.write_reg(REG_ICR_HIGH, u32::from(target_apic_id) << 24);
+        self.write_reg(REG_ICR_LOW, icr_low);
+        // Wait for delivery.
+        while self.read_reg(REG_ICR_LOW) & (1 << 12) != 0 {
+            core::hint::spin_loop();
+        }
+    }
+
     /// Sends an NMI to all CPUs except the current one.
     ///
     /// Used by the panic handler to halt all other CPUs. NMIs cannot be

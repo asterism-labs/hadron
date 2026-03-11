@@ -86,6 +86,40 @@ pub unsafe fn init_gs_base() {
     }
 }
 
+/// Allocate and initialize a per-CPU state for an AP.
+///
+/// Heap-allocates a `PerCpuState`, initializes it, leaks it (lives forever),
+/// and returns its virtual address (suitable for writing to `IA32_GS_BASE`).
+///
+/// # Safety
+///
+/// Must be called from the BSP during `boot_aps()`, after the heap is ready.
+#[cfg(hadron_smp)]
+pub fn init_ap_percpu(cpu_id: u32, kernel_rsp: u64) -> *mut PerCpuState {
+    extern crate alloc;
+    use alloc::boxed::Box;
+
+    let state = Box::new(PerCpuState {
+        self_ptr: 0, // filled below
+        kernel_rsp,
+        user_rsp: 0,
+        cpu_id,
+        _pad: 0,
+        initialized: 0, // set to 1 by the AP after full init
+        _pad2: [0; 2],
+        _pad3: [0; 24],
+        saved_regs_ptr: crate::arch::x86_64::syscall::SYSCALL_SAVED_REGS
+            .get_for(cpu_id as usize)
+            .get() as u64,
+    });
+    let ptr = Box::into_raw(state);
+    // SAFETY: We just allocated this and it will be leaked (never freed).
+    unsafe {
+        (*ptr).self_ptr = ptr as u64;
+    }
+    ptr
+}
+
 /// Returns the early kernel RSP for TSS initialization.
 ///
 /// Uses a statically allocated BSS stack for the BSP before the VMM is ready.

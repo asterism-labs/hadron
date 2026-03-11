@@ -17,14 +17,17 @@ extern crate alloc;
 use alloc::sync::Arc;
 use core::future::Future;
 use core::pin::Pin;
-use core::task::{Context, Poll, Waker};
+use core::task::{Context, Poll};
 
 use hadron_core::cpu_local::CpuLocal;
 use hadron_core::sync::SpinLock;
 use hadron_mm::address_space::AddressSpace;
+use hadron_syscall::constants::{POLLIN, POLLOUT};
+
 use hadron_objects::channel::{Channel, ChannelError};
 use hadron_objects::handle::HandleValue;
 use hadron_objects::object::{KernelObject, ObjectType, Signals};
+use hadron_objects::observer::WakerDispatch;
 use hadron_objects::process::Process;
 use hadron_objects::thread::{Thread, ThreadState};
 
@@ -65,6 +68,29 @@ pub enum BlockingOp {
         buf_len: usize,
         /// User pointer to write the received fd.
         fd_out_ptr: usize,
+    },
+    /// Sleeping until a monotonic deadline (nanoseconds since boot).
+    ClockNanosleep {
+        /// Absolute deadline in nanoseconds since boot.
+        deadline_ns: u64,
+    },
+    /// Blocking poll: wait until any fd has events or timeout expires.
+    EventWaitMany {
+        /// User pointer to the PollFd array.
+        fds_ptr: usize,
+        /// Number of fds.
+        nfds: usize,
+        /// Timeout in milliseconds (`u64::MAX` = infinite).
+        timeout_ms: u64,
+    },
+    /// Futex wait: block until the futex is woken.
+    FutexWait {
+        /// User virtual address of the futex word.
+        addr: u64,
+        /// Expected value (already verified by syscall handler).
+        val: u32,
+        /// Optional timeout in nanoseconds since boot (`u64::MAX` = no timeout).
+        timeout_ns: u64,
     },
 }
 
@@ -118,38 +144,6 @@ pub fn lookup_process(koid: u64) -> Option<Arc<Process>> {
 /// Remove a process from the global table.
 pub fn unregister_process(koid: u64) {
     PROCESS_TABLE.lock().remove(&koid);
-}
-
-// ── Child exit waker (Phase 2b simple mechanism) ────────────────────
-
-/// Per-CPU waker storage for a parent waiting on a child exit.
-///
-/// Phase 2b: only one waiter per CPU. Phase 2c replaces this with
-/// proper observer-based waking via Port.
-static CHILD_EXIT_WAKER: CpuLocal<SpinLock<Option<Waker>>> =
-    CpuLocal::new([const { SpinLock::new(None) }; MAX_CPUS]);
-
-/// Wake any parent waiting for a child exit on this CPU.
-pub fn wake_child_exit_waiter() {
-    if let Some(waker) = CHILD_EXIT_WAKER.get().lock().take() {
-        waker.wake();
-    }
-}
-
-// ── Channel recv waker (Phase 2 simple mechanism) ───────────────────
-
-/// Per-CPU waker storage for a process waiting on a channel read.
-///
-/// Phase 2: only one channel-recv waiter per CPU. A more scalable
-/// approach (per-channel waiters) is deferred to Phase 3.
-static CHANNEL_RECV_WAKER: CpuLocal<SpinLock<Option<Waker>>> =
-    CpuLocal::new([const { SpinLock::new(None) }; MAX_CPUS]);
-
-/// Wake any process waiting for a channel recv on this CPU.
-pub fn wake_channel_recv_waiter() {
-    if let Some(waker) = CHANNEL_RECV_WAKER.get().lock().take() {
-        waker.wake();
-    }
 }
 
 // ── Process task ────────────────────────────────────────────────────
@@ -294,11 +288,10 @@ pub async fn process_task(
         match op {
             BlockingOp::Exit(code) => {
                 crate::kinfo!("process", "process {} exited with code {}", pid, code);
+                // Process::exit() calls signal_update(TERMINATED), which
+                // notifies any observer-based wakers registered by WaitChild.
                 process.exit(code as i64);
                 thread.exit();
-
-                // Wake any parent waiting for this child.
-                wake_child_exit_waiter();
                 break;
             }
             BlockingOp::TaskWait {
@@ -413,6 +406,113 @@ pub async fn process_task(
                 unsafe { core::arch::asm!("cli") };
                 hadron_log::enable_auto_flush();
             }
+            BlockingOp::ClockNanosleep { deadline_ns } => {
+                SleepUntil::new(deadline_ns).await;
+
+                // Restore context after suspension.
+                *CURRENT_PROCESS.get().lock() = Some(Arc::clone(&process));
+                // SAFETY: process_cr3 is valid.
+                unsafe {
+                    crate::arch::x86_64::registers::control::Cr3::write(process_cr3);
+                }
+
+                // Return 0 (success) to userspace.
+                let regs = build_resume_regs(&user_state, 0);
+
+                hadron_log::flush();
+                hadron_log::disable_auto_flush();
+
+                // SAFETY: regs has valid user-mode RIP/RSP. GS is kernel.
+                unsafe {
+                    userspace::enter_userspace_resume(&regs, &mut saved_rsp);
+                }
+                // SAFETY: cli is safe in ring 0.
+                unsafe { core::arch::asm!("cli") };
+                hadron_log::enable_auto_flush();
+            }
+            BlockingOp::FutexWait {
+                addr,
+                val: _,
+                timeout_ns,
+            } => {
+                WaitFutex::new(pid, addr, timeout_ns).await;
+
+                // Restore context after suspension.
+                *CURRENT_PROCESS.get().lock() = Some(Arc::clone(&process));
+                // SAFETY: process_cr3 is valid.
+                unsafe {
+                    crate::arch::x86_64::registers::control::Cr3::write(process_cr3);
+                }
+
+                // Return 0 to userspace (woken successfully or timed out).
+                let regs = build_resume_regs(&user_state, 0);
+
+                hadron_log::flush();
+                hadron_log::disable_auto_flush();
+
+                // SAFETY: regs has valid user-mode RIP/RSP. GS is kernel.
+                unsafe {
+                    userspace::enter_userspace_resume(&regs, &mut saved_rsp);
+                }
+                // SAFETY: cli is safe in ring 0.
+                unsafe { core::arch::asm!("cli") };
+                hadron_log::enable_auto_flush();
+            }
+            BlockingOp::EventWaitMany {
+                fds_ptr,
+                nfds,
+                timeout_ms,
+            } => {
+                // Collect kernel objects for each fd.
+                let entries: alloc::vec::Vec<PollEntry> = process.with_handle_table(|table| {
+                    // SAFETY: fds_ptr was validated by the syscall handler.
+                    let fds = unsafe {
+                        core::slice::from_raw_parts(
+                            fds_ptr as *const hadron_syscall::types::PollFd,
+                            nfds,
+                        )
+                    };
+                    fds.iter()
+                        .filter_map(|pfd| {
+                            let hv = HandleValue::from_raw(pfd.fd);
+                            table.get(hv).ok().map(|entry| PollEntry {
+                                object: Arc::clone(entry.object()),
+                                events: pfd.events,
+                            })
+                        })
+                        .collect()
+                });
+
+                let timeout_ns = if timeout_ms == u64::MAX {
+                    u64::MAX
+                } else {
+                    crate::time::nanos_since_boot().saturating_add(timeout_ms as u64 * 1_000_000)
+                };
+
+                WaitAnyReady::new(entries, timeout_ns).await;
+
+                // Restore context after suspension.
+                *CURRENT_PROCESS.get().lock() = Some(Arc::clone(&process));
+                // SAFETY: process_cr3 is valid.
+                unsafe {
+                    crate::arch::x86_64::registers::control::Cr3::write(process_cr3);
+                }
+
+                // Re-poll all fds and write back revents, then return count.
+                let result = crate::syscall::event::sys_event_wait_many(fds_ptr, nfds, 0);
+                let regs = build_resume_regs(&user_state, result);
+
+                hadron_log::flush();
+                hadron_log::disable_auto_flush();
+
+                // SAFETY: regs has valid user-mode RIP/RSP. GS is kernel.
+                unsafe {
+                    userspace::enter_userspace_resume(&regs, &mut saved_rsp);
+                }
+                // SAFETY: cli is safe in ring 0.
+                unsafe { core::arch::asm!("cli") };
+                hadron_log::enable_auto_flush();
+            }
         }
     }
 
@@ -435,6 +535,10 @@ pub async fn process_task(
 // ── WaitChild future ────────────────────────────────────────────────
 
 /// A future that resolves when a child process sets the TERMINATED signal.
+///
+/// Uses observer-based waking: registers a [`WakerDispatch`] on the child
+/// process for `TERMINATED`. When the child exits and signals TERMINATED,
+/// the observer fires and wakes this future. Works correctly across CPUs.
 struct WaitChild {
     /// The child process to wait on.
     child: Arc<Process>,
@@ -453,9 +557,16 @@ impl Future for WaitChild {
         if self.child.get_signals().contains(Signals::TERMINATED) {
             Poll::Ready(())
         } else {
-            // Store our waker so the child's process_task can wake us on exit.
-            *CHILD_EXIT_WAKER.get().lock() = Some(cx.waker().clone());
-            Poll::Pending
+            // Register an observer-based waker on the child process.
+            // The observer is one-shot: it is removed when it fires.
+            let dispatch = Arc::new(WakerDispatch::new(cx.waker().clone()));
+            self.child.add_observer(dispatch, 0, Signals::TERMINATED);
+            // Re-check after registration to avoid missed wake-up.
+            if self.child.get_signals().contains(Signals::TERMINATED) {
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
         }
     }
 }
@@ -463,6 +574,10 @@ impl Future for WaitChild {
 // ── WaitChannelReadable future ──────────────────────────────────────
 
 /// A future that resolves when a kernel object has the READABLE signal set.
+///
+/// Uses observer-based waking: registers a [`WakerDispatch`] on the object
+/// for `READABLE`. When the object becomes readable (e.g. channel write),
+/// the observer fires and wakes this future.
 struct WaitChannelReadable {
     /// The channel object to wait on.
     object: Arc<dyn KernelObject>,
@@ -481,9 +596,175 @@ impl Future for WaitChannelReadable {
         if self.object.get_signals().contains(Signals::READABLE) {
             Poll::Ready(())
         } else {
-            *CHANNEL_RECV_WAKER.get().lock() = Some(cx.waker().clone());
+            let dispatch = Arc::new(WakerDispatch::new(cx.waker().clone()));
+            self.object.add_observer(dispatch, 0, Signals::READABLE);
+            // Re-check after registration to avoid missed wake-up.
+            if self.object.get_signals().contains(Signals::READABLE) {
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
+        }
+    }
+}
+
+// ── SleepUntil future ──────────────────────────────────────────────
+
+/// A future that resolves when the monotonic clock reaches a deadline.
+struct SleepUntil {
+    /// Absolute deadline in nanoseconds since boot.
+    deadline_ns: u64,
+    /// Whether the waker has been registered in the sleep queue.
+    registered: bool,
+}
+
+impl SleepUntil {
+    fn new(deadline_ns: u64) -> Self {
+        Self {
+            deadline_ns,
+            registered: false,
+        }
+    }
+}
+
+impl Future for SleepUntil {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        if crate::time::nanos_since_boot() >= self.deadline_ns {
+            Poll::Ready(())
+        } else {
+            if !self.registered {
+                self.registered = true;
+            }
+            // Re-register on every poll in case the waker changed.
+            hadron_sched::timer::register_sleep_waker(self.deadline_ns, cx.waker().clone());
             Poll::Pending
         }
+    }
+}
+
+// ── WaitFutex future ───────────────────────────────────────────────
+
+/// A future that resolves when a futex is woken or a timeout expires.
+struct WaitFutex {
+    /// Process koid (part of the futex key).
+    koid: u64,
+    /// Virtual address of the futex word.
+    addr: u64,
+    /// Timeout deadline in nanoseconds since boot, or `u64::MAX` for none.
+    timeout_ns: u64,
+    /// Whether the waker has been registered in the futex table.
+    registered: bool,
+}
+
+impl WaitFutex {
+    fn new(koid: u64, addr: u64, timeout_ns: u64) -> Self {
+        Self {
+            koid,
+            addr,
+            timeout_ns,
+            registered: false,
+        }
+    }
+}
+
+impl Future for WaitFutex {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        // Check timeout first.
+        if self.timeout_ns != u64::MAX && crate::time::nanos_since_boot() >= self.timeout_ns {
+            return Poll::Ready(());
+        }
+
+        if !self.registered {
+            self.registered = true;
+            crate::futex::futex_wait(self.koid, self.addr, cx.waker().clone());
+
+            // Register a timeout waker if needed.
+            if self.timeout_ns != u64::MAX {
+                hadron_sched::timer::register_sleep_waker(self.timeout_ns, cx.waker().clone());
+            }
+
+            Poll::Pending
+        } else {
+            // We were woken (either by futex_wake or timeout).
+            Poll::Ready(())
+        }
+    }
+}
+
+// ── WaitAnyReady future ────────────────────────────────────────────
+
+/// Per-fd info for the `WaitAnyReady` future.
+struct PollEntry {
+    /// The kernel object being polled.
+    object: Arc<dyn KernelObject>,
+    /// Requested event mask (POLLIN/POLLOUT bits).
+    events: u16,
+}
+
+/// A future that resolves when any polled fd has matching signals.
+///
+/// Uses observer-based waking: registers `WakerDispatch` on each object
+/// for the requested signal types. When any object's signals change, the
+/// future re-polls all objects. Level-triggered semantics (like poll/select).
+struct WaitAnyReady {
+    /// Objects to poll.
+    entries: alloc::vec::Vec<PollEntry>,
+    /// Timeout deadline in nanoseconds since boot, or `u64::MAX` for none.
+    timeout_ns: u64,
+}
+
+impl WaitAnyReady {
+    fn new(entries: alloc::vec::Vec<PollEntry>, timeout_ns: u64) -> Self {
+        Self {
+            entries,
+            timeout_ns,
+        }
+    }
+}
+
+impl Future for WaitAnyReady {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        // Check if any fd is already ready.
+        for entry in &self.entries {
+            let sig = entry.object.get_signals();
+            let has_readable = entry.events & POLLIN != 0 && sig.contains(Signals::READABLE);
+            let has_writable = entry.events & POLLOUT != 0 && sig.contains(Signals::WRITABLE);
+            let has_hangup = sig.contains(Signals::PEER_CLOSED);
+            if has_readable || has_writable || has_hangup {
+                return Poll::Ready(());
+            }
+        }
+
+        // Check timeout.
+        if self.timeout_ns != u64::MAX && crate::time::nanos_since_boot() >= self.timeout_ns {
+            return Poll::Ready(());
+        }
+
+        // Not ready yet — register observers on each object.
+        for entry in &self.entries {
+            let mut mask = Signals::PEER_CLOSED;
+            if entry.events & POLLIN != 0 {
+                mask |= Signals::READABLE;
+            }
+            if entry.events & POLLOUT != 0 {
+                mask |= Signals::WRITABLE;
+            }
+            let dispatch = Arc::new(WakerDispatch::new(cx.waker().clone()));
+            entry.object.add_observer(dispatch, 0, mask);
+        }
+
+        // Register timeout waker if needed.
+        if self.timeout_ns != u64::MAX {
+            hadron_sched::timer::register_sleep_waker(self.timeout_ns, cx.waker().clone());
+        }
+
+        Poll::Pending
     }
 }
 

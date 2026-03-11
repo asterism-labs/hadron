@@ -75,10 +75,7 @@ pub fn sys_channel_send(fd: usize, buf_ptr: usize, len: usize) -> isize {
         };
 
         match channel.write(msg) {
-            Ok(()) => {
-                crate::process::wake_channel_recv_waiter();
-                len as isize
-            }
+            Ok(()) => len as isize,
             Err(ChannelError::PeerClosed) => -EPIPE,
             Err(ChannelError::MessageTooLarge) => -EINVAL,
             Err(_) => -EIO,
@@ -183,10 +180,7 @@ pub fn sys_channel_send_fd(ch_fd: usize, fd: usize, buf_ptr: usize, len: usize) 
         };
 
         match channel.write(msg) {
-            Ok(()) => {
-                crate::process::wake_channel_recv_waiter();
-                len as isize
-            }
+            Ok(()) => len as isize,
             Err(ChannelError::PeerClosed) => -EPIPE,
             Err(ChannelError::MessageTooLarge) => -EINVAL,
             Err(_) => -EIO,

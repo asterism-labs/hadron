@@ -4,6 +4,7 @@
 //! PMM → VMM → heap → per-CPU state → SYSCALL init → userboot launch.
 
 use hadron_core::addr::VirtAddr;
+use hadron_sched::executor::ArchHalt;
 
 use crate::boot::BootInfo;
 
@@ -109,10 +110,17 @@ pub extern "C" fn kernel_init(boot_info: *const BootInfo) -> ! {
     unsafe { crate::arch::x86_64::syscall::init() };
     crate::kinfo!("boot", "SYSCALL/SYSRET initialized");
 
-    // ── 12. Boot complete ──────────────────────────────────────────────
+    // ── 12. Boot APs (SMP) ──────────────────────────────────────────────
+    #[cfg(hadron_smp)]
+    {
+        // SAFETY: Called once from BSP after ACPI/PMM/heap/per-CPU init.
+        unsafe { crate::arch::x86_64::smp::boot_aps() };
+    }
+
+    // ── 13. Boot complete ──────────────────────────────────────────────
     crate::kinfo!("boot", "kernel bootstrap complete");
 
-    // ── 13. Load and launch userboot ───────────────────────────────────
+    // ── 14. Load and launch userboot ───────────────────────────────────
     load_and_run_userboot();
 }
 
@@ -134,8 +142,6 @@ fn load_and_run_userboot() -> ! {
     use hadron_objects::process::Process;
     use hadron_objects::thread::Thread;
     use hadron_objects::vmar::Vmar;
-    use hadron_sched::executor::ArchHalt;
-
     /// Page size in bytes.
     const PAGE_SIZE: u64 = 4096;
     /// Page offset mask.
@@ -269,21 +275,53 @@ fn load_and_run_userboot() -> ! {
     ));
 
     // ── Start the executor (never returns) ───────────────────────────
-    struct HltHalt;
-    impl ArchHalt for HltHalt {
-        fn enable_interrupts_and_halt(&self) {
-            // SAFETY: sti + hlt is safe; an interrupt will resume execution.
-            unsafe { core::arch::asm!("sti", "hlt", "cli") };
+    hadron_sched::executor().run(&HltHalt, make_steal_fn());
+}
+
+/// Halt implementation: enables interrupts and halts the CPU until an
+/// interrupt arrives.
+pub(crate) struct HltHalt;
+impl ArchHalt for HltHalt {
+    fn enable_interrupts_and_halt(&self) {
+        // SAFETY: sti + hlt is safe; an interrupt will resume execution.
+        unsafe { core::arch::asm!("sti", "hlt", "cli") };
+    }
+}
+
+/// Creates a work-stealing closure for the executor.
+pub(crate) fn make_steal_fn() -> fn() -> Option<(
+    hadron_core::task::TaskId,
+    hadron_core::task::Priority,
+    hadron_sched::executor::TaskEntry,
+)> {
+    steal_from_other_cpus
+}
+
+/// Attempts to steal a task from another CPU's executor.
+fn steal_from_other_cpus() -> Option<(
+    hadron_core::task::TaskId,
+    hadron_core::task::Priority,
+    hadron_sched::executor::TaskEntry,
+)> {
+    #[cfg(hadron_smp)]
+    {
+        let my_cpu = hadron_core::cpu_local::current_cpu_id();
+        let total = crate::arch::x86_64::smp::cpu_count();
+        if total <= 1 {
+            return None;
+        }
+        // Start from a pseudo-random CPU to avoid thundering herd.
+        let start = (crate::time::nanos_since_boot() as u32) % total;
+        for i in 0..total {
+            let target = (start + i) % total;
+            if target == my_cpu {
+                continue;
+            }
+            let target_id = hadron_core::id::CpuId::new(target);
+            if let Some(stolen) = hadron_sched::executor::for_cpu(target_id).steal_task() {
+                return Some(stolen);
+            }
         }
     }
-
-    fn no_steal() -> Option<(
-        hadron_core::task::TaskId,
-        hadron_core::task::Priority,
-        hadron_sched::executor::TaskEntry,
-    )> {
-        None // Phase 2b: single CPU, no work stealing.
-    }
-
-    hadron_sched::executor().run(&HltHalt, no_steal);
+    None
 }

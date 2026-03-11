@@ -90,6 +90,12 @@ static LAPIC_TIMER_DIVIDE: AtomicU8 = AtomicU8::new(0);
 #[cfg(hadron_apic)]
 static LAPIC_BASE: AtomicU64 = AtomicU64::new(0);
 
+/// Stored MADT for SMP AP enumeration.
+///
+/// The MADT borrows from the HHDM-mapped ACPI tables, which are permanent.
+#[cfg(hadron_apic)]
+static STORED_MADT: IrqSpinLock<Option<madt::Madt>> = IrqSpinLock::leveled("STORED_MADT", 10, None);
+
 /// ACPI namespace, stored after AML parsing for use by platform device discovery.
 ///
 /// Level 12 avoids nesting with PLATFORM (level 11) since `with_namespace` is
@@ -174,6 +180,16 @@ impl Acpi {
         }
     }
 
+    /// Runs a closure with a reference to the stored MADT, if available.
+    ///
+    /// Used by the SMP module to enumerate AP LAPIC IDs.
+    #[cfg(hadron_apic)]
+    pub fn with_madt<R>(f: impl FnOnce(&madt::Madt) -> R) -> Option<R> {
+        let lock = STORED_MADT.lock();
+        let madt = lock.as_ref()?;
+        Some(f(madt))
+    }
+
     /// Runs a closure with a reference to the I/O APIC, if initialized.
     ///
     /// Reconstructs the `IoApic` from the stored virtual base address. Drivers use
@@ -202,8 +218,8 @@ pub(crate) extern "C" fn timer_tick_and_eoi() {
 /// LAPIC timer interrupt handler.
 #[cfg(hadron_apic)]
 fn timer_handler(_vector: IrqVector) {
-    // Wake tasks whose sleep deadline has expired.
-    crate::sched::timer::wake_expired(crate::time::Time::timer_ticks());
+    // Wake tasks whose sleep deadline has expired (nanosecond deadlines).
+    crate::sched::timer::wake_expired(crate::time::nanos_since_boot());
 
     // Signal the executor to rotate to the next task.
     crate::sched::set_preempt_pending();
@@ -273,6 +289,16 @@ pub fn init(rsdp_phys: Option<PhysAddr>) {
                 io_apic_count,
                 m.local_apic_address
             );
+
+            // Store MADT for SMP AP enumeration.
+            #[cfg(hadron_apic)]
+            {
+                // Re-parse to get a fresh Madt value for storage (m is consumed below).
+                if let Ok(stored) = tables.madt() {
+                    *STORED_MADT.lock() = Some(stored);
+                }
+            }
+
             Some(m)
         }
         Err(e) => {

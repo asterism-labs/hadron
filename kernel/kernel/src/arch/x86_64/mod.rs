@@ -19,8 +19,12 @@ pub mod legacy;
 pub mod mem;
 pub mod paging;
 pub mod registers;
+#[cfg(hadron_smp)]
+pub mod smp;
 pub mod structures;
 pub mod syscall;
+#[cfg(hadron_smp)]
+pub mod tlb_shootdown;
 pub mod userspace;
 
 // Re-export commonly used types for ergonomic imports.

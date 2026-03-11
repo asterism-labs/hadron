@@ -55,6 +55,9 @@ pub mod boot;
 pub mod entry;
 
 #[cfg(target_os = "none")]
+pub mod futex;
+
+#[cfg(target_os = "none")]
 pub mod percpu;
 
 #[cfg(target_os = "none")]
