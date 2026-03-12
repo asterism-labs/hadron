@@ -30,33 +30,24 @@ pub extern "C" fn kernel_init(boot_info: *const BootInfo) -> ! {
     hadron_mm::hhdm::init(hhdm_offset);
     crate::kinfo!("boot", "HHDM initialized at {:#x}", bi.hhdm_offset);
 
-    // ── 2. Boot mapper ─────────────────────────────────────────────────
-    // The boot stub maps the first 4 GiB into the HHDM. The boot mapper
-    // callback extends the HHDM beyond 4 GiB, but after GDT/IDT init the
-    // callback into stub code is no longer safe (the stub was compiled for
-    // the UEFI target with different segment assumptions). For systems with
-    // <=4 GiB RAM the initial mapping suffices.
-    // TODO: Support >4 GiB by extending HHDM from the kernel's own VMM.
-    crate::kdebug!("boot", "boot mapper skipped (4 GiB HHDM sufficient)");
-
-    // ── 3. GDT init ────────────────────────────────────────────────────
+    // ── 2. GDT init ──────────────────────────────────────────────────
     // SAFETY: Called exactly once during BSP init. No interrupts yet.
     unsafe { crate::arch::x86_64::gdt::init() };
 
-    // ── 4. IDT init ────────────────────────────────────────────────────
+    // ── 3. IDT init ──────────────────────────────────────────────────
     // SAFETY: Called after GDT init, CS is valid.
     unsafe { crate::arch::x86_64::idt::init() };
 
-    // ── 4b. Calibrate TSC frequency ────────────────────────────────────
+    // ── 3b. Calibrate TSC frequency ─────────────────────────────────
     // Uses PIT channel 2 (I/O ports only, available after GDT/IDT).
     // SAFETY: Interrupts are still disabled; PIT is not in use.
     unsafe { crate::time::calibrate_tsc() };
 
-    // ── 5. Register TLB flush callback ─────────────────────────────────
+    // ── 4. Register TLB flush callback ──────────────────────────────
     hadron_mm::mapper::register_tlb_flush(crate::arch::x86_64::instructions::tlb::flush);
     crate::kdebug!("boot", "TLB flush registered");
 
-    // ── 6. Convert UEFI memory map ─────────────────────────────────────
+    // ── 5. Convert UEFI memory map ──────────────────────────────────
     // SAFETY: bi contains a valid UEFI memory map; HHDM is initialized.
     let mem = unsafe { crate::boot::convert_uefi_memory_map(bi, hhdm_offset) };
     let regions = &mem.regions[..mem.count];
@@ -67,7 +58,12 @@ pub extern "C" fn kernel_init(boot_info: *const BootInfo) -> ! {
         mem.max_phys
     );
 
-    // ── 7. PMM init ────────────────────────────────────────────────────
+    // ── 6b. Extend HHDM beyond 4 GiB ──────────────────────────────────
+    // The UEFI stub only maps the first 4 GiB. Extend for systems with
+    // more physical memory so the PMM bitmap is accessible.
+    crate::hhdm_extend::extend_hhdm(regions, hhdm_offset, bi);
+
+    // ── 7. PMM init ─────────────────────────────────────────────────
     let boot_reserved = [
         (bi.kernel_phys, bi.kernel_size),
         (bi.boot_pt_pool_phys, bi.boot_pt_pool_pages * 4096),

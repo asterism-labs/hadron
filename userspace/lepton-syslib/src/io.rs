@@ -37,18 +37,16 @@ pub fn close(fd: usize) -> isize {
 /// Perform a device-specific ioctl on a file descriptor.
 ///
 /// Returns 0 on success, or a negative errno on failure.
-pub fn ioctl(fd: usize, cmd: usize, arg: usize) -> isize {
-    wrappers::sys_handle_ioctl(fd, cmd, arg)
+///
+/// Not yet implemented — always returns `-ENOSYS`.
+pub fn ioctl(_fd: usize, _cmd: usize, _arg: usize) -> isize {
+    -(hadron_syscall::ENOSYS as isize)
 }
 
 /// Stat a file descriptor. Returns `Some(StatInfo)` on success, or `None`.
 pub fn stat(fd: usize) -> Option<StatInfo> {
     let mut info = core::mem::MaybeUninit::<StatInfo>::uninit();
-    let ret = wrappers::sys_vnode_stat(
-        fd,
-        info.as_mut_ptr() as usize,
-        core::mem::size_of::<StatInfo>(),
-    );
+    let ret = wrappers::sys_vnode_stat(fd, info.as_mut_ptr() as usize);
     if ret >= 0 {
         // SAFETY: The kernel wrote a valid StatInfo into the buffer on success.
         Some(unsafe { info.assume_init() })

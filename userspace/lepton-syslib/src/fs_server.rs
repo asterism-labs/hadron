@@ -94,7 +94,7 @@ fn handle_mount_message(server: &mut dyn FsServer, mount_fd: u32) -> Option<u32>
     }
 
     // SAFETY: We verified `n >= size_of::<VfsRequest>()`.
-    let req: VfsRequest = unsafe { *core::ptr::read_unaligned(buf.as_ptr().cast()) };
+    let req: VfsRequest = unsafe { core::ptr::read_unaligned(buf.as_ptr().cast()) };
 
     if req.op != FS_OP_OPEN {
         // Only open requests arrive on the mount channel.
@@ -149,7 +149,7 @@ fn handle_file_message(server: &mut dyn FsServer, file_fd: u32) -> bool {
     }
 
     // SAFETY: We verified size.
-    let req: VfsRequest = unsafe { *core::ptr::read_unaligned(buf.as_ptr().cast()) };
+    let req: VfsRequest = unsafe { core::ptr::read_unaligned(buf.as_ptr().cast()) };
     let header_size = core::mem::size_of::<VfsRequest>();
 
     let (status, data) = match req.op {
@@ -223,6 +223,7 @@ pub fn run_fs_server(server: &mut dyn FsServer, mount_fd: u32) -> ! {
             poll_fds.push(PollFd {
                 fd: ch,
                 events: POLLIN,
+                revents: 0,
             });
         }
 
@@ -255,12 +256,10 @@ pub fn run_fs_server(server: &mut dyn FsServer, mount_fd: u32) -> ! {
         // Check per-file channels for I/O requests or hangup.
         let mut to_remove: Vec<usize> = Vec::new();
         for (i, &ch) in file_channels.iter().enumerate() {
-            // Try to receive; if peer closed, remove.
-            let mut peek_buf = [0u8; 1];
-            // Use a non-blocking check: just try recv on each channel.
-            // In practice, the event_wait_many already told us which are ready.
-            // For simplicity, try all and handle errors.
-            let _ = peek_buf; // suppress unused warning
+            let revents = poll_fds[i + 1].revents;
+            if revents & POLLIN == 0 && revents & POLLHUP == 0 {
+                continue;
+            }
 
             if !handle_file_message(server, ch) {
                 server.close(ch);

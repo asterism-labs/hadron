@@ -81,5 +81,8 @@ pub mod vfs;
 #[cfg(target_os = "none")]
 pub mod vmm;
 
+/// HHDM extension for physical memory beyond 4 GiB.
+pub mod hhdm_extend;
+
 #[cfg(all(target_os = "none", hadron_iommu))]
 pub mod iommu_objects;

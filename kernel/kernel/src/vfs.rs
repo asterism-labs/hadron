@@ -8,9 +8,11 @@
 //! Zero filesystem logic lives in the kernel — path resolution, permissions,
 //! and directory traversal are the FS server's responsibility.
 
+use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::sync::Arc;
+use core::sync::atomic::{AtomicPtr, Ordering};
 
 use hadron_core::sync::SpinLock;
 use hadron_objects::channel::Channel;
@@ -33,8 +35,9 @@ pub struct VfsRouter {
     mounts: SpinLock<BTreeMap<String, Arc<Channel>>>,
 }
 
-/// Global VFS router instance.
-static VFS_ROUTER: SpinLock<Option<VfsRouter>> = SpinLock::new(None);
+/// Global VFS router instance. Initialized once, never replaced.
+/// Only the inner `mounts` lock needs synchronization.
+static VFS_ROUTER: AtomicPtr<VfsRouter> = AtomicPtr::new(core::ptr::null_mut());
 
 /// Initialize the global VFS router. Called once during `kernel_init()`.
 ///
@@ -42,11 +45,17 @@ static VFS_ROUTER: SpinLock<Option<VfsRouter>> = SpinLock::new(None);
 ///
 /// Panics if called more than once.
 pub fn init() {
-    let mut guard = VFS_ROUTER.lock();
-    assert!(guard.is_none(), "VFS router already initialized");
-    *guard = Some(VfsRouter {
-        mounts: SpinLock::new(BTreeMap::new()),
+    let router = Box::new(VfsRouter {
+        mounts: SpinLock::leveled("VFS_ROUTER.mounts", 6, BTreeMap::new()),
     });
+    let ptr = Box::into_raw(router);
+    let prev = VFS_ROUTER.compare_exchange(
+        core::ptr::null_mut(),
+        ptr,
+        Ordering::Release,
+        Ordering::Relaxed,
+    );
+    assert!(prev.is_ok(), "VFS router already initialized");
 }
 
 /// Execute a closure with a reference to the global VFS router.
@@ -55,8 +64,11 @@ pub fn init() {
 ///
 /// Panics if the VFS router has not been initialized.
 pub fn with<R>(f: impl FnOnce(&VfsRouter) -> R) -> R {
-    let guard = VFS_ROUTER.lock();
-    f(guard.as_ref().expect("VFS router not initialized"))
+    let ptr = VFS_ROUTER.load(Ordering::Acquire);
+    assert!(!ptr.is_null(), "VFS router not initialized");
+    // SAFETY: ptr was set by `init()` from a valid Box and is never freed.
+    let router = unsafe { &*ptr };
+    f(router)
 }
 
 impl VfsRouter {

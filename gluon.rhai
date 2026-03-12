@@ -168,7 +168,6 @@ kernel_libs.add("hadron-pci", "kernel/pci");
 kernel_libs.add("hadron-mm", "kernel/mm")
     .deps(#{
         bitflags: "bitflags",
-        hadron_boot_info: "hadron-boot-info",
         hadron_core: "hadron-core",
         planck_noalloc: "planck-noalloc"
     });
@@ -278,6 +277,8 @@ let user_libs = group("user-libs").target("x86_64-unknown-hadron-user").edition(
 user_libs.add("hadron-syscall-user", "crates/core/hadron-syscall");
 user_libs.add("hadron-vfs-protocol-user", "crates/core/hadron-vfs-protocol")
     .deps(#{ hadron_syscall: "hadron-syscall-user" });
+user_libs.add("lepton-syslib", "userspace/lepton-syslib")
+    .deps(#{ hadron_syscall: "hadron-syscall-user", hadron_vfs_protocol: "hadron-vfs-protocol-user" });
 
 // ===========================================================================
 // Userboot (first userspace binary)
@@ -321,7 +322,7 @@ let ramfs = group("ramfs").target("x86_64-unknown-hadron-user").edition("2024");
 ramfs.add("ramfs", "userspace/ramfs")
     .crate_type(BIN)
     .root("src/main.rs")
-    .deps(#{ hadron_syscall: "hadron-syscall-user", hadron_vfs_protocol: "hadron-vfs-protocol-user" });
+    .deps(#{ hadron_syscall: "hadron-syscall-user", lepton_syslib: "lepton-syslib" });
 
 // ===========================================================================
 // DevMgr (stub /dev filesystem server)
@@ -332,7 +333,18 @@ let devmgr = group("devmgr").target("x86_64-unknown-hadron-user").edition("2024"
 devmgr.add("devmgr", "userspace/devmgr")
     .crate_type(BIN)
     .root("src/main.rs")
-    .deps(#{ hadron_syscall: "hadron-syscall-user", hadron_vfs_protocol: "hadron-vfs-protocol-user" });
+    .deps(#{ hadron_syscall: "hadron-syscall-user", lepton_syslib: "lepton-syslib" });
+
+// ===========================================================================
+// Test harness (Phase 2 verification tests)
+// ===========================================================================
+
+let test_harness = group("test-harness").target("x86_64-unknown-hadron-user").edition("2024");
+
+test_harness.add("test-harness", "userspace/test-harness")
+    .crate_type(BIN)
+    .root("src/main.rs")
+    .deps(#{ hadron_syscall: "hadron-syscall-user" });
 
 // ===========================================================================
 // UEFI boot binary
@@ -373,7 +385,7 @@ bench_deps.add("hadron-bench", "crates/test/hadron-bench")
 // ===========================================================================
 
 rule("initrd")
-    .inputs(["userboot", "test-child", "test-receiver", "ramfs", "devmgr"])
+    .inputs(["userboot", "test-child", "test-receiver", "test-harness", "ramfs", "devmgr"])
     .output("build/initrd.cpio");
 
 // ===========================================================================
@@ -385,7 +397,7 @@ pipeline()
     .barrier("sysroot-ready")
     .stage("host", ["host"])
     .barrier("host-ready")
-    .stage("kernel", ["vendored", "vendored-uefi", "kernel-libs", "uefi-libs", "user-libs", "userboot", "test-child", "test-receiver", "ramfs", "devmgr"])
+    .stage("kernel", ["vendored", "vendored-uefi", "kernel-libs", "uefi-libs", "user-libs", "userboot", "test-child", "test-receiver", "test-harness", "ramfs", "devmgr"])
     .barrier("kernel-ready")
     .rule("initrd")
     .barrier("initrd-ready")

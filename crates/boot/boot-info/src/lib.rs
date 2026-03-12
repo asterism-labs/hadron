@@ -82,8 +82,11 @@ pub struct BootInfo {
     /// Physical base of the boot page table pool (for reclamation).
     pub boot_pt_pool_phys: u64,
 
-    /// Number of pages in the boot page table pool.
+    /// Number of pages used by the boot stub from the page table pool.
     pub boot_pt_pool_pages: u64,
+
+    /// Total number of pages in the boot page table pool.
+    pub boot_pt_pool_total: u64,
 
     /// Boot services vtable. Valid until the kernel switches CR3. Null after.
     pub boot_services: *const BootServices,

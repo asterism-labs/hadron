@@ -27,8 +27,14 @@ impl Koid {
     pub const INVALID: Self = Self(0);
 
     /// Allocate a fresh, globally unique koid.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the koid counter overflows (exhausted all 2^64 - 1 IDs).
     pub fn alloc() -> Self {
-        Self(NEXT_KOID.fetch_add(1, Ordering::Relaxed))
+        let id = NEXT_KOID.fetch_add(1, Ordering::Relaxed);
+        assert!(id != u64::MAX, "Koid space exhausted");
+        Self(id)
     }
 
     /// Return the raw `u64` value.

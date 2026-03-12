@@ -21,6 +21,21 @@
 //! - **Warning-only mode** (behind `cfg(hadron_lockdep_warn)`): logs
 //!   violations without panicking.
 //!
+//! ## Lock ordering reference
+//!
+//! | Level | Lock name                    |
+//! |------:|------------------------------|
+//! |     1 | HEAP                         |
+//! |     3 | PMM                          |
+//! |     4 | VMM                          |
+//! |     5 | VFS_ROUTER                   |
+//! |     6 | VFS_ROUTER.mounts            |
+//! |    10 | STORED_MADT                  |
+//! |    11 | PLATFORM / FUTEX             |
+//! |    12 | ACPI_NS / ECAM / SLEEP_QUEUE |
+//! |    13 | DMAR / executor.ready        |
+//! |    14 | VTD / executor.tasks         |
+//!
 //! Gated behind `cfg(hadron_lockdep)`.
 
 use super::atomic::AtomicPtr;

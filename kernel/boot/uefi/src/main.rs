@@ -636,6 +636,7 @@ extern "efiapi" fn efi_main(handle: EfiHandle, system_table: *mut table::SystemT
         kernel_size: kernel_size_aligned,
         boot_pt_pool_phys: pt_pool_phys,
         boot_pt_pool_pages: boot_svc_state.pool.pages_used(),
+        boot_pt_pool_total: pt_pool_pages as u64,
         boot_services: vtable_ptr as *const BootServices,
     };
 

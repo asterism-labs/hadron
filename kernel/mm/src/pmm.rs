@@ -110,11 +110,8 @@ impl BitmapAllocator {
             .next()
             .ok_or(PmmError::NoBitmapRegion)?;
 
-        // 3. Ensure the bitmap region is mapped in the HHDM (may extend
-        //    beyond the initial 4 GiB mapped by the boot stub).
-        crate::hhdm::ensure_mapped(bitmap_phys_start, bitmap_bytes as u64);
-
-        // 4. Map bitmap via HHDM and create a mutable slice.
+        // 3. Map bitmap via HHDM and create a mutable slice.
+        //    The HHDM is extended beyond 4 GiB by `hhdm_extend` before PMM init.
         // SAFETY: The HHDM offset is valid, and bitmap_phys_start points to a
         // usable physical region large enough for bitmap_words * 8 bytes. The
         // region is not aliased because we are the sole consumer during boot.
