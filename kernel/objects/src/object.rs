@@ -78,6 +78,8 @@ pub enum ObjectType {
     Bti = 16,
     /// Pmt — pinned memory token (pinned VMO region for DMA).
     Pmt = 17,
+    /// Vnode — open file or directory backed by a per-file channel.
+    Vnode = 18,
 }
 
 bitflags! {

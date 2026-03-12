@@ -283,6 +283,12 @@ pub fn sys_task_spawn(info_ptr: usize, info_len: usize) -> isize {
         }
     }
 
+    // Inherit parent namespace and CWD.
+    process::with_current_process(|parent| {
+        child_process.inherit_namespace(parent);
+        child_process.set_cwd(parent.cwd());
+    });
+
     // Register in global process table.
     process::register_process(&child_process);
 
@@ -365,6 +371,71 @@ pub fn sys_task_setpgid(_pid: usize, _pgid: usize) -> isize {
 /// `SYS_TASK_GETPGID` — stub (not yet implemented).
 pub fn sys_task_getpgid(_pid: usize) -> isize {
     -ENOSYS
+}
+
+/// `SYS_TASK_GETCWD(buf_ptr, buf_len)` — get current working directory.
+///
+/// Copies the CWD path into the user buffer. Returns the path length on
+/// success (excluding any terminator), or a negative error code.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    reason = "path length fits in isize on x86_64"
+)]
+pub fn sys_task_getcwd(buf_ptr: usize, buf_len: usize) -> isize {
+    let cwd = match process::with_current_process(|p| p.cwd()) {
+        Some(c) => c,
+        None => return -ESRCH,
+    };
+
+    if cwd.len() > buf_len {
+        return -ERANGE;
+    }
+
+    let buf = match UserPtrMut::<u8>::new(buf_ptr) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+
+    // SAFETY: buf_ptr was validated and buf_len covers the CWD string.
+    unsafe {
+        core::ptr::copy_nonoverlapping(cwd.as_ptr(), buf.as_mut_ptr(), cwd.len());
+    }
+
+    cwd.len() as isize
+}
+
+/// `SYS_TASK_CHDIR(path_ptr, path_len)` — change working directory.
+///
+/// Updates the process CWD to the given absolute path. For Phase 5 this
+/// does a simple validation (path must start with `/`) without verifying
+/// the directory exists via VFS. Full validation via vnode_open with
+/// `OPEN_DIRECTORY` is deferred to a later phase.
+pub fn sys_task_chdir(path_ptr: usize, path_len: usize) -> isize {
+    let path_slice = match UserSlice::new(path_ptr, path_len) {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+
+    // SAFETY: User buffer was range-validated.
+    let path_bytes = unsafe { path_slice.read_to_vec() };
+    let path = match core::str::from_utf8(&path_bytes) {
+        Ok(p) => p,
+        Err(_) => return -EINVAL,
+    };
+
+    // Must be an absolute path.
+    if !path.starts_with('/') {
+        return -EINVAL;
+    }
+
+    let normalized = crate::vfs::normalize_path(path);
+
+    process::with_current_process(|p| {
+        p.set_cwd(normalized);
+    });
+
+    0
 }
 
 /// Frame deallocation callback for `AddressSpace::new_user`.

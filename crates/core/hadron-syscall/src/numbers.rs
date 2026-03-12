@@ -114,6 +114,10 @@ pub const SYS_VNODE_READLINK: usize = 0x3B;
 pub const SYS_VNODE_TRUNCATE: usize = 0x3C;
 /// Get file status relative to directory.
 pub const SYS_VNODE_FSTATAT: usize = 0x3D;
+/// Mount a filesystem at a path prefix.
+pub const SYS_VFS_MOUNT: usize = 0x3E;
+/// Unmount a filesystem from a path prefix.
+pub const SYS_VFS_UNMOUNT: usize = 0x3F;
 
 // ── Memory (0x40) ────────────────────────────────────────────────────
 
@@ -254,6 +258,8 @@ mod tests {
             SYS_VNODE_READLINK,
             SYS_VNODE_TRUNCATE,
             SYS_VNODE_FSTATAT,
+            SYS_VFS_MOUNT,
+            SYS_VFS_UNMOUNT,
             // Memory
             SYS_MEM_MAP,
             SYS_MEM_UNMAP,

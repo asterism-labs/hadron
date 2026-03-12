@@ -88,6 +88,15 @@ pub const FUTEX_WAIT: u32 = 0;
 /// Wake up to `val` waiters.
 pub const FUTEX_WAKE: u32 = 1;
 
+// ── Seek whence constants ───────────────────────────────────────────
+
+/// Seek from the beginning of the file.
+pub const SEEK_SET: u32 = 0;
+/// Seek from the current position.
+pub const SEEK_CUR: u32 = 1;
+/// Seek from the end of the file.
+pub const SEEK_END: u32 = 2;
+
 // ── Poll event flags ─────────────────────────────────────────────────
 
 /// Data available for reading.

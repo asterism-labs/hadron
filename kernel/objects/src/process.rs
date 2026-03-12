@@ -5,6 +5,7 @@
 //! or current working directory — handles replace file descriptors, and
 //! namespaces replace cwd.
 
+use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
@@ -40,6 +41,13 @@ pub struct Process {
     job: SpinLock<Option<Weak<dyn KernelObject>>>,
     /// Process return code, set on exit.
     return_code: AtomicI64,
+    /// Per-process mount namespace: maps mount prefix → koid of the FS
+    /// server channel. Using Koid avoids lock ordering hazards with the
+    /// VfsRouter — the kernel snapshots this map and passes it to
+    /// `VfsRouter::resolve()` without holding the process lock.
+    namespace: SpinLock<BTreeMap<String, Koid>>,
+    /// Current working directory (absolute path, defaults to `"/"`).
+    cwd: SpinLock<String>,
     /// Current signal state.
     signals: AtomicU32,
     /// Registered observers for signal notifications.
@@ -60,6 +68,8 @@ impl Process {
             root_vmar,
             threads: SpinLock::new(Vec::new()),
             job: SpinLock::new(None),
+            namespace: SpinLock::new(BTreeMap::new()),
+            cwd: SpinLock::new(String::from("/")),
             return_code: AtomicI64::new(0),
             signals: AtomicU32::new(0),
             observers: ObserverList::new(),
@@ -107,6 +117,39 @@ impl Process {
     /// Set the process name.
     pub fn set_name(&self, name: String) {
         *self.name.lock() = name;
+    }
+
+    /// Get the current working directory.
+    #[must_use]
+    pub fn cwd(&self) -> String {
+        self.cwd.lock().clone()
+    }
+
+    /// Set the current working directory.
+    pub fn set_cwd(&self, path: String) {
+        *self.cwd.lock() = path;
+    }
+
+    /// Snapshot the process namespace (mount prefix → channel koid map).
+    #[must_use]
+    pub fn namespace_snapshot(&self) -> BTreeMap<String, Koid> {
+        self.namespace.lock().clone()
+    }
+
+    /// Add an entry to the process namespace.
+    pub fn namespace_add(&self, prefix: String, koid: Koid) {
+        self.namespace.lock().insert(prefix, koid);
+    }
+
+    /// Remove an entry from the process namespace.
+    pub fn namespace_remove(&self, prefix: &str) {
+        self.namespace.lock().remove(prefix);
+    }
+
+    /// Copy the namespace from another process (used for inheritance).
+    pub fn inherit_namespace(&self, parent: &Process) {
+        let parent_ns = parent.namespace.lock().clone();
+        *self.namespace.lock() = parent_ns;
     }
 
     /// Set the return code and signal termination.

@@ -113,6 +113,17 @@ pub enum BlockingOp {
         /// User buffer length.
         buf_len: usize,
     },
+    /// Blocking VFS operation: wait for FS server reply on vnode channel.
+    VnodeOp {
+        /// Vnode handle value.
+        vnode_handle: hadron_objects::handle::HandleValue,
+        /// User buffer for result data (read, readdir, stat).
+        buf_ptr: usize,
+        /// User buffer length.
+        buf_len: usize,
+        /// Original syscall number (for reply parsing).
+        syscall_nr: u32,
+    },
 }
 
 /// Per-CPU pending blocking operation.
@@ -606,6 +617,82 @@ pub async fn process_task(
 
                 // Retry the read.
                 let result = do_fifo_read(&*obj, buf_ptr, buf_len);
+                let regs = build_resume_regs(&user_state, result);
+
+                hadron_log::flush();
+                hadron_log::disable_auto_flush();
+
+                // SAFETY: regs has valid user-mode RIP/RSP. GS is kernel.
+                unsafe {
+                    userspace::enter_userspace_resume(&regs, &mut saved_rsp);
+                }
+                // SAFETY: cli is safe in ring 0.
+                unsafe { core::arch::asm!("cli") };
+                hadron_log::enable_auto_flush();
+            }
+            BlockingOp::VnodeOp {
+                vnode_handle,
+                buf_ptr,
+                buf_len,
+                syscall_nr,
+            } => {
+                // Get the vnode's inner channel to wait on.
+                let vnode_channel: Result<Arc<dyn KernelObject>, _> =
+                    process.with_handle_table(|ht| {
+                        let entry = ht.get(vnode_handle)?;
+                        let vnode = entry
+                            .object()
+                            .as_any()
+                            .downcast_ref::<hadron_objects::vnode::Vnode>()
+                            .ok_or(hadron_objects::handle::HandleError::NotFound)?;
+                        Ok::<_, hadron_objects::handle::HandleError>(
+                            Arc::clone(vnode.channel()) as Arc<dyn KernelObject>
+                        )
+                    });
+
+                let ch_obj = match vnode_channel {
+                    Ok(ch) => ch,
+                    Err(_) => {
+                        // Handle was already closed — resume with EBADF.
+                        *CURRENT_PROCESS.get().lock() = Some(Arc::clone(&process));
+                        // SAFETY: process_cr3 is valid.
+                        unsafe {
+                            crate::arch::x86_64::registers::control::Cr3::write(process_cr3);
+                        }
+                        let regs = build_resume_regs(&user_state, -hadron_syscall::EBADF);
+                        hadron_log::flush();
+                        hadron_log::disable_auto_flush();
+                        // SAFETY: regs has valid user-mode RIP/RSP. GS is kernel.
+                        unsafe {
+                            userspace::enter_userspace_resume(&regs, &mut saved_rsp);
+                        }
+                        // SAFETY: cli is safe in ring 0.
+                        unsafe { core::arch::asm!("cli") };
+                        hadron_log::enable_auto_flush();
+                        continue;
+                    }
+                };
+
+                // Wait for the FS server reply on the per-file channel.
+                WaitChannelReadable::new(Arc::clone(&ch_obj)).await;
+
+                // Restore context after suspension.
+                *CURRENT_PROCESS.get().lock() = Some(Arc::clone(&process));
+                // SAFETY: process_cr3 is valid.
+                unsafe {
+                    crate::arch::x86_64::registers::control::Cr3::write(process_cr3);
+                }
+
+                // Read the reply from the channel.
+                let result = do_vnode_reply(
+                    &process,
+                    &ch_obj,
+                    vnode_handle,
+                    buf_ptr,
+                    buf_len,
+                    syscall_nr,
+                );
+
                 let regs = build_resume_regs(&user_state, result);
 
                 hadron_log::flush();
@@ -1127,5 +1214,137 @@ fn do_fifo_read(obj: &dyn KernelObject, buf_ptr: usize, buf_len: usize) -> isize
         Err(hadron_objects::fifo::FifoError::ShouldWait) => -hadron_syscall::EAGAIN,
         Err(hadron_objects::fifo::FifoError::PeerClosed) => -hadron_syscall::EPIPE,
         Err(_) => -hadron_syscall::EIO,
+    }
+}
+
+/// Process a VFS reply from a FS server channel.
+///
+/// Reads the reply message from the per-file channel, parses the VfsReply
+/// header, copies payload data to the user buffer, and updates the vnode's
+/// seek offset for read/write/readdir operations.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    reason = "reply data lengths fit in isize on x86_64"
+)]
+fn do_vnode_reply(
+    process: &Arc<Process>,
+    ch_obj: &Arc<dyn KernelObject>,
+    vnode_handle: HandleValue,
+    buf_ptr: usize,
+    buf_len: usize,
+    syscall_nr: u32,
+) -> isize {
+    use hadron_objects::vnode::Vnode;
+    use hadron_vfs_protocol::{VfsReply, from_bytes};
+
+    let channel = ch_obj
+        .as_any()
+        .downcast_ref::<Channel>()
+        .expect("vnode_reply: channel downcast failed");
+
+    let msg = match channel.read() {
+        Ok(m) => m,
+        Err(hadron_objects::channel::ChannelError::PeerClosed) => return -hadron_syscall::EIO,
+        Err(hadron_objects::channel::ChannelError::ShouldWait) => return -hadron_syscall::EAGAIN,
+        Err(_) => return -hadron_syscall::EIO,
+    };
+
+    // Parse reply header.
+    let reply = match from_bytes::<VfsReply>(&msg.data) {
+        Some(r) => *r,
+        None => return -hadron_syscall::EIO,
+    };
+
+    if reply.status != 0 {
+        return -(reply.status as isize);
+    }
+
+    let header_size = core::mem::size_of::<VfsReply>();
+    let payload = &msg.data[header_size..];
+    let data_len = reply.data_len as usize;
+    let actual_payload = data_len.min(payload.len());
+
+    match syscall_nr as usize {
+        hadron_syscall::SYS_VNODE_OPEN => {
+            // Open success — return the vnode handle value.
+            vnode_handle.raw() as isize
+        }
+        hadron_syscall::SYS_VNODE_READ => {
+            // Copy read data to user buffer.
+            let copy_len = actual_payload.min(buf_len);
+            if copy_len > 0 {
+                // SAFETY: buf_ptr was validated before blocking. CR3 restored.
+                unsafe {
+                    core::ptr::copy_nonoverlapping(payload.as_ptr(), buf_ptr as *mut u8, copy_len);
+                }
+            }
+            // Advance seek offset.
+            process.with_handle_table(|ht| {
+                if let Ok(entry) = ht.get(vnode_handle) {
+                    if let Some(vnode) = entry.object().as_any().downcast_ref::<Vnode>() {
+                        vnode.advance_seek_offset(copy_len as u64);
+                    }
+                }
+            });
+            copy_len as isize
+        }
+        hadron_syscall::SYS_VNODE_WRITE => {
+            // Parse bytes_written from payload.
+            let bytes_written = if actual_payload >= 4 {
+                u32::from_ne_bytes([payload[0], payload[1], payload[2], payload[3]])
+            } else {
+                0
+            };
+            // Advance seek offset.
+            process.with_handle_table(|ht| {
+                if let Ok(entry) = ht.get(vnode_handle) {
+                    if let Some(vnode) = entry.object().as_any().downcast_ref::<Vnode>() {
+                        vnode.advance_seek_offset(u64::from(bytes_written));
+                    }
+                }
+            });
+            bytes_written as isize
+        }
+        hadron_syscall::SYS_VNODE_STAT => {
+            // Copy StatInfo to user buffer.
+            let copy_len = actual_payload.min(buf_len);
+            if copy_len > 0 {
+                // SAFETY: buf_ptr was validated before blocking. CR3 restored.
+                unsafe {
+                    core::ptr::copy_nonoverlapping(payload.as_ptr(), buf_ptr as *mut u8, copy_len);
+                }
+            }
+            0
+        }
+        hadron_syscall::SYS_VNODE_READDIR => {
+            // Copy DirEntryInfo array to user buffer.
+            let copy_len = actual_payload.min(buf_len);
+            if copy_len > 0 {
+                // SAFETY: buf_ptr was validated before blocking. CR3 restored.
+                unsafe {
+                    core::ptr::copy_nonoverlapping(payload.as_ptr(), buf_ptr as *mut u8, copy_len);
+                }
+            }
+            // Count entries returned and advance seek offset.
+            let entry_size = core::mem::size_of::<hadron_syscall::types::DirEntryInfo>();
+            let num_entries = if entry_size > 0 {
+                copy_len / entry_size
+            } else {
+                0
+            };
+            process.with_handle_table(|ht| {
+                if let Ok(entry) = ht.get(vnode_handle) {
+                    if let Some(vnode) = entry.object().as_any().downcast_ref::<Vnode>() {
+                        vnode.advance_seek_offset(num_entries as u64);
+                    }
+                }
+            });
+            num_entries as isize
+        }
+        _ => {
+            // Unknown syscall for vnode op.
+            -hadron_syscall::ENOSYS
+        }
     }
 }

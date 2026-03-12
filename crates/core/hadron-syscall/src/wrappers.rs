@@ -421,6 +421,18 @@ pub fn sys_futex(addr: usize, op: usize, val: usize, timeout: usize) -> isize {
     syscall4(SYS_FUTEX, addr, op, val, timeout)
 }
 
+// ── VFS ─────────────────────────────────────────────────────────────
+
+/// Mount a filesystem at a path prefix.
+pub fn sys_vfs_mount(prefix_ptr: usize, prefix_len: usize, channel_fd: usize) -> isize {
+    syscall3(SYS_VFS_MOUNT, prefix_ptr, prefix_len, channel_fd)
+}
+
+/// Unmount a filesystem at a path prefix.
+pub fn sys_vfs_unmount(prefix_ptr: usize, prefix_len: usize) -> isize {
+    syscall2(SYS_VFS_UNMOUNT, prefix_ptr, prefix_len)
+}
+
 // ── System ───────────────────────────────────────────────────────────
 
 /// Query system information.

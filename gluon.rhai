@@ -147,6 +147,9 @@ kernel_libs.add("hadron-core", "kernel/core")
     .deps(#{ bitflags: "bitflags", hadron_linkset: "hadron-linkset", planck_noalloc: "planck-noalloc" });
 kernel_libs.add("hadron-linkset", "crates/core/linkset");
 kernel_libs.add("hadron-syscall", "crates/core/hadron-syscall");
+kernel_libs.add("hadron-vfs-protocol", "crates/core/hadron-vfs-protocol")
+    .deps(#{ hadron_syscall: "hadron-syscall" });
+kernel_libs.add("hadron-cpio", "crates/parse/cpio");
 kernel_libs.add("hadron-log", "crates/core/hadron-log")
     .deps(#{ hadron_core: "hadron-core", hadron_linkset: "hadron-linkset" });
 kernel_libs.add("hadron-arch-x86_64", "kernel/arch-x86_64")
@@ -248,6 +251,7 @@ kernel_main.add("hadron-kernel", "kernel/kernel")
         hadron_pci: "hadron-pci",
         hadron_syscall: "hadron-syscall",
         hadron_sched: "hadron-sched",
+        hadron_vfs_protocol: "hadron-vfs-protocol",
         planck_noalloc: "planck-noalloc"
     })
     .dev_deps(#{
@@ -272,6 +276,8 @@ kernel_main.add("hadron-kernel-image", "kernel/kernel-image")
 let user_libs = group("user-libs").target("x86_64-unknown-hadron-user").edition("2024");
 
 user_libs.add("hadron-syscall-user", "crates/core/hadron-syscall");
+user_libs.add("hadron-vfs-protocol-user", "crates/core/hadron-vfs-protocol")
+    .deps(#{ hadron_syscall: "hadron-syscall-user" });
 
 // ===========================================================================
 // Userboot (first userspace binary)
@@ -282,7 +288,7 @@ let userboot = group("userboot").target("x86_64-unknown-hadron-user").edition("2
 userboot.add("userboot", "userspace/userboot")
     .crate_type(BIN)
     .root("src/main.rs")
-    .deps(#{ hadron_syscall: "hadron-syscall-user" });
+    .deps(#{ hadron_syscall: "hadron-syscall-user", hadron_vfs_protocol: "hadron-vfs-protocol-user" });
 
 // ===========================================================================
 // Test child (spawned by userboot during Phase 2b verification)
@@ -305,6 +311,28 @@ test_receiver.add("test-receiver", "userspace/test-receiver")
     .crate_type(BIN)
     .root("src/main.rs")
     .deps(#{ hadron_syscall: "hadron-syscall-user" });
+
+// ===========================================================================
+// Ramfs (initrd-backed filesystem server)
+// ===========================================================================
+
+let ramfs = group("ramfs").target("x86_64-unknown-hadron-user").edition("2024");
+
+ramfs.add("ramfs", "userspace/ramfs")
+    .crate_type(BIN)
+    .root("src/main.rs")
+    .deps(#{ hadron_syscall: "hadron-syscall-user", hadron_vfs_protocol: "hadron-vfs-protocol-user" });
+
+// ===========================================================================
+// DevMgr (stub /dev filesystem server)
+// ===========================================================================
+
+let devmgr = group("devmgr").target("x86_64-unknown-hadron-user").edition("2024");
+
+devmgr.add("devmgr", "userspace/devmgr")
+    .crate_type(BIN)
+    .root("src/main.rs")
+    .deps(#{ hadron_syscall: "hadron-syscall-user", hadron_vfs_protocol: "hadron-vfs-protocol-user" });
 
 // ===========================================================================
 // UEFI boot binary
@@ -345,7 +373,7 @@ bench_deps.add("hadron-bench", "crates/test/hadron-bench")
 // ===========================================================================
 
 rule("initrd")
-    .inputs(["userboot", "test-child", "test-receiver"])
+    .inputs(["userboot", "test-child", "test-receiver", "ramfs", "devmgr"])
     .output("build/initrd.cpio");
 
 // ===========================================================================
@@ -357,7 +385,7 @@ pipeline()
     .barrier("sysroot-ready")
     .stage("host", ["host"])
     .barrier("host-ready")
-    .stage("kernel", ["vendored", "vendored-uefi", "kernel-libs", "uefi-libs", "user-libs", "userboot", "test-child", "test-receiver"])
+    .stage("kernel", ["vendored", "vendored-uefi", "kernel-libs", "uefi-libs", "user-libs", "userboot", "test-child", "test-receiver", "ramfs", "devmgr"])
     .barrier("kernel-ready")
     .rule("initrd")
     .barrier("initrd-ready")
@@ -396,6 +424,7 @@ tests()
         "hadron-acpi",
         "hadron-binparse",
         "hadron-core",
+        "hadron-cpio",
         "hadron-dwarf",
         "hadron-elf",
         "hadron-fdt",
@@ -404,7 +433,8 @@ tests()
         "hadron-objects",
         "hadron-sched",
         "hadron-pci",
-        "hadron-syscall"
+        "hadron-syscall",
+        "hadron-vfs-protocol"
     ])
     .kani_verifiable(["hadron-core", "hadron-objects", "hadron-sched"])
     .shuttle_testable(["hadron-core", "hadron-objects", "hadron-sched"])

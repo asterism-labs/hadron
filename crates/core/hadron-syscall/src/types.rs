@@ -141,6 +141,59 @@ pub struct PollFd {
     pub revents: u16,
 }
 
+/// File metadata returned by `SYS_VNODE_STAT`.
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct StatInfo {
+    /// Inode type: 0 = file, 1 = directory, 2 = symlink, 3 = device.
+    pub inode_type: u32,
+    /// Padding for alignment.
+    pub _pad: u32,
+    /// File size in bytes.
+    pub size: u64,
+    /// Permission bits.
+    pub permissions: u32,
+    /// Number of hard links.
+    pub nlinks: u32,
+    /// Device identifier.
+    pub dev: u64,
+}
+
+/// Inode type constant: regular file.
+pub const INODE_TYPE_FILE: u32 = 0;
+/// Inode type constant: directory.
+pub const INODE_TYPE_DIR: u32 = 1;
+/// Inode type constant: symbolic link.
+pub const INODE_TYPE_SYMLINK: u32 = 2;
+/// Inode type constant: device.
+pub const INODE_TYPE_DEVICE: u32 = 3;
+
+/// A single directory entry returned by `SYS_VNODE_READDIR`.
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct DirEntryInfo {
+    /// Entry type (same as [`StatInfo::inode_type`]).
+    pub inode_type: u32,
+    /// Length of the name in bytes (excluding padding).
+    pub name_len: u32,
+    /// Null-padded name buffer (supports `NAME_MAX` = 255).
+    pub name: [u8; 256],
+}
+
+impl DirEntryInfo {
+    /// Get the entry name as a string slice.
+    #[must_use]
+    pub fn name_str(&self) -> &str {
+        let len = self.name_len as usize;
+        let clamped = if len > self.name.len() {
+            self.name.len()
+        } else {
+            len
+        };
+        core::str::from_utf8(&self.name[..clamped]).unwrap_or("")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,5 +251,28 @@ mod tests {
     fn poll_fd_layout() {
         assert_eq!(mem::size_of::<PollFd>(), 8);
         assert_eq!(mem::align_of::<PollFd>(), 4);
+    }
+
+    #[test]
+    fn stat_info_layout() {
+        assert_eq!(mem::size_of::<StatInfo>(), 32);
+        assert_eq!(mem::align_of::<StatInfo>(), 8);
+    }
+
+    #[test]
+    fn dir_entry_info_layout() {
+        assert_eq!(mem::size_of::<DirEntryInfo>(), 264);
+        assert_eq!(mem::align_of::<DirEntryInfo>(), 4);
+    }
+
+    #[test]
+    fn dir_entry_info_name_str() {
+        let mut entry = DirEntryInfo {
+            inode_type: INODE_TYPE_FILE,
+            name_len: 5,
+            name: [0u8; 256],
+        };
+        entry.name[..5].copy_from_slice(b"hello");
+        assert_eq!(entry.name_str(), "hello");
     }
 }

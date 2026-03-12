@@ -49,6 +49,8 @@ pub fn dispatch(nr: usize, a0: usize, a1: usize, a2: usize, a3: usize, a4: usize
         SYS_TASK_SIGACTION => task::sys_task_sigaction(a0, a1, a2, a3),
         SYS_TASK_SETPGID => task::sys_task_setpgid(a0, a1),
         SYS_TASK_GETPGID => task::sys_task_getpgid(a0),
+        SYS_TASK_GETCWD => task::sys_task_getcwd(a0, a1),
+        SYS_TASK_CHDIR => task::sys_task_chdir(a0, a1),
 
         // ── Handle ───────────────────────────────────────────────
         SYS_HANDLE_CLOSE => handle::sys_handle_close(a0),
@@ -86,6 +88,8 @@ pub fn dispatch(nr: usize, a0: usize, a1: usize, a2: usize, a3: usize, a4: usize
         SYS_VNODE_READLINK => vnode::sys_vnode_readlink(a0, a1, a2),
         SYS_VNODE_TRUNCATE => vnode::sys_vnode_truncate(a0, a1),
         SYS_VNODE_FSTATAT => vnode::sys_vnode_fstatat(a0, a1, a2, a3),
+        SYS_VFS_MOUNT => vnode::sys_vfs_mount(a0, a1, a2),
+        SYS_VFS_UNMOUNT => vnode::sys_vfs_unmount(a0, a1),
 
         // ── Memory ───────────────────────────────────────────────
         SYS_MEM_MAP => memory::sys_mem_map(a0, a1, a2, a3, a4),

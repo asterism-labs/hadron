@@ -151,6 +151,13 @@ bitflags! {
             | Self::DUPLICATE.bits()
             | Self::TRANSFER.bits()
             | Self::WAIT.bits();
+
+        /// Default rights for a Vnode handle.
+        const VNODE_DEFAULT = Self::READ.bits()
+            | Self::WRITE.bits()
+            | Self::DUPLICATE.bits()
+            | Self::TRANSFER.bits()
+            | Self::WAIT.bits();
     }
 }
 

@@ -188,6 +188,7 @@ pub extern "C" fn kernel_init(boot_info: *const BootInfo) -> ! {
 fn load_and_run_userboot() -> ! {
     use alloc::string::ToString;
     use alloc::sync::Arc;
+    use alloc::vec;
 
     use hadron_core::addr::VirtAddr;
     use hadron_core::paging::{Page, Size4KiB};
@@ -303,11 +304,40 @@ fn load_and_run_userboot() -> ! {
         });
     }
 
+    // ── Initialize VFS router ─────────────────────────────────────────
+    crate::vfs::init();
+    crate::kinfo!("boot", "VFS router initialized");
+
     // ── Create Process and Thread objects ─────────────────────────────
     let root_vmar = Vmar::new_root(USER_BASE, USER_SIZE);
     let process = Process::new("userboot".to_string(), root_vmar);
     let thread = Thread::new("main".to_string(), &process);
     process.add_thread(Arc::clone(&thread));
+
+    // ── Set up initrd channel (handle 3) ─────────────────────────────
+    // Create a channel pair and send the initrd CPIO data on one end.
+    // Userboot receives the other end as handle 3.
+    {
+        use hadron_objects::channel::{Channel, ChannelMessage};
+        use hadron_objects::handle::{HandleEntry, Rights};
+
+        let (sender, receiver) = Channel::create_pair();
+
+        // Send the initrd CPIO bytes as a message on the sender end.
+        let initrd_data = crate::userboot::initrd_bytes().to_vec();
+        let msg = ChannelMessage {
+            data: initrd_data,
+            handles: alloc::vec![],
+        };
+        sender.write(msg).expect("failed to send initrd to channel");
+
+        // Insert the receiver end into userboot's handle table at handle 3.
+        let entry = HandleEntry::new(receiver as Arc<dyn KernelObject>, Rights::CHANNEL_DEFAULT);
+        process.with_handle_table(|ht| {
+            ht.insert_at(hadron_objects::handle::HandleValue::from_raw(3), entry)
+                .expect("failed to insert initrd handle");
+        });
+    }
 
     // Register in the global process table.
     crate::process::register_process(&process);

@@ -21,6 +21,7 @@ hadron-core = { workspace = true }
 hadron-intrinsics = { workspace = true }
 hadron-ktest = { workspace = true }
 hadron-mm = { workspace = true }
+hadron-vfs-protocol = { workspace = true }
 planck-noalloc = { workspace = true }
 
 [dev-dependencies]

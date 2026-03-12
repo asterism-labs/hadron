@@ -76,6 +76,9 @@ pub mod time;
 pub mod userboot;
 
 #[cfg(target_os = "none")]
+pub mod vfs;
+
+#[cfg(target_os = "none")]
 pub mod vmm;
 
 #[cfg(all(target_os = "none", hadron_iommu))]

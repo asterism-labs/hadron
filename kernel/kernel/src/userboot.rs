@@ -24,6 +24,14 @@ pub fn elf_bytes() -> &'static [u8] {
     lookup_initrd_binary("userboot").expect("userboot not found in initrd")
 }
 
+/// Returns the raw CPIO initrd archive bytes.
+///
+/// Used by the kernel to create a channel message containing the initrd
+/// data, which is then passed to the ramfs server.
+pub fn initrd_bytes() -> &'static [u8] {
+    INITRD_CPIO
+}
+
 /// Look up an embedded binary by name in the CPIO initrd.
 ///
 /// Searches for entries matching `bin/<name>` or `<name>` directly.

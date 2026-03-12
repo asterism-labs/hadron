@@ -29,6 +29,7 @@ pub mod thread;
 pub mod timer;
 pub mod vmar;
 pub mod vmo;
+pub mod vnode;
 
 #[cfg(test)]
 pub(crate) mod test_util;

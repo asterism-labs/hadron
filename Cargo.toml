@@ -39,10 +39,14 @@ hadron-sched = { path = "kernel/sched" }
 hadron-mmio = { path = "kernel/mmio" }
 hadron-mmio-macros = { path = "kernel/mmio-macros" }
 
+# Internal crates — VFS protocol
+hadron-vfs-protocol = { path = "crates/core/hadron-vfs-protocol" }
+
 # Internal crates — parsers
 hadron-acpi = { path = "crates/parse/acpi" }
 hadron-binparse = { path = "crates/parse/binparse" }
 hadron-binparse-macros = { path = "crates/parse/binparse-macros" }
+hadron-cpio = { path = "crates/parse/cpio" }
 hadron-elf = { path = "crates/parse/elf" }
 
 # Internal crates — boot
