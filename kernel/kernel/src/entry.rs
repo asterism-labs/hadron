@@ -71,6 +71,7 @@ pub extern "C" fn kernel_init(boot_info: *const BootInfo) -> ! {
     let boot_reserved = [
         (bi.kernel_phys, bi.kernel_size),
         (bi.boot_pt_pool_phys, bi.boot_pt_pool_pages * 4096),
+        (crate::arch::x86_64::smp::AP_TRAMPOLINE_PHYS, 0x1000),
     ];
     hadron_mm::pmm::init(regions, hhdm_offset, &boot_reserved);
     crate::kinfo!("boot", "PMM initialized");

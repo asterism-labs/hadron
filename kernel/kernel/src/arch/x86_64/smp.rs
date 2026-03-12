@@ -24,7 +24,7 @@ use crate::arch::x86_64::hw::local_apic::LocalApic;
 use crate::percpu::MAX_CPUS_HARD;
 
 /// Physical address of the AP trampoline code (must be page-aligned, < 1 MiB).
-const AP_TRAMPOLINE_PHYS: u64 = 0x8000;
+pub const AP_TRAMPOLINE_PHYS: u64 = 0x8000;
 
 /// Maximum number of CPUs supported.
 const MAX_AP_COUNT: usize = MAX_CPUS_HARD - 1;
@@ -214,32 +214,54 @@ pub unsafe fn boot_aps() {
     init_ipi_handlers();
 
     // Copy trampoline to low memory and set up data area.
-    // SAFETY: Physical page 0x8000 is available (below 1 MiB, not used by kernel).
+    // SAFETY: Physical page 0x8000 is reserved in the PMM boot_reserved list.
     unsafe {
         setup_trampoline(cr3);
     }
+    crate::kdebug!(
+        "smp",
+        "Trampoline installed at phys {:#x}",
+        AP_TRAMPOLINE_PHYS
+    );
 
-    // Send INIT-SIPI-SIPI to each AP.
-    for ap in &aps {
+    // Each AP needs its own temporary stack because all APs remain in
+    // `ap_entry` (spinning on AP_RELEASE) while subsequent APs start.
+    // The trampoline reads the stack pointer from a fixed data slot, so we
+    // update that slot with a fresh stack before each SIPI.
+    const AP_TEMP_STACK_SIZE: usize = 16384; // 16 KiB — must handle full AP init
+    let hhdm = hadron_mm::hhdm::offset().as_u64();
+    let stack_slot = (AP_TRAMPOLINE_PHYS + TRAMPOLINE_STACK_OFFSET as u64 + hhdm) as *mut u64;
+
+    crate::kdebug!("smp", "Sending INIT-SIPI-SIPI to {} APs", aps.len());
+    for (i, ap) in aps.iter().enumerate() {
+        let expected = (i + 1) as u32;
+
+        // Allocate a per-AP temporary stack. Leaked intentionally — APs
+        // switch to their real kernel stack in init_ap, so this is only
+        // used briefly during early boot.
+        let stack_buf = alloc::vec![0u8; AP_TEMP_STACK_SIZE].leak();
+        let stack_top = stack_buf.as_ptr() as u64 + AP_TEMP_STACK_SIZE as u64;
+        // SAFETY: stack_slot points to the trampoline data area we own.
+        unsafe { stack_slot.write_volatile(stack_top) };
+
         // SAFETY: Sending IPIs to valid LAPIC IDs.
         unsafe {
             send_init_sipi_sipi(&lapic, ap.lapic_id);
         }
-    }
-
-    // Wait for all APs to reach their parking loop.
-    let deadline = crate::time::nanos_since_boot() + 500_000_000; // 500 ms timeout
-    while AP_STARTED_COUNT.load(Ordering::Acquire) < ap_count as u32 {
-        if crate::time::nanos_since_boot() > deadline {
-            crate::kerror!(
-                "smp",
-                "SMP: Timeout waiting for APs ({}/{} started)",
-                AP_STARTED_COUNT.load(Ordering::Acquire),
-                ap_count
-            );
-            break;
+        // Wait for this AP to signal before starting the next one.
+        let deadline = crate::time::nanos_since_boot() + 500_000_000;
+        while AP_STARTED_COUNT.load(Ordering::Acquire) < expected {
+            if crate::time::nanos_since_boot() > deadline {
+                crate::kerror!(
+                    "smp",
+                    "SMP: Timeout waiting for AP {} (LAPIC {})",
+                    ap.cpu_id,
+                    ap.lapic_id
+                );
+                break;
+            }
+            core::hint::spin_loop();
         }
-        core::hint::spin_loop();
     }
 
     let started = AP_STARTED_COUNT.load(Ordering::Acquire);
@@ -569,7 +591,7 @@ fn build_trampoline() -> Vec<u8> {
     code.extend_from_slice(&(base + gdt64_offset + 0x30).to_le_bytes());
 
     // Far jump to 64-bit long mode
-    let lm_entry_offset = 0xC0u32; // 64-bit code at 0x80C0
+    let lm_entry_offset = 0x180u32; // 64-bit code at 0x8180 (after GDT data ends at ~0x17A)
     code.extend_from_slice(&[0xEA]); // far jmp
     code.extend_from_slice(&(base + lm_entry_offset).to_le_bytes());
     code.extend_from_slice(&[0x08, 0x00]); // code64 selector
@@ -624,7 +646,7 @@ fn build_trampoline() -> Vec<u8> {
         code.push(0x90);
     }
 
-    // ── 64-bit long mode code (at 0x80C0) ──────────────────
+    // ── 64-bit long mode code (at 0x8180) ──────────────────
 
     // mov ax, 0x10; mov ds, ax; mov es, ax; mov ss, ax; xor ax,ax; mov fs,ax; mov gs,ax
     // Use REX.W prefix for 64-bit segment loads
