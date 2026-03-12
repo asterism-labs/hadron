@@ -110,6 +110,14 @@ unsafe extern "C" fn ap_entry(lapic_id: u64) {
         crate::arch::x86_64::idt::init();
     }
 
+    // Enable FPU/SSE/AVX support (XSAVE, XCR0 setup).
+    // The trampoline already set CR4.OSFXSR + CR4.OSXMMEXCPT, but this
+    // additionally configures XSAVE/XCR0 for AVX state if available.
+    // SAFETY: CPUID features were initialized by BSP; same features apply to all APs.
+    unsafe {
+        crate::arch::x86_64::fpu::enable_fpu_support();
+    }
+
     // Set GS base to our PerCpu.
     // SAFETY: Valid PerCpu pointer, correct MSR.
     unsafe {
@@ -570,9 +578,11 @@ fn build_trampoline() -> Vec<u8> {
     code.extend_from_slice(&[0x8E, 0xE0]); // mov fs, ax
     code.extend_from_slice(&[0x8E, 0xE8]); // mov gs, ax
 
-    // Enable PAE (CR4.PAE = bit 5)
+    // Enable PAE + SSE support (CR4: PAE=5, OSFXSR=9, OSXMMEXCPT=10)
     code.extend_from_slice(&[0x0F, 0x20, 0xE0]); // mov eax, cr4
-    code.extend_from_slice(&[0x0F, 0xBA, 0xE8, 0x05]); // bts eax, 5
+    code.extend_from_slice(&[0x0F, 0xBA, 0xE8, 0x05]); // bts eax, 5  (PAE)
+    code.extend_from_slice(&[0x0F, 0xBA, 0xE8, 0x09]); // bts eax, 9  (OSFXSR)
+    code.extend_from_slice(&[0x0F, 0xBA, 0xE8, 0x0A]); // bts eax, 10 (OSXMMEXCPT)
     code.extend_from_slice(&[0x0F, 0x22, 0xE0]); // mov cr4, eax
 
     // Load CR3 from data area

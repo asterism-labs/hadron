@@ -220,6 +220,7 @@ pub fn sys_task_spawn(info_ptr: usize, info_len: usize) -> isize {
 
     // Map child's user stack.
     let stack_bottom = CHILD_STACK_TOP - CHILD_STACK_PAGES * PAGE_SIZE;
+    let mut top_page_hhdm = VirtAddr::zero();
     for i in 0..CHILD_STACK_PAGES {
         let page_addr = stack_bottom + i * PAGE_SIZE;
         let page = Page::<Size4KiB>::containing_address(VirtAddr::new(page_addr));
@@ -235,6 +236,10 @@ pub fn sys_task_spawn(info_ptr: usize, info_len: usize) -> isize {
         };
         page_slice.fill(0);
 
+        if i == CHILD_STACK_PAGES - 1 {
+            top_page_hhdm = hhdm_ptr;
+        }
+
         hadron_mm::pmm::with(|pmm| {
             let mut alloc = hadron_mm::pmm::BitmapFrameAllocRef(pmm);
             let flags = MapFlags::WRITABLE;
@@ -243,6 +248,24 @@ pub fn sys_task_spawn(info_ptr: usize, info_len: usize) -> isize {
                 .expect("failed to map child stack page")
                 .flush();
         });
+    }
+
+    // Write a minimal C-style argc/argv/envp layout at the top of the stack.
+    // Layout (growing downward from CHILD_STACK_TOP):
+    //   [RSP + 0]  = argc (0)
+    //   [RSP + 8]  = argv NULL terminator
+    //   [RSP + 16] = envp NULL terminator
+    //   [RSP + 24] = padding (16-byte alignment)
+    let user_rsp = CHILD_STACK_TOP - 32;
+    let offset_in_page = (PAGE_SIZE - 32) as usize;
+    // SAFETY: top_page_hhdm points to the HHDM mapping of the topmost stack frame,
+    // which was just allocated and zeroed. We write 4 qwords at the end of the page.
+    unsafe {
+        let base = (top_page_hhdm.as_u64() as *mut u64).add(offset_in_page / 8);
+        base.write(0); // argc = 0
+        base.add(1).write(0); // argv[0] = NULL
+        base.add(2).write(0); // envp[0] = NULL
+        base.add(3).write(0); // padding
     }
 
     // Create Process and Thread objects.
@@ -305,7 +328,7 @@ pub fn sys_task_spawn(info_ptr: usize, info_len: usize) -> isize {
         child_thread,
         Some(address_space),
         entry,
-        CHILD_STACK_TOP,
+        user_rsp,
     ));
 
     child_pid as isize
