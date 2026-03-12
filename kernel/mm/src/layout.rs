@@ -53,8 +53,8 @@ pub const KERNEL_IMAGE_BASE: u64 = 0xFFFF_FFFF_8000_0000;
 /// Maximum kernel image size: 128 MiB.
 pub const KERNEL_IMAGE_MAX_SIZE: u64 = 128 * 1024 * 1024;
 
-/// Initial heap size: 4 MiB.
-pub const INITIAL_HEAP_SIZE: u64 = 4 * 1024 * 1024;
+/// Initial heap size: 8 MiB.
+pub const INITIAL_HEAP_SIZE: u64 = 8 * 1024 * 1024;
 /// Minimum heap growth increment: 64 KiB.
 pub const HEAP_GROW_MIN: u64 = 64 * 1024;
 

@@ -115,7 +115,6 @@ unsafe extern "C" fn ap_entry(lapic_id: u64) {
     unsafe {
         crate::arch::x86_64::registers::model_specific::IA32_GS_BASE.write(percpu_ptr);
         crate::arch::x86_64::registers::model_specific::IA32_KERNEL_GS_BASE.write(percpu_ptr);
-        (*percpu).initialized = 1;
     }
 
     // Initialize SYSCALL/SYSRET MSRs.
@@ -137,6 +136,14 @@ unsafe extern "C" fn ap_entry(lapic_id: u64) {
         if initial_count > 0 {
             lapic.start_timer_periodic(vectors::TIMER.as_irq_vector(), initial_count, divide);
         }
+    }
+
+    // Signal to BSP that this AP is fully initialized.
+    // SAFETY: percpu pointer is valid; release fence ensures all prior
+    // writes (SYSCALL MSRs, LAPIC config) are visible before the flag.
+    unsafe {
+        core::sync::atomic::fence(core::sync::atomic::Ordering::Release);
+        (*percpu).initialized = 1;
     }
 
     crate::kinfo!(

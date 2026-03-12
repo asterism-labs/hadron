@@ -95,6 +95,9 @@ pub extern "C" fn kernel_init(boot_info: *const BootInfo) -> ! {
     // ── 9. Store VMM globally ──────────────────────────────────────────
     crate::vmm::init(vmm);
 
+    // ── 9a. Register heap grow callback ──────────────────────────────
+    hadron_mm::heap::register_grow_fn(heap_grow_fn);
+
     // ── 10a. Per-CPU phase 1 (PERCPU_BASES[0] = template) ───────────────
     // SAFETY: Called once before init_gs_base, single-threaded BSP init.
     unsafe { crate::percpu::percpu_init_phase1() };
@@ -172,6 +175,22 @@ pub extern "C" fn kernel_init(boot_info: *const BootInfo) -> ! {
 
     // ── 14. Load and launch userboot ───────────────────────────────────
     load_and_run_userboot();
+}
+
+/// Heap grow callback: allocates physical frames and maps them into the kernel
+/// heap region. Called by the allocator when the current heap is exhausted.
+///
+/// Lock ordering: PMM (level 3) acquired first, then VMM (level 4) — correct
+/// ascending order per the leveled lock convention.
+fn heap_grow_fn(min_bytes: usize) -> Option<(*mut u8, usize)> {
+    hadron_mm::pmm::with(|pmm| {
+        let mut alloc = hadron_mm::pmm::BitmapFrameAllocRef(pmm);
+        crate::vmm::with(|vmm| {
+            vmm.grow_heap(min_bytes as u64, &mut alloc)
+                .ok()
+                .map(|(virt, size)| (virt.as_mut_ptr::<u8>(), size as usize))
+        })
+    })
 }
 
 /// Parses the embedded userboot ELF, maps it into the shared address space,
