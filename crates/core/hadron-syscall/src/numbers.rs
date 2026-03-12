@@ -133,6 +133,8 @@ pub const SYS_MEM_CREATE_SHARED: usize = 0x43;
 pub const SYS_MEM_MAP_SHARED: usize = 0x44;
 /// Change memory protection flags.
 pub const SYS_MEM_PROTECT: usize = 0x45;
+/// Query the size of a VMO.
+pub const SYS_VMO_GET_SIZE: usize = 0x46;
 
 // ── Event (0x50) ─────────────────────────────────────────────────────
 
@@ -267,6 +269,7 @@ mod tests {
             SYS_MEM_CREATE_SHARED,
             SYS_MEM_MAP_SHARED,
             SYS_MEM_PROTECT,
+            SYS_VMO_GET_SIZE,
             // Event
             SYS_EVENT_CREATE,
             SYS_EVENT_SIGNAL,

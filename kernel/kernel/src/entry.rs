@@ -203,7 +203,6 @@ fn heap_grow_fn(min_bytes: usize) -> Option<(*mut u8, usize)> {
 fn load_and_run_userboot() -> ! {
     use alloc::string::ToString;
     use alloc::sync::Arc;
-    use alloc::vec;
 
     use hadron_core::addr::VirtAddr;
     use hadron_core::paging::{Page, Size4KiB};
@@ -329,28 +328,55 @@ fn load_and_run_userboot() -> ! {
     let thread = Thread::new("main".to_string(), &process);
     process.add_thread(Arc::clone(&thread));
 
-    // ── Set up initrd channel (handle 3) ─────────────────────────────
-    // Create a channel pair and send the initrd CPIO data on one end.
-    // Userboot receives the other end as handle 3.
+    // ── Set up initrd VMO (handle 3) ──────────────────────────────────
+    // Create a VMO containing the initrd CPIO data and insert it directly
+    // into userboot's handle table. This avoids the channel message size
+    // limit (~64 KiB) for large initrd archives.
     {
-        use hadron_objects::channel::{Channel, ChannelMessage};
         use hadron_objects::handle::{HandleEntry, Rights};
+        use hadron_objects::vmo::Vmo;
 
-        let (sender, receiver) = Channel::create_pair();
+        let initrd_data = crate::userboot::initrd_bytes();
+        let initrd_len = initrd_data.len() as u64;
+        let aligned_size = (initrd_len + PAGE_MASK) & !PAGE_MASK;
 
-        // Send the initrd CPIO bytes as a message on the sender end.
-        let initrd_data = crate::userboot::initrd_bytes().to_vec();
-        let msg = ChannelMessage {
-            data: initrd_data,
-            handles: alloc::vec![],
-        };
-        sender.write(msg).expect("failed to send initrd to channel");
+        let vmo = Vmo::new_paged(aligned_size);
+        let page_count = vmo.page_count();
+        let hhdm_offset = hadron_mm::hhdm::offset();
 
-        // Insert the receiver end into userboot's handle table at handle 3.
-        let entry = HandleEntry::new(receiver as Arc<dyn KernelObject>, Rights::CHANNEL_DEFAULT);
+        // Allocate frames, copy initrd data, and commit into the VMO.
+        for i in 0..page_count {
+            let frame = hadron_mm::pmm::with(|pmm| {
+                pmm.allocate_frame()
+                    .expect("PMM: out of frames for initrd VMO")
+            });
+
+            // Copy initrd data into the frame via HHDM.
+            let hhdm_virt = hhdm_offset + frame.start_address().as_u64();
+            // SAFETY: Frame was just allocated and is accessible via HHDM.
+            let page_slice = unsafe {
+                core::slice::from_raw_parts_mut(hhdm_virt.as_u64() as *mut u8, PAGE_SIZE as usize)
+            };
+
+            let src_offset = i * PAGE_SIZE as usize;
+            let src_end = core::cmp::min(src_offset + PAGE_SIZE as usize, initrd_data.len());
+            if src_offset < initrd_data.len() {
+                let copy_len = src_end - src_offset;
+                page_slice[..copy_len].copy_from_slice(&initrd_data[src_offset..src_end]);
+                // Zero the remainder of the last page.
+                page_slice[copy_len..].fill(0);
+            } else {
+                page_slice.fill(0);
+            }
+
+            let _ = vmo.commit_page(i, frame);
+        }
+
+        // Insert VMO into userboot's handle table at handle 3.
+        let entry = HandleEntry::new(vmo as Arc<dyn KernelObject>, Rights::VMO_DEFAULT);
         process.with_handle_table(|ht| {
             ht.insert_at(hadron_objects::handle::HandleValue::from_raw(3), entry)
-                .expect("failed to insert initrd handle");
+                .expect("failed to insert initrd VMO handle");
         });
     }
 

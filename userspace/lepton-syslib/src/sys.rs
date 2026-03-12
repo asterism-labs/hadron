@@ -423,6 +423,14 @@ pub fn mem_create_shared(size: usize) -> Result<usize, isize> {
     if ret < 0 { Err(ret) } else { Ok(ret as usize) }
 }
 
+/// Query the size of a VMO in bytes.
+///
+/// Returns the VMO size on success, or an error code on failure.
+pub fn vmo_get_size(handle: usize) -> Result<usize, isize> {
+    let ret = wrappers::sys_vmo_get_size(handle);
+    if ret < 0 { Err(ret) } else { Ok(ret as usize) }
+}
+
 /// Map a shared memory object into the process address space.
 ///
 /// Returns a pointer to the mapped region, or `None` on failure.

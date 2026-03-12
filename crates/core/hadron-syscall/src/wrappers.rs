@@ -393,6 +393,11 @@ pub fn sys_mem_map_shared(fd: usize, size: usize, prot: usize) -> isize {
     syscall3(SYS_MEM_MAP_SHARED, fd, size, prot)
 }
 
+/// Query the size of a VMO.
+pub fn sys_vmo_get_size(handle: usize) -> isize {
+    syscall1(SYS_VMO_GET_SIZE, handle)
+}
+
 // ── Event ────────────────────────────────────────────────────────────
 
 /// Poll multiple file descriptors.

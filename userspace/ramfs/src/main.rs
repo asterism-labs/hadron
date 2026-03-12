@@ -1,6 +1,6 @@
 //! In-memory filesystem server backed by a CPIO initrd archive.
 //!
-//! Receives the initrd data on a channel (handle 3) and serves file system
+//! Maps the initrd VMO (handle 3) into memory and serves file system
 //! requests via the [`FsServer`] trait from `lepton-syslib`. Parses the CPIO
 //! archive at startup to build an in-memory directory tree, then enters
 //! the VFS server event loop.
@@ -13,12 +13,11 @@ extern crate lepton_syslib;
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;
-use alloc::vec;
 use alloc::vec::Vec;
 
 use hadron_syscall::types::{DirEntryInfo, INODE_TYPE_DIR, INODE_TYPE_FILE, StatInfo};
 use hadron_syscall::wrappers;
-use hadron_syscall::{EBADF, EISDIR, ENOENT, ENOTDIR, EROFS};
+use hadron_syscall::{EBADF, EISDIR, ENOENT, ENOTDIR, EROFS, PROT_READ};
 use lepton_syslib::fs_server::{self, FsServer};
 
 // ── Constants ────────────────────────────────────────────────────────
@@ -331,22 +330,25 @@ fn build_tree(cpio_data: &[u8]) -> BTreeMap<String, FsNode> {
 pub extern "C" fn main(_args: &[&str]) -> i32 {
     lepton_syslib::println!("ramfs: starting");
 
-    let mut initrd_buf = vec![0u8; 512 * 1024];
-    let n = wrappers::sys_channel_recv(
-        INITRD_VMO_HANDLE as usize,
-        initrd_buf.as_mut_ptr() as usize,
-        initrd_buf.len(),
-    );
+    // Query VMO size and map the initrd data (zero-copy).
+    let initrd_size = wrappers::sys_vmo_get_size(INITRD_VMO_HANDLE as usize);
+    if initrd_size < 0 {
+        lepton_syslib::println!("ramfs: failed to query initrd VMO size");
+        return 1;
+    }
+    let initrd_size = initrd_size as usize;
 
-    if n < 0 {
-        lepton_syslib::println!("ramfs: failed to receive initrd data");
+    let ptr = wrappers::sys_mem_map_shared(INITRD_VMO_HANDLE as usize, initrd_size, PROT_READ);
+    if ptr <= 0 {
+        lepton_syslib::println!("ramfs: failed to map initrd VMO");
         return 1;
     }
 
-    initrd_buf.truncate(n as usize);
+    // SAFETY: The VMO was mapped successfully and contains initrd_size bytes.
+    let initrd_data = unsafe { core::slice::from_raw_parts(ptr as *const u8, initrd_size) };
 
     lepton_syslib::println!("ramfs: parsing initrd CPIO archive");
-    let nodes = build_tree(&initrd_buf);
+    let nodes = build_tree(initrd_data);
     lepton_syslib::println!("ramfs: tree built ({} nodes)", nodes.len());
 
     let mut server = RamFs {

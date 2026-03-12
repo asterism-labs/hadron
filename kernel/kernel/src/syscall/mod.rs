@@ -97,6 +97,7 @@ pub fn dispatch(nr: usize, a0: usize, a1: usize, a2: usize, a3: usize, a4: usize
         SYS_MEM_BRK => memory::sys_mem_brk(a0),
         SYS_MEM_CREATE_SHARED => memory::sys_mem_create_shared(a0),
         SYS_MEM_MAP_SHARED => memory::sys_mem_map_shared(a0, a1, a2),
+        SYS_VMO_GET_SIZE => memory::sys_vmo_get_size(a0),
 
         // ── Event / Timer ────────────────────────────────────────
         SYS_EVENT_CREATE => event::sys_event_create(),

@@ -305,6 +305,37 @@ pub fn sys_mem_map_shared(fd: usize, size: usize, prot: usize) -> isize {
     vaddr as isize
 }
 
+/// `SYS_VMO_GET_SIZE(handle)` — return the size of a VMO in bytes.
+///
+/// Looks up the handle with `Rights::READ`, downcasts to `Vmo`, and returns
+/// the VMO's size. Returns a negative error code on failure.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "VMO sizes fit in isize on x86_64"
+)]
+pub fn sys_vmo_get_size(fd: usize) -> isize {
+    let hv = HandleValue::from_raw(fd as u32);
+
+    let vmo: Arc<Vmo> = match with_handle_table(|table| {
+        let entry = table.get_with_rights(hv, Rights::READ)?;
+        entry
+            .object()
+            .as_any()
+            .downcast_ref::<Vmo>()
+            .map(|_| {
+                let obj = entry.object().clone();
+                // SAFETY: downcast_ref succeeded above, so this is a Vmo.
+                unsafe { Arc::from_raw(Arc::into_raw(obj).cast::<Vmo>()) }
+            })
+            .ok_or(hadron_objects::handle::HandleError::NotFound)
+    }) {
+        Ok(vmo) => vmo,
+        Err(_) => return -EBADF,
+    };
+
+    vmo.size() as isize
+}
+
 /// Convert `PROT_*` flags to `VmarFlags`.
 fn prot_to_vmar_flags(prot: usize) -> hadron_objects::vmar::VmarFlags {
     use hadron_objects::vmar::VmarFlags;
