@@ -10,6 +10,11 @@
 
 extern crate alloc;
 
+mod heap;
+
+#[global_allocator]
+static HEAP: heap::UserHeap = heap::UserHeap::new();
+
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec;

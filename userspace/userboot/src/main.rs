@@ -404,8 +404,7 @@ fn setup_vfs() {
 
     // 6. Mount devmgr at "/dev".
     let prefix = "/dev";
-    let ret =
-        wrappers::sys_vfs_mount(prefix.as_ptr() as usize, prefix.len(), devmgr_userboot_end);
+    let ret = wrappers::sys_vfs_mount(prefix.as_ptr() as usize, prefix.len(), devmgr_userboot_end);
     if ret < 0 {
         debug_log("FAIL: vfs_mount /dev failed\n");
         wrappers::sys_task_exit(55);
