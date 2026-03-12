@@ -289,6 +289,17 @@ pub fn sys_port_queue(fd: usize, key: usize, signals: usize) -> isize {
     syscall3(SYS_PORT_QUEUE, fd, key, signals)
 }
 
+/// Register an async wait: when `object_fd`'s signals match `signals`,
+/// deliver a packet with `key` to `port_fd`.
+pub fn sys_object_wait_async(
+    object_fd: usize,
+    port_fd: usize,
+    key: usize,
+    signals: usize,
+) -> isize {
+    syscall4(SYS_OBJECT_WAIT_ASYNC, object_fd, port_fd, key, signals)
+}
+
 // ── Timer ────────────────────────────────────────────────────────
 
 /// Create a timer object.

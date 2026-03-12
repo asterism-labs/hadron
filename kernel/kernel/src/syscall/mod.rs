@@ -91,6 +91,8 @@ pub fn dispatch(nr: usize, a0: usize, a1: usize, a2: usize, a3: usize, a4: usize
         SYS_MEM_MAP => memory::sys_mem_map(a0, a1, a2, a3, a4),
         SYS_MEM_UNMAP => memory::sys_mem_unmap(a0, a1),
         SYS_MEM_BRK => memory::sys_mem_brk(a0),
+        SYS_MEM_CREATE_SHARED => memory::sys_mem_create_shared(a0),
+        SYS_MEM_MAP_SHARED => memory::sys_mem_map_shared(a0, a1, a2),
 
         // ── Event / Timer ────────────────────────────────────────
         SYS_EVENT_CREATE => event::sys_event_create(),
@@ -106,6 +108,7 @@ pub fn dispatch(nr: usize, a0: usize, a1: usize, a2: usize, a3: usize, a4: usize
         SYS_TIMER_CREATE => timer::sys_timer_create(),
         SYS_TIMER_SET => timer::sys_timer_set(a0, a1, a2),
         SYS_TIMER_CANCEL => timer::sys_timer_cancel(a0),
+        SYS_OBJECT_WAIT_ASYNC => port::sys_object_wait_async(a0, a1, a2, a3),
 
         // ── Network ──────────────────────────────────────────────
         SYS_NET_SOCKET => net::sys_net_socket(a0, a1, a2),

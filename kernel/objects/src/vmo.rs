@@ -5,7 +5,12 @@
 //! They support copy-on-write cloning and pager-backed demand paging.
 
 use alloc::sync::Arc;
+use alloc::vec;
+use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+
+use hadron_core::paging::{PhysFrame, Size4KiB};
+use hadron_core::sync::SpinLock;
 
 use crate::object::{KernelObject, Koid, ObjectType, Signals};
 use crate::observer::{ObserverList, PortDispatch};
@@ -59,6 +64,11 @@ pub struct Vmo {
     size: AtomicU64,
     /// The backing store kind.
     kind: VmoKind,
+    /// Physical page backing for paged and contiguous VMOs.
+    ///
+    /// Each slot corresponds to a 4 KiB page index. `None` means the page
+    /// has not yet been committed (demand-paging or sparse allocation).
+    pages: SpinLock<Vec<Option<PhysFrame<Size4KiB>>>>,
     /// Current signal state.
     signals: AtomicU32,
     /// Registered observers for signal notifications.
@@ -72,10 +82,12 @@ impl Vmo {
     #[must_use]
     pub fn new_paged(size: u64) -> Arc<Self> {
         let aligned_size = (size + 0xFFF) & !0xFFF;
+        let page_count = (aligned_size / 4096) as usize;
         Arc::new(Self {
             koid: Koid::alloc(),
             size: AtomicU64::new(aligned_size),
             kind: VmoKind::Paged,
+            pages: SpinLock::new(vec![None; page_count]),
             signals: AtomicU32::new(0),
             observers: ObserverList::new(),
         })
@@ -85,10 +97,12 @@ impl Vmo {
     #[must_use]
     pub fn new_contiguous(size: u64) -> Arc<Self> {
         let aligned_size = (size + 0xFFF) & !0xFFF;
+        let page_count = (aligned_size / 4096) as usize;
         Arc::new(Self {
             koid: Koid::alloc(),
             size: AtomicU64::new(aligned_size),
             kind: VmoKind::Contiguous,
+            pages: SpinLock::new(vec![None; page_count]),
             signals: AtomicU32::new(0),
             observers: ObserverList::new(),
         })
@@ -101,6 +115,7 @@ impl Vmo {
     #[must_use]
     pub fn create_cow_child(parent: &Arc<Self>, offset: u64, size: u64) -> Arc<Self> {
         let aligned_size = (size + 0xFFF) & !0xFFF;
+        let page_count = (aligned_size / 4096) as usize;
         Arc::new(Self {
             koid: Koid::alloc(),
             size: AtomicU64::new(aligned_size),
@@ -108,6 +123,7 @@ impl Vmo {
                 parent: Arc::clone(parent),
                 offset,
             },
+            pages: SpinLock::new(vec![None; page_count]),
             signals: AtomicU32::new(0),
             observers: ObserverList::new(),
         })
@@ -139,6 +155,31 @@ impl Vmo {
     #[must_use]
     pub fn kind(&self) -> &VmoKind {
         &self.kind
+    }
+
+    /// The number of 4 KiB pages this VMO spans.
+    #[must_use]
+    pub fn page_count(&self) -> usize {
+        (self.size() / 4096) as usize
+    }
+
+    /// Commit a physical frame at the given page index.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if `index` is out of range.
+    pub fn commit_page(&self, index: usize, frame: PhysFrame<Size4KiB>) -> Result<(), VmoError> {
+        let mut pages = self.pages.lock();
+        let slot = pages.get_mut(index).ok_or(VmoError::OutOfRange)?;
+        *slot = Some(frame);
+        Ok(())
+    }
+
+    /// Retrieve the physical frame at the given page index, if committed.
+    #[must_use]
+    pub fn page_at(&self, index: usize) -> Option<PhysFrame<Size4KiB>> {
+        let pages = self.pages.lock();
+        pages.get(index).copied().flatten()
     }
 }
 

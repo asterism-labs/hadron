@@ -64,6 +64,33 @@ impl ObserverList {
         self.inner.lock().push(Observer { port, key, mask });
     }
 
+    /// Register an observer and immediately check if signals already match.
+    ///
+    /// If `current_signals` already intersects `mask`, the observer fires
+    /// immediately (one-shot) and is never stored. This avoids the race
+    /// where signals are asserted between the `add_observer` call and
+    /// a subsequent check.
+    pub fn add_and_check(
+        &self,
+        port: Arc<dyn PortDispatch>,
+        key: u64,
+        mask: Signals,
+        current_signals: Signals,
+        koid: Koid,
+    ) {
+        if mask.intersects(current_signals) {
+            // Already satisfied — fire immediately without storing.
+            port.queue_packet(PortPacket {
+                key,
+                signals: current_signals,
+                koid,
+                packet_type: PacketType::SignalOne,
+            });
+        } else {
+            self.inner.lock().push(Observer { port, key, mask });
+        }
+    }
+
     /// Remove all observers targeting the given port (compared by `Arc` pointer).
     pub fn remove_by_port(&self, port: &Arc<dyn PortDispatch>) {
         let target = Arc::as_ptr(port);

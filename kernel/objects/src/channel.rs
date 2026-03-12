@@ -181,6 +181,12 @@ impl KernelObject for Channel {
         self.observers.add(port, key, signals);
     }
 
+    fn add_observer_checked(&self, port: Arc<dyn PortDispatch>, key: u64, signals: Signals) {
+        let current = self.get_signals();
+        self.observers
+            .add_and_check(port, key, signals, current, self.koid);
+    }
+
     fn remove_observer(&self, port: &Arc<dyn PortDispatch>) {
         self.observers.remove_by_port(port);
     }

@@ -149,6 +149,15 @@ pub trait KernelObject: Send + Sync + 'static {
     /// to the given `port` with the provided `key`.
     fn add_observer(&self, port: Arc<dyn PortDispatch>, key: u64, signals: Signals);
 
+    /// Register a port observer, immediately firing if signals already match.
+    ///
+    /// Uses [`ObserverList::add_and_check`] to atomically register the
+    /// observer and check current signals, avoiding the race where signals
+    /// change between add and check. The default delegates to `add_observer`.
+    fn add_observer_checked(&self, port: Arc<dyn PortDispatch>, key: u64, signals: Signals) {
+        self.add_observer(port, key, signals);
+    }
+
     /// Remove a previously registered port observer.
     fn remove_observer(&self, port: &Arc<dyn PortDispatch>);
 

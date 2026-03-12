@@ -158,6 +158,8 @@ pub const SYS_TIMER_CREATE: usize = 0x5A;
 pub const SYS_TIMER_SET: usize = 0x5B;
 /// Cancel a pending timer.
 pub const SYS_TIMER_CANCEL: usize = 0x5C;
+/// Register an async wait on an object's signals via a port.
+pub const SYS_OBJECT_WAIT_ASYNC: usize = 0x5D;
 
 // ── Network (0x60) ───────────────────────────────────────────────────
 
@@ -204,36 +206,94 @@ mod tests {
     fn no_duplicate_syscall_numbers() {
         let all: &[usize] = &[
             // Task
-            SYS_TASK_EXIT, SYS_TASK_SPAWN, SYS_TASK_WAIT, SYS_TASK_KILL,
-            SYS_TASK_CLONE, SYS_TASK_INFO, SYS_TASK_SIGACTION, SYS_TASK_SIGRETURN,
-            SYS_TASK_SETPGID, SYS_TASK_GETPGID, SYS_TASK_GETPPID, SYS_TASK_GETCWD,
-            SYS_TASK_CHDIR, SYS_TASK_SETSID, SYS_TASK_SIGPROCMASK, SYS_TASK_EXECVE,
+            SYS_TASK_EXIT,
+            SYS_TASK_SPAWN,
+            SYS_TASK_WAIT,
+            SYS_TASK_KILL,
+            SYS_TASK_CLONE,
+            SYS_TASK_INFO,
+            SYS_TASK_SIGACTION,
+            SYS_TASK_SIGRETURN,
+            SYS_TASK_SETPGID,
+            SYS_TASK_GETPGID,
+            SYS_TASK_GETPPID,
+            SYS_TASK_GETCWD,
+            SYS_TASK_CHDIR,
+            SYS_TASK_SETSID,
+            SYS_TASK_SIGPROCMASK,
+            SYS_TASK_EXECVE,
             // Handle
-            SYS_HANDLE_CLOSE, SYS_HANDLE_DUP, SYS_HANDLE_DUP_LOWEST,
-            SYS_HANDLE_PIPE, SYS_HANDLE_TCSETPGRP, SYS_HANDLE_TCGETPGRP,
-            SYS_HANDLE_IOCTL, SYS_HANDLE_FCNTL, SYS_HANDLE_PIPE2,
+            SYS_HANDLE_CLOSE,
+            SYS_HANDLE_DUP,
+            SYS_HANDLE_DUP_LOWEST,
+            SYS_HANDLE_PIPE,
+            SYS_HANDLE_TCSETPGRP,
+            SYS_HANDLE_TCGETPGRP,
+            SYS_HANDLE_IOCTL,
+            SYS_HANDLE_FCNTL,
+            SYS_HANDLE_PIPE2,
             // Channel
-            SYS_CHANNEL_CREATE, SYS_CHANNEL_SEND, SYS_CHANNEL_RECV,
-            SYS_CHANNEL_ACCEPT, SYS_CHANNEL_SEND_FD, SYS_CHANNEL_RECV_FD,
+            SYS_CHANNEL_CREATE,
+            SYS_CHANNEL_SEND,
+            SYS_CHANNEL_RECV,
+            SYS_CHANNEL_ACCEPT,
+            SYS_CHANNEL_SEND_FD,
+            SYS_CHANNEL_RECV_FD,
             // Vnode
-            SYS_VNODE_OPEN, SYS_VNODE_READ, SYS_VNODE_WRITE, SYS_VNODE_STAT,
-            SYS_VNODE_READDIR, SYS_VNODE_UNLINK, SYS_VNODE_SEEK, SYS_VNODE_MKDIR,
-            SYS_VNODE_RENAME, SYS_VNODE_SYMLINK, SYS_VNODE_LINK, SYS_VNODE_READLINK,
-            SYS_VNODE_TRUNCATE, SYS_VNODE_FSTATAT,
+            SYS_VNODE_OPEN,
+            SYS_VNODE_READ,
+            SYS_VNODE_WRITE,
+            SYS_VNODE_STAT,
+            SYS_VNODE_READDIR,
+            SYS_VNODE_UNLINK,
+            SYS_VNODE_SEEK,
+            SYS_VNODE_MKDIR,
+            SYS_VNODE_RENAME,
+            SYS_VNODE_SYMLINK,
+            SYS_VNODE_LINK,
+            SYS_VNODE_READLINK,
+            SYS_VNODE_TRUNCATE,
+            SYS_VNODE_FSTATAT,
             // Memory
-            SYS_MEM_MAP, SYS_MEM_UNMAP, SYS_MEM_BRK, SYS_MEM_CREATE_SHARED,
-            SYS_MEM_MAP_SHARED, SYS_MEM_PROTECT,
+            SYS_MEM_MAP,
+            SYS_MEM_UNMAP,
+            SYS_MEM_BRK,
+            SYS_MEM_CREATE_SHARED,
+            SYS_MEM_MAP_SHARED,
+            SYS_MEM_PROTECT,
             // Event
-            SYS_EVENT_CREATE, SYS_EVENT_SIGNAL, SYS_EVENT_WAIT,
-            SYS_EVENT_WAIT_MANY, SYS_CLOCK_GETTIME, SYS_CLOCK_NANOSLEEP,
+            SYS_EVENT_CREATE,
+            SYS_EVENT_SIGNAL,
+            SYS_EVENT_WAIT,
+            SYS_EVENT_WAIT_MANY,
+            SYS_CLOCK_GETTIME,
+            SYS_CLOCK_NANOSLEEP,
             SYS_FUTEX,
+            // Port / Timer
+            SYS_PORT_CREATE,
+            SYS_PORT_WAIT,
+            SYS_PORT_QUEUE,
+            SYS_TIMER_CREATE,
+            SYS_TIMER_SET,
+            SYS_TIMER_CANCEL,
+            SYS_OBJECT_WAIT_ASYNC,
             // Network
-            SYS_NET_SOCKET, SYS_NET_BIND, SYS_NET_LISTEN, SYS_NET_ACCEPT,
-            SYS_NET_CONNECT, SYS_NET_SENDMSG, SYS_NET_RECVMSG, SYS_NET_SHUTDOWN,
+            SYS_NET_SOCKET,
+            SYS_NET_BIND,
+            SYS_NET_LISTEN,
+            SYS_NET_ACCEPT,
+            SYS_NET_CONNECT,
+            SYS_NET_SENDMSG,
+            SYS_NET_RECVMSG,
+            SYS_NET_SHUTDOWN,
             // Device / IOMMU
-            SYS_BTI_CREATE, SYS_BTI_PIN, SYS_BTI_RELEASE_QUARANTINE, SYS_PMT_UNPIN,
+            SYS_BTI_CREATE,
+            SYS_BTI_PIN,
+            SYS_BTI_RELEASE_QUARANTINE,
+            SYS_PMT_UNPIN,
             // System
-            SYS_QUERY, SYS_DEBUG_LOG,
+            SYS_QUERY,
+            SYS_DEBUG_LOG,
         ];
 
         for (i, a) in all.iter().enumerate() {

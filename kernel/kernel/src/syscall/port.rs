@@ -109,3 +109,54 @@ pub fn sys_port_queue(fd: usize, key: usize, signals: usize) -> isize {
         0
     })
 }
+
+/// `SYS_OBJECT_WAIT_ASYNC(object_fd, port_fd, key, signals)` — register an
+/// async signal observer on `object_fd` that delivers a packet to `port_fd`
+/// when any of the specified `signals` become asserted.
+///
+/// Uses one-shot semantics: the observer fires at most once, then is removed.
+/// If the signals are already asserted at registration time, the packet is
+/// delivered immediately.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "signal bitmask fits in u32"
+)]
+pub fn sys_object_wait_async(
+    object_fd: usize,
+    port_fd: usize,
+    key: usize,
+    signals: usize,
+) -> isize {
+    use hadron_objects::observer::PortDispatch;
+
+    let obj_hv = HandleValue::from_raw(object_fd as u32);
+    let port_hv = HandleValue::from_raw(port_fd as u32);
+    let mask = Signals::from_bits_truncate(signals as u32);
+
+    with_handle_table(|table| {
+        // Look up the target object with WAIT rights.
+        let obj_entry = match table.get_with_rights(obj_hv, Rights::WAIT) {
+            Ok(e) => e,
+            Err(_) => return -EBADF,
+        };
+        let object = obj_entry.object().clone();
+
+        // Look up the port with WRITE rights.
+        let port_entry = match table.get_with_rights(port_hv, Rights::WRITE) {
+            Ok(e) => e,
+            Err(_) => return -EBADF,
+        };
+        let port = match port_entry.object().as_any().downcast_ref::<Port>() {
+            Some(_) => port_entry.object().clone(),
+            None => return -EINVAL,
+        };
+
+        // SAFETY: We verified the downcast succeeds above.
+        let port_dispatch: Arc<dyn PortDispatch> =
+            unsafe { Arc::from_raw(Arc::into_raw(port).cast::<Port>()) };
+
+        // Register the observer with immediate-check semantics.
+        object.add_observer_checked(port_dispatch, key as u64, mask);
+        0
+    })
+}

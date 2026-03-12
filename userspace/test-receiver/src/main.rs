@@ -47,12 +47,30 @@ fn main() -> ! {
     }
     debug_log("\n");
 
-    // We received a handle — just verify it's non-zero.
+    // We received a handle — verify it's non-zero.
     if received_fd == 0 {
         debug_log("test-receiver: FAIL: no handle received\n");
         wrappers::sys_task_exit(2);
     }
-    debug_log("test-receiver: handle transfer successful\n");
+
+    // Map the received VMO and verify its contents.
+    let vaddr = wrappers::sys_mem_map_shared(received_fd, 4096, hadron_syscall::PROT_READ);
+    if vaddr < 0 {
+        debug_log("test-receiver: FAIL: mem_map_shared failed\n");
+        wrappers::sys_task_exit(3);
+    }
+
+    // Read and verify the payload written by userboot.
+    let expected = b"Phase2-VMO-OK";
+    // SAFETY: vaddr is a valid mapped page from the VMO.
+    let data = unsafe { core::slice::from_raw_parts(vaddr as *const u8, expected.len()) };
+
+    if data != expected.as_slice() {
+        debug_log("test-receiver: FAIL: VMO data mismatch\n");
+        wrappers::sys_task_exit(4);
+    }
+
+    debug_log("test-receiver: VMO transfer + mapping verified\n");
 
     // Exit with code 0 to signal success to the parent.
     wrappers::sys_task_exit(0);
