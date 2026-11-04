@@ -49,11 +49,7 @@ fn test_hhdm_phys_to_virt_roundtrip() {
     let virt = crate::mm::hhdm::phys_to_virt(phys);
     let hhdm = crate::mm::hhdm::offset();
 
-    assert_eq!(
-        virt.as_u64(),
-        hhdm + 0x1000,
-        "phys_to_virt should add HHDM offset"
-    );
+    assert_eq!(virt, hhdm + 0x1000, "phys_to_virt should add HHDM offset");
 }
 
 // ── Before executor stage ───────────────────────────────────────────────

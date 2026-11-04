@@ -39,7 +39,6 @@
 //! 0 or 1 for boolean values, matching Rust's `bool` validity invariant.
 
 #![no_std]
-#![feature(c_variadic)]
 
 /// Safe, high-level wrappers for UEFI services using type-state and RAII patterns.
 pub mod api;

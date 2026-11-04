@@ -1481,7 +1481,7 @@ pub unsafe extern "C" fn _Exit(status: i32) -> ! {
 // ---- syscall (raw syscall passthrough) ---------------------------------------
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn syscall(number: i64, ...) -> i64 {
+pub unsafe extern "C" fn syscall(number: i64, _: ...) -> i64 {
     // We can't forward variadic args in safe Rust; just return ENOSYS.
     -38 // -ENOSYS
 }
@@ -1509,17 +1509,17 @@ pub unsafe extern "C" fn execvp(_file: *const u8, _argv: *const *const u8) -> i3
 
 // execl / execlp / execle are variadic; stub_err via raw syscall pattern.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn execl(_path: *const u8, _arg: *const u8, ...) -> i32 {
+pub unsafe extern "C" fn execl(_path: *const u8, _arg: *const u8, _: ...) -> i32 {
     stub_err()
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn execlp(_file: *const u8, _arg: *const u8, ...) -> i32 {
+pub unsafe extern "C" fn execlp(_file: *const u8, _arg: *const u8, _: ...) -> i32 {
     stub_err()
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn execle(_path: *const u8, _arg: *const u8, ...) -> i32 {
+pub unsafe extern "C" fn execle(_path: *const u8, _arg: *const u8, _: ...) -> i32 {
     stub_err()
 }
 
@@ -1697,7 +1697,7 @@ pub unsafe extern "C" fn wcscmp(s1: *const i32, s2: *const i32) -> i32 {
 // ---- sem_open / sem_close / sem_unlink (named semaphores) -------------------
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sem_open(_name: *const u8, _oflag: i32, ...) -> *mut u8 {
+pub unsafe extern "C" fn sem_open(_name: *const u8, _oflag: i32, _: ...) -> *mut u8 {
     // Named semaphores require a kernel-side namespace; not implemented.
     core::ptr::null_mut()
 }

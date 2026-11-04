@@ -313,9 +313,8 @@ fn write_padded(
 
 // ---- C ABI printf family -----------------------------------------------------
 //
-// The `...` parameter gives us a `VaListImpl` (unnamed type) that supports
-// `.arg::<T>()`. We feed each arg into `format_to` via a closure, avoiding
-// any need to name `VaListImpl` explicitly.
+// The `...` parameter gives us a `VaList` that supports `.next_arg::<T>()`.
+// We feed each arg into `format_to` via a closure.
 
 /// `printf(fmt, ...)` — print formatted output to stdout.
 ///
@@ -335,7 +334,7 @@ pub unsafe extern "C" fn printf(fmt: *const u8, mut args: ...) -> i32 {
     };
 
     // SAFETY: Caller guarantees args match format specifiers.
-    let mut next_arg = || -> usize { unsafe { args.arg::<usize>() } };
+    let mut next_arg = || -> usize { unsafe { args.next_arg::<usize>() } };
 
     format_to(&mut writer, fmt, &mut next_arg);
     count
@@ -356,7 +355,7 @@ pub unsafe extern "C" fn fprintf(stream: *mut FILE, fmt: *const u8, mut args: ..
     };
 
     // SAFETY: Caller guarantees args match format specifiers.
-    let mut next_arg = || -> usize { unsafe { args.arg::<usize>() } };
+    let mut next_arg = || -> usize { unsafe { args.next_arg::<usize>() } };
 
     format_to(&mut writer, fmt, &mut next_arg);
     count
@@ -386,7 +385,7 @@ pub unsafe extern "C" fn snprintf(buf: *mut u8, size: usize, fmt: *const u8, mut
     };
 
     // SAFETY: Caller guarantees args match format specifiers.
-    let mut next_arg = || -> usize { unsafe { args.arg::<usize>() } };
+    let mut next_arg = || -> usize { unsafe { args.next_arg::<usize>() } };
 
     format_to(&mut writer, fmt, &mut next_arg);
 
@@ -420,7 +419,7 @@ pub unsafe extern "C" fn sprintf(buf: *mut u8, fmt: *const u8, mut args: ...) ->
     };
 
     // SAFETY: Caller guarantees args match format specifiers.
-    let mut next_arg = || -> usize { unsafe { args.arg::<usize>() } };
+    let mut next_arg = || -> usize { unsafe { args.next_arg::<usize>() } };
 
     format_to(&mut writer, fmt, &mut next_arg);
 
@@ -463,7 +462,7 @@ pub unsafe extern "C" fn vsnprintf(
     };
 
     // SAFETY: Caller guarantees args match format specifiers.
-    let mut next_arg = || -> usize { unsafe { args.arg::<usize>() } };
+    let mut next_arg = || -> usize { unsafe { args.next_arg::<usize>() } };
     format_to(&mut writer, fmt, &mut next_arg);
 
     if !buf.is_null() && size > 0 {
@@ -497,7 +496,7 @@ pub unsafe extern "C" fn vsprintf(
         }
     };
     // SAFETY: Caller guarantees args match format specifiers.
-    let mut next_arg = || -> usize { unsafe { args.arg::<usize>() } };
+    let mut next_arg = || -> usize { unsafe { args.next_arg::<usize>() } };
     format_to(&mut writer, fmt, &mut next_arg);
     if !buf.is_null() {
         // SAFETY: Caller guarantees sufficient space.
@@ -525,7 +524,7 @@ pub unsafe extern "C" fn vfprintf(
         count += bytes.len() as i32;
     };
     // SAFETY: Caller guarantees args match format specifiers.
-    let mut next_arg = || -> usize { unsafe { args.arg::<usize>() } };
+    let mut next_arg = || -> usize { unsafe { args.next_arg::<usize>() } };
     format_to(&mut writer, fmt, &mut next_arg);
     count
 }

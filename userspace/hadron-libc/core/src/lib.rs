@@ -6,7 +6,6 @@
 #![no_std]
 #![allow(internal_features)]
 #![feature(lang_items)]
-#![feature(c_variadic)]
 
 #[cfg(feature = "userspace")]
 pub mod alloc;

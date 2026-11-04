@@ -124,7 +124,10 @@ pub fn build_sysroot(
         opt_level,
         &[("core", &core_rlib)],
         &[],
-        &["compiler-builtins", "mem", "rustc-dep-of-std"],
+        // rustc is invoked directly, so Cargo's feature implications are
+        // spelled out: `compiler-builtins` implies `unmangled-names`, which
+        // `mem` needs to export `memcpy` and friends as unmangled symbols.
+        &["compiler-builtins", "unmangled-names", "mem"],
     )?;
 
     // Step 3: Compile alloc.
