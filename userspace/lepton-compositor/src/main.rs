@@ -712,7 +712,13 @@ fn blit(
 // ── Message dispatcher ───────────────────────────────────────────────────────
 
 /// Dispatch one parsed Wayland request to the appropriate handler.
-fn dispatch(client: &mut Client, obj_id: u32, opcode: u16, args: &[u8], recv_fd: &mut Option<usize>) {
+fn dispatch(
+    client: &mut Client,
+    obj_id: u32,
+    opcode: u16,
+    args: &[u8],
+    recv_fd: &mut Option<usize>,
+) {
     let kind = client.obj_kind(obj_id);
     match (kind, opcode) {
         // wl_display
