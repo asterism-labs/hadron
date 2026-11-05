@@ -105,6 +105,19 @@ impl PerCpu {
     pub(crate) fn clear_need_resched(&self) {
         self.need_resched.store(false, Ordering::Relaxed);
     }
+
+    /// Replaces the interrupt flag the outermost [`IrqGuard`] restores
+    /// when it drops, and returns the old one. The scheduler swaps it on
+    /// each switch, since the thread switched to drops the guard the old
+    /// thread made.
+    ///
+    /// # Panics
+    ///
+    /// Panics unless exactly one [`IrqGuard`] is alive on this CPU.
+    pub(crate) fn replace_irq_enabled(&self, enabled: bool) -> bool {
+        assert_eq!(self.irq_depth.get(), 1, "one IrqGuard is alive");
+        self.irq_enabled.replace(enabled)
+    }
 }
 
 /// The boot CPU's block.
@@ -143,6 +156,13 @@ pub(crate) fn preempt_depth() -> u32 {
     // SAFETY: `kmain` runs `init_boot_cpu` first. A single load reads the
     // whole count.
     unsafe { cpu::gs_read_u32(offset_of!(PerCpu, preempt_depth)) }
+}
+
+/// Whether this CPU has a reschedule pending. Reads one byte, with no
+/// guard.
+pub(crate) fn need_resched() -> bool {
+    // SAFETY: `kmain` runs `init_boot_cpu` first. The flag is one byte.
+    unsafe { cpu::gs_read_u8(offset_of!(PerCpu, need_resched)) != 0 }
 }
 
 /// Whether the scheduler has given this CPU a current thread. Reads one
@@ -193,8 +213,7 @@ impl Drop for PreemptGuard {
         if !zero {
             return;
         }
-        // SAFETY: as in `new`. The flag is one byte.
-        let pending = unsafe { cpu::gs_read_u8(offset_of!(PerCpu, need_resched)) } != 0;
+        let pending = need_resched();
         // An interrupt or exception handler runs with interrupts masked. It
         // must not switch threads, since it runs on the stack of the
         // thread it interrupted.

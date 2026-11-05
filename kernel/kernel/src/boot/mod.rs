@@ -16,7 +16,7 @@ use arch_x86_64::{PhysAddr, VirtAddr};
 use mm::{DirectMap, Region};
 
 use crate::arch::x86_64::qemu::{self, ExitCode};
-use crate::arch::x86_64::{cpu, gdt, idt, pic};
+use crate::arch::x86_64::{cpu, gdt, idt, lapic, pic};
 use crate::console::{self, kprintln};
 use crate::{acpi, heap, memory, percpu, sched};
 
@@ -125,8 +125,9 @@ fn check_boot_info(info: &BootInfo) {
 }
 
 /// Runs on the kernel's own page tables and boot stack, after
-/// [`memory::init`]. Maps the heap, reads the ACPI tables, turns the boot
-/// context into the idle thread, and starts the main thread.
+/// [`memory::init`]. Maps the heap, reads the ACPI tables, starts the
+/// local APIC timer, turns the boot context into the idle thread, and
+/// starts the main thread.
 fn kmain_paged(info: BootInfo) -> ! {
     heap::init();
     let madt = acpi::init(info.rsdp());
@@ -136,10 +137,16 @@ fn kmain_paged(info: BootInfo) -> ! {
         madt.io_apics.len(),
         madt.local_apic
     );
-    sched::init();
     pic::mask_all();
-    // SAFETY: the PICs are masked, and nothing else is set up to deliver
-    // interrupts.
+    let per_ms = lapic::init(madt);
+    kprintln!(
+        "hadron: local APIC timer at {} kHz, {} Hz ticks",
+        per_ms,
+        lapic::HZ
+    );
+    sched::init();
+    // SAFETY: the PICs are masked. The local APIC delivers only its timer
+    // and spurious vectors, which have handlers, and NMIs.
     unsafe { cpu::enable_interrupts() };
     // The main thread runs to the end of boot, so its handle is not needed.
     drop(sched::spawn("main", move || main_thread(info)));

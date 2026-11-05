@@ -37,6 +37,10 @@ pub(crate) struct Thread {
     pub(super) notified: AtomicBool,
     /// The saved stack pointer while the thread is switched out.
     pub(super) rsp: UnsafeCell<u64>,
+    /// Whether interrupts were enabled when the thread was switched out,
+    /// before the scheduler masked them. A thread switched out from an
+    /// interrupt handler had them masked.
+    pub(super) irq_enabled: UnsafeCell<bool>,
     /// The next thread in the run queue. Only the run queue lock's holder
     /// touches it.
     pub(super) next: UnsafeCell<Option<Arc<Thread>>>,
@@ -53,7 +57,8 @@ pub(crate) struct Thread {
 }
 
 // SAFETY: `state`, `notified` and `finished` are atomics and `exited` is a
-// lock. `rsp` and `next` are touched only under the run queue lock.
+// lock. `rsp`, `irq_enabled` and `next` are touched only under the run
+// queue lock.
 // `entry` and `held` are touched only by the thread itself while it runs.
 unsafe impl Send for Thread {}
 // SAFETY: as for `Send`.
@@ -83,6 +88,8 @@ impl Thread {
             state: AtomicU8::new(state),
             notified: AtomicBool::new(false),
             rsp: UnsafeCell::new(rsp),
+            // A new thread starts with interrupts enabled.
+            irq_enabled: UnsafeCell::new(true),
             next: UnsafeCell::new(None),
             entry: UnsafeCell::new(entry),
             finished: AtomicBool::new(false),

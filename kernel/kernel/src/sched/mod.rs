@@ -1,9 +1,10 @@
 //! The scheduler: kernel threads, one run queue, and blocking.
 //!
 //! The boot context becomes the idle thread, which runs only when no other
-//! thread is ready. Threads switch when they yield, park, exit, or drop
-//! the last [`PreemptGuard`] with a reschedule pending. Nothing sets that
-//! flag on a timer yet, so preemption happens only at those points.
+//! thread is ready. Threads switch when they yield, park or exit. The
+//! local APIC timer sets a reschedule flag on every tick, and the thread
+//! switches when it next can: at the end of the interrupt, if it holds no
+//! [`PreemptGuard`], or else when it drops the last one.
 //!
 //! Threads wait through `Waker`s. A thread's waker unparks it, so a wait
 //! queue or a future wakes a thread the same way it would wake an async
@@ -17,6 +18,11 @@
 //! switch, and a new thread adopts the guard in [`finish_first_switch`].
 //! The lock, the preempt count and the interrupt count all live on the CPU,
 //! so either way the counts balance.
+//!
+//! The lock's [`IrqGuard`] restores the interrupt flag that the thread
+//! which took it saw, so `schedule` swaps that flag per thread. A thread
+//! switched out by an interrupt resumes with interrupts masked and turns
+//! them back on as it returns from the interrupt.
 //!
 //! One CPU only. The run queue is global until SMP needs one per CPU.
 //!
@@ -222,6 +228,16 @@ fn enqueue(thread: Arc<Thread>) {
     RUN_QUEUE.lock().push(thread);
 }
 
+/// Called at the end of an interrupt. Switches threads if a reschedule is
+/// pending and the interrupted thread holds no [`PreemptGuard`]. The
+/// switch returns when the thread runs again, and the interrupt returns to
+/// it then.
+pub(crate) fn preempt_on_interrupt_exit() {
+    if percpu::preempt_depth() == 0 && percpu::need_resched() {
+        preempt();
+    }
+}
+
 /// Called by `PreemptGuard` when the last guard drops with a reschedule
 /// pending. It makes no guard of its own: dropping one would find the
 /// reschedule still pending and call this again.
@@ -305,6 +321,11 @@ fn schedule(how: Switch) {
     // The outgoing thread's reference moves to `previous`, and the thread
     // switched to drops it.
     cpu.previous.set(current_raw);
+    // SAFETY: the run queue lock is held, which guards both flags.
+    unsafe {
+        let next_irq_enabled = *(*next_raw).irq_enabled.get();
+        *current.irq_enabled.get() = cpu.replace_irq_enabled(next_irq_enabled);
+    }
 
     // SAFETY: the run queue lock is held, which guards both `rsp`s.
     // `next` was switched out by `switch` or built by `initial_stack`,
@@ -440,6 +461,29 @@ ktest::ktest! {
         assert!(!ran.load(Ordering::SeqCst), "a guard was held");
         drop(preempt);
         assert!(ran.load(Ordering::SeqCst), "the switch ran the other thread");
+        other.join();
+    }
+}
+
+ktest::ktest! {
+    fn timer_preempts_a_spinning_thread() {
+        use core::sync::atomic::AtomicBool;
+        use crate::arch::x86_64::{cpu, lapic};
+
+        let ran = Arc::new(AtomicBool::new(false));
+        let flag = ran.clone();
+        // This thread starts from the switch the timer interrupt makes. It
+        // must still run with interrupts enabled.
+        let other = spawn("other", move || {
+            assert!(cpu::interrupts_enabled(), "interrupts are enabled");
+            flag.store(true, Ordering::SeqCst);
+        });
+        let start = lapic::ticks();
+        while !ran.load(Ordering::SeqCst) && lapic::ticks() < start + 10 {
+            core::hint::spin_loop();
+        }
+        assert!(ran.load(Ordering::SeqCst), "the timer switched threads");
+        assert!(cpu::interrupts_enabled());
         other.join();
     }
 }

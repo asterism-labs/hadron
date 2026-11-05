@@ -1,9 +1,14 @@
 //! Interrupt vectors 32 to 255: which handler each one runs.
 //!
 //! Handlers run with interrupts masked, on the stack of the thread they
-//! interrupted. They must not sleep.
+//! interrupted. They must not sleep. After the handler, [`dispatch`]
+//! signals the end of the interrupt to the local APIC and lets the
+//! scheduler switch threads.
 
 use core::sync::atomic::{AtomicPtr, Ordering};
+
+use super::lapic;
+use crate::sched;
 
 /// The first vector after the exceptions.
 pub(crate) const FIRST: u8 = 32;
@@ -50,6 +55,13 @@ pub(super) fn dispatch(vector: u8) {
     // SAFETY: `set_handler` stores only `Handler`s.
     let handler = unsafe { core::mem::transmute::<*mut (), Handler>(raw) };
     handler();
+    // The APIC sets no in-service bit for a spurious interrupt, so it
+    // takes no EOI. The EOI comes before a switch, or the APIC would hold
+    // back interrupts until this thread runs again.
+    if vector != lapic::SPURIOUS {
+        lapic::eoi();
+    }
+    sched::preempt_on_interrupt_exit();
 }
 
 ktest::ktest! {

@@ -47,21 +47,44 @@ pub(crate) fn cr4() -> u64 {
 /// `IA32_EFER`, the extended feature enable register (Vol. 4, Table 2-2).
 const IA32_EFER: u32 = 0xc000_0080;
 
-/// Reads `IA32_EFER`.
-pub(crate) fn efer() -> u64 {
+/// Reads the model-specific register `msr`.
+///
+/// # Safety
+///
+/// `msr` must exist on this CPU, or `rdmsr` raises #GP, and reading it
+/// must have no side effects.
+unsafe fn rdmsr(msr: u32) -> u64 {
     let (low, high): (u32, u32);
-    // SAFETY: `IA32_EFER` exists on every 64-bit CPU, and reading it has
-    // no side effects.
+    // SAFETY: the caller guarantees the register exists and reading it
+    // changes nothing.
     unsafe {
         asm!(
             "rdmsr",
-            in("ecx") IA32_EFER,
+            in("ecx") msr,
             out("eax") low,
             out("edx") high,
             options(nomem, nostack, preserves_flags),
         );
     }
     u64::from(high) << 32 | u64::from(low)
+}
+
+/// Reads `IA32_EFER`.
+pub(crate) fn efer() -> u64 {
+    // SAFETY: `IA32_EFER` exists on every 64-bit CPU, and reading it has
+    // no side effects.
+    unsafe { rdmsr(IA32_EFER) }
+}
+
+/// `IA32_APIC_BASE`, the local APIC's base address and mode (Vol. 4,
+/// Table 2-2).
+const IA32_APIC_BASE: u32 = 0x1b;
+
+/// Reads `IA32_APIC_BASE`.
+pub(crate) fn apic_base() -> u64 {
+    // SAFETY: every 64-bit CPU has a local APIC and this register, and
+    // reading it has no side effects.
+    unsafe { rdmsr(IA32_APIC_BASE) }
 }
 
 /// Whether the CPU supports 1 GiB pages: CPUID.80000001H:EDX.Page1GB,
@@ -211,18 +234,9 @@ pub(crate) unsafe fn set_gs_base(base: u64) {
 
 /// The GS base.
 pub(crate) fn gs_base() -> u64 {
-    let (low, high): (u32, u32);
-    // SAFETY: reading `IA32_GS_BASE` has no side effects.
-    unsafe {
-        asm!(
-            "rdmsr",
-            in("ecx") IA32_GS_BASE,
-            out("eax") low,
-            out("edx") high,
-            options(nomem, nostack, preserves_flags),
-        );
-    }
-    u64::from(high) << 32 | u64::from(low)
+    // SAFETY: `IA32_GS_BASE` exists on every 64-bit CPU, and reading it
+    // has no side effects.
+    unsafe { rdmsr(IA32_GS_BASE) }
 }
 
 /// Reads the `u64` at `offset` from the GS base.
