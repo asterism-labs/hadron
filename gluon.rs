@@ -80,9 +80,20 @@ fn main() -> Result<()> {
         .machine("q35")
         .memory(256)
         .cores(1)
-        .serial_stdio()
         .boot_mode("uefi")
-        .extra_args(&["-device", "isa-debug-exit,iobase=0xf4,iosize=0x04"])
+        // OVMF puts its console, which Limine also writes through, on COM1
+        // and COM2. The kernel writes to COM3. Only COM3 reaches the
+        // terminal.
+        .extra_args(&[
+            "-serial",
+            "null",
+            "-serial",
+            "null",
+            "-serial",
+            "stdio",
+            "-device",
+            "isa-debug-exit,iobase=0xf4,iosize=0x04",
+        ])
         .success_exit_code(33);
 
     cfg.emit()

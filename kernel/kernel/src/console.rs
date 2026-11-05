@@ -1,4 +1,8 @@
-//! Kernel console on COM1, and the [`kprint!`] and [`kprintln!`] macros.
+//! Kernel console on COM3, and the [`kprint!`] and [`kprintln!`] macros.
+//!
+//! The console uses COM3 because OVMF puts its own console, which Limine
+//! also writes through, on COM1 and COM2. That output clears the screen
+//! and moves the cursor.
 //!
 //! The console takes no lock. One CPU runs the kernel and no interrupt
 //! handler prints, so writes cannot interleave yet. SMP and interrupt
@@ -9,22 +13,22 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::drivers::uart16550::{InitError, Uart16550};
 
-/// I/O port base of the first serial port on PCs.
-const COM1_BASE: u16 = 0x3f8;
+/// I/O port base of the third serial port on PCs.
+const COM3_BASE: u16 = 0x3e8;
 /// Baud rate of the console. QEMU ignores it.
 const BAUD: u32 = 115_200;
 
-// SAFETY: on PCs, ports 0x3f8 to 0x3ff belong to COM1, and only this module
+// SAFETY: on PCs, ports 0x3e8 to 0x3ef belong to COM3, and only this module
 // touches them.
-static COM1: Uart16550 = unsafe { Uart16550::new(COM1_BASE) };
+static COM3: Uart16550 = unsafe { Uart16550::new(COM3_BASE) };
 
-/// Set once COM1 passed its loopback check. Until then the console drops
+/// Set once COM3 passed its loopback check. Until then the console drops
 /// output.
 static READY: AtomicBool = AtomicBool::new(false);
 
-/// Sets up COM1. If it fails, the console stays silent.
+/// Sets up COM3. If it fails, the console stays silent.
 pub(crate) fn init() -> Result<(), InitError> {
-    COM1.init(BAUD)?;
+    COM3.init(BAUD)?;
     READY.store(true, Ordering::Release);
     Ok(())
 }
@@ -44,9 +48,9 @@ impl Write for Console {
         }
         for byte in s.bytes() {
             if byte == b'\n' {
-                COM1.write_byte(b'\r');
+                COM3.write_byte(b'\r');
             }
-            COM1.write_byte(byte);
+            COM3.write_byte(byte);
         }
         Ok(())
     }
@@ -78,7 +82,7 @@ macro_rules! kprintln {
 pub(crate) use {kprint, kprintln};
 
 ktest::ktest! {
-    fn com1_passed_loopback_check() {
+    fn com3_passed_loopback_check() {
         assert!(is_ready());
     }
 }

@@ -1,6 +1,6 @@
 //! The Hadron kernel.
 //!
-//! It boots through Limine, sets up the boot CPU's per-CPU block, COM1 as
+//! It boots through Limine, sets up the boot CPU's per-CPU block, COM3 as
 //! the console, the GDT and the IDT, switches to its own page tables,
 //! builds the physical memory map and frame allocator, and maps the heap.
 //! The boot context then becomes the idle thread and starts the main

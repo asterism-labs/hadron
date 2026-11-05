@@ -56,7 +56,9 @@ gluon run            # boot the kernel under QEMU
 ```
 
 `gluon run` exits 0 when the kernel reports success through QEMU's
-`isa-debug-exit` device. The first build downloads Limine's `BOOTX64.EFI`
+`isa-debug-exit` device. The kernel console is COM3, which QEMU sends to
+the terminal. The firmware and Limine write to COM1 and COM2, and QEMU
+discards both. The first build downloads Limine's `BOOTX64.EFI`
 and checks it against the SHA-256 in `gluon.rs`.
 
 ## Kernel tests
@@ -80,7 +82,7 @@ GLUON_KTEST_IGNORED=true gluon run -p test # also run #[ignore] tests
 ```
 
 The `test` profile sets the `KTEST` config option. The kernel then prints
-one line per test on the serial port and exits QEMU with status 33 when
+one line per test on COM3 and exits QEMU with status 33 when
 every test passes. The kernel has no unwinding, so the first failing test
 ends the run: the panic handler prints `FAILED` and the panic message, and
 QEMU exits with status 35. `gluon run` exits 0 or 1 to match.
