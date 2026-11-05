@@ -9,6 +9,8 @@
 //! page's permissions. The mapper does not flush the TLB. After changing
 //! the live tables, the caller runs `invlpg` or reloads CR3.
 
+use core::ops::Range;
+
 use arch_x86_64::paging::{Level, PageSize, PageTable, PageTableEntry, PageTableFlags};
 use arch_x86_64::{PhysAddr, VirtAddr};
 
@@ -208,6 +210,56 @@ impl Mapper {
             size,
             flags: entry.flags(),
         })
+    }
+
+    /// Clears the PML4 entries in `slots` and passes every table below
+    /// them to `free`, lower levels first. The pages those tables map are
+    /// not freed. Returns the number of tables freed.
+    ///
+    /// The CPU may still hold the cleared entries in its TLB and
+    /// paging-structure caches. Flush them before the freed frames are
+    /// reused.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `slots` reaches past entry 511.
+    pub fn unmap_pml4_slots(
+        &mut self,
+        slots: Range<usize>,
+        mut free: impl FnMut(PhysFrame),
+    ) -> u64 {
+        assert!(slots.end <= 512, "a PML4 has 512 entries");
+        let mut freed = 0;
+        for index in slots {
+            let slot = self.entry(self.root.start(), index);
+            // SAFETY: `slot` points into the PML4, and the mapper has the
+            // only access.
+            let entry = unsafe { slot.read() };
+            if !entry.is_present() {
+                continue;
+            }
+            // SAFETY: as above.
+            unsafe { slot.write(PageTableEntry::UNUSED) };
+            freed += self.free_table(entry.address(), Level::Pdpt, &mut free);
+        }
+        freed
+    }
+
+    /// Passes the table at `table`, which sits at `level`, and every table
+    /// below it to `free`. Returns the number of tables.
+    fn free_table(&self, table: PhysAddr, level: Level, free: &mut impl FnMut(PhysFrame)) -> u64 {
+        let mut freed = 1;
+        if let Some(next) = level.next() {
+            for index in 0..512 {
+                // SAFETY: the entry is inside a table of this tree.
+                let entry = unsafe { self.entry(table, index).read() };
+                if entry.is_present() && !entry.is_huge() {
+                    freed += self.free_table(entry.address(), next, free);
+                }
+            }
+        }
+        free(PhysFrame::containing(table));
+        freed
     }
 
     /// Where `virt` leads, or `None` if it is not mapped.
@@ -514,5 +566,33 @@ mod tests {
             ),
             Err(MapError::OutOfFrames)
         );
+    }
+    #[test]
+    fn unmap_pml4_slots_frees_every_table_below() {
+        let mut memory = FakeMemory::new(16);
+        let mut mapper = memory.mapper();
+        // Slot 256: a 4 KiB page and a 2 MiB page. Slot 257: a 1 GiB page.
+        // Slot 300 stays mapped.
+        let pages = [
+            (0xffff_8000_0000_0000, PageSize::Size4K),
+            (0xffff_8000_4000_0000, PageSize::Size2M),
+            (0xffff_8080_0000_0000, PageSize::Size1G),
+            (0xffff_9600_0000_0000, PageSize::Size4K),
+        ];
+        for (virt, size) in pages {
+            mapper
+                .map(kernel(virt), PhysAddr::ZERO, size, RW_NX, &mut memory)
+                .unwrap();
+        }
+        let mut freed = Vec::new();
+        let count = mapper.unmap_pml4_slots(256..258, |frame| freed.push(frame));
+        // Slot 256: PDPT, two PDs, one PT. Slot 257: PDPT.
+        assert_eq!(count, 5);
+        assert_eq!(freed.len(), 5);
+        for (virt, _) in &pages[..3] {
+            assert_eq!(mapper.translate(kernel(*virt)), None);
+        }
+        assert!(mapper.translate(kernel(pages[3].0)).is_some());
+        assert!(!freed.contains(&mapper.root()));
     }
 }

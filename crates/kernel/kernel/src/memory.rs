@@ -22,7 +22,7 @@
 //!
 //! Everything built in stage 1 is kept as physical addresses, so it stays
 //! valid after the direct map moves. The bootloader's alias stays mapped
-//! until [`BootInfo::reclaim`] unmaps it, which it does not do yet.
+//! until [`reclaim_boot_memory`] unmaps it.
 //!
 //! After [`init`], three statics hold the results, since interrupt
 //! handlers and the global allocator need them and have no caller to pass
@@ -35,8 +35,9 @@
 //!   [`levels::KernelTables`], which comes before the frame allocator.
 
 use core::mem::size_of;
+use core::ops::Range;
 
-use arch_x86_64::paging::{PAGE_SIZE, PageSize, PageTableFlags};
+use arch_x86_64::paging::{Level, PAGE_SIZE, PageSize, PageTableFlags};
 use arch_x86_64::{PhysAddr, VirtAddr};
 use mm::{
     BitmapFrameAllocator, BumpAllocator, DirectMap, FrameAllocator, MapError, Mapper, MemoryMap,
@@ -191,6 +192,12 @@ pub(crate) fn init(info: BootInfo, next: fn(BootInfo) -> !) -> ! {
     let mut mapper = unsafe { Mapper::empty(loader, &mut bump) }.expect(BOOT_MEMORY);
     map_direct(&mut mapper, DIRECT_MAP, info.memory_map(), &mut bump);
     if loader != DIRECT_MAP {
+        // `reclaim_boot_memory` removes the alias by whole PML4 slots, so
+        // none of them may hold kernel mappings.
+        assert!(
+            loader_slots(loader, info.memory_map()).end <= DIRECT_MAP_SLOT,
+            "the bootloader's direct map lies below the kernel's"
+        );
         map_direct(&mut mapper, loader, info.memory_map(), &mut bump);
     }
     let image = KernelImage {
@@ -248,6 +255,75 @@ extern "C" fn stage2(handoff: u64) -> ! {
     FRAMES.init(IrqSpinLock::new(frames));
     KERNEL_TABLES.init(IrqSpinLock::new(kernel));
     next(info)
+}
+
+/// What [`reclaim_boot_memory`] freed, in frames.
+pub(crate) struct Reclaimed {
+    /// Frames of bootloader-reclaimable memory.
+    pub(crate) boot: u64,
+    /// Frames of the page tables that mapped the bootloader's direct map.
+    pub(crate) tables: u64,
+}
+
+/// Unmaps the bootloader's direct map, frees the page tables that held
+/// it, and frees every bootloader-reclaimable region in `regions`.
+///
+/// # Safety
+///
+/// `loader` and `regions` come from the [`BootInfo`] that [`init`] took,
+/// and nothing reads bootloader-reclaimable memory or the bootloader's
+/// direct map after this call.
+pub(crate) unsafe fn reclaim_boot_memory<P: LockBefore<levels::KernelTables>>(
+    ctx: &mut Ctx<'_, P>,
+    loader: DirectMap,
+    regions: &[Region],
+) -> Reclaimed {
+    let (mut tables, mut ctx) = kernel_tables(ctx);
+    let mut frames = frames(&mut ctx);
+    let mut table_frames = 0;
+    if loader != DIRECT_MAP {
+        table_frames = tables.unmap_pml4_slots(loader_slots(loader, regions), |frame| {
+            frames
+                .free(frame)
+                .expect("the alias page tables are marked in use");
+        });
+        // SAFETY: CR3 already holds these tables, and they still map
+        // everything in use. Reloading CR3 flushes the alias from the TLB
+        // and the paging-structure caches. Both locks are held with
+        // interrupts masked, so no freed table is reused before this.
+        unsafe { cpu::switch_page_tables(tables.root()) };
+    }
+    let before = frames.free_frames();
+    for region in regions
+        .iter()
+        .filter(|region| region.kind == RegionKind::BootloaderReclaimable)
+    {
+        frames.mark_free(region.start, region.end);
+    }
+    Reclaimed {
+        boot: frames.free_frames() - before,
+        tables: table_frames,
+    }
+}
+
+/// The PML4 slot of [`DIRECT_MAP`], the lowest the kernel maps.
+const DIRECT_MAP_SLOT: usize = VirtAddr::new(DIRECT_MAP.offset()).table_index(Level::Pml4);
+
+/// The PML4 slots the bootloader's direct map `loader` covers when it maps
+/// the direct-mapped kinds of `regions`.
+fn loader_slots(loader: DirectMap, regions: &[Region]) -> Range<usize> {
+    let end = regions
+        .iter()
+        .filter(|region| region.kind.is_direct_mapped())
+        .map(|region| region.end.align_up(PAGE_SIZE).as_u64())
+        .max()
+        .unwrap_or(0);
+    if end == 0 {
+        return 0..0;
+    }
+    let first = VirtAddr::new(loader.offset()).table_index(Level::Pml4);
+    let last = VirtAddr::new(loader.offset() + end - 1).table_index(Level::Pml4);
+    first..last + 1
 }
 
 const BOOT_MEMORY: &str = "the largest usable region holds the boot page tables";

@@ -10,13 +10,14 @@ mod limine;
 
 use core::ptr::NonNull;
 
+use arch_x86_64::paging::PAGE_SIZE;
 use arch_x86_64::{PhysAddr, VirtAddr};
 use mm::{DirectMap, Region};
 
 use crate::arch::x86_64::qemu::{self, ExitCode};
 use crate::arch::x86_64::{cpu, gdt, idt, pic};
 use crate::console::{self, kprintln};
-use crate::sync::{Ctx, levels};
+use crate::sync::{Ctx, LockBefore, levels};
 use crate::{heap, memory, percpu, sched};
 
 /// CR0.WP, bit 16: supervisor writes honour read-only pages.
@@ -102,8 +103,7 @@ fn check_boot_info(info: &BootInfo) {
         "the kernel is loaded at its link address"
     );
     assert!(
-        info.kernel_phys()
-            .is_aligned(arch_x86_64::paging::PAGE_SIZE),
+        info.kernel_phys().is_aligned(PAGE_SIZE),
         "the kernel is loaded on a page boundary"
     );
     assert!(
@@ -150,7 +150,13 @@ fn main_thread(ctx: &mut Ctx<'static, levels::ThreadRoot>, info: BootInfo) {
         usable / MIB
     );
     kprintln!("hadron: {} KiB heap", heap::free_bytes(ctx) / 1024);
-    info.reclaim();
+    let reclaimed = info.reclaim(ctx);
+    let free = memory::frames(ctx).free_frames();
+    kprintln!(
+        "hadron: reclaimed {} KiB of bootloader memory and {} KiB of page tables, {free} frames free",
+        reclaimed.boot * PAGE_SIZE / 1024,
+        reclaimed.tables * PAGE_SIZE / 1024,
+    );
     if hadron_config::KTEST {
         crate::ktest::run();
     }
@@ -200,6 +206,8 @@ impl BootInfo {
     /// - `loader_name` and `loader_version` stay valid and unchanged while
     ///   `loader_direct_map` is mapped and bootloader-reclaimable memory
     ///   is in use.
+    /// - After `new` returns, the caller reads no bootloader-reclaimable
+    ///   memory, since [`reclaim`](Self::reclaim) frees it.
     pub(crate) unsafe fn new(
         memory_map: &'static [Region],
         loader_direct_map: DirectMap,
@@ -251,13 +259,17 @@ impl BootInfo {
         unsafe { self.loader_version.as_ref() }
     }
 
-    /// Gives the bootloader's memory back to the frame allocator and
-    /// unmaps the bootloader's direct map. Copy anything still needed
-    /// first.
-    pub(crate) fn reclaim(self) {
-        // TODO: mark each `BootloaderReclaimable` region free in the frame
-        // allocator, then unmap `loader_direct_map` if it differs from
-        // `memory::DIRECT_MAP`. Until then the memory leaks.
-        let Self { .. } = self;
+    /// Gives the bootloader's memory back to the frame allocator, unmaps
+    /// the bootloader's direct map, and frees the page tables that held
+    /// it. Copy anything still needed first.
+    pub(crate) fn reclaim<P: LockBefore<levels::KernelTables>>(
+        self,
+        ctx: &mut Ctx<'_, P>,
+    ) -> memory::Reclaimed {
+        // SAFETY: `memory::init` took this `BootInfo`. Taking `self` ends
+        // every borrow from it, and `new` requires that nothing else reads
+        // bootloader-reclaimable memory. The rest of the kernel reaches
+        // memory through `memory::DIRECT_MAP`.
+        unsafe { memory::reclaim_boot_memory(ctx, self.loader_direct_map, self.memory_map) }
     }
 }

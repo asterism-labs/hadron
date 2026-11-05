@@ -97,7 +97,8 @@ extern "C" fn kmain() -> ! {
     unsafe { super::kernel_main(boot_info) }
 }
 
-/// Reads Limine's responses into a [`BootInfo`].
+/// Reads Limine's responses into a [`BootInfo`]. The responses live in
+/// bootloader-reclaimable memory, so nothing reads them after this.
 ///
 /// # Panics
 ///
@@ -174,11 +175,5 @@ fn region(entry: &MemMapEntry) -> Region {
         start,
         end: start + entry.length,
         kind,
-    }
-}
-
-ktest::ktest! {
-    fn limine_answers_bootloader_info() {
-        assert!(BOOTLOADER_INFO.response().is_some());
     }
 }

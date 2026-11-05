@@ -62,8 +62,8 @@ Kernel tests run inside the kernel after boot. Define one with
 
 ```rust
 ktest::ktest! {
-    fn limine_answers_bootloader_info() {
-        assert!(BOOTLOADER_INFO.response().is_some());
+    fn null_page_is_unmapped() {
+        assert_eq!(translate(VirtAddr::ZERO), None);
     }
 }
 ```
