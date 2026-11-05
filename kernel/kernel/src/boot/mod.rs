@@ -18,7 +18,6 @@ use mm::{DirectMap, Region};
 use crate::arch::x86_64::qemu::{self, ExitCode};
 use crate::arch::x86_64::{cpu, gdt, idt, pic};
 use crate::console::{self, kprintln};
-use crate::sync::{Ctx, LockBefore, levels};
 use crate::{heap, memory, percpu, sched};
 
 /// CR0.WP, bit 16: supervisor writes honour read-only pages.
@@ -129,36 +128,33 @@ fn check_boot_info(info: &BootInfo) {
 /// [`memory::init`]. Maps the heap, turns the boot context into the idle
 /// thread, and starts the main thread.
 fn kmain_paged(info: BootInfo) -> ! {
-    let mut ctx = Ctx::root();
-    heap::init(&mut ctx);
+    heap::init();
     sched::init();
     pic::mask_all();
     // SAFETY: the PICs are masked, and nothing else is set up to deliver
     // interrupts.
     unsafe { cpu::enable_interrupts() };
     // The main thread runs to the end of boot, so its handle is not needed.
-    drop(sched::spawn(&mut ctx, "main", move |ctx| {
-        main_thread(ctx, info);
-    }));
-    sched::run_idle(&mut ctx)
+    drop(sched::spawn("main", move || main_thread(info)));
+    sched::run_idle()
 }
 
 /// The first kernel thread: reports memory, gives back the bootloader's
 /// memory, runs the `main` [`kernel_main`] got, and exits.
-fn main_thread(ctx: &mut Ctx<'static, levels::ThreadRoot>, info: BootInfo) {
+fn main_thread(info: BootInfo) {
     const MIB: u64 = 1 << 20;
     let usable = memory::map().total(mm::RegionKind::Usable);
     let (free, count) = {
-        let frames = memory::frames(ctx);
+        let frames = memory::frames();
         (frames.free_frames(), frames.frame_count())
     };
     kprintln!(
         "hadron: {} MiB usable, {free} of {count} frames free",
         usable / MIB
     );
-    kprintln!("hadron: {} KiB heap", heap::free_bytes(ctx) / 1024);
-    let reclaimed = info.reclaim(ctx);
-    let free = memory::frames(ctx).free_frames();
+    kprintln!("hadron: {} KiB heap", heap::free_bytes() / 1024);
+    let reclaimed = info.reclaim();
+    let free = memory::frames().free_frames();
     kprintln!(
         "hadron: reclaimed {} KiB of bootloader memory and {} KiB of page tables, {free} frames free",
         reclaimed.boot * PAGE_SIZE / 1024,
@@ -270,14 +266,11 @@ impl BootInfo {
     /// Gives the bootloader's memory back to the frame allocator, unmaps
     /// the bootloader's direct map, and frees the page tables that held
     /// it. Copy anything still needed first.
-    pub(crate) fn reclaim<P: LockBefore<levels::KernelTables>>(
-        self,
-        ctx: &mut Ctx<'_, P>,
-    ) -> memory::Reclaimed {
+    pub(crate) fn reclaim(self) -> memory::Reclaimed {
         // SAFETY: `memory::init` took this `BootInfo`. Taking `self` ends
         // every borrow from it, and `new` requires that nothing else reads
         // bootloader-reclaimable memory. The rest of the kernel reaches
         // memory through `memory::DIRECT_MAP`.
-        unsafe { memory::reclaim_boot_memory(ctx, self.loader_direct_map, self.memory_map) }
+        unsafe { memory::reclaim_boot_memory(self.loader_direct_map, self.memory_map) }
     }
 }

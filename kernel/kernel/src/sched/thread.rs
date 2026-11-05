@@ -12,7 +12,7 @@ use arch_x86_64::paging::PAGE_SIZE;
 
 use crate::arch::x86_64::context;
 use crate::memory::{self, KERNEL_STACK_SIZE, THREAD_STACKS};
-use crate::sync::{Ctx, HeldLocks, IrqSpinLock, LockBefore, WaitQueue, levels};
+use crate::sync::{HeldLocks, IrqSpinLock, WaitQueue, levels};
 
 /// The thread is on a CPU.
 pub(super) const RUNNING: u8 = 0;
@@ -23,9 +23,8 @@ pub(super) const PARKED: u8 = 2;
 /// The thread finished and never runs again.
 pub(super) const EXITED: u8 = 3;
 
-/// What a new thread runs. It gets the token for a thread holding no
-/// locks.
-type Entry = Box<dyn FnOnce(&mut Ctx<'static, levels::ThreadRoot>) + Send>;
+/// What a new thread runs.
+type Entry = Box<dyn FnOnce() + Send>;
 
 /// A kernel thread.
 pub(crate) struct Thread {
@@ -126,12 +125,11 @@ impl Wake for Thread {
 /// # Panics
 ///
 /// Panics if there are no frames for a new stack.
-pub(crate) fn spawn<P, F>(ctx: &mut Ctx<'_, P>, name: &'static str, entry: F) -> JoinHandle
+pub(crate) fn spawn<F>(name: &'static str, entry: F) -> JoinHandle
 where
-    P: LockBefore<levels::Stacks>,
-    F: FnOnce(&mut Ctx<'static, levels::ThreadRoot>) + Send + 'static,
+    F: FnOnce() + Send + 'static,
 {
-    let stack = KernelStack::new(ctx);
+    let stack = KernelStack::new();
     // SAFETY: the stack is mapped, writable, 16-byte aligned at the top and
     // not used by anyone yet.
     let rsp = unsafe { context::initial_stack(stack.top().as_u64(), thread_start) };
@@ -156,7 +154,7 @@ extern "C" fn thread_start() -> ! {
     let entry = unsafe { (*thread.entry.get()).take() };
     drop(thread);
     if let Some(entry) = entry {
-        entry(&mut Ctx::root());
+        entry();
     }
     exit()
 }
@@ -178,11 +176,17 @@ pub(crate) struct JoinHandle {
 
 impl JoinHandle {
     /// Sleeps until the thread exits.
-    pub(crate) fn join<P: LockBefore<levels::MaySleep>>(self, ctx: &mut Ctx<'_, P>) {
+    ///
+    /// # Panics
+    ///
+    /// Panics if the calling thread may not sleep (see
+    /// [`super::might_sleep`]).
+    #[track_caller]
+    pub(crate) fn join(self) {
         let thread = &self.thread;
         thread
             .exited
-            .block_until(ctx, || thread.finished.load(Ordering::Acquire));
+            .block_until(|| thread.finished.load(Ordering::Acquire));
     }
 
     /// The thread.
@@ -219,15 +223,15 @@ struct KernelStack {
 
 impl KernelStack {
     /// Takes a free slot, or maps a new one.
-    fn new<P: LockBefore<levels::Stacks>>(ctx: &mut Ctx<'_, P>) -> Self {
-        let (mut slots, mut ctx) = STACKS.lock_and(ctx);
+    fn new() -> Self {
+        let mut slots = STACKS.lock();
         if let Some(slot) = slots.free.pop() {
             return Self { slot };
         }
         let slot = slots.next;
         slots.next += 1;
         let stack = Self { slot };
-        memory::map_new_pages(&mut ctx, stack.bottom(), KERNEL_STACK_SIZE)
+        memory::map_new_pages(stack.bottom(), KERNEL_STACK_SIZE)
             .expect("frames for a kernel stack");
         stack
     }
@@ -243,13 +247,13 @@ impl KernelStack {
 
 impl Drop for KernelStack {
     fn drop(&mut self) {
-        STACKS.lock_without_ctx().free.push(self.slot);
+        STACKS.lock().free.push(self.slot);
     }
 }
 
 /// How many stack slots have ever been mapped.
-pub(super) fn mapped_stacks<P: LockBefore<levels::Stacks>>(ctx: &mut Ctx<'_, P>) -> u64 {
-    STACKS.lock(ctx).next
+pub(super) fn mapped_stacks() -> u64 {
+    STACKS.lock().next
 }
 
 ktest::ktest! {
@@ -270,7 +274,7 @@ ktest::ktest! {
         // Shows the run-time checker's report. Run it with
         // `GLUON_KTEST_IGNORED=true gluon run -p test`.
         static LATE: IrqSpinLock<KtestSpin, ()> = IrqSpinLock::new(());
-        let _late = LATE.lock_without_ctx();
-        let _early = STACKS.lock_without_ctx();
+        let _late = LATE.lock();
+        let _early = STACKS.lock();
     }
 }

@@ -9,10 +9,10 @@
 //!   holding one.
 //!
 //! Taking a lock whose rank is not above every held lock's rank panics and
-//! names both locks and where each was taken. That catches the paths the
-//! compile-time tokens cannot see: locks taken without a token, two locks
-//! at the same level, and an exception handler that takes a lock its
-//! interrupted code holds.
+//! names both locks and where each was taken. Ranks are fixed, so one run
+//! that takes two locks out of order is enough: the reverse order never
+//! has to happen. That also catches two locks at the same level, and an
+//! exception handler that takes a lock its interrupted code holds.
 
 use core::cell::Cell;
 use core::panic::Location;

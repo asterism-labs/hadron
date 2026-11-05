@@ -35,7 +35,7 @@ pub(crate) use thread::{Thread, spawn};
 
 use crate::arch::x86_64::context;
 use crate::percpu::{self, IrqGuard};
-use crate::sync::{Ctx, IrqSpinLock, LockBefore, levels};
+use crate::sync::{IrqSpinLock, levels};
 
 /// Threads ready to run, oldest first, linked through [`Thread::next`].
 struct ReadyList {
@@ -107,15 +107,29 @@ pub(crate) fn init() {
 ///
 /// Panics when no thread is ready, since nothing can wake one until the
 /// kernel handles device or timer interrupts.
-pub(crate) fn run_idle(ctx: &mut Ctx<'_, levels::ThreadRoot>) -> ! {
+pub(crate) fn run_idle() -> ! {
     loop {
-        let ready = !RUN_QUEUE.lock(ctx).is_empty();
+        let ready = !RUN_QUEUE.lock().is_empty();
         assert!(
             ready,
             "every thread is blocked, and no interrupt can wake one yet"
         );
-        yield_now(ctx);
+        yield_now();
     }
+}
+
+/// Panics if the current thread may not sleep: it holds a spin lock, or
+/// has preemption or interrupts masked. Every function that may sleep
+/// calls this first, so the mistake shows on every call, not only when
+/// the function happens to sleep.
+#[track_caller]
+pub(crate) fn might_sleep() {
+    let depth = percpu::preempt_depth();
+    assert!(
+        depth == 0,
+        "may sleep with preemption off (depth {depth}): a spin lock is held, or \
+         interrupts or preemption are masked"
+    );
 }
 
 /// The running thread.
@@ -137,14 +151,26 @@ pub(crate) fn current() -> Arc<Thread> {
 
 /// Moves the current thread to the back of the run queue and runs the
 /// next ready thread, if any.
-pub(crate) fn yield_now<P: LockBefore<levels::MaySleep>>(_ctx: &mut Ctx<'_, P>) {
+///
+/// # Panics
+///
+/// Panics if the thread may not sleep (see [`might_sleep`]).
+#[track_caller]
+pub(crate) fn yield_now() {
+    might_sleep();
     schedule(Switch::Yield);
 }
 
 /// Sleeps until [`unpark`] is called for this thread. Returns at once if
 /// an unpark came since the last park. It can also return early, so
 /// callers check their condition in a loop.
-pub(crate) fn park<P: LockBefore<levels::MaySleep>>(_ctx: &mut Ctx<'_, P>) {
+///
+/// # Panics
+///
+/// Panics if the thread may not sleep (see [`might_sleep`]).
+#[track_caller]
+pub(crate) fn park() {
+    might_sleep();
     let thread = current();
     if thread.notified.swap(false, Ordering::Acquire) {
         return;
@@ -160,7 +186,7 @@ pub(crate) fn unpark(thread: &Arc<Thread>) {
     // the flag or this sees `PARKED`.
     thread.notified.store(true, Ordering::SeqCst);
     if thread.state.load(Ordering::SeqCst) == PARKED {
-        let mut queue = RUN_QUEUE.lock_without_ctx();
+        let mut queue = RUN_QUEUE.lock();
         let woke = thread
             .state
             .compare_exchange(PARKED, READY, Ordering::SeqCst, Ordering::SeqCst)
@@ -173,11 +199,13 @@ pub(crate) fn unpark(thread: &Arc<Thread>) {
 
 /// Runs `future` to completion on the current thread, parking whenever it
 /// is pending. The future's waker unparks this thread.
-pub(crate) fn block_on<P, F>(ctx: &mut Ctx<'_, P>, future: F) -> F::Output
-where
-    P: LockBefore<levels::MaySleep>,
-    F: Future,
-{
+///
+/// # Panics
+///
+/// Panics if the thread may not sleep (see [`might_sleep`]).
+#[track_caller]
+pub(crate) fn block_on<F: Future>(future: F) -> F::Output {
+    might_sleep();
     let waker = Waker::from(current());
     let mut cx = Context::from_waker(&waker);
     let mut future = pin!(future);
@@ -185,13 +213,13 @@ where
         if let Poll::Ready(output) = future.as_mut().poll(&mut cx) {
             return output;
         }
-        park(ctx);
+        park();
     }
 }
 
 /// Puts a new or woken thread at the back of the run queue.
 fn enqueue(thread: Arc<Thread>) {
-    RUN_QUEUE.lock_without_ctx().push(thread);
+    RUN_QUEUE.lock().push(thread);
 }
 
 /// Called by `PreemptGuard` when the last guard drops with a reschedule
@@ -225,7 +253,7 @@ fn schedule(how: Switch) {
         0,
         "a thread gave up the CPU with preemption disabled"
     );
-    let mut queue = RUN_QUEUE.lock_without_ctx();
+    let mut queue = RUN_QUEUE.lock();
     let (current_raw, idle_raw) = {
         let cpu = percpu::current(queue.mask());
         cpu.clear_need_resched();
@@ -317,13 +345,12 @@ ktest::ktest! {
     fn spawned_thread_runs_and_joins() {
         use core::sync::atomic::AtomicBool;
 
-        let mut ctx = Ctx::root();
         let ran = Arc::new(AtomicBool::new(false));
         let flag = ran.clone();
-        let handle = spawn(&mut ctx, "ktest", move |_| flag.store(true, Ordering::SeqCst));
+        let handle = spawn("ktest", move || flag.store(true, Ordering::SeqCst));
         assert!(handle.thread().id() > 0);
         assert_eq!(handle.thread().name(), "ktest");
-        handle.join(&mut ctx);
+        handle.join();
         assert!(ran.load(Ordering::SeqCst));
     }
 }
@@ -334,20 +361,19 @@ ktest::ktest! {
         use crate::sync::Mutex;
 
         static ORDER: Mutex<levels::KtestOuter, Vec<u8>> = Mutex::new(Vec::new());
-        let mut ctx = Ctx::root();
         let turns = |id: u8| {
-            move |ctx: &mut Ctx<'static, levels::ThreadRoot>| {
+            move || {
                 for _ in 0..3 {
-                    ORDER.lock(ctx).push(id);
-                    yield_now(ctx);
+                    ORDER.lock().push(id);
+                    yield_now();
                 }
             }
         };
-        let first = spawn(&mut ctx, "first", turns(1));
-        let second = spawn(&mut ctx, "second", turns(2));
-        first.join(&mut ctx);
-        second.join(&mut ctx);
-        assert_eq!(*ORDER.lock(&mut ctx), [1, 2, 1, 2, 1, 2]);
+        let first = spawn("first", turns(1));
+        let second = spawn("second", turns(2));
+        first.join();
+        second.join();
+        assert_eq!(*ORDER.lock(), [1, 2, 1, 2, 1, 2]);
     }
 }
 
@@ -356,16 +382,15 @@ ktest::ktest! {
         use crate::sync::Mutex;
 
         static VALUE: Mutex<levels::KtestOuter, u32> = Mutex::new(0);
-        let mut ctx = Ctx::root();
-        let (mut guard, mut held) = VALUE.lock_and(&mut ctx);
-        let waiter = spawn(&mut held, "waiter", |ctx| *VALUE.lock(ctx) += 1);
+        let mut guard = VALUE.lock();
+        let waiter = spawn("waiter", || *VALUE.lock() += 1);
         // The waiter runs, finds the lock taken and parks.
-        yield_now(&mut held);
+        yield_now();
         assert_eq!(waiter.thread().state.load(Ordering::SeqCst), PARKED);
         *guard = 10;
         drop(guard);
-        waiter.join(&mut held);
-        assert_eq!(*VALUE.lock(&mut ctx), 11);
+        waiter.join();
+        assert_eq!(*VALUE.lock(), 11);
     }
 }
 
@@ -375,9 +400,8 @@ ktest::ktest! {
 
         static OUTER: Mutex<levels::KtestOuter, u32> = Mutex::new(1);
         static INNER: Mutex<levels::KtestInner, u32> = Mutex::new(2);
-        let mut ctx = Ctx::root();
-        let (outer, mut ctx) = OUTER.lock_and(&mut ctx);
-        let inner = INNER.lock(&mut ctx);
+        let outer = OUTER.lock();
+        let inner = INNER.lock();
         assert_eq!(*outer + *inner, 3);
     }
 }
@@ -389,15 +413,14 @@ ktest::ktest! {
 
         static QUEUE: WaitQueue = WaitQueue::new();
         static READY_FLAG: AtomicBool = AtomicBool::new(false);
-        let mut ctx = Ctx::root();
-        let waiter = spawn(&mut ctx, "waiter", |ctx| {
-            QUEUE.block_until(ctx, || READY_FLAG.load(Ordering::SeqCst));
+        let waiter = spawn("waiter", || {
+            QUEUE.block_until(|| READY_FLAG.load(Ordering::SeqCst));
         });
-        yield_now(&mut ctx);
+        yield_now();
         assert_eq!(waiter.thread().state.load(Ordering::SeqCst), PARKED);
         READY_FLAG.store(true, Ordering::SeqCst);
         QUEUE.wake_all();
-        waiter.join(&mut ctx);
+        waiter.join();
     }
 }
 
@@ -406,10 +429,9 @@ ktest::ktest! {
         use core::sync::atomic::AtomicBool;
         use crate::percpu::PreemptGuard;
 
-        let mut ctx = Ctx::root();
         let ran = Arc::new(AtomicBool::new(false));
         let flag = ran.clone();
-        let other = spawn(&mut ctx, "other", move |_| flag.store(true, Ordering::SeqCst));
+        let other = spawn("other", move || flag.store(true, Ordering::SeqCst));
         let preempt = PreemptGuard::new();
         {
             let irq = IrqGuard::new();
@@ -418,18 +440,29 @@ ktest::ktest! {
         assert!(!ran.load(Ordering::SeqCst), "a guard was held");
         drop(preempt);
         assert!(ran.load(Ordering::SeqCst), "the switch ran the other thread");
-        other.join(&mut ctx);
+        other.join();
     }
 }
 
 ktest::ktest! {
     fn exited_threads_give_back_their_stacks() {
-        let mut ctx = Ctx::root();
-        spawn(&mut ctx, "first", |_| {}).join(&mut ctx);
-        let mapped = thread::mapped_stacks(&mut ctx);
+        spawn("first", || {}).join();
+        let mapped = thread::mapped_stacks();
         for _ in 0..32 {
-            spawn(&mut ctx, "again", |_| {}).join(&mut ctx);
+            spawn("again", || {}).join();
         }
-        assert_eq!(thread::mapped_stacks(&mut ctx), mapped);
+        assert_eq!(thread::mapped_stacks(), mapped);
+    }
+}
+
+ktest::ktest! {
+    #[ignore]
+    fn might_sleep_reports_sleeping_under_a_spin_lock() {
+        use crate::sync::{IrqSpinLock, levels::KtestSpin};
+        // Shows the report. Run it with
+        // `GLUON_KTEST_IGNORED=true gluon run -p test`.
+        static LOCK: IrqSpinLock<KtestSpin, ()> = IrqSpinLock::new(());
+        let _held = LOCK.lock();
+        yield_now();
     }
 }

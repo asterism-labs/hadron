@@ -11,7 +11,7 @@ use alloc::collections::VecDeque;
 use core::pin::Pin;
 use core::task::{Context, Poll, Waker};
 
-use super::level::{Ctx, LockBefore, levels};
+use super::level::levels;
 use super::spin::IrqSpinLock;
 use crate::sched;
 
@@ -39,17 +39,18 @@ impl WaitQueue {
     }
 
     /// Blocks the current thread until `condition` returns true.
-    pub(crate) fn block_until<P: LockBefore<levels::MaySleep>>(
-        &self,
-        ctx: &mut Ctx<'_, P>,
-        condition: impl FnMut() -> bool,
-    ) {
-        sched::block_on(ctx, self.wait_until(condition));
+    ///
+    /// # Panics
+    ///
+    /// Panics if the thread may not sleep (see [`sched::might_sleep`]).
+    #[track_caller]
+    pub(crate) fn block_until(&self, condition: impl FnMut() -> bool) {
+        sched::block_on(self.wait_until(condition));
     }
 
     /// Wakes the waiter that registered first.
     pub(crate) fn wake_one(&self) {
-        let waker = self.wakers.lock_without_ctx().pop_front();
+        let waker = self.wakers.lock().pop_front();
         if let Some(waker) = waker {
             waker.wake();
         }
@@ -57,14 +58,14 @@ impl WaitQueue {
 
     /// Wakes every waiter.
     pub(crate) fn wake_all(&self) {
-        let wakers = core::mem::take(&mut *self.wakers.lock_without_ctx());
+        let wakers = core::mem::take(&mut *self.wakers.lock());
         for waker in wakers {
             waker.wake();
         }
     }
 
     fn register(&self, waker: &Waker) {
-        let mut wakers = self.wakers.lock_without_ctx();
+        let mut wakers = self.wakers.lock();
         if !wakers.iter().any(|w| w.will_wake(waker)) {
             wakers.push_back(waker.clone());
         }
@@ -74,9 +75,7 @@ impl WaitQueue {
     /// `waker`, so the copy is never the last reference to a thread, and
     /// dropping it under the lock frees nothing.
     fn unregister(&self, waker: &Waker) {
-        self.wakers
-            .lock_without_ctx()
-            .retain(|w| !w.will_wake(waker));
+        self.wakers.lock().retain(|w| !w.will_wake(waker));
     }
 }
 

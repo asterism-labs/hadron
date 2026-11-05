@@ -1,8 +1,7 @@
 //! Locks, wait queues and other synchronization.
 //!
-//! Every lock has a level, and [`level`] checks the order locks are taken
-//! in at compile time. `lockdep` checks it again at run time for the
-//! paths the types cannot see.
+//! Every lock has a level, declared in [`level`], and `lockdep` checks at
+//! run time that locks are taken in level order.
 
 mod level;
 mod lockdep;
@@ -14,7 +13,7 @@ use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicU8, Ordering};
 
-pub(crate) use level::{Ctx, LockBefore, levels};
+pub(crate) use level::levels;
 pub(crate) use lockdep::HeldLocks;
 pub(crate) use mutex::Mutex;
 pub(crate) use spin::{IrqSpinLock, IrqSpinLockGuard, Mask};

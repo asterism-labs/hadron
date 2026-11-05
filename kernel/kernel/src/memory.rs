@@ -47,7 +47,7 @@ use mm::{
 
 use crate::arch::x86_64::cpu;
 use crate::boot::BootInfo;
-use crate::sync::{Ctx, IrqSpinLock, IrqSpinLockGuard, LockBefore, WriteOnce, levels};
+use crate::sync::{IrqSpinLock, IrqSpinLockGuard, WriteOnce, levels};
 
 /// The kernel's direct map, PML4 slot 273. It differs from Limine's
 /// default offset, slot 256, so a pointer into the bootloader's map that
@@ -108,25 +108,18 @@ pub(crate) fn map() -> &'static MemoryMap<'static> {
 /// # Panics
 ///
 /// Panics before [`init`].
-pub(crate) fn frames<'a, P: LockBefore<levels::Frames>>(
-    ctx: &'a mut Ctx<'_, P>,
-) -> IrqSpinLockGuard<'a, levels::Frames, Frames> {
-    FRAMES.get().expect(INIT_RAN).lock(ctx)
+pub(crate) fn frames() -> IrqSpinLockGuard<'static, levels::Frames, Frames> {
+    FRAMES.get().expect(INIT_RAN).lock()
 }
 
-/// Locks the kernel's page tables, the ones in CR3, and returns a token
-/// for taking the frame allocator next.
+/// Locks the kernel's page tables, the ones in CR3. Take it before the
+/// frame allocator.
 ///
 /// # Panics
 ///
 /// Panics before [`init`].
-pub(crate) fn kernel_tables<'a, P: LockBefore<levels::KernelTables>>(
-    ctx: &'a mut Ctx<'_, P>,
-) -> (
-    IrqSpinLockGuard<'a, levels::KernelTables, Mapper>,
-    Ctx<'a, levels::KernelTables>,
-) {
-    KERNEL_TABLES.get().expect(INIT_RAN).lock_and(ctx)
+pub(crate) fn kernel_tables() -> IrqSpinLockGuard<'static, levels::KernelTables, Mapper> {
+    KERNEL_TABLES.get().expect(INIT_RAN).lock()
 }
 
 /// Maps `len` bytes at `virt` to new frames, page by page, read-write and
@@ -140,13 +133,9 @@ pub(crate) fn kernel_tables<'a, P: LockBefore<levels::KernelTables>>(
 /// # Panics
 ///
 /// Panics before [`init`].
-pub(crate) fn map_new_pages<P: LockBefore<levels::KernelTables>>(
-    ctx: &mut Ctx<'_, P>,
-    virt: VirtAddr,
-    len: u64,
-) -> Result<(), MapError> {
-    let (mut tables, mut ctx) = kernel_tables(ctx);
-    let mut frames = frames(&mut ctx);
+pub(crate) fn map_new_pages(virt: VirtAddr, len: u64) -> Result<(), MapError> {
+    let mut tables = kernel_tables();
+    let mut frames = frames();
     let mut page = virt;
     while page < virt + len {
         let frame = frames.allocate().ok_or(MapError::OutOfFrames)?;
@@ -274,13 +263,9 @@ pub(crate) struct Reclaimed {
 /// `loader` and `regions` come from the [`BootInfo`] that [`init`] took,
 /// and nothing reads bootloader-reclaimable memory or the bootloader's
 /// direct map after this call.
-pub(crate) unsafe fn reclaim_boot_memory<P: LockBefore<levels::KernelTables>>(
-    ctx: &mut Ctx<'_, P>,
-    loader: DirectMap,
-    regions: &[Region],
-) -> Reclaimed {
-    let (mut tables, mut ctx) = kernel_tables(ctx);
-    let mut frames = frames(&mut ctx);
+pub(crate) unsafe fn reclaim_boot_memory(loader: DirectMap, regions: &[Region]) -> Reclaimed {
+    let mut tables = kernel_tables();
+    let mut frames = frames();
     let mut table_frames = 0;
     if loader != DIRECT_MAP {
         table_frames = tables.unmap_pml4_slots(loader_slots(loader, regions), |frame| {

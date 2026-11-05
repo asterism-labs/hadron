@@ -10,7 +10,7 @@ use core::ops::{Deref, DerefMut};
 use core::panic::Location;
 use core::sync::atomic::{AtomicU16, Ordering};
 
-use super::level::{Ctx, Level, LockBefore};
+use super::level::{Level, levels};
 use super::lockdep::{self, Kind};
 use crate::percpu::{IrqGuard, PreemptGuard};
 
@@ -78,6 +78,12 @@ unsafe impl<L, T: Send, M> Sync for SpinLock<L, T, M> {}
 impl<L: Level, T, M: Mask> SpinLock<L, T, M> {
     /// An unlocked lock around `value`.
     pub(crate) const fn new(value: T) -> Self {
+        const {
+            assert!(
+                L::RANK > levels::MaySleep::RANK,
+                "a spin lock's level must come after `MaySleep`"
+            );
+        }
         Self {
             ticket: Ticket::new(),
             value: UnsafeCell::new(value),
@@ -86,31 +92,14 @@ impl<L: Level, T, M: Mask> SpinLock<L, T, M> {
         }
     }
 
-    /// Takes the lock. `ctx` proves the caller holds only earlier levels,
-    /// and stays borrowed until the guard drops.
+    /// Takes the lock, spinning until it is free.
+    ///
+    /// # Panics
+    ///
+    /// With `LOCKDEP`, panics if this CPU or thread holds a lock at the
+    /// same or a later level.
     #[track_caller]
-    pub(crate) fn lock<'a, P: LockBefore<L>>(
-        &'a self,
-        _ctx: &'a mut Ctx<'_, P>,
-    ) -> SpinLockGuard<'a, L, T, M> {
-        self.lock_without_ctx()
-    }
-
-    /// Takes the lock and returns a token for its level, for taking later
-    /// locks while holding it.
-    #[track_caller]
-    pub(crate) fn lock_and<'a, P: LockBefore<L>>(
-        &'a self,
-        _ctx: &'a mut Ctx<'_, P>,
-    ) -> (SpinLockGuard<'a, L, T, M>, Ctx<'a, L>) {
-        (self.lock_without_ctx(), Ctx::new())
-    }
-
-    /// Takes the lock without a token. Only code inside a standard trait
-    /// that cannot take one uses this, such as `GlobalAlloc` or `Waker`.
-    /// The run-time checker still sees it.
-    #[track_caller]
-    pub(crate) fn lock_without_ctx(&self) -> SpinLockGuard<'_, L, T, M> {
+    pub(crate) fn lock(&self) -> SpinLockGuard<'_, L, T, M> {
         let mask = M::new();
         lockdep::acquire::<L>(Kind::Spin, self.addr(), Location::caller());
         self.ticket.lock();
@@ -182,9 +171,8 @@ ktest::ktest! {
         use super::levels::KtestSpin;
 
         static LOCK: IrqSpinLock<KtestSpin, u32> = IrqSpinLock::new(1);
-        let mut ctx = Ctx::root();
-        *LOCK.lock(&mut ctx) += 1;
-        assert_eq!(*LOCK.lock(&mut ctx), 2);
+        *LOCK.lock() += 1;
+        assert_eq!(*LOCK.lock(), 2);
     }
 }
 
@@ -194,9 +182,8 @@ ktest::ktest! {
         use crate::arch::x86_64::cpu;
 
         static LOCK: IrqSpinLock<KtestSpin, ()> = IrqSpinLock::new(());
-        let mut ctx = Ctx::root();
         let before = cpu::interrupts_enabled();
-        let guard = LOCK.lock(&mut ctx);
+        let guard = LOCK.lock();
         assert!(!cpu::interrupts_enabled());
         drop(guard);
         assert_eq!(cpu::interrupts_enabled(), before);
