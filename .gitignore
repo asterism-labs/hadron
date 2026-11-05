@@ -1,0 +1,19 @@
+# Build artifacts
+/target/
+/build/
+*.iso
+*.img
+
+# Generated files
+rust-project.json
+
+# Editor / IDE
+*.swp
+*.swo
+.idea/
+.vscode/
+*.DS_Store
+*.orig
+
+# Git worktrees
+.worktrees/
