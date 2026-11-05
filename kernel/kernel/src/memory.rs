@@ -36,6 +36,7 @@
 
 use core::mem::size_of;
 use core::ops::Range;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use arch_x86_64::paging::{Level, PAGE_SIZE, PageSize, PageTableFlags};
 use arch_x86_64::{PhysAddr, VirtAddr};
@@ -83,8 +84,19 @@ const BOOT_STACK_TOP: VirtAddr = VirtAddr::new(BOOT_STACK_BOTTOM.as_u64() + BOOT
 /// starts with a guard page.
 pub(crate) const THREAD_STACKS: VirtAddr = BOOT_STACK_TOP;
 
+/// Start of the device register region, PML4 slot 403. [`map_mmio`]
+/// hands out addresses here and never reuses them.
+const MMIO: VirtAddr = VirtAddr::new(0xffff_c980_0000_0000);
+
+/// Size of the device register region.
+const MMIO_SIZE: u64 = 1 << 39;
+
 const _: () = assert!(DIRECT_MAP.offset() + DIRECT_MAP_SIZE <= HEAP.as_u64());
 const _: () = assert!(HEAP.as_u64() + HEAP_SIZE <= STACKS.as_u64());
+const _: () = assert!(STACKS.as_u64() + (1 << 39) <= MMIO.as_u64());
+
+/// The next free address in the device register region.
+static MMIO_NEXT: AtomicU64 = AtomicU64::new(MMIO.as_u64());
 
 static MAP: WriteOnce<MemoryMap<'static>> = WriteOnce::new();
 type Frames = BitmapFrameAllocator<'static>;
@@ -149,6 +161,48 @@ pub(crate) fn map_new_pages(virt: VirtAddr, len: u64) -> Result<(), MapError> {
         page = page + PAGE_SIZE;
     }
     Ok(())
+}
+
+/// Maps `len` bytes of device registers at `phys` uncached, read-write and
+/// non-executable, and returns the address of `phys` in the mapping. The
+/// mapping stays for good.
+///
+/// PCD and PWT together select PAT entry 3, which is uncacheable both at
+/// reset and as Limine sets the PAT.
+///
+/// # Panics
+///
+/// Panics if the range overlaps memory the direct map covers, since two
+/// mappings of one frame with different cache types are undefined, if the
+/// device register region is full, or if frames for page tables run out.
+pub(crate) fn map_mmio(phys: PhysAddr, len: u64) -> VirtAddr {
+    let start = phys.align_down(PAGE_SIZE);
+    let end = (phys + len).align_up(PAGE_SIZE);
+    let overlaps = map()
+        .regions()
+        .iter()
+        .any(|region| region.kind.is_direct_mapped() && region.start < end && start < region.end);
+    assert!(
+        !overlaps,
+        "device registers at {phys:?} lie in the direct map"
+    );
+
+    let size = end - start;
+    let virt = VirtAddr::new(MMIO_NEXT.fetch_add(size, Ordering::Relaxed));
+    assert!(
+        virt.as_u64() + size <= MMIO.as_u64() + MMIO_SIZE,
+        "the device register region is full"
+    );
+    let flags = PageTableFlags::WRITABLE
+        | PageTableFlags::NO_EXECUTE
+        | PageTableFlags::CACHE_DISABLE
+        | PageTableFlags::WRITE_THROUGH;
+    let mut tables = kernel_tables();
+    let mut frames = frames();
+    tables
+        .map_range(virt, start, size, PageSize::Size4K, flags, &mut *frames)
+        .expect("frames for device register page tables");
+    virt + (phys - start)
 }
 
 /// What stage 1 passes to stage 2 across the stack switch.
@@ -487,6 +541,18 @@ ktest::ktest! {
     fn boot_stack_has_a_guard_page() {
         assert_eq!(translate(STACKS), None);
         assert!(translate(BOOT_STACK_BOTTOM).is_some());
+    }
+}
+
+ktest::ktest! {
+    fn mmio_is_mapped_uncached() {
+        let phys = PhysAddr::new(0xfee0_0000);
+        let virt = map_mmio(phys + 0x20, 4);
+        assert_eq!(virt.as_u64() % PAGE_SIZE, 0x20);
+        let t = translate(virt).expect("the registers are mapped");
+        assert_eq!(t.phys, phys + 0x20);
+        let uncached = PageTableFlags::CACHE_DISABLE | PageTableFlags::WRITE_THROUGH;
+        assert!(t.flags.contains(uncached | PageTableFlags::NO_EXECUTE));
     }
 }
 
