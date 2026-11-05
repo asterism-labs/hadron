@@ -16,13 +16,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hadron-bench"
-version = "0.1.0"
-dependencies = [
- "limine",
-]
-
-[[package]]
 name = "hadron-binparse"
 version = "0.1.0"
 dependencies = [
@@ -54,33 +47,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "hadron-ktest"
-version = "0.1.0"
-dependencies = [
- "hadron-ktest-macros",
- "hadron-linkset",
-]
-
-[[package]]
-name = "hadron-ktest-macros"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
 name = "hadron-linkset"
 version = "0.1.0"
-
-[[package]]
-name = "hadron-test"
-version = "0.1.0"
-dependencies = [
- "limine",
- "uefi",
-]
 
 [[package]]
 name = "limine"
@@ -123,7 +91,6 @@ name = "uefi"
 version = "0.1.0"
 dependencies = [
  "bitflags",
- "hadron-test",
 ]
 
 [[package]]
