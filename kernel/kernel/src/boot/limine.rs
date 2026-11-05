@@ -66,7 +66,9 @@ fn take_regions() -> &'static mut [Region; MAX_REGIONS] {
     unsafe { &mut *REGIONS.regions.get() }
 }
 
-/// Boots the kernel from Limine. The binary's entry point calls this.
+/// Boots the kernel from Limine and runs `main` on the main thread. The
+/// binary's entry point calls this. QEMU exits with success when `main`
+/// returns, and with failure on a panic.
 ///
 /// # Safety
 ///
@@ -74,11 +76,11 @@ fn take_regions() -> &'static mut [Region; MAX_REGIONS] {
 /// it. Limine enters the kernel once, on the boot CPU alone, in 64-bit
 /// mode with interrupts masked, the kernel mapped at its link address,
 /// and a stack of at least 64 KiB.
-pub unsafe fn enter() -> ! {
+pub unsafe fn enter(main: fn()) -> ! {
     // SAFETY: the caller is Limine's entry point, as above. The paging
     // mode request asks for 4-level paging. `kernel_main` checks the CPU state.
     // `boot_info` explains why its `BootInfo` is sound.
-    unsafe { super::kernel_main(boot_info) }
+    unsafe { super::kernel_main(boot_info, main) }
 }
 
 /// Reads Limine's responses into a [`BootInfo`]. The responses live in

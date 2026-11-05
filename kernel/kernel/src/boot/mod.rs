@@ -8,7 +8,8 @@
 
 pub mod limine;
 
-use core::ptr::NonNull;
+use core::ptr::{self, NonNull};
+use core::sync::atomic::{AtomicPtr, Ordering};
 
 use arch_x86_64::paging::PAGE_SIZE;
 use arch_x86_64::{PhysAddr, VirtAddr};
@@ -38,6 +39,10 @@ unsafe extern "C" {
     static __kernel_start: u8;
 }
 
+/// What the main thread runs, set once by [`kernel_main`]. A static
+/// carries it because [`memory::init`] continues in a plain function.
+static MAIN: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
+
 /// The kernel's entry point, for every bootloader.
 ///
 /// It sets up the boot CPU's per-CPU block and the console, checks the CPU
@@ -45,6 +50,7 @@ unsafe extern "C" {
 /// `boot_info`, so the adapter reads the bootloader's data with the
 /// console up and a panic handler that can report what went wrong. Last,
 /// it switches to the kernel's page tables and starts the scheduler.
+/// The main thread runs `main`, then exits QEMU with success.
 ///
 /// # Safety
 ///
@@ -56,7 +62,8 @@ unsafe extern "C" {
 /// - The stack has at least 64 KiB free. Boot runs on it until
 ///   [`memory::init`] switches to the kernel's boot stack.
 /// - `boot_info` upholds what [`BootInfo::new`] requires.
-pub(crate) unsafe fn kernel_main(boot_info: impl FnOnce() -> BootInfo) -> ! {
+pub(crate) unsafe fn kernel_main(boot_info: impl FnOnce() -> BootInfo, main: fn()) -> ! {
+    MAIN.store(main as *mut (), Ordering::Relaxed);
     // Locks mask interrupts through the per-CPU block, so it comes first.
     percpu::init_boot_cpu();
     // With no console there is nowhere to report the error, so boot goes on.
@@ -137,7 +144,7 @@ fn kmain_paged(info: BootInfo) -> ! {
 }
 
 /// The first kernel thread: reports memory, gives back the bootloader's
-/// memory, then runs the kernel tests or exits.
+/// memory, runs the `main` [`kernel_main`] got, and exits.
 fn main_thread(ctx: &mut Ctx<'static, levels::ThreadRoot>, info: BootInfo) {
     const MIB: u64 = 1 << 20;
     let usable = memory::map().total(mm::RegionKind::Usable);
@@ -157,9 +164,10 @@ fn main_thread(ctx: &mut Ctx<'static, levels::ThreadRoot>, info: BootInfo) {
         reclaimed.boot * PAGE_SIZE / 1024,
         reclaimed.tables * PAGE_SIZE / 1024,
     );
-    if hadron_config::KTEST {
-        crate::ktest::run();
-    }
+    // SAFETY: `kernel_main` stored a `fn()` before boot went on, and
+    // nothing else writes `MAIN`.
+    let main = unsafe { core::mem::transmute::<*mut (), fn()>(MAIN.load(Ordering::Relaxed)) };
+    main();
     qemu::exit(ExitCode::Success)
 }
 

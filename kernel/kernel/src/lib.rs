@@ -45,5 +45,14 @@ mod sched;
 #[cfg(all(target_os = "none", target_arch = "x86_64"))]
 mod sync;
 
+/// The kernel binary's main thread: runs the kernel tests under Gluon's
+/// `test` profile, else returns, and QEMU exits with success.
+#[cfg(all(target_os = "none", target_arch = "x86_64"))]
+pub fn kmain() {
+    if hadron_config::KTEST {
+        ktest::run();
+    }
+}
+
 #[cfg(all(target_os = "none", not(target_arch = "x86_64")))]
 compile_error!("the kernel supports only x86_64");

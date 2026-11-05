@@ -11,7 +11,7 @@ mod entry {
     #[unsafe(no_mangle)]
     extern "C" fn kmain() -> ! {
         // SAFETY: Limine jumps here, and nothing runs before it.
-        unsafe { kernel::boot::limine::enter() }
+        unsafe { kernel::boot::limine::enter(kernel::kmain) }
     }
 
     #[panic_handler]
