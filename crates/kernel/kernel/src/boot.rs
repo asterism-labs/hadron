@@ -28,12 +28,12 @@ const COM1: u16 = 0x3f8;
 const DEBUG_EXIT: u16 = 0xf4;
 /// Written to `DEBUG_EXIT` on success. QEMU exits with `(value << 1) | 1`,
 /// so this becomes status 33, which `gluon.rs` names as success.
-const EXIT_SUCCESS: u32 = 0x10;
+pub(crate) const EXIT_SUCCESS: u32 = 0x10;
 /// Written to `DEBUG_EXIT` on failure. QEMU exits with status 35.
 const EXIT_FAILURE: u32 = 0x11;
 
 /// Writes to COM1. QEMU's UART transmits without any setup.
-struct Serial;
+pub(crate) struct Serial;
 
 impl Write for Serial {
     fn write_str(&mut self, s: &str) -> fmt::Result {
@@ -47,7 +47,7 @@ impl Write for Serial {
 }
 
 /// Stops QEMU with `code`, or halts forever where `isa-debug-exit` is absent.
-fn exit_qemu(code: u32) -> ! {
+pub(crate) fn exit_qemu(code: u32) -> ! {
     // SAFETY: the `isa-debug-exit` port ends the QEMU process. On a machine
     // without the device the write is ignored.
     unsafe { asm!("out dx, eax", in("dx") DEBUG_EXIT, in("eax") code, options(nomem, nostack)) };
@@ -74,11 +74,21 @@ extern "C" fn kmain() -> ! {
             (info.name(), info.version())
         });
     let _ = writeln!(Serial, "hadron: booted by {name} {version}");
+    if hadron_config::KTEST {
+        crate::ktest::run();
+    }
     exit_qemu(EXIT_SUCCESS)
 }
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
+    crate::ktest::report_panic();
     let _ = writeln!(Serial, "hadron: {info}");
     exit_qemu(EXIT_FAILURE)
+}
+
+ktest::ktest! {
+    fn limine_answers_bootloader_info() {
+        assert!(BOOTLOADER_INFO.response().is_some());
+    }
 }

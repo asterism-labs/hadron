@@ -52,6 +52,32 @@ gluon run            # boot the kernel under QEMU
 `isa-debug-exit` device. The first build downloads Limine's `BOOTX64.EFI`
 and checks it against the SHA-256 in `gluon.rs`.
 
+## Kernel tests
+
+Kernel tests run inside the kernel after boot. Define one with
+`ktest::ktest!` in the kernel crate. A test fails by panicking.
+
+```rust
+ktest::ktest! {
+    fn limine_answers_bootloader_info() {
+        assert!(BOOTLOADER_INFO.response().is_some());
+    }
+}
+```
+
+Write `#[ignore]` before `fn` to keep a test out of the default run.
+
+```sh
+gluon run -p test                          # run the tests
+GLUON_KTEST_IGNORED=true gluon run -p test # also run #[ignore] tests
+```
+
+The `test` profile sets the `KTEST` config option. The kernel then prints
+one line per test on the serial port and exits QEMU with status 33 when
+every test passes. The kernel has no unwinding, so the first failing test
+ends the run: the panic handler prints `FAILED` and the panic message, and
+QEMU exits with status 35. `gluon run` exits 0 or 1 to match.
+
 ## History
 
 - `legacy`: the previous monolithic kernel, with userspace, a Wayland

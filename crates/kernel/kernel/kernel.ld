@@ -30,6 +30,15 @@ SECTIONS
     . = ALIGN(CONSTANT(MAXPAGESIZE));
     .rodata : { *(.rodata .rodata.*) } :rodata
 
+    /* Tests registered with ktest!. The runner reads the array between
+       the two symbols. KEEP stops the linker from dropping the entries,
+       since no code references them by name. */
+    .ktest : {
+        __ktest_start = .;
+        KEEP(*(.ktest))
+        __ktest_end = .;
+    } :rodata
+
     . = ALIGN(CONSTANT(MAXPAGESIZE));
     .data : { *(.data .data.*) } :data
     .bss : { *(.bss .bss.*) *(COMMON) } :data

@@ -1,10 +1,11 @@
 // Gluon build for Hadron.
 //
-//     gluon build     build every crate
-//     gluon clippy    lint every crate
-//     gluon run       boot the kernel under QEMU through UEFI and Limine
+//     gluon build         build every crate
+//     gluon clippy        lint every crate
+//     gluon run           boot the kernel under QEMU through UEFI and Limine
+//     gluon run -p test   boot the kernel and run the kernel tests
 
-use gluon_config::{Config, Result};
+use gluon_config::{Config, ConfigValue, Result};
 
 /// Workspace library crates. The kernel package is declared on its own.
 const LIBRARIES: &[&str] = &[
@@ -24,11 +25,24 @@ fn main() -> Result<()> {
         .debug_info(true)
         .boot_binary("kernel");
 
+    // The kernel reads these as `hadron_config::KTEST` and
+    // `hadron_config::KTEST_IGNORED`. The `test` profile turns on KTEST.
+    // `GLUON_KTEST_IGNORED=true` also runs the `#[ignore]` tests.
+    cfg.config_bool("KTEST")
+        .default_value(ConfigValue::Bool(false))
+        .help("Run the kernel tests after boot instead of exiting");
+    cfg.config_bool("KTEST_IGNORED")
+        .default_value(ConfigValue::Bool(false))
+        .help("Also run the kernel tests marked #[ignore]");
+    cfg.preset("test").set("KTEST", ConfigValue::Bool(true));
+    cfg.profile("test").inherits("dev").preset("test");
+
     // x86_64-unknown-none links a position-independent executable by
     // default. Limine loads one only with a PT_DYNAMIC segment, so link a
     // plain executable at the address kernel.ld sets.
     cfg.group("kernel")
         .target(x86_64)
+        .config(true)
         .package("kernel")
         .linker_script("crates/kernel/kernel/kernel.ld")
         .rustc_flag("-Crelocation-model=static");
