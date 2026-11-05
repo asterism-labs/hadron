@@ -11,21 +11,10 @@ repos:
       - id: check-toml
       - id: check-yaml
 
-      # Commit messages: `type(scope): summary`, at most 72 characters,
-      # lowercase start, no trailing period, no Co-Authored-By trailers.
-      - id: require-pattern
-        name: commit subject format
-        stages: [commit-msg]
-        args:
-          - --multiline
-          - '\A(?:(?:fixup|squash|amend)! .*|(?:feat|fix|refactor|docs|test|chore|ci|perf|style|build)\([a-z0-9/_-]+\): [^A-Z\s][^\n]*[^.\s])(?:\n|\z)'
-      - id: require-pattern
-        name: commit subject length
-        stages: [commit-msg]
-        args: [--multiline, '\A[^\n]{1,72}(?:\n|\z)']
-      - id: check-commit-trailers
-        stages: [commit-msg]
-        args: [--deny, Co-Authored-By]
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v4.5.0
+    hooks:
+      - id: conventional-pre-commit
 
   - repo: local
     hooks:

@@ -33,8 +33,8 @@ cargo test --workspace
 The kernel will build with [Gluon](https://github.com/hxyulin/gluon).
 
 The hooks check whitespace, final newlines, `cargo fmt`, `taplo fmt` and
-`cargo clippy -D warnings`. Commit subjects must follow
-`type(scope): summary`, with at most 72 characters.
+`cargo clippy -D warnings`. Commit messages must follow
+[Conventional Commits](https://www.conventionalcommits.org/).
 
 ## History
 
