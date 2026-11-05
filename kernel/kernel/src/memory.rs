@@ -33,6 +33,16 @@
 //!   [`levels::Frames`];
 //! - [`kernel_tables`]: the kernel's page tables, an [`IrqSpinLock`] at
 //!   [`levels::KernelTables`], which comes before the frame allocator.
+//!
+//! The kernel's virtual regions, one or more PML4 slots each:
+//!
+//! | Slot | Start                   | Region                                  |
+//! |------|-------------------------|-----------------------------------------|
+//! | 273  | [`DIRECT_MAP`]          | all physical memory except reserved     |
+//! | 401  | [`HEAP`]                | the kernel heap                         |
+//! | 402  | `STACKS`                | the boot stack, then [`THREAD_STACKS`]  |
+//! | 403  | `MMIO`                  | device registers, from [`map_mmio`]     |
+//! | 511  | `0xffff_ffff_8000_0000` | the kernel image, from `kernel.ld`      |
 
 use core::mem::size_of;
 use core::ops::Range;
