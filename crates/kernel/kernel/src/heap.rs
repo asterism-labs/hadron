@@ -8,14 +8,14 @@
 use core::alloc::{GlobalAlloc, Layout};
 use core::ptr::{self, NonNull};
 
-use arch_x86_64::paging::{PAGE_SIZE, PageSize, PageTableFlags};
 use mm::Heap;
 
 use crate::memory::{self, HEAP, HEAP_SIZE};
-use crate::sync::IrqSpinLock;
+use crate::sync::{Ctx, IrqSpinLock, LockBefore, levels};
 
-/// The global allocator's state.
-struct KernelHeap(IrqSpinLock<Option<Heap>>);
+/// The global allocator's state. `GlobalAlloc` cannot take a token, so it
+/// locks without one, and the heap is last in the lock order.
+struct KernelHeap(IrqSpinLock<levels::Heap, Option<Heap>>);
 
 #[global_allocator]
 static KERNEL_HEAP: KernelHeap = KernelHeap(IrqSpinLock::new(None));
@@ -25,14 +25,14 @@ static KERNEL_HEAP: KernelHeap = KernelHeap(IrqSpinLock::new(None));
 unsafe impl GlobalAlloc for KernelHeap {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         self.0
-            .lock()
+            .lock_without_ctx()
             .as_mut()
             .and_then(|heap| heap.allocate(layout))
             .map_or(ptr::null_mut(), NonNull::as_ptr)
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        let mut heap = self.0.lock();
+        let mut heap = self.0.lock_without_ctx();
         let heap = heap
             .as_mut()
             .expect("memory was allocated before it is freed");
@@ -48,28 +48,9 @@ unsafe impl GlobalAlloc for KernelHeap {
 /// # Panics
 ///
 /// Panics if called twice or if there are not enough frames.
-pub(crate) fn init() {
-    {
-        let mut tables = memory::kernel_tables();
-        let mut frames = memory::frames();
-        let mut page = HEAP;
-        while page < HEAP + HEAP_SIZE {
-            let frame = frames.allocate().expect("frames for the heap");
-            tables
-                .map(
-                    page,
-                    frame.start(),
-                    PageSize::Size4K,
-                    PageTableFlags::WRITABLE | PageTableFlags::NO_EXECUTE,
-                    &mut *frames,
-                )
-                .expect("the heap region is unmapped");
-            page = page + PAGE_SIZE;
-        }
-    }
-    // The page table and frame locks are released: the heap's lock comes
-    // first in the order.
-    let mut heap = KERNEL_HEAP.0.lock();
+pub(crate) fn init<P: LockBefore<levels::KernelTables>>(ctx: &mut Ctx<'_, P>) {
+    memory::map_new_pages(ctx, HEAP, HEAP_SIZE).expect("frames for the heap");
+    let mut heap = KERNEL_HEAP.0.lock(ctx);
     assert!(heap.is_none(), "heap::init called twice");
     #[allow(clippy::cast_possible_truncation)] // fits on a 64-bit target
     // SAFETY: the range was just mapped, read-write, and only the heap
@@ -79,8 +60,8 @@ pub(crate) fn init() {
 }
 
 /// Free bytes in the heap, or 0 before [`init`].
-pub(crate) fn free_bytes() -> usize {
-    KERNEL_HEAP.0.lock().as_ref().map_or(0, Heap::free_bytes)
+pub(crate) fn free_bytes<P: LockBefore<levels::Heap>>(ctx: &mut Ctx<'_, P>) -> usize {
+    KERNEL_HEAP.0.lock(ctx).as_ref().map_or(0, Heap::free_bytes)
 }
 
 ktest::ktest! {
@@ -103,11 +84,12 @@ ktest::ktest! {
     fn freed_memory_returns_to_the_heap() {
         use alloc::vec::Vec;
 
-        let before = free_bytes();
+        let mut ctx = Ctx::root();
+        let before = free_bytes(&mut ctx);
         let big: Vec<u8> = alloc::vec![0xa5; 1 << 20];
-        assert!(free_bytes() <= before - (1 << 20));
+        assert!(free_bytes(&mut ctx) <= before - (1 << 20));
         assert!(big.iter().all(|&b| b == 0xa5));
         drop(big);
-        assert_eq!(free_bytes(), before);
+        assert_eq!(free_bytes(&mut ctx), before);
     }
 }

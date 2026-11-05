@@ -5,7 +5,8 @@ aarch64 second.
 
 This branch is a rewrite from scratch. It holds the no_std crates carried
 over from the previous kernel and a kernel that boots through Limine, sets
-up its own page tables, frame allocator and heap, and exits.
+up its own page tables, frame allocator and heap, starts kernel threads on
+one CPU, and exits.
 
 ## Layout
 

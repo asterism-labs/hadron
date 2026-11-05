@@ -180,21 +180,120 @@ pub(crate) fn gs_base() -> u64 {
     u64::from(high) << 32 | u64::from(low)
 }
 
-/// Reads the `u64` at offset 0 from the GS base.
+/// Reads the `u64` at `offset` from the GS base.
 ///
 /// # Safety
 ///
-/// The GS base must point at a readable, initialized `u64`.
-pub(crate) unsafe fn read_gs() -> u64 {
+/// The GS base plus `offset` must point at a readable, initialized `u64`.
+pub(crate) unsafe fn gs_read_u64(offset: usize) -> u64 {
     let value: u64;
-    // SAFETY: the caller vouches for the GS base. The block is not `pure`,
+    // SAFETY: the caller vouches for the address. The block is not `pure`,
     // so the compiler reads GS every time instead of reusing an old value.
     unsafe {
         asm!(
-            "mov {}, gs:[0]",
-            out(reg) value,
+            "mov {value}, gs:[{offset}]",
+            offset = in(reg) offset,
+            value = out(reg) value,
             options(nostack, preserves_flags, readonly),
         );
     }
     value
+}
+
+/// Reads the `u32` at `offset` from the GS base.
+///
+/// # Safety
+///
+/// As for [`gs_read_u64`], for a `u32`.
+pub(crate) unsafe fn gs_read_u32(offset: usize) -> u32 {
+    let value: u32;
+    // SAFETY: as in `gs_read_u64`.
+    unsafe {
+        asm!(
+            "mov {value:e}, gs:[{offset}]",
+            offset = in(reg) offset,
+            value = out(reg) value,
+            options(nostack, preserves_flags, readonly),
+        );
+    }
+    value
+}
+
+/// Reads the byte at `offset` from the GS base.
+///
+/// # Safety
+///
+/// As for [`gs_read_u64`], for a byte.
+pub(crate) unsafe fn gs_read_u8(offset: usize) -> u8 {
+    let value: u8;
+    // SAFETY: as in `gs_read_u64`.
+    unsafe {
+        asm!(
+            "mov {value}, byte ptr gs:[{offset}]",
+            offset = in(reg) offset,
+            value = out(reg_byte) value,
+            options(nostack, preserves_flags, readonly),
+        );
+    }
+    value
+}
+
+/// Adds 1 to the `u32` at `offset` from the GS base, in one instruction,
+/// so an interrupt on this CPU cannot split the update.
+///
+/// # Safety
+///
+/// The GS base plus `offset` must point at a `u32` that only this CPU
+/// writes, such as an `AtomicU32` in its per-CPU block.
+pub(crate) unsafe fn gs_inc_u32(offset: usize) {
+    // SAFETY: the caller vouches for the address. `inc` changes the flags.
+    unsafe {
+        asm!(
+            "inc dword ptr gs:[{offset}]",
+            offset = in(reg) offset,
+            options(nostack),
+        );
+    }
+}
+
+/// Subtracts 1 from the `u32` at `offset` from the GS base, in one
+/// instruction, and reports whether it reached 0.
+///
+/// # Safety
+///
+/// As for [`gs_inc_u32`].
+pub(crate) unsafe fn gs_dec_u32(offset: usize) -> bool {
+    let zero: u8;
+    // SAFETY: as in `gs_inc_u32`.
+    unsafe {
+        asm!(
+            "dec dword ptr gs:[{offset}]",
+            "setz {zero}",
+            offset = in(reg) offset,
+            zero = out(reg_byte) zero,
+            options(nostack),
+        );
+    }
+    zero != 0
+}
+
+/// Whether maskable interrupts are enabled on this CPU.
+pub(crate) fn interrupts_enabled() -> bool {
+    let rflags: u64;
+    // SAFETY: `pushfq; pop` reads RFLAGS through the stack and changes
+    // nothing else.
+    unsafe { asm!("pushfq", "pop {}", out(reg) rflags, options(nomem, preserves_flags)) };
+    rflags & RFLAGS_IF != 0
+}
+
+/// Enables maskable interrupts on this CPU.
+///
+/// # Safety
+///
+/// Every interrupt that can arrive must have a handler. Until the kernel
+/// handles device interrupts, the legacy PIC must be masked.
+pub(crate) unsafe fn enable_interrupts() {
+    // SAFETY: the caller guarantees no unhandled interrupt can arrive. The
+    // block may touch memory, so memory accesses stay on their side of it.
+    unsafe { asm!("sti", options(nostack)) };
 }

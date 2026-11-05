@@ -3,10 +3,10 @@
 use limine::{BaseRevision, BootloaderInfoRequest, RequestsEndMarker, RequestsStartMarker};
 
 use crate::arch::x86_64::qemu::{self, ExitCode};
-use crate::arch::x86_64::{gdt, idt};
+use crate::arch::x86_64::{cpu, gdt, idt, pic};
 use crate::console::{self, kprintln};
-use crate::memory;
-use crate::percpu;
+use crate::sync::{Ctx, levels};
+use crate::{heap, memory, percpu, sched};
 
 #[used]
 #[unsafe(link_section = ".limine_requests_start")]
@@ -54,20 +54,35 @@ extern "C" fn kmain() -> ! {
 }
 
 /// Runs on the kernel's own page tables and boot stack, after
-/// [`memory::init`].
+/// [`memory::init`]. Maps the heap, turns the boot context into the idle
+/// thread, and starts the main thread.
 fn kmain_paged() -> ! {
+    let mut ctx = Ctx::root();
+    heap::init(&mut ctx);
+    sched::init();
+    pic::mask_all();
+    // SAFETY: the PICs are masked, and nothing else is set up to deliver
+    // interrupts.
+    unsafe { cpu::enable_interrupts() };
+    // The main thread runs to the end of boot, so its handle is not needed.
+    drop(sched::spawn(&mut ctx, "main", main_thread));
+    sched::run_idle(&mut ctx)
+}
+
+/// The first kernel thread: reports memory, then runs the kernel tests or
+/// exits.
+fn main_thread(ctx: &mut Ctx<'static, levels::ThreadRoot>) {
     const MIB: u64 = 1 << 20;
-    crate::heap::init();
     let usable = memory::map().total(mm::RegionKind::Usable);
     let (free, count) = {
-        let frames = memory::frames();
+        let frames = memory::frames(ctx);
         (frames.free_frames(), frames.frame_count())
     };
     kprintln!(
         "hadron: {} MiB usable, {free} of {count} frames free",
         usable / MIB
     );
-    kprintln!("hadron: {} KiB heap", crate::heap::free_bytes() / 1024);
+    kprintln!("hadron: {} KiB heap", heap::free_bytes(ctx) / 1024);
     if hadron_config::KTEST {
         crate::ktest::run();
     }

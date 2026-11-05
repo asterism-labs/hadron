@@ -34,6 +34,11 @@ fn main() -> Result<()> {
     cfg.config_bool("KTEST_IGNORED")
         .default_value(ConfigValue::Bool(false))
         .help("Also run the kernel tests marked #[ignore]");
+    // The kernel reads this as `hadron_config::LOCKDEP`. It is on by
+    // default; a release profile will turn it off.
+    cfg.config_bool("LOCKDEP")
+        .default_value(ConfigValue::Bool(true))
+        .help("Check lock order at run time");
     cfg.preset("test").set("KTEST", ConfigValue::Bool(true));
     cfg.profile("test").inherits("dev").preset("test");
 

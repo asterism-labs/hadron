@@ -1,9 +1,11 @@
-//! `x86_64` support: port I/O, CPU control, the GDT, the IDT and exception
-//! entry, and the QEMU exit device.
+//! `x86_64` support: port I/O, CPU control, context switches, the GDT, the
+//! IDT and exception entry, the legacy PIC, and the QEMU exit device.
 
+pub(crate) mod context;
 pub(crate) mod cpu;
 pub(crate) mod gdt;
 pub(crate) mod idt;
+pub(crate) mod pic;
 pub(crate) mod port;
 pub(crate) mod qemu;
 pub(crate) mod tables;

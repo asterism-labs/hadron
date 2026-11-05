@@ -2,8 +2,9 @@
 //!
 //! It boots through Limine, sets up the boot CPU's per-CPU block, COM1 as
 //! the console, the GDT and the IDT, switches to its own page tables,
-//! builds the physical memory map and frame allocator, maps the heap, and
-//! exits QEMU through the `isa-debug-exit` device.
+//! builds the physical memory map and frame allocator, and maps the heap.
+//! The boot context then becomes the idle thread and starts the main
+//! kernel thread, which exits QEMU through the `isa-debug-exit` device.
 //!
 //! Built with Gluon's `test` profile, it runs the kernel tests after boot
 //! instead. See `ktest.rs`.
@@ -35,6 +36,8 @@ mod memory;
 mod panic;
 #[cfg(all(target_os = "none", target_arch = "x86_64"))]
 mod percpu;
+#[cfg(all(target_os = "none", target_arch = "x86_64"))]
+mod sched;
 #[cfg(all(target_os = "none", target_arch = "x86_64"))]
 mod sync;
 

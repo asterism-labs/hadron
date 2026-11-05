@@ -29,12 +29,10 @@
 //! them in:
 //!
 //! - [`map`]: the memory map, written once and read without a lock;
-//! - [`frames`]: the frame allocator, behind an [`IrqSpinLock`];
-//! - [`kernel_tables`]: the kernel's page tables, behind an [`IrqSpinLock`].
-//!
-//! Until the kernel has lock levels, the order is by convention: take
-//! [`kernel_tables`] before [`frames`], and never take the heap's lock
-//! while holding either.
+//! - [`frames`]: the frame allocator, an [`IrqSpinLock`] at
+//!   [`levels::Frames`];
+//! - [`kernel_tables`]: the kernel's page tables, an [`IrqSpinLock`] at
+//!   [`levels::KernelTables`], which comes before the frame allocator.
 
 use core::mem::size_of;
 
@@ -44,12 +42,12 @@ use limine::memmap::{MemMapEntry, MemMapEntryType};
 use limine::paging::PagingMode;
 use limine::{ExecutableAddressRequest, HhdmRequest, MemMapRequest, PagingModeRequest};
 use mm::{
-    BitmapFrameAllocator, BumpAllocator, DirectMap, FrameAllocator, Mapper, MemoryMap, PhysFrame,
-    Region, RegionKind, Translation,
+    BitmapFrameAllocator, BumpAllocator, DirectMap, FrameAllocator, MapError, Mapper, MemoryMap,
+    PhysFrame, Region, RegionKind, Translation,
 };
 
 use crate::arch::x86_64::cpu;
-use crate::sync::{IrqSpinLock, IrqSpinLockGuard, WriteOnce};
+use crate::sync::{Ctx, IrqSpinLock, IrqSpinLockGuard, LockBefore, WriteOnce, levels};
 
 #[used]
 #[unsafe(link_section = ".limine_requests")]
@@ -91,6 +89,9 @@ pub(crate) const HEAP_SIZE: u64 = 4 << 20;
 /// boot stack's guard page.
 const STACKS: VirtAddr = VirtAddr::new(0xffff_c900_0000_0000);
 
+/// Size of a kernel thread's stack.
+pub(crate) const KERNEL_STACK_SIZE: u64 = 16 * 1024;
+
 /// Size of the boot stack.
 const BOOT_STACK_SIZE: u64 = 64 * 1024;
 
@@ -100,12 +101,18 @@ const BOOT_STACK_BOTTOM: VirtAddr = VirtAddr::new(STACKS.as_u64() + PAGE_SIZE);
 /// One past the highest byte of the boot stack.
 const BOOT_STACK_TOP: VirtAddr = VirtAddr::new(BOOT_STACK_BOTTOM.as_u64() + BOOT_STACK_SIZE);
 
+/// Where kernel thread stacks start, right after the boot stack. Each
+/// starts with a guard page.
+pub(crate) const THREAD_STACKS: VirtAddr = BOOT_STACK_TOP;
+
 const _: () = assert!(DIRECT_MAP.offset() + DIRECT_MAP_SIZE <= HEAP.as_u64());
 const _: () = assert!(HEAP.as_u64() + HEAP_SIZE <= STACKS.as_u64());
 
 static MAP: WriteOnce<MemoryMap<'static>> = WriteOnce::new();
-static FRAMES: WriteOnce<IrqSpinLock<BitmapFrameAllocator<'static>>> = WriteOnce::new();
-static KERNEL_TABLES: WriteOnce<IrqSpinLock<Mapper>> = WriteOnce::new();
+type Frames = BitmapFrameAllocator<'static>;
+
+static FRAMES: WriteOnce<IrqSpinLock<levels::Frames, Frames>> = WriteOnce::new();
+static KERNEL_TABLES: WriteOnce<IrqSpinLock<levels::KernelTables, Mapper>> = WriteOnce::new();
 
 const INIT_RAN: &str = "memory::init ran";
 
@@ -118,23 +125,63 @@ pub(crate) fn map() -> &'static MemoryMap<'static> {
     MAP.get().expect(INIT_RAN)
 }
 
-/// Locks the frame allocator. Take [`kernel_tables`] first when holding
-/// both.
+/// Locks the frame allocator.
 ///
 /// # Panics
 ///
 /// Panics before [`init`].
-pub(crate) fn frames() -> IrqSpinLockGuard<'static, BitmapFrameAllocator<'static>> {
-    FRAMES.get().expect(INIT_RAN).lock()
+pub(crate) fn frames<'a, P: LockBefore<levels::Frames>>(
+    ctx: &'a mut Ctx<'_, P>,
+) -> IrqSpinLockGuard<'a, levels::Frames, Frames> {
+    FRAMES.get().expect(INIT_RAN).lock(ctx)
 }
 
-/// Locks the kernel's page tables, the ones in CR3.
+/// Locks the kernel's page tables, the ones in CR3, and returns a token
+/// for taking the frame allocator next.
 ///
 /// # Panics
 ///
 /// Panics before [`init`].
-pub(crate) fn kernel_tables() -> IrqSpinLockGuard<'static, Mapper> {
-    KERNEL_TABLES.get().expect(INIT_RAN).lock()
+pub(crate) fn kernel_tables<'a, P: LockBefore<levels::KernelTables>>(
+    ctx: &'a mut Ctx<'_, P>,
+) -> (
+    IrqSpinLockGuard<'a, levels::KernelTables, Mapper>,
+    Ctx<'a, levels::KernelTables>,
+) {
+    KERNEL_TABLES.get().expect(INIT_RAN).lock_and(ctx)
+}
+
+/// Maps `len` bytes at `virt` to new frames, page by page, read-write and
+/// non-executable. The frames are not zeroed.
+///
+/// # Errors
+///
+/// Returns an error if frames run out or part of the range is mapped. The
+/// pages mapped before the error stay mapped.
+///
+/// # Panics
+///
+/// Panics before [`init`].
+pub(crate) fn map_new_pages<P: LockBefore<levels::KernelTables>>(
+    ctx: &mut Ctx<'_, P>,
+    virt: VirtAddr,
+    len: u64,
+) -> Result<(), MapError> {
+    let (mut tables, mut ctx) = kernel_tables(ctx);
+    let mut frames = frames(&mut ctx);
+    let mut page = virt;
+    while page < virt + len {
+        let frame = frames.allocate().ok_or(MapError::OutOfFrames)?;
+        tables.map(
+            page,
+            frame.start(),
+            PageSize::Size4K,
+            PageTableFlags::WRITABLE | PageTableFlags::NO_EXECUTE,
+            &mut *frames,
+        )?;
+        page = page + PAGE_SIZE;
+    }
+    Ok(())
 }
 
 /// What stage 1 passes to stage 2 across the stack switch.
@@ -400,7 +447,7 @@ impl KernelImage {
 }
 
 /// What the active page tables map at `virt`.
-fn translate(virt: VirtAddr) -> Option<Translation> {
+pub(crate) fn translate(virt: VirtAddr) -> Option<Translation> {
     // SAFETY: CR3 holds the kernel's tables, which `DIRECT_MAP` covers, and
     // `translate` only reads them.
     let mapper = unsafe { Mapper::new(cpu::cr3(), DIRECT_MAP) };
@@ -438,8 +485,6 @@ ktest::ktest! {
     fn boot_stack_has_a_guard_page() {
         assert_eq!(translate(STACKS), None);
         assert!(translate(BOOT_STACK_BOTTOM).is_some());
-        let rsp = cpu::stack_pointer();
-        assert!((BOOT_STACK_BOTTOM.as_u64()..BOOT_STACK_TOP.as_u64()).contains(&rsp));
     }
 }
 
