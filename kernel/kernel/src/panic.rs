@@ -1,4 +1,6 @@
-//! The panic handler. It prints the panic, then stops the kernel.
+//! The kernel's panic handling. It prints the panic, then stops the kernel.
+//!
+//! The binary's `#[panic_handler]` calls [`handle`].
 //!
 //! Under QEMU the kernel exits with a failure status, so `gluon run` and
 //! the test runner see the panic. On real hardware the CPU halts.
@@ -13,8 +15,8 @@ use crate::console::kprintln;
 /// skips straight to the exit.
 static PANICKING: AtomicBool = AtomicBool::new(false);
 
-#[panic_handler]
-fn panic(info: &PanicInfo<'_>) -> ! {
+/// Reports a panic on the console and stops the kernel.
+pub fn handle(info: &PanicInfo<'_>) -> ! {
     cpu::disable_interrupts();
     if PANICKING.swap(true, Ordering::Relaxed) {
         kprintln!("hadron: panicked while panicking");

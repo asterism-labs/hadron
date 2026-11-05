@@ -9,6 +9,11 @@ license.workspace = true
 readme.workspace = true
 publish.workspace = true
 
+[lib]
+test = false
+bench = false
+doctest = false
+
 [[bin]]
 name = "kernel"
 path = "src/main.rs"

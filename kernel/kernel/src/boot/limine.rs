@@ -86,14 +86,18 @@ fn take_regions() -> &'static mut [Region; MAX_REGIONS] {
     unsafe { &mut *REGIONS.regions.get() }
 }
 
-/// Entry point. Limine jumps here, as named by `ENTRY` in `kernel.ld`.
-#[unsafe(no_mangle)]
-extern "C" fn kmain() -> ! {
-    // SAFETY: Limine enters the kernel once, on the boot CPU alone, in
-    // 64-bit mode with interrupts masked, the kernel mapped at its link
-    // address, and a stack of at least 64 KiB. `PAGING_MODE` asks for
-    // 4-level paging. `kernel_main` checks the CPU state. `boot_info`
-    // explains why its `BootInfo` is sound.
+/// Boots the kernel from Limine. The binary's entry point calls this.
+///
+/// # Safety
+///
+/// The caller is the entry point Limine jumps to, and nothing ran before
+/// it. Limine enters the kernel once, on the boot CPU alone, in 64-bit
+/// mode with interrupts masked, the kernel mapped at its link address,
+/// and a stack of at least 64 KiB.
+pub unsafe fn enter() -> ! {
+    // SAFETY: the caller is Limine's entry point, as above. `PAGING_MODE`
+    // asks for 4-level paging. `kernel_main` checks the CPU state.
+    // `boot_info` explains why its `BootInfo` is sound.
     unsafe { super::kernel_main(boot_info) }
 }
 

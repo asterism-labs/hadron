@@ -1,48 +1,24 @@
-//! The Hadron kernel.
-//!
-//! It boots through Limine, sets up the boot CPU's per-CPU block, COM1 as
-//! the console, the GDT and the IDT, switches to its own page tables,
-//! builds the physical memory map and frame allocator, and maps the heap.
-//! The boot context then becomes the idle thread and starts the main
-//! kernel thread, which exits QEMU through the `isa-debug-exit` device.
-//!
-//! Built with Gluon's `test` profile, it runs the kernel tests after boot
-//! instead. See `ktest.rs`.
-//!
-//! The kernel builds for `x86_64-unknown-none` only. On a hosted target the
-//! crate is an empty program, so `cargo test --workspace` and
-//! `cargo clippy --workspace` still work on the development machine.
+//! The Hadron kernel binary: the entry point Limine jumps to and the panic
+//! handler. The kernel itself is the `kernel` library.
 
 #![cfg_attr(target_os = "none", no_std, no_main)]
 
 #[cfg(all(target_os = "none", target_arch = "x86_64"))]
-extern crate alloc;
+mod entry {
+    use core::panic::PanicInfo;
 
-#[cfg(all(target_os = "none", target_arch = "x86_64"))]
-mod arch;
-#[cfg(all(target_os = "none", target_arch = "x86_64"))]
-mod boot;
-#[cfg(all(target_os = "none", target_arch = "x86_64"))]
-mod console;
-#[cfg(all(target_os = "none", target_arch = "x86_64"))]
-mod drivers;
-#[cfg(all(target_os = "none", target_arch = "x86_64"))]
-mod heap;
-#[cfg(all(target_os = "none", target_arch = "x86_64"))]
-mod ktest;
-#[cfg(all(target_os = "none", target_arch = "x86_64"))]
-mod memory;
-#[cfg(all(target_os = "none", target_arch = "x86_64"))]
-mod panic;
-#[cfg(all(target_os = "none", target_arch = "x86_64"))]
-mod percpu;
-#[cfg(all(target_os = "none", target_arch = "x86_64"))]
-mod sched;
-#[cfg(all(target_os = "none", target_arch = "x86_64"))]
-mod sync;
+    /// Entry point. Limine jumps here, as named by `ENTRY` in `kernel.ld`.
+    #[unsafe(no_mangle)]
+    extern "C" fn kmain() -> ! {
+        // SAFETY: Limine jumps here, and nothing runs before it.
+        unsafe { kernel::boot::limine::enter() }
+    }
 
-#[cfg(all(target_os = "none", not(target_arch = "x86_64")))]
-compile_error!("the kernel supports only x86_64");
+    #[panic_handler]
+    fn panic(info: &PanicInfo<'_>) -> ! {
+        kernel::panic::handle(info)
+    }
+}
 
 #[cfg(not(target_os = "none"))]
 fn main() {}

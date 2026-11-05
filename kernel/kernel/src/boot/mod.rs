@@ -6,7 +6,7 @@
 //! [`kernel_main`] with a function that reads the bootloader's data into a
 //! [`BootInfo`]. Nothing past the adapter knows which bootloader ran.
 
-mod limine;
+pub mod limine;
 
 use core::ptr::NonNull;
 
