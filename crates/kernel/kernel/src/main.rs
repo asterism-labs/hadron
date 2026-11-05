@@ -2,7 +2,7 @@
 //!
 //! It boots through Limine, sets up COM1 as the console, the GDT and the
 //! IDT, switches to its own page tables, builds the physical memory map and
-//! frame allocator, and exits QEMU through the `isa-debug-exit` device.
+//! frame allocator, maps the heap, and exits QEMU through the `isa-debug-exit` device.
 //!
 //! Built with Gluon's `test` profile, it runs the kernel tests after boot
 //! instead. See `ktest.rs`.
@@ -14,6 +14,9 @@
 #![cfg_attr(target_os = "none", no_std, no_main)]
 
 #[cfg(all(target_os = "none", target_arch = "x86_64"))]
+extern crate alloc;
+
+#[cfg(all(target_os = "none", target_arch = "x86_64"))]
 mod arch;
 #[cfg(all(target_os = "none", target_arch = "x86_64"))]
 mod boot;
@@ -21,6 +24,8 @@ mod boot;
 mod console;
 #[cfg(all(target_os = "none", target_arch = "x86_64"))]
 mod drivers;
+#[cfg(all(target_os = "none", target_arch = "x86_64"))]
+mod heap;
 #[cfg(all(target_os = "none", target_arch = "x86_64"))]
 mod ktest;
 #[cfg(all(target_os = "none", target_arch = "x86_64"))]

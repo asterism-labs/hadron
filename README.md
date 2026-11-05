@@ -5,7 +5,7 @@ aarch64 second.
 
 This branch is a rewrite from scratch. It holds the no_std crates carried
 over from the previous kernel and a kernel that boots through Limine, sets
-up its own page tables and frame allocator, and exits.
+up its own page tables, frame allocator and heap, and exits.
 
 ## Layout
 
@@ -17,7 +17,7 @@ up its own page tables and frame allocator, and exits.
 | `crates/core/linkset` | Access to data collected in linker sections |
 | `crates/kernel/kernel` | The kernel |
 | `crates/kernel/ktest` | Kernel test registration |
-| `crates/kernel/mm` | Memory map, frame allocators and the page table mapper |
+| `crates/kernel/mm` | Memory map, frame allocators, page table mapper and heap |
 | `crates/parse/acpi` | ACPI table parser and static AML namespace walker |
 | `crates/parse/dwarf` | DWARF line-program parser |
 | `crates/parse/elf` | ELF64 parser and x86_64 relocations |

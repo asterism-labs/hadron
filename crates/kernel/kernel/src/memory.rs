@@ -68,6 +68,12 @@ pub(crate) const DIRECT_MAP: DirectMap = DirectMap::new(0xffff_8880_0000_0000);
 /// Room reserved for the direct map: 64 TiB of physical memory.
 const DIRECT_MAP_SIZE: u64 = 64 << 40;
 
+/// Start of the kernel heap, PML4 slot 401.
+pub(crate) const HEAP: VirtAddr = VirtAddr::new(0xffff_c880_0000_0000);
+
+/// Size of the heap. It does not grow yet.
+pub(crate) const HEAP_SIZE: u64 = 4 << 20;
+
 /// Start of the kernel stack region, PML4 slot 402. The first page is the
 /// boot stack's guard page.
 const STACKS: VirtAddr = VirtAddr::new(0xffff_c900_0000_0000);
@@ -81,7 +87,8 @@ const BOOT_STACK_BOTTOM: VirtAddr = VirtAddr::new(STACKS.as_u64() + PAGE_SIZE);
 /// One past the highest byte of the boot stack.
 const BOOT_STACK_TOP: VirtAddr = VirtAddr::new(BOOT_STACK_BOTTOM.as_u64() + BOOT_STACK_SIZE);
 
-const _: () = assert!(DIRECT_MAP.offset() + DIRECT_MAP_SIZE <= STACKS.as_u64());
+const _: () = assert!(DIRECT_MAP.offset() + DIRECT_MAP_SIZE <= HEAP.as_u64());
+const _: () = assert!(HEAP.as_u64() + HEAP_SIZE <= STACKS.as_u64());
 
 /// Physical memory, owned by the boot CPU until the locking model exists.
 pub(crate) struct Memory {
@@ -90,7 +97,6 @@ pub(crate) struct Memory {
     /// Free and used frames.
     pub(crate) frames: BitmapFrameAllocator<'static>,
     /// The kernel's page tables, the ones in CR3.
-    #[allow(dead_code)] // read once the kernel maps memory after boot
     pub(crate) kernel: Mapper,
 }
 

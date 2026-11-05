@@ -108,3 +108,24 @@ pub(crate) unsafe fn switch_stack(top: u64, entry: extern "C" fn(u64) -> !, arg:
         );
     }
 }
+
+/// RFLAGS.IF, bit 9: maskable interrupts are enabled.
+const RFLAGS_IF: u64 = 1 << 9;
+
+/// Masks interrupts and returns whether they were enabled before.
+pub(crate) fn save_and_disable_interrupts() -> bool {
+    let rflags: u64;
+    // SAFETY: `pushfq; pop` reads RFLAGS through the stack, and `cli` only
+    // clears IF. The caller restores IF with `restore_interrupts`.
+    unsafe { asm!("pushfq", "pop {}", "cli", out(reg) rflags, options(nomem, preserves_flags)) };
+    rflags & RFLAGS_IF != 0
+}
+
+/// Enables interrupts again if `enabled`, the value
+/// [`save_and_disable_interrupts`] returned.
+pub(crate) fn restore_interrupts(enabled: bool) {
+    if enabled {
+        // SAFETY: the caller had interrupts enabled before masking them.
+        unsafe { asm!("sti", options(nomem, nostack)) };
+    }
+}

@@ -2,7 +2,10 @@
 
 use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::ops::{Deref, DerefMut};
+use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+
+use crate::arch::x86_64::cpu;
 
 /// No value yet.
 const EMPTY: u8 = 0;
@@ -60,6 +63,84 @@ impl<T> WriteOnce<T> {
         } else {
             None
         }
+    }
+}
+
+/// A spin lock that masks interrupts on this CPU while it is held.
+///
+/// Masking interrupts keeps an interrupt handler from spinning on a lock
+/// the code it interrupted already holds. It is the heap's lock until the
+/// kernel's locking model exists, and is not meant for general use.
+pub(crate) struct IrqSpinLock<T> {
+    locked: AtomicBool,
+    value: UnsafeCell<T>,
+}
+
+// SAFETY: the lock gives one holder at a time access to the value, so
+// sharing the lock only needs the value to be sendable between CPUs.
+unsafe impl<T: Send> Sync for IrqSpinLock<T> {}
+
+impl<T> IrqSpinLock<T> {
+    /// An unlocked lock around `value`.
+    pub(crate) const fn new(value: T) -> Self {
+        Self {
+            locked: AtomicBool::new(false),
+            value: UnsafeCell::new(value),
+        }
+    }
+
+    /// Masks interrupts, then spins until the lock is free.
+    pub(crate) fn lock(&self) -> IrqSpinLockGuard<'_, T> {
+        let interrupts = cpu::save_and_disable_interrupts();
+        while self
+            .locked
+            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
+            core::hint::spin_loop();
+        }
+        IrqSpinLockGuard {
+            lock: self,
+            interrupts,
+        }
+    }
+}
+
+/// Access to the value of a held [`IrqSpinLock`]. Dropping it releases the
+/// lock and restores the interrupt flag.
+pub(crate) struct IrqSpinLockGuard<'a, T> {
+    lock: &'a IrqSpinLock<T>,
+    interrupts: bool,
+}
+
+impl<T> Deref for IrqSpinLockGuard<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        // SAFETY: the guard holds the lock.
+        unsafe { &*self.lock.value.get() }
+    }
+}
+
+impl<T> DerefMut for IrqSpinLockGuard<'_, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        // SAFETY: the guard holds the lock.
+        unsafe { &mut *self.lock.value.get() }
+    }
+}
+
+impl<T> Drop for IrqSpinLockGuard<'_, T> {
+    fn drop(&mut self) {
+        self.lock.locked.store(false, Ordering::Release);
+        cpu::restore_interrupts(self.interrupts);
+    }
+}
+
+ktest::ktest! {
+    fn irq_spin_lock_releases_on_drop() {
+        let lock = IrqSpinLock::new(1_u32);
+        *lock.lock() += 1;
+        assert_eq!(*lock.lock(), 2);
     }
 }
 

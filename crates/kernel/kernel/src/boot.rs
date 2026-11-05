@@ -53,8 +53,9 @@ extern "C" fn kmain() -> ! {
 /// Runs on the kernel's own page tables and boot stack, after
 /// [`memory::init`]. It owns physical memory from here on.
 #[allow(clippy::needless_pass_by_value)] // takes ownership on purpose
-fn kmain_paged(memory: Memory) -> ! {
+fn kmain_paged(mut memory: Memory) -> ! {
     const MIB: u64 = 1 << 20;
+    crate::heap::init(&mut memory);
     let usable = memory.map.total(mm::RegionKind::Usable);
     kprintln!(
         "hadron: {} MiB usable, {} of {} frames free",
@@ -62,6 +63,7 @@ fn kmain_paged(memory: Memory) -> ! {
         memory.frames.free_frames(),
         memory.frames.frame_count()
     );
+    kprintln!("hadron: {} KiB heap", crate::heap::free_bytes() / 1024);
     if hadron_config::KTEST {
         crate::ktest::run();
     }

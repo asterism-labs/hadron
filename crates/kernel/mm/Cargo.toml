@@ -1,6 +1,6 @@
 [package]
 name = "mm"
-description = "Physical memory map, frame allocators and the x86_64 page table mapper."
+description = "Physical memory map, frame allocators, the x86_64 page table mapper and the heap."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
