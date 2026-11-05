@@ -8,19 +8,19 @@
 use core::alloc::{GlobalAlloc, Layout};
 use core::ptr::{self, NonNull};
 
-use mm::Heap;
+use mm::allocators::LinkedListAllocator;
 
 use crate::memory::{self, HEAP, HEAP_SIZE};
 use crate::sync::{Ctx, IrqSpinLock, LockBefore, levels};
 
 /// The global allocator's state. `GlobalAlloc` cannot take a token, so it
 /// locks without one, and the heap is last in the lock order.
-struct KernelHeap(IrqSpinLock<levels::Heap, Option<Heap>>);
+struct KernelHeap(IrqSpinLock<levels::Heap, Option<LinkedListAllocator>>);
 
 #[global_allocator]
 static KERNEL_HEAP: KernelHeap = KernelHeap(IrqSpinLock::new(None));
 
-// SAFETY: `Heap` hands out disjoint blocks with the requested alignment and
+// SAFETY: `LinkedListAllocator` hands out disjoint blocks with the requested alignment and
 // takes back only what it handed out, and the lock serializes callers.
 unsafe impl GlobalAlloc for KernelHeap {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
@@ -55,13 +55,17 @@ pub(crate) fn init<P: LockBefore<levels::KernelTables>>(ctx: &mut Ctx<'_, P>) {
     #[allow(clippy::cast_possible_truncation)] // fits on a 64-bit target
     // SAFETY: the range was just mapped, read-write, and only the heap
     // uses it.
-    let new = unsafe { Heap::new(HEAP.as_mut_ptr(), HEAP_SIZE as usize) };
+    let new = unsafe { LinkedListAllocator::new(HEAP.as_mut_ptr(), HEAP_SIZE as usize) };
     *heap = Some(new);
 }
 
 /// Free bytes in the heap, or 0 before [`init`].
 pub(crate) fn free_bytes<P: LockBefore<levels::Heap>>(ctx: &mut Ctx<'_, P>) -> usize {
-    KERNEL_HEAP.0.lock(ctx).as_ref().map_or(0, Heap::free_bytes)
+    KERNEL_HEAP
+        .0
+        .lock(ctx)
+        .as_ref()
+        .map_or(0, LinkedListAllocator::free_bytes)
 }
 
 ktest::ktest! {

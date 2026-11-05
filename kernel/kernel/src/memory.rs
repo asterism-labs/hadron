@@ -39,9 +39,10 @@ use core::ops::Range;
 
 use arch_x86_64::paging::{Level, PAGE_SIZE, PageSize, PageTableFlags};
 use arch_x86_64::{PhysAddr, VirtAddr};
+use mm::allocators::{BitmapFrameAllocator, BumpAllocator};
 use mm::{
-    BitmapFrameAllocator, BumpAllocator, DirectMap, FrameAllocator, MapError, Mapper, MemoryMap,
-    PhysFrame, Region, RegionKind, Translation,
+    DirectMap, FrameAllocator, MapError, Mapper, MemoryMap, PhysFrame, Region, RegionKind,
+    Translation,
 };
 
 use crate::arch::x86_64::cpu;

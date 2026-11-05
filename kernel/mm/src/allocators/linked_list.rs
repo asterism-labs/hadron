@@ -1,4 +1,4 @@
-//! A first-fit heap over one fixed range of memory.
+//! A first-fit linked-list allocator over one fixed range of memory.
 //!
 //! Free blocks form a list sorted by address. Each free block stores its
 //! size and the next block in its own first 16 bytes. Every block start
@@ -24,9 +24,9 @@ const BLOCK_ALIGN: usize = 16;
 const _: () = assert!(size_of::<FreeBlock>() <= BLOCK_ALIGN);
 const _: () = assert!(align_of::<FreeBlock>() <= BLOCK_ALIGN);
 
-/// A heap over `[start, end)`.
+/// An allocator over `[start, end)`.
 #[derive(Debug)]
-pub struct Heap {
+pub struct LinkedListAllocator {
     /// The pointer the heap was made from. Block pointers are derived from
     /// it, so they keep its provenance.
     base: *mut u8,
@@ -38,10 +38,10 @@ pub struct Heap {
 
 // SAFETY: the heap owns its range, and the free list points only into it.
 // Moving the heap to another CPU moves that ownership with it.
-unsafe impl Send for Heap {}
+unsafe impl Send for LinkedListAllocator {}
 
-impl Heap {
-    /// A heap over the 16-byte aligned part of `[start, start + size)`.
+impl LinkedListAllocator {
+    /// An allocator over the 16-byte aligned part of `[start, start + size)`.
     ///
     /// # Safety
     ///
@@ -244,9 +244,9 @@ mod tests {
         unsafe { Box::<Arena>::new_zeroed().assume_init() }
     }
 
-    fn heap(arena: &mut Arena) -> Heap {
+    fn heap(arena: &mut Arena) -> LinkedListAllocator {
         // SAFETY: the arena outlives the heap in every test.
-        unsafe { Heap::new(arena.0.as_mut_ptr(), arena.0.len()) }
+        unsafe { LinkedListAllocator::new(arena.0.as_mut_ptr(), arena.0.len()) }
     }
 
     fn layout(size: usize, align: usize) -> Layout {
@@ -265,7 +265,7 @@ mod tests {
     fn unaligned_range_is_trimmed() {
         let mut arena = arena();
         // SAFETY: the arena outlives the heap.
-        let heap = unsafe { Heap::new(arena.0.as_mut_ptr().add(3), 100) };
+        let heap = unsafe { LinkedListAllocator::new(arena.0.as_mut_ptr().add(3), 100) };
         // 3..103 trims to 16..96.
         assert_eq!(heap.size(), 80);
         assert_eq!(heap.free_bytes(), 80);

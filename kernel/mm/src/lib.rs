@@ -10,19 +10,14 @@
 
 #![cfg_attr(not(test), no_std)]
 
-mod bitmap;
-mod bump;
+pub mod allocators;
 mod direct_map;
 mod frame;
-mod heap;
 mod mapper;
 mod memory_map;
 
-pub use bitmap::{BitmapFrameAllocator, FreeError};
-pub use bump::BumpAllocator;
 pub use direct_map::DirectMap;
 pub use frame::{FrameAllocator, PhysFrame};
-pub use heap::Heap;
 pub use mapper::{MapError, Mapper, PageMapping, Translation, UnmapError, pages};
 pub use memory_map::{BuildError, MemoryMap, Region, RegionKind};
 
