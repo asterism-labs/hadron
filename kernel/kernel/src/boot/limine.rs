@@ -9,7 +9,7 @@ use limine::memmap::{MemMapEntry, MemMapEntryType};
 use limine::paging::PagingMode;
 use limine::{
     BaseRevision, BootloaderInfoRequest, ExecutableAddressRequest, HhdmRequest, MemMapRequest,
-    PagingModeRequest,
+    PagingModeRequest, RsdpRequest,
 };
 use mm::{DirectMap, Region, RegionKind};
 
@@ -23,6 +23,7 @@ limine::requests! {
         hhdm: HhdmRequest = HhdmRequest::new(),
         memmap: MemMapRequest = MemMapRequest::new(),
         executable_address: ExecutableAddressRequest = ExecutableAddressRequest::new(),
+        rsdp: RsdpRequest = RsdpRequest::new(),
         /// The kernel uses 4-level paging only. Limine picks 4-level
         /// paging when the request is missing, but the request makes the
         /// choice explicit.
@@ -125,6 +126,16 @@ fn boot_info() -> BootInfo {
     }
     let regions: &'static [Region; MAX_REGIONS] = regions;
 
+    // From base revision 4 on, the RSDP address is in the HHDM. The
+    // kernel keeps it physical, since the HHDM goes away after boot.
+    let rsdp = REQUESTS.rsdp.response().map(|rsdp| {
+        let phys = rsdp
+            .rsdp_addr
+            .checked_sub(hhdm.hhdm_base)
+            .expect("the RSDP address lies in the HHDM");
+        PhysAddr::new(phys)
+    });
+
     let (name, version) = REQUESTS
         .bootloader_info
         .response()
@@ -136,13 +147,15 @@ fn boot_info() -> BootInfo {
     // `BootInfo`. The Limine protocol guarantees the rest: the memory map
     // is accurate, the HHDM maps every entry except reserved and bad
     // memory, the executable address response gives where the image was
-    // loaded, and the strings live in bootloader-reclaimable memory.
+    // loaded, the RSDP response gives the RSDP, and the strings live in
+    // bootloader-reclaimable memory.
     unsafe {
         BootInfo::new(
             &regions[..count],
             DirectMap::new(hhdm.hhdm_base),
             PhysAddr::new(executable.phys_base),
             VirtAddr::new(executable.virt_base),
+            rsdp,
             name,
             version,
         )

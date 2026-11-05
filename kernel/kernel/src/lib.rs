@@ -2,7 +2,8 @@
 //!
 //! It boots through Limine, sets up the boot CPU's per-CPU block, COM3 as
 //! the console, the GDT and the IDT, switches to its own page tables,
-//! builds the physical memory map and frame allocator, and maps the heap.
+//! builds the physical memory map and frame allocator, maps the heap, and
+//! reads the ACPI MADT.
 //! The boot context then becomes the idle thread and starts the main
 //! kernel thread, which exits QEMU through the `isa-debug-exit` device.
 //!
@@ -22,6 +23,8 @@
 #[cfg(all(target_os = "none", target_arch = "x86_64"))]
 extern crate alloc;
 
+#[cfg(all(target_os = "none", target_arch = "x86_64"))]
+mod acpi;
 #[cfg(all(target_os = "none", target_arch = "x86_64"))]
 mod arch;
 #[cfg(all(target_os = "none", target_arch = "x86_64"))]

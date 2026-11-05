@@ -18,7 +18,7 @@ use mm::{DirectMap, Region};
 use crate::arch::x86_64::qemu::{self, ExitCode};
 use crate::arch::x86_64::{cpu, gdt, idt, pic};
 use crate::console::{self, kprintln};
-use crate::{heap, memory, percpu, sched};
+use crate::{acpi, heap, memory, percpu, sched};
 
 /// CR0.WP, bit 16: supervisor writes honour read-only pages.
 const CR0_WP: u64 = 1 << 16;
@@ -125,10 +125,17 @@ fn check_boot_info(info: &BootInfo) {
 }
 
 /// Runs on the kernel's own page tables and boot stack, after
-/// [`memory::init`]. Maps the heap, turns the boot context into the idle
-/// thread, and starts the main thread.
+/// [`memory::init`]. Maps the heap, reads the ACPI tables, turns the boot
+/// context into the idle thread, and starts the main thread.
 fn kmain_paged(info: BootInfo) -> ! {
     heap::init();
+    let madt = acpi::init(info.rsdp());
+    kprintln!(
+        "hadron: {} CPUs, {} I/O APICs, local APIC at {:?}",
+        madt.cpus.len(),
+        madt.io_apics.len(),
+        madt.local_apic
+    );
     sched::init();
     pic::mask_all();
     // SAFETY: the PICs are masked, and nothing else is set up to deliver
@@ -184,6 +191,7 @@ pub(crate) struct BootInfo {
     loader_direct_map: DirectMap,
     kernel_phys: PhysAddr,
     kernel_virt: VirtAddr,
+    rsdp: Option<PhysAddr>,
     /// In bootloader memory.
     loader_name: NonNull<str>,
     /// In bootloader memory.
@@ -207,6 +215,7 @@ impl BootInfo {
     ///   [`direct mapped`](mm::RegionKind::is_direct_mapped), read-write.
     /// - The kernel image lies at `kernel_phys`, physically contiguous,
     ///   and is mapped at `kernel_virt`.
+    /// - `rsdp`, if given, is the physical address of the ACPI RSDP.
     /// - `loader_name` and `loader_version` stay valid and unchanged while
     ///   `loader_direct_map` is mapped and bootloader-reclaimable memory
     ///   is in use.
@@ -217,6 +226,7 @@ impl BootInfo {
         loader_direct_map: DirectMap,
         kernel_phys: PhysAddr,
         kernel_virt: VirtAddr,
+        rsdp: Option<PhysAddr>,
         loader_name: &str,
         loader_version: &str,
     ) -> Self {
@@ -225,6 +235,7 @@ impl BootInfo {
             loader_direct_map,
             kernel_phys,
             kernel_virt,
+            rsdp,
             loader_name: NonNull::from(loader_name),
             loader_version: NonNull::from(loader_version),
         }
@@ -248,6 +259,11 @@ impl BootInfo {
     /// Where the kernel image starts in virtual memory.
     pub(crate) fn kernel_virt(&self) -> VirtAddr {
         self.kernel_virt
+    }
+
+    /// The physical address of the ACPI RSDP, if the bootloader found one.
+    pub(crate) fn rsdp(&self) -> Option<PhysAddr> {
+        self.rsdp
     }
 
     /// The bootloader's name.
