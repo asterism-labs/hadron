@@ -15,6 +15,7 @@ Limine, prints one line on the serial port and exits.
 | `crates/boot/limine` | Limine boot protocol bindings |
 | `crates/core/linkset` | Access to data collected in linker sections |
 | `crates/kernel/kernel` | Placeholder kernel |
+| `crates/kernel/ktest` | Kernel test registration |
 | `crates/parse/acpi` | ACPI table parser and static AML namespace walker |
 | `crates/parse/dwarf` | DWARF line-program parser |
 | `crates/parse/elf` | ELF64 parser and x86_64 relocations |

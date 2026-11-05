@@ -18,6 +18,7 @@ acpi = { path = "crates/parse/acpi" }
 dwarf = { path = "crates/parse/dwarf" }
 elf = { path = "crates/parse/elf" }
 fdt = { path = "crates/parse/fdt" }
+ktest = { path = "crates/kernel/ktest" }
 limine = { path = "crates/boot/limine" }
 linkset = { path = "crates/core/linkset" }
 uefi = { path = "crates/boot/uefi" }
