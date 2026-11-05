@@ -23,7 +23,7 @@ pub use bump::BumpAllocator;
 pub use direct_map::DirectMap;
 pub use frame::{FrameAllocator, PhysFrame};
 pub use heap::Heap;
-pub use mapper::{MapError, Mapper, Translation, UnmapError};
+pub use mapper::{MapError, Mapper, PageMapping, Translation, UnmapError, pages};
 pub use memory_map::{BuildError, MemoryMap, Region, RegionKind};
 
 #[cfg(test)]

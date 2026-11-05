@@ -64,6 +64,15 @@ pub(crate) fn efer() -> u64 {
     u64::from(high) << 32 | u64::from(low)
 }
 
+/// Whether the CPU supports 1 GiB pages: CPUID.80000001H:EDX.Page1GB,
+/// bit 26 (Vol. 2A, CPUID).
+pub(crate) fn has_1g_pages() -> bool {
+    use core::arch::x86_64::__cpuid;
+    const PAGE_1GB: u32 = 1 << 26;
+    let max_extended = __cpuid(0x8000_0000).eax;
+    max_extended >= 0x8000_0001 && __cpuid(0x8000_0001).edx & PAGE_1GB != 0
+}
+
 /// Reads CR2, which holds the address of the last page fault.
 pub(crate) fn cr2() -> u64 {
     let value: u64;

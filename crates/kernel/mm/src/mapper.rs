@@ -50,6 +50,62 @@ pub struct Translation {
     pub flags: PageTableFlags,
 }
 
+/// One page of a range: which virtual page maps which frame, and the page
+/// size.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PageMapping {
+    /// The page's first virtual address.
+    pub virt: VirtAddr,
+    /// The frame's first physical address.
+    pub phys: PhysAddr,
+    /// The page size.
+    pub size: PageSize,
+}
+
+/// The fewest pages, none larger than `largest`, that map `len` bytes at
+/// `virt` to `phys`, in address order.
+///
+/// Each step takes the largest page that both addresses are aligned to
+/// and that fits in what is left. Each page size divides the next, so no
+/// other choice uses fewer pages. When `virt` and `phys` have the same
+/// offset within a 1 GiB page, the range gets 4 KiB pages at the edges,
+/// 2 MiB pages inside those and 1 GiB pages in the middle. Otherwise the
+/// shared alignment of the two addresses caps the page size.
+///
+/// # Panics
+///
+/// Panics if `virt`, `phys` or `len` is not 4 KiB aligned.
+pub fn pages(
+    virt: VirtAddr,
+    phys: PhysAddr,
+    len: u64,
+    largest: PageSize,
+) -> impl Iterator<Item = PageMapping> {
+    const SIZES: [PageSize; 3] = [PageSize::Size1G, PageSize::Size2M, PageSize::Size4K];
+    let small = PageSize::Size4K.bytes();
+    assert!(
+        virt.is_aligned(small) && phys.is_aligned(small) && len % small == 0,
+        "a page range is 4 KiB aligned"
+    );
+    let mut done = 0;
+    core::iter::from_fn(move || {
+        if done == len {
+            return None;
+        }
+        let (virt, phys) = (virt + done, phys + done);
+        let size = SIZES
+            .into_iter()
+            .filter(|&size| size <= largest)
+            .find(|size| {
+                let bytes = size.bytes();
+                virt.is_aligned(bytes) && phys.is_aligned(bytes) && len - done >= bytes
+            })
+            .unwrap_or(PageSize::Size4K);
+        done += size.bytes();
+        Some(PageMapping { virt, phys, size })
+    })
+}
+
 /// A page table tree rooted at a PML4.
 #[derive(Debug)]
 pub struct Mapper {
@@ -149,8 +205,8 @@ impl Mapper {
         Ok(())
     }
 
-    /// Maps `len` bytes at `virt` to `phys`, with the largest pages up to
-    /// `largest` that fit. Both addresses and `len` must be 4 KiB aligned.
+    /// Maps `len` bytes at `virt` to `phys` with the pages [`pages`]
+    /// picks. Both addresses and `len` must be 4 KiB aligned.
     ///
     /// On failure, the pages mapped before the failing one stay mapped.
     ///
@@ -166,24 +222,12 @@ impl Mapper {
         flags: PageTableFlags,
         frames: &mut impl FrameAllocator,
     ) -> Result<(), MapError> {
-        const SIZES: [PageSize; 3] = [PageSize::Size1G, PageSize::Size2M, PageSize::Size4K];
         let small = PageSize::Size4K.bytes();
         if !virt.is_aligned(small) || !phys.is_aligned(small) || len % small != 0 {
             return Err(MapError::Misaligned);
         }
-        let mut done = 0;
-        while done < len {
-            let (v, p) = (virt + done, phys + done);
-            let size = SIZES
-                .into_iter()
-                .filter(|&size| size <= largest)
-                .find(|size| {
-                    let bytes = size.bytes();
-                    v.is_aligned(bytes) && p.is_aligned(bytes) && len - done >= bytes
-                })
-                .unwrap_or(PageSize::Size4K);
-            self.map(v, p, size, flags, frames)?;
-            done += size.bytes();
+        for page in pages(virt, phys, len, largest) {
+            self.map(page.virt, page.phys, page.size, flags, frames)?;
         }
         Ok(())
     }
@@ -459,6 +503,71 @@ mod tests {
                 &mut memory
             ),
             Err(MapError::Misaligned)
+        );
+    }
+
+    /// The page sizes `pages` picks, with runs of one size merged into
+    /// (size, count).
+    fn page_runs(virt: u64, phys: u64, len: u64, largest: PageSize) -> Vec<(PageSize, u64)> {
+        let mut runs: Vec<(PageSize, u64)> = Vec::new();
+        let mut next = (kernel(virt), PhysAddr::new(phys));
+        for page in pages(kernel(virt), PhysAddr::new(phys), len, largest) {
+            assert_eq!((page.virt, page.phys), next, "pages are contiguous");
+            next = (page.virt + page.size.bytes(), page.phys + page.size.bytes());
+            match runs.last_mut() {
+                Some((size, count)) if *size == page.size => *count += 1,
+                _ => runs.push((page.size, 1)),
+            }
+        }
+        assert_eq!(next.0, kernel(virt) + len, "pages cover the range");
+        runs
+    }
+
+    #[test]
+    fn pages_use_1g_in_the_middle_and_smaller_at_the_edges() {
+        use PageSize::{Size1G, Size2M, Size4K};
+        // 4 KiB below a 2 MiB boundary that is 2 MiB below a 1 GiB one.
+        let start = (1 << 30) - 0x20_0000 - 0x1000;
+        let len = 0x1000 + 0x20_0000 + (2 << 30) + 0x20_0000 + 0x1000;
+        let virt = 0xffff_8000_0000_0000 + start;
+        assert_eq!(
+            page_runs(virt, start, len, Size1G),
+            [
+                (Size4K, 1),
+                (Size2M, 1),
+                (Size1G, 2),
+                (Size2M, 1),
+                (Size4K, 1)
+            ]
+        );
+        assert_eq!(
+            page_runs(virt, start, len, Size2M),
+            [(Size4K, 1), (Size2M, 1 + 1024 + 1), (Size4K, 1)]
+        );
+    }
+
+    #[test]
+    fn pages_follow_the_shared_alignment_of_virt_and_phys() {
+        use PageSize::{Size1G, Size2M, Size4K};
+        // `virt` is 1 GiB aligned but `phys` only 2 MiB aligned.
+        let virt = 0xffff_8000_4000_0000;
+        assert_eq!(
+            page_runs(virt, 0x20_0000, 2 << 30, Size1G),
+            [(Size2M, 1024)]
+        );
+        // `phys` is only 4 KiB aligned.
+        assert_eq!(page_runs(virt, 0x1000, 0x40_0000, Size1G), [(Size4K, 1024)]);
+        assert_eq!(page_runs(virt, 0, 0, Size1G), []);
+    }
+
+    #[test]
+    #[should_panic(expected = "4 KiB aligned")]
+    fn pages_reject_a_misaligned_range() {
+        let _ = pages(
+            kernel(0xffff_8000_0000_0000),
+            PhysAddr::ZERO,
+            0x800,
+            PageSize::Size4K,
         );
     }
 

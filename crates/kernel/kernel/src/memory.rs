@@ -337,19 +337,22 @@ fn map_direct(
     regions: &[Region],
     frames: &mut impl FrameAllocator,
 ) {
+    let largest = if cpu::has_1g_pages() {
+        PageSize::Size1G
+    } else {
+        PageSize::Size2M
+    };
     let mut map = |start: PhysAddr, end: PhysAddr| {
         assert!(
             end.as_u64() <= DIRECT_MAP_SIZE,
             "physical memory past the direct map"
         );
-        // 1 GiB pages need CPUID.80000001H:EDX.Page1GB, which QEMU's
-        // default CPU lacks, so the largest is 2 MiB.
         mapper
             .map_range(
                 direct.phys_to_virt(start),
                 start,
                 end - start,
-                PageSize::Size2M,
+                largest,
                 PageTableFlags::WRITABLE | PageTableFlags::NO_EXECUTE,
                 frames,
             )
