@@ -1,9 +1,10 @@
-//! Exception entry: the assembly stubs, the saved register frame and the
-//! Rust dispatcher.
+//! Exception and interrupt entry: the assembly stubs, the saved register
+//! frame and the Rust dispatcher.
 //!
-//! Each of vectors 0 to 31 has a stub. Stubs for vectors without a CPU
+//! Each of the 256 vectors has a stub. Stubs for vectors without a CPU
 //! error code push a zero in its place, then every stub pushes its vector
-//! and jumps to a common entry. The entry saves the general registers,
+//! and jumps to a common entry. Vectors 0 to 31 are exceptions. Vectors 32
+//! to 255 go to [`irq::dispatch`]. The entry saves the general registers,
 //! calls [`trap_dispatch`] with a pointer to the [`TrapFrame`] on the
 //! stack, restores the registers and returns with `iretq`.
 //!
@@ -20,11 +21,11 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use arch_x86_64::Exception;
 
-use super::cpu;
+use super::{cpu, irq};
 use crate::console::kprintln;
 
-/// Number of vectors with a stub: the 32 exception vectors.
-pub(crate) const STUBS: usize = 32;
+/// Number of vectors with a stub: all of them.
+pub(crate) const STUBS: usize = 256;
 
 // The vectors in the two `.irp` lists must match
 // `Exception::has_error_code`, which the arch crate's tests pin to SDM
@@ -41,6 +42,18 @@ global_asm!(
     "hadron_trap_stub_\\vector:",
     "    push \\vector",
     "    jmp hadron_trap_entry",
+    ".endr",
+    // Interrupt stubs, 16 bytes apart, so the table below can compute
+    // their addresses. No interrupt has an error code.
+    ".balign 16",
+    "hadron_irq_stubs:",
+    ".set hadron_vector, 32",
+    ".rept 224",
+    "    .balign 16",
+    "    push 0",
+    "    push hadron_vector",
+    "    jmp hadron_trap_entry",
+    "    .set hadron_vector, hadron_vector + 1",
     ".endr",
     "",
     "hadron_trap_entry:",
@@ -90,6 +103,11 @@ global_asm!(
     ".irp vector, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31",
     "    .quad hadron_trap_stub_\\vector",
     ".endr",
+    ".set hadron_vector, 0",
+    ".rept 224",
+    "    .quad hadron_irq_stubs + hadron_vector * 16",
+    "    .set hadron_vector, hadron_vector + 1",
+    ".endr",
     ".popsection",
     dispatch = sym trap_dispatch,
 );
@@ -107,7 +125,7 @@ pub(crate) fn stubs() -> &'static [u64; STUBS] {
     unsafe { &TRAP_STUBS }
 }
 
-/// The registers saved on exception entry, lowest address first. The
+/// The registers saved on trap entry, lowest address first. The
 /// layout must match the pushes in the entry stub.
 #[derive(Debug)]
 #[repr(C)]
@@ -177,8 +195,12 @@ pub(crate) fn breakpoints() -> u64 {
     BREAKPOINTS.load(Ordering::Relaxed)
 }
 
-/// Called by the entry stub for every exception.
+/// Called by the entry stub for every vector.
 extern "C" fn trap_dispatch(frame: &mut TrapFrame) {
+    if let Ok(vector @ irq::FIRST..) = u8::try_from(frame.vector) {
+        irq::dispatch(vector);
+        return;
+    }
     match Exception::from_vector(frame.vector) {
         Some(Exception::Breakpoint) => {
             BREAKPOINTS.fetch_add(1, Ordering::Relaxed);

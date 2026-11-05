@@ -1,6 +1,6 @@
-//! The kernel's IDT. Every exception vector enters through an interrupt
-//! gate, so handlers run with interrupts masked. Double faults switch to
-//! their own stack. Vectors 32 to 255 have no gate yet.
+//! The kernel's IDT. Every vector enters through an interrupt gate, so
+//! handlers run with interrupts masked. Double faults switch to their own
+//! stack.
 
 use arch_x86_64::{Exception, GateDescriptor, GateType, Idt, PrivilegeLevel};
 
@@ -42,7 +42,8 @@ ktest::ktest! {
         let double_fault = idt.gate(Exception::DoubleFault as u8);
         assert_eq!(double_fault.ist(), Some(gdt::DOUBLE_FAULT_IST));
         assert_eq!(idt.gate(Exception::PageFault as u8).ist(), None);
-        assert!(!idt.gate(32).is_present());
+        assert!(idt.gate(32).is_present());
+        assert!(idt.gate(255).is_present());
     }
 }
 
