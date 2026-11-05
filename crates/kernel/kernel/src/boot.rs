@@ -1,10 +1,9 @@
-//! Limine entry point, COM1 output and QEMU exit for `x86_64`.
-
-use core::arch::asm;
-use core::fmt::{self, Write};
-use core::panic::PanicInfo;
+//! Limine requests and the kernel entry point.
 
 use limine::{BaseRevision, BootloaderInfoRequest, RequestsEndMarker, RequestsStartMarker};
+
+use crate::arch::x86_64::qemu::{self, ExitCode};
+use crate::console::{self, kprintln};
 
 #[used]
 #[unsafe(link_section = ".limine_requests_start")]
@@ -22,72 +21,32 @@ static BOOTLOADER_INFO: BootloaderInfoRequest = BootloaderInfoRequest::new();
 #[unsafe(link_section = ".limine_requests_end")]
 static REQUESTS_END: RequestsEndMarker = RequestsEndMarker::new();
 
-/// I/O port of the first serial port's data register.
-const COM1: u16 = 0x3f8;
-/// I/O port of QEMU's `isa-debug-exit` device, as set in `gluon.rs`.
-const DEBUG_EXIT: u16 = 0xf4;
-/// Written to `DEBUG_EXIT` on success. QEMU exits with `(value << 1) | 1`,
-/// so this becomes status 33, which `gluon.rs` names as success.
-pub(crate) const EXIT_SUCCESS: u32 = 0x10;
-/// Written to `DEBUG_EXIT` on failure. QEMU exits with status 35.
-const EXIT_FAILURE: u32 = 0x11;
-
-/// Writes to COM1. QEMU's UART transmits without any setup.
-pub(crate) struct Serial;
-
-impl Write for Serial {
-    fn write_str(&mut self, s: &str) -> fmt::Result {
-        for byte in s.bytes() {
-            // SAFETY: writing COM1's data register sends one byte and
-            // touches no memory.
-            unsafe { asm!("out dx, al", in("dx") COM1, in("al") byte, options(nomem, nostack)) };
-        }
-        Ok(())
-    }
-}
-
-/// Stops QEMU with `code`, or halts forever where `isa-debug-exit` is absent.
-pub(crate) fn exit_qemu(code: u32) -> ! {
-    // SAFETY: the `isa-debug-exit` port ends the QEMU process. On a machine
-    // without the device the write is ignored.
-    unsafe { asm!("out dx, eax", in("dx") DEBUG_EXIT, in("eax") code, options(nomem, nostack)) };
-    loop {
-        // SAFETY: `hlt` only stops the CPU until the next interrupt.
-        unsafe { asm!("hlt", options(nomem, nostack)) };
-    }
-}
-
 /// Entry point. Limine jumps here, as named by `ENTRY` in `kernel.ld`.
 #[unsafe(no_mangle)]
 extern "C" fn kmain() -> ! {
+    // With no console there is nowhere to report the error, so boot goes on.
+    let _ = console::init();
+
     if !BASE_REVISION.is_supported() {
-        let _ = writeln!(
-            Serial,
+        kprintln!(
             "hadron: Limine does not support base revision {}",
             BASE_REVISION.revision_slot()
         );
-        exit_qemu(EXIT_FAILURE);
+        qemu::exit(ExitCode::Failure);
     }
     let (name, version) = BOOTLOADER_INFO
         .response()
         .map_or(("an unknown bootloader", ""), |info| {
             (info.name(), info.version())
         });
-    let _ = writeln!(Serial, "hadron: booted by {name} {version}");
+    kprintln!("hadron: booted by {name} {version}");
     if let Some(revision) = BASE_REVISION.loaded_revision() {
-        let _ = writeln!(Serial, "hadron: Limine base revision {revision}");
+        kprintln!("hadron: Limine base revision {revision}");
     }
     if hadron_config::KTEST {
         crate::ktest::run();
     }
-    exit_qemu(EXIT_SUCCESS)
-}
-
-#[panic_handler]
-fn panic(info: &PanicInfo) -> ! {
-    crate::ktest::report_panic();
-    let _ = writeln!(Serial, "hadron: {info}");
-    exit_qemu(EXIT_FAILURE)
+    qemu::exit(ExitCode::Success)
 }
 
 ktest::ktest! {

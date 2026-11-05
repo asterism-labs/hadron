@@ -1,8 +1,7 @@
-//! Placeholder kernel. Replace this crate when the real kernel work starts.
+//! The Hadron kernel.
 //!
-//! It boots through Limine, writes one line to COM1 and exits QEMU through
-//! the `isa-debug-exit` device, which is enough for `gluon run` to show
-//! that the build and boot path works.
+//! It boots through Limine, sets up COM1 as the console, prints what booted
+//! it and exits QEMU through the `isa-debug-exit` device.
 //!
 //! Built with Gluon's `test` profile, it runs the kernel tests after boot
 //! instead. See `ktest.rs`.
@@ -14,12 +13,20 @@
 #![cfg_attr(target_os = "none", no_std, no_main)]
 
 #[cfg(all(target_os = "none", target_arch = "x86_64"))]
+mod arch;
+#[cfg(all(target_os = "none", target_arch = "x86_64"))]
 mod boot;
 #[cfg(all(target_os = "none", target_arch = "x86_64"))]
+mod console;
+#[cfg(all(target_os = "none", target_arch = "x86_64"))]
+mod drivers;
+#[cfg(all(target_os = "none", target_arch = "x86_64"))]
 mod ktest;
+#[cfg(all(target_os = "none", target_arch = "x86_64"))]
+mod panic;
 
 #[cfg(all(target_os = "none", not(target_arch = "x86_64")))]
-compile_error!("the placeholder kernel supports only x86_64");
+compile_error!("the kernel supports only x86_64");
 
 #[cfg(not(target_os = "none"))]
 fn main() {}
