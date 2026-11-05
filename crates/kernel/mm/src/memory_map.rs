@@ -44,8 +44,9 @@ impl RegionKind {
         )
     }
 
-    /// Whether Limine maps regions of this kind in its direct map, which
-    /// is everything except reserved and bad memory.
+    /// Whether the bootloader's direct map covers regions of this kind,
+    /// which is everything except reserved and bad memory. Limine maps
+    /// exactly these.
     #[must_use]
     pub const fn is_direct_mapped(self) -> bool {
         !matches!(self, Self::Reserved | Self::BadMemory)

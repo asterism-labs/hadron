@@ -28,6 +28,42 @@ pub(crate) fn breakpoint() {
     unsafe { asm!("int3", options(nomem, nostack)) };
 }
 
+/// Reads CR0.
+pub(crate) fn cr0() -> u64 {
+    let value: u64;
+    // SAFETY: reading CR0 has no side effects.
+    unsafe { asm!("mov {}, cr0", out(reg) value, options(nomem, nostack, preserves_flags)) };
+    value
+}
+
+/// Reads CR4.
+pub(crate) fn cr4() -> u64 {
+    let value: u64;
+    // SAFETY: reading CR4 has no side effects.
+    unsafe { asm!("mov {}, cr4", out(reg) value, options(nomem, nostack, preserves_flags)) };
+    value
+}
+
+/// `IA32_EFER`, the extended feature enable register (Vol. 4, Table 2-2).
+const IA32_EFER: u32 = 0xc000_0080;
+
+/// Reads `IA32_EFER`.
+pub(crate) fn efer() -> u64 {
+    let (low, high): (u32, u32);
+    // SAFETY: `IA32_EFER` exists on every 64-bit CPU, and reading it has
+    // no side effects.
+    unsafe {
+        asm!(
+            "rdmsr",
+            in("ecx") IA32_EFER,
+            out("eax") low,
+            out("edx") high,
+            options(nomem, nostack, preserves_flags),
+        );
+    }
+    u64::from(high) << 32 | u64::from(low)
+}
+
 /// Reads CR2, which holds the address of the last page fault.
 pub(crate) fn cr2() -> u64 {
     let value: u64;

@@ -14,6 +14,7 @@ PHDRS
 SECTIONS
 {
     . = 0xffffffff80000000;
+    __kernel_start = .;
 
     /* Limine looks for requests between the start and end markers.
        KEEP stops the linker from dropping them, since no code
