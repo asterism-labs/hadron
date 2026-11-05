@@ -9,7 +9,7 @@ use gluon_config::{Config, ConfigValue, Result};
 
 /// Workspace library crates. The kernel package is declared on its own.
 const LIBRARIES: &[&str] = &[
-    "acpi", "dwarf", "elf", "fdt", "ktest", "limine", "linkset", "uefi",
+    "acpi", "arch-x86_64", "dwarf", "elf", "fdt", "ktest", "limine", "linkset", "uefi",
 ];
 
 fn main() -> Result<()> {

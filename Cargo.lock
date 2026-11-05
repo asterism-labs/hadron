@@ -10,6 +10,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "arch-x86_64"
+version = "0.1.0"
+
+[[package]]
 name = "bitflags"
 version = "2.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -34,6 +38,7 @@ dependencies = [
 name = "kernel"
 version = "0.1.0"
 dependencies = [
+ "arch-x86_64",
  "ktest",
  "limine",
 ]

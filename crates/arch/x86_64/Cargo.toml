@@ -1,0 +1,18 @@
+[package]
+name = "arch-x86_64"
+description = "x86_64 descriptor tables, segment selectors and the TSS, as plain data."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+readme.workspace = true
+publish.workspace = true
+
+[lib]
+bench = false
+doctest = false
+
+[lints]
+workspace = true

@@ -24,6 +24,8 @@ mod drivers;
 mod ktest;
 #[cfg(all(target_os = "none", target_arch = "x86_64"))]
 mod panic;
+#[cfg(all(target_os = "none", target_arch = "x86_64"))]
+mod sync;
 
 #[cfg(all(target_os = "none", not(target_arch = "x86_64")))]
 compile_error!("the kernel supports only x86_64");

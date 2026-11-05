@@ -18,6 +18,7 @@ bench = false
 # Only the bare-metal build uses these. On the host the crate is an empty
 # program.
 [target.'cfg(target_os = "none")'.dependencies]
+arch-x86_64 = { workspace = true }
 ktest = { workspace = true }
 limine = { workspace = true }
 

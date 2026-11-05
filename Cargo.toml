@@ -15,6 +15,7 @@ publish = false
 [workspace.dependencies]
 # Internal crates
 acpi = { path = "crates/parse/acpi" }
+arch-x86_64 = { path = "crates/arch/x86_64" }
 dwarf = { path = "crates/parse/dwarf" }
 elf = { path = "crates/parse/elf" }
 fdt = { path = "crates/parse/fdt" }
