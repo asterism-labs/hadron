@@ -15,8 +15,6 @@ publish = false
 [workspace.dependencies]
 # Internal crates
 acpi = { path = "crates/parse/acpi" }
-binparse = { path = "crates/parse/binparse" }
-binparse-macros = { path = "crates/parse/binparse-macros" }
 dwarf = { path = "crates/parse/dwarf" }
 elf = { path = "crates/parse/elf" }
 fdt = { path = "crates/parse/fdt" }
@@ -26,9 +24,7 @@ uefi = { path = "crates/boot/uefi" }
 
 # External dependencies
 bitflags = "2"
-proc-macro2 = "1"
-quote = "1"
-syn = { version = "2", features = [ "full", "extra-traits" ] }
+zerocopy = { version = "0.8", features = [ "derive" ] }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "warn"

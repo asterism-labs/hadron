@@ -5,19 +5,20 @@
 //! - ACPI Specification 6.5, §5.2.6: System Description Table Header
 //!   <https://uefi.org/specs/ACPI/6.5/>
 
-use binparse::FromBytes;
+use zerocopy::little_endian::U32;
+use zerocopy::{FromBytes, Immutable, KnownLayout, Unaligned};
 
 /// Standard ACPI System Description Table header.
 ///
 /// This 36-byte header is present at the start of every ACPI table
 /// (RSDT, XSDT, MADT, HPET, FADT, MCFG, etc.).
-#[derive(Debug, Clone, Copy, FromBytes)]
-#[repr(C, packed)]
+#[derive(Debug, Clone, Copy, FromBytes, KnownLayout, Immutable, Unaligned)]
+#[repr(C)]
 pub struct SdtHeader {
     /// 4-byte ASCII signature identifying the table type.
     pub signature: [u8; 4],
     /// Total length of the table, including the header, in bytes.
-    pub length: u32,
+    pub length: U32,
     /// Revision of the table structure.
     pub revision: u8,
     /// Checksum byte. The entire table, including the header, must sum to zero.
@@ -27,23 +28,27 @@ pub struct SdtHeader {
     /// OEM-supplied table identification string.
     pub oem_table_id: [u8; 8],
     /// OEM-supplied revision number.
-    pub oem_revision: u32,
+    pub oem_revision: U32,
     /// Vendor ID of the utility that created the table.
-    pub creator_id: u32,
+    pub creator_id: U32,
     /// Revision of the utility that created the table.
-    pub creator_revision: u32,
+    pub creator_revision: U32,
 }
 
 impl SdtHeader {
     /// The size of an SDT header in bytes.
     pub const SIZE: usize = 36;
+}
 
+const _: () = assert!(size_of::<SdtHeader>() == SdtHeader::SIZE);
+
+impl SdtHeader {
     /// Read an [`SdtHeader`] from a byte slice.
     ///
     /// Returns `None` if the slice is shorter than [`SdtHeader::SIZE`] bytes.
     #[must_use]
-    pub fn read_from_bytes(data: &[u8]) -> Option<Self> {
-        Self::read_from(data)
+    pub fn parse(data: &[u8]) -> Option<Self> {
+        Self::read_from_prefix(data).ok().map(|(header, _)| header)
     }
 
     /// Returns the 4-byte signature as a byte slice.
@@ -55,7 +60,7 @@ impl SdtHeader {
     /// Returns the total length of this table (header included).
     #[must_use]
     pub fn length(&self) -> u32 {
-        self.length
+        self.length.get()
     }
 }
 
@@ -90,7 +95,7 @@ pub fn load_table(
 ) -> Result<ValidatedTable, super::AcpiError> {
     // SAFETY: Caller provides a valid table physical address.
     let header_data = unsafe { handler.map_physical_region(phys, SdtHeader::SIZE) };
-    let header = SdtHeader::read_from_bytes(header_data).ok_or(super::AcpiError::TruncatedData)?;
+    let header = SdtHeader::parse(header_data).ok_or(super::AcpiError::TruncatedData)?;
 
     if &header.signature() != expected_signature {
         return Err(super::AcpiError::InvalidSignature);

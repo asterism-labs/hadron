@@ -1,5 +1,8 @@
 //! FDT property types and typed accessors.
 
+use zerocopy::FromBytes;
+use zerocopy::big_endian::{U32, U64};
+
 /// A single property from an FDT node.
 #[derive(Debug, Clone, Copy)]
 pub struct FdtProperty<'a> {
@@ -40,21 +43,15 @@ impl<'a> FdtProperty<'a> {
     /// Interprets the property as a big-endian `u32`.
     #[must_use]
     pub fn as_u32(&self) -> Option<u32> {
-        if self.data.len() < 4 {
-            return None;
-        }
-        let bytes: [u8; 4] = self.data[..4].try_into().ok()?;
-        Some(u32::from_be_bytes(bytes))
+        let (value, _) = U32::read_from_prefix(self.data).ok()?;
+        Some(value.get())
     }
 
     /// Interprets the property as a big-endian `u64`.
     #[must_use]
     pub fn as_u64(&self) -> Option<u64> {
-        if self.data.len() < 8 {
-            return None;
-        }
-        let bytes: [u8; 8] = self.data[..8].try_into().ok()?;
-        Some(u64::from_be_bytes(bytes))
+        let (value, _) = U64::read_from_prefix(self.data).ok()?;
+        Some(value.get())
     }
 
     /// Interprets the property as a null-terminated UTF-8 string.

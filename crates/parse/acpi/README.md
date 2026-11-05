@@ -5,7 +5,7 @@ A standalone, `no_std` ACPI table parser for the Hadron kernel. This crate provi
 ## Features
 
 - **Full RSDP/RSDT/XSDT discovery** --- validates ACPI 1.0 and 2.0+ root pointers and iterates over all table entries
-- **MADT parsing** --- enumerates local APICs, I/O APICs, interrupt source overrides, NMI sources, and local APIC NMIs via a `TableEntries`-derived iterator
+- **MADT parsing** --- enumerates local APICs, I/O APICs, interrupt source overrides, NMI sources, and local APIC NMIs
 - **FADT parsing** --- extracts PM timer port, boot architecture flags, feature flags, and DSDT/FACS addresses (with 32/64-bit fallback)
 - **MCFG (PCIe ECAM) parsing** --- iterates PCI segment group ECAM base addresses and bus ranges
 - **HPET table parsing** --- reads the timer block ID, base address, and minimum tick

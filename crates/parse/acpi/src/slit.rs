@@ -9,8 +9,7 @@
 //! - ACPI Specification 6.5, §5.2.17: System Locality Distance Information Table (SLIT)
 //!   <https://uefi.org/specs/ACPI/6.5/>
 
-use binparse::FromBytes;
-
+use crate::read::u64_at;
 use crate::sdt::SdtHeader;
 use crate::{AcpiError, AcpiHandler};
 
@@ -43,8 +42,8 @@ impl Slit {
     pub fn parse(handler: &impl AcpiHandler, phys: u64) -> Result<Self, AcpiError> {
         let table = crate::sdt::load_table(handler, phys, SLIT_SIGNATURE)?;
 
-        let num_localities = u64::read_at(table.data, Self::NUM_LOCALITIES_OFFSET)
-            .ok_or(AcpiError::TruncatedData)?;
+        let num_localities =
+            u64_at(table.data, Self::NUM_LOCALITIES_OFFSET).ok_or(AcpiError::TruncatedData)?;
 
         let matrix_offset = SdtHeader::SIZE + Self::FIELDS_SIZE;
         let matrix_data = table.data.get(matrix_offset..).unwrap_or(&[]);

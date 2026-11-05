@@ -9,4 +9,4 @@ A standalone, `no_std` Flattened Device Tree (DTB) parser. Provides zero-copy ac
 - Typed property accessors: `as_u32`, `as_u64`, `as_str`, and `as_str_list` for null-separated string lists
 - Path-based node lookup (`find_node("/soc/serial@10000000")`) and recursive `compatible` search
 - Memory reservation block iteration via `MemReservationIter`
-- Big-endian primitive types (`Be32`, `Be64`) backed by `binparse::FromBytes`
+- Header and reservation layouts read through `zerocopy` big-endian types

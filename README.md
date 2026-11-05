@@ -15,7 +15,6 @@ started.
 | `crates/boot/limine` | Limine boot protocol bindings |
 | `crates/core/linkset` | Access to data collected in linker sections |
 | `crates/parse/acpi` | ACPI table parser and static AML namespace walker |
-| `crates/parse/binparse` | Binary structure parsing, with derive macros in `binparse-macros` |
 | `crates/parse/dwarf` | DWARF line-program parser |
 | `crates/parse/elf` | ELF64 parser and x86_64 relocations |
 | `crates/parse/fdt` | Flattened device tree parser |

@@ -11,7 +11,8 @@
 //! - IA-PC HPET Specification 1.0a
 //!   <https://www.intel.com/content/dam/www/public/us/en/documents/technical-specifications/software-developers-hpet-spec-1-0a.pdf>
 
-use binparse::FromBytes;
+use zerocopy::little_endian::{U16, U32, U64};
+use zerocopy::{FromBytes, Immutable, KnownLayout, Unaligned};
 
 use crate::sdt::SdtHeader;
 use crate::{AcpiError, AcpiHandler};
@@ -20,8 +21,7 @@ use crate::{AcpiError, AcpiHandler};
 pub const HPET_SIGNATURE: &[u8; 4] = b"HPET";
 
 /// Generic Address Structure used to describe the HPET base address.
-#[derive(Debug, Clone, Copy, FromBytes)]
-#[repr(C, packed)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GenericAddress {
     /// Address space ID (0 = system memory, 1 = system I/O).
     pub address_space_id: u8,
@@ -35,14 +35,25 @@ pub struct GenericAddress {
     pub address: u64,
 }
 
+/// Generic Address Structure as laid out in the table.
+#[derive(FromBytes, KnownLayout, Immutable, Unaligned)]
+#[repr(C)]
+struct RawGenericAddress {
+    address_space_id: u8,
+    register_bit_width: u8,
+    register_bit_offset: u8,
+    reserved: u8,
+    address: U64,
+}
+
 /// Raw HPET table fields following the SDT header.
-#[derive(Debug, Clone, Copy, FromBytes)]
-#[repr(C, packed)]
+#[derive(FromBytes, KnownLayout, Immutable, Unaligned)]
+#[repr(C)]
 struct HpetRaw {
-    event_timer_block_id: u32,
-    base_address: GenericAddress,
+    event_timer_block_id: U32,
+    base_address: RawGenericAddress,
     hpet_number: u8,
-    minimum_tick: u16,
+    minimum_tick: U16,
     page_protection: u8,
 }
 
@@ -71,13 +82,21 @@ impl HpetTable {
     pub fn parse(handler: &impl AcpiHandler, phys: u64) -> Result<Self, AcpiError> {
         let table = crate::sdt::load_table(handler, phys, HPET_SIGNATURE)?;
 
-        let raw = HpetRaw::read_at(table.data, SdtHeader::SIZE).ok_or(AcpiError::TruncatedData)?;
+        let raw: HpetRaw =
+            crate::read::at(table.data, SdtHeader::SIZE).ok_or(AcpiError::TruncatedData)?;
+        let gas = raw.base_address;
 
         Ok(Self {
-            event_timer_block_id: raw.event_timer_block_id,
-            base_address: raw.base_address,
+            event_timer_block_id: raw.event_timer_block_id.get(),
+            base_address: GenericAddress {
+                address_space_id: gas.address_space_id,
+                register_bit_width: gas.register_bit_width,
+                register_bit_offset: gas.register_bit_offset,
+                reserved: gas.reserved,
+                address: gas.address.get(),
+            },
             hpet_number: raw.hpet_number,
-            minimum_tick: raw.minimum_tick,
+            minimum_tick: raw.minimum_tick.get(),
             page_protection: raw.page_protection,
         })
     }

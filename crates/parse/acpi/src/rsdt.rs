@@ -12,8 +12,6 @@
 //! - ACPI Specification 6.5, §5.2.8: Extended System Description Table (XSDT)
 //!   <https://uefi.org/specs/ACPI/6.5/>
 
-use binparse::FromBytes;
-
 use crate::AcpiHandler;
 use crate::sdt::SdtHeader;
 
@@ -56,11 +54,10 @@ impl Iterator for RsdtIterator<'_> {
             return None;
         }
 
-        let entry_data = &self.data[self.offset..];
         let addr = if self.entry_size == XSDT_ENTRY_SIZE {
-            u64::read_from(entry_data)?
+            crate::read::u64_at(self.data, self.offset)?
         } else {
-            u64::from(u32::read_from(entry_data)?)
+            u64::from(crate::read::u32_at(self.data, self.offset)?)
         };
         self.offset += self.entry_size;
         Some(addr)
@@ -94,7 +91,7 @@ pub fn find_table_in_rsdt(
     // Map the RSDT/XSDT header to learn the total table length.
     // SAFETY: caller provides a valid physical address.
     let header_data = unsafe { handler.map_physical_region(rsdt_addr, SdtHeader::SIZE) };
-    let header = SdtHeader::read_from_bytes(header_data)?;
+    let header = SdtHeader::parse(header_data)?;
 
     let total_len = header.length() as usize;
     let entries_len = total_len.saturating_sub(SdtHeader::SIZE);
@@ -114,7 +111,7 @@ pub fn find_table_in_rsdt(
         // Map just the header of the candidate table.
         // SAFETY: entry_phys is a physical address from the RSDT/XSDT.
         let candidate_data = unsafe { handler.map_physical_region(entry_phys, SdtHeader::SIZE) };
-        let candidate = SdtHeader::read_from_bytes(candidate_data)?;
+        let candidate = SdtHeader::parse(candidate_data)?;
         if &candidate.signature() == signature {
             return Some(entry_phys);
         }
@@ -137,8 +134,7 @@ pub fn find_all_tables_in_rsdt<'a, H: AcpiHandler>(
     // Map the RSDT/XSDT header to learn the total table length.
     // SAFETY: caller provides a valid physical address.
     let header_data = unsafe { handler.map_physical_region(rsdt_addr, SdtHeader::SIZE) };
-    let total_len =
-        SdtHeader::read_from_bytes(header_data).map_or(SdtHeader::SIZE, |h| h.length() as usize);
+    let total_len = SdtHeader::parse(header_data).map_or(SdtHeader::SIZE, |h| h.length() as usize);
 
     let entries_data = if total_len > SdtHeader::SIZE {
         // SAFETY: caller provides a valid physical address, total_len from header.
@@ -173,7 +169,7 @@ impl<H: AcpiHandler> Iterator for MatchingTableIter<'_, H> {
                 self.handler
                     .map_physical_region(entry_phys, SdtHeader::SIZE)
             };
-            if let Some(candidate) = SdtHeader::read_from_bytes(candidate_data) {
+            if let Some(candidate) = SdtHeader::parse(candidate_data) {
                 if &candidate.signature() == self.signature {
                     return Some(entry_phys);
                 }

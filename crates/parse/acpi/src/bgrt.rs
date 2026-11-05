@@ -8,7 +8,8 @@
 //! - ACPI Specification 6.5, §5.2.22: Boot Graphics Resource Table (BGRT)
 //!   <https://uefi.org/specs/ACPI/6.5/>
 
-use binparse::FromBytes;
+use zerocopy::little_endian::{U16, U32, U64};
+use zerocopy::{FromBytes, Immutable, KnownLayout, Unaligned};
 
 use crate::sdt::SdtHeader;
 use crate::{AcpiError, AcpiHandler};
@@ -17,15 +18,15 @@ use crate::{AcpiError, AcpiHandler};
 pub const BGRT_SIGNATURE: &[u8; 4] = b"BGRT";
 
 /// Raw BGRT table fields following the SDT header.
-#[derive(Debug, Clone, Copy, FromBytes)]
-#[repr(C, packed)]
+#[derive(FromBytes, KnownLayout, Immutable, Unaligned)]
+#[repr(C)]
 struct BgrtRaw {
-    version: u16,
+    version: U16,
     status: u8,
     image_type: u8,
-    image_address: u64,
-    image_offset_x: u32,
-    image_offset_y: u32,
+    image_address: U64,
+    image_offset_x: U32,
+    image_offset_y: U32,
 }
 
 /// Parsed BGRT table.
@@ -55,15 +56,16 @@ impl BgrtTable {
     pub fn parse(handler: &impl AcpiHandler, phys: u64) -> Result<Self, AcpiError> {
         let table = crate::sdt::load_table(handler, phys, BGRT_SIGNATURE)?;
 
-        let raw = BgrtRaw::read_at(table.data, SdtHeader::SIZE).ok_or(AcpiError::TruncatedData)?;
+        let raw: BgrtRaw =
+            crate::read::at(table.data, SdtHeader::SIZE).ok_or(AcpiError::TruncatedData)?;
 
         Ok(Self {
-            version: raw.version,
+            version: raw.version.get(),
             status: raw.status,
             image_type: raw.image_type,
-            image_address: raw.image_address,
-            image_offset_x: raw.image_offset_x,
-            image_offset_y: raw.image_offset_y,
+            image_address: raw.image_address.get(),
+            image_offset_x: raw.image_offset_x.get(),
+            image_offset_y: raw.image_offset_y.get(),
         })
     }
 }

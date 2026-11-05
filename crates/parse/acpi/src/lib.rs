@@ -31,6 +31,7 @@ pub mod hpet;
 pub mod ivrs;
 pub mod madt;
 pub mod mcfg;
+mod read;
 pub mod resource;
 pub mod rsdp;
 pub mod rsdt;

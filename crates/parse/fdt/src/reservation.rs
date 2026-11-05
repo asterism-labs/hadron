@@ -1,7 +1,7 @@
 //! Memory reservation block parsing.
 
-use crate::header::Be64;
-use binparse::FromBytes;
+use zerocopy::big_endian::U64;
+use zerocopy::{FromBytes, Immutable, KnownLayout, Unaligned};
 
 /// A single memory reservation entry from the FDT reservation block.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -13,11 +13,11 @@ pub struct MemReservation {
 }
 
 /// Raw reservation entry as stored in the DTB (two big-endian 64-bit values).
-#[derive(Clone, Copy, Debug, FromBytes)]
+#[derive(FromBytes, KnownLayout, Immutable, Unaligned)]
 #[repr(C)]
 struct RawReservationEntry {
-    address: Be64,
-    size: Be64,
+    address: U64,
+    size: U64,
 }
 
 /// Iterator over memory reservation entries in the FDT.
@@ -25,13 +25,12 @@ struct RawReservationEntry {
 /// Yields [`MemReservation`] entries until the all-zero terminator is reached.
 pub struct MemReservationIter<'a> {
     data: &'a [u8],
-    offset: usize,
 }
 
 impl<'a> MemReservationIter<'a> {
     /// Creates a new iterator over the raw reservation block bytes.
     pub(crate) fn new(data: &'a [u8]) -> Self {
-        Self { data, offset: 0 }
+        Self { data }
     }
 }
 
@@ -39,7 +38,7 @@ impl Iterator for MemReservationIter<'_> {
     type Item = MemReservation;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let entry = RawReservationEntry::read_at(self.data, self.offset)?;
+        let (entry, rest) = RawReservationEntry::read_from_prefix(self.data).ok()?;
         let address = entry.address.get();
         let size = entry.size.get();
 
@@ -48,7 +47,30 @@ impl Iterator for MemReservationIter<'_> {
             return None;
         }
 
-        self.offset += core::mem::size_of::<RawReservationEntry>();
+        self.data = rest;
         Some(MemReservation { address, size })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncated_block_without_terminator_ends_iteration() {
+        let mut data = [0u8; 16 + 9];
+        data[..8].copy_from_slice(&0x8000_0000u64.to_be_bytes());
+        data[8..16].copy_from_slice(&0x1000u64.to_be_bytes());
+        data[16] = 0xFF;
+
+        let mut iter = MemReservationIter::new(&data);
+        assert_eq!(
+            iter.next(),
+            Some(MemReservation {
+                address: 0x8000_0000,
+                size: 0x1000,
+            })
+        );
+        assert_eq!(iter.next(), None);
     }
 }

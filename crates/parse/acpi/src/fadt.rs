@@ -10,8 +10,7 @@
 //! - ACPI Specification 6.5, §5.2.9: Fixed ACPI Description Table (FADT)
 //!   <https://uefi.org/specs/ACPI/6.5/>
 
-use binparse::FromBytes;
-
+use crate::read::{u8_at, u16_at, u32_at, u64_at};
 use crate::{AcpiError, AcpiHandler};
 
 /// FADT table signature.
@@ -72,11 +71,6 @@ impl Fadt {
     /// Byte offset of `x_dsdt` within the FADT (ACPI 2.0+).
     const X_DSDT_OFFSET: usize = 140;
 
-    /// Minimum FADT length required to read all the fields we need.
-    ///
-    /// We need up to offset 140 + 8 bytes = 148 bytes for `x_dsdt`.
-    const MIN_LENGTH: usize = 148;
-
     /// Parse a FADT from the given physical address.
     ///
     /// # Errors
@@ -86,40 +80,22 @@ impl Fadt {
     pub fn parse(handler: &impl AcpiHandler, phys: u64) -> Result<Self, AcpiError> {
         let table = crate::sdt::load_table(handler, phys, FADT_SIGNATURE)?;
 
-        // Older FADT revisions may be shorter; provide zero defaults for
-        // missing fields rather than failing outright.
-        if table.data.len() < Self::MIN_LENGTH {
-            return Ok(Self::parse_partial(table.data));
-        }
-
+        // Older FADT revisions may be shorter; missing fields read as zero
+        // rather than failing outright.
         Ok(Self::read_fields(table.data))
     }
 
-    /// Read all needed fields from a fully-sized FADT byte slice.
+    /// Reads the fields we need, using zero for any that lie past the end.
     fn read_fields(data: &[u8]) -> Self {
         Self {
-            firmware_ctrl: u32::read_at(data, Self::FIRMWARE_CTRL_OFFSET).unwrap_or(0),
-            dsdt: u32::read_at(data, Self::DSDT_OFFSET).unwrap_or(0),
-            pm_timer_block: u32::read_at(data, Self::PM_TMR_BLK_OFFSET).unwrap_or(0),
-            century: u8::read_at(data, Self::CENTURY_OFFSET).unwrap_or(0),
-            boot_architecture_flags: u16::read_at(data, Self::BOOT_ARCH_OFFSET).unwrap_or(0),
-            flags: u32::read_at(data, Self::FLAGS_OFFSET).unwrap_or(0),
-            x_firmware_ctrl: u64::read_at(data, Self::X_FIRMWARE_CTRL_OFFSET).unwrap_or(0),
-            x_dsdt: u64::read_at(data, Self::X_DSDT_OFFSET).unwrap_or(0),
-        }
-    }
-
-    /// Parse a shorter-than-expected FADT, filling in zero for missing fields.
-    fn parse_partial(data: &[u8]) -> Self {
-        Self {
-            firmware_ctrl: u32::read_at(data, Self::FIRMWARE_CTRL_OFFSET).unwrap_or(0),
-            dsdt: u32::read_at(data, Self::DSDT_OFFSET).unwrap_or(0),
-            pm_timer_block: u32::read_at(data, Self::PM_TMR_BLK_OFFSET).unwrap_or(0),
-            century: u8::read_at(data, Self::CENTURY_OFFSET).unwrap_or(0),
-            boot_architecture_flags: u16::read_at(data, Self::BOOT_ARCH_OFFSET).unwrap_or(0),
-            flags: u32::read_at(data, Self::FLAGS_OFFSET).unwrap_or(0),
-            x_firmware_ctrl: u64::read_at(data, Self::X_FIRMWARE_CTRL_OFFSET).unwrap_or(0),
-            x_dsdt: u64::read_at(data, Self::X_DSDT_OFFSET).unwrap_or(0),
+            firmware_ctrl: u32_at(data, Self::FIRMWARE_CTRL_OFFSET).unwrap_or(0),
+            dsdt: u32_at(data, Self::DSDT_OFFSET).unwrap_or(0),
+            pm_timer_block: u32_at(data, Self::PM_TMR_BLK_OFFSET).unwrap_or(0),
+            century: u8_at(data, Self::CENTURY_OFFSET).unwrap_or(0),
+            boot_architecture_flags: u16_at(data, Self::BOOT_ARCH_OFFSET).unwrap_or(0),
+            flags: u32_at(data, Self::FLAGS_OFFSET).unwrap_or(0),
+            x_firmware_ctrl: u64_at(data, Self::X_FIRMWARE_CTRL_OFFSET).unwrap_or(0),
+            x_dsdt: u64_at(data, Self::X_DSDT_OFFSET).unwrap_or(0),
         }
     }
 
@@ -152,5 +128,22 @@ impl Fadt {
         } else {
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn short_table_reads_missing_fields_as_zero() {
+        // An ACPI 1.0 FADT: 116 bytes, so no 64-bit addresses.
+        let mut data = [0u8; 116];
+        data[40..44].copy_from_slice(&0x7FE0_0000u32.to_le_bytes());
+        data[76..80].copy_from_slice(&0x608u32.to_le_bytes());
+        let fadt = Fadt::read_fields(&data);
+        assert_eq!(fadt.pm_timer_block, 0x608);
+        assert_eq!(fadt.x_dsdt, 0);
+        assert_eq!(fadt.dsdt_address(), Some(0x7FE0_0000));
     }
 }

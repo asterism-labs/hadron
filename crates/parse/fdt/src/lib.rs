@@ -29,8 +29,8 @@ pub use node::FdtNode;
 pub use property::{FdtProperty, PropertyIter, StrListIter};
 pub use reservation::{MemReservation, MemReservationIter};
 
-use binparse::FromBytes;
 use header::{FDT_MAGIC, FDT_MIN_COMPAT_VERSION, RawFdtHeader};
+use zerocopy::FromBytes;
 
 /// Errors that can occur during FDT parsing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,7 +67,7 @@ impl<'a> Fdt<'a> {
     ///
     /// Returns an [`FdtError`] if the blob is malformed.
     pub fn parse(data: &'a [u8]) -> Result<Self, FdtError> {
-        let hdr = RawFdtHeader::read_from(data).ok_or(FdtError::TruncatedData)?;
+        let (hdr, _) = RawFdtHeader::read_from_prefix(data).map_err(|_| FdtError::TruncatedData)?;
 
         if hdr.magic.get() != FDT_MAGIC {
             return Err(FdtError::InvalidMagic);
@@ -254,7 +254,7 @@ mod tests {
         let header_size = 40u32; // 10 × 4 bytes
         let mem_rsv_off = header_size;
 
-        // Reservation entries: each is 16 bytes (2 × Be64), plus terminator.
+        // Reservation entries: each is 16 bytes (2 × big-endian u64), plus terminator.
         let rsv_size = (reservations.len() + 1) * 16;
         let struct_off = mem_rsv_off as usize + rsv_size;
         let strings_off = struct_off + struct_block.len();

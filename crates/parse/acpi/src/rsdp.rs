@@ -9,13 +9,14 @@
 //! - ACPI Specification 6.5, §5.2.5: Root System Description Pointer (RSDP)
 //!   <https://uefi.org/specs/ACPI/6.5/>
 
-use binparse::FromBytes;
+use zerocopy::little_endian::{U32, U64};
+use zerocopy::{FromBytes, Immutable, KnownLayout, Unaligned};
 
 use crate::{AcpiError, AcpiHandler};
 
 /// ACPI 1.0 RSDP — 20 bytes.
-#[derive(Debug, Clone, Copy, FromBytes)]
-#[repr(C, packed)]
+#[derive(Debug, Clone, Copy, FromBytes, KnownLayout, Immutable, Unaligned)]
+#[repr(C)]
 pub struct Rsdp {
     /// Must be `b"RSD PTR "` (8 bytes, note the trailing space).
     pub signature: [u8; 8],
@@ -26,7 +27,7 @@ pub struct Rsdp {
     /// ACPI revision: 0 for ACPI 1.0, 2 for ACPI 2.0+.
     pub revision: u8,
     /// Physical address of the RSDT (32-bit).
-    pub rsdt_address: u32,
+    pub rsdt_address: U32,
 }
 
 impl Rsdp {
@@ -37,19 +38,21 @@ impl Rsdp {
     pub const SIGNATURE: &[u8; 8] = b"RSD PTR ";
 }
 
+const _: () = assert!(size_of::<Rsdp>() == Rsdp::SIZE);
+
 /// ACPI 2.0+ RSDP extension — 36 bytes total.
 ///
 /// The first 20 bytes are identical to [`Rsdp`]. The remaining 16 bytes
 /// provide the 64-bit XSDT address and an extended checksum.
-#[derive(Debug, Clone, Copy, FromBytes)]
-#[repr(C, packed)]
+#[derive(Debug, Clone, Copy, FromBytes, KnownLayout, Immutable, Unaligned)]
+#[repr(C)]
 pub struct Rsdp2 {
     /// The ACPI 1.0 portion.
     pub v1: Rsdp,
     /// Total length of this structure (should be 36).
-    pub length: u32,
+    pub length: U32,
     /// Physical address of the XSDT (64-bit).
-    pub xsdt_address: u64,
+    pub xsdt_address: U64,
     /// Checksum covering the entire 36 bytes.
     pub extended_checksum: u8,
     /// Reserved bytes.
@@ -60,6 +63,8 @@ impl Rsdp2 {
     /// Size of the ACPI 2.0 RSDP structure in bytes.
     pub const SIZE: usize = 36;
 }
+
+const _: () = assert!(size_of::<Rsdp2>() == Rsdp2::SIZE);
 
 /// Parse and validate the RSDP at the given physical address.
 ///
@@ -76,7 +81,7 @@ pub fn parse_rsdp(handler: &impl AcpiHandler, phys: u64) -> Result<(u64, bool), 
     // SAFETY: we trust the handler to return a valid mapping.
     let data = unsafe { handler.map_physical_region(phys, Rsdp2::SIZE) };
 
-    let v1 = Rsdp::read_from(data).ok_or(AcpiError::InvalidRsdp)?;
+    let (v1, _) = Rsdp::read_from_prefix(data).map_err(|_| AcpiError::InvalidRsdp)?;
 
     // Validate signature.
     if &v1.signature != Rsdp::SIGNATURE {
@@ -90,7 +95,7 @@ pub fn parse_rsdp(handler: &impl AcpiHandler, phys: u64) -> Result<(u64, bool), 
 
     match v1.revision {
         // ACPI 1.0 — use the 32-bit RSDT address.
-        0 => Ok((u64::from(v1.rsdt_address), false)),
+        0 => Ok((u64::from(v1.rsdt_address.get()), false)),
 
         // ACPI 2.0+ — validate extended checksum and use the XSDT address.
         2 => {
@@ -100,8 +105,8 @@ pub fn parse_rsdp(handler: &impl AcpiHandler, phys: u64) -> Result<(u64, bool), 
                 return Err(AcpiError::InvalidChecksum);
             }
 
-            let v2 = Rsdp2::read_from(data).ok_or(AcpiError::InvalidRsdp)?;
-            Ok((v2.xsdt_address, true))
+            let (v2, _) = Rsdp2::read_from_prefix(data).map_err(|_| AcpiError::InvalidRsdp)?;
+            Ok((v2.xsdt_address.get(), true))
         }
 
         _ => Err(AcpiError::InvalidRevision),

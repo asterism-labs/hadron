@@ -1,5 +1,8 @@
 //! FDT node types and structure-block token parsing.
 
+use zerocopy::FromBytes;
+use zerocopy::big_endian::U32;
+
 use crate::property::{FdtProperty, PropertyIter};
 
 // ---- Token constants --------------------------------------------------------
@@ -15,8 +18,8 @@ pub(crate) const FDT_END: u32 = 0x0000_0009;
 
 /// Reads a big-endian `u32` at `offset` in `data`.
 pub(crate) fn read_be32_at(data: &[u8], offset: usize) -> Option<u32> {
-    let bytes: [u8; 4] = data.get(offset..offset + 4)?.try_into().ok()?;
-    Some(u32::from_be_bytes(bytes))
+    let (value, _) = U32::read_from_prefix(data.get(offset..)?).ok()?;
+    Some(value.get())
 }
 
 /// Reads the 4-byte token tag at `offset`.

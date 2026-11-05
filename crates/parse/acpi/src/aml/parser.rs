@@ -10,7 +10,8 @@
 //! - ACPI Specification 6.5, Ch. 20: ACPI Machine Language (AML) Specification
 //!   <https://uefi.org/specs/ACPI/6.5/>
 
-use binparse::BinaryReader;
+use zerocopy::FromBytes;
+use zerocopy::little_endian::{U16, U32, U64};
 
 use super::path::{AmlPath, NameSeg};
 use super::value::{AmlError, AmlValue, EisaId, InlineString};
@@ -34,7 +35,7 @@ pub fn walk_aml(data: &[u8], visitor: &mut impl AmlVisitor) -> Result<(), AmlErr
 ///
 /// Errors inside the list stop the walk of this scope only, so this never fails.
 fn parse_term_list(data: &[u8], end: usize, path: &mut AmlPath, visitor: &mut impl AmlVisitor) {
-    let mut reader = BinaryReader::new(data);
+    let mut reader = Reader::new(data);
 
     while reader.position() < end && reader.position() < reader.len() {
         if parse_term_obj(&mut reader, end, path, visitor).is_err() {
@@ -47,7 +48,7 @@ fn parse_term_list(data: &[u8], end: usize, path: &mut AmlPath, visitor: &mut im
 
 /// Parse a single `TermObj` and dispatch to the visitor.
 fn parse_term_obj(
-    reader: &mut BinaryReader<'_>,
+    reader: &mut Reader<'_>,
     scope_end: usize,
     path: &mut AmlPath,
     visitor: &mut impl AmlVisitor,
@@ -56,7 +57,7 @@ fn parse_term_obj(
         return Err(AmlError::UnexpectedEnd);
     }
 
-    let op = reader.read::<u8>().ok_or(AmlError::UnexpectedEnd)?;
+    let op = reader.u8().ok_or(AmlError::UnexpectedEnd)?;
 
     match op {
         // DefName — NameString DataRefObject
@@ -70,7 +71,7 @@ fn parse_term_obj(
 
         // ExtOpPrefix
         0x5B => {
-            let ext_op = reader.read::<u8>().ok_or(AmlError::UnexpectedEnd)?;
+            let ext_op = reader.u8().ok_or(AmlError::UnexpectedEnd)?;
             match ext_op {
                 // DefOpRegion — skip
                 0x80 => skip_op_region(reader),
@@ -157,7 +158,7 @@ const PRT_SEG: NameSeg = NameSeg(*b"_PRT");
 
 /// Parse `DefName`: 0x08 `NameString` `DataRefObject`
 fn parse_def_name(
-    reader: &mut BinaryReader<'_>,
+    reader: &mut Reader<'_>,
     path: &AmlPath,
     visitor: &mut impl AmlVisitor,
 ) -> Result<(), AmlError> {
@@ -189,7 +190,7 @@ fn parse_def_name(
 /// For link-device routing (Source = Name), we skip the entry since resolving
 /// link devices requires method evaluation.
 fn parse_prt_package(
-    reader: &mut BinaryReader<'_>,
+    reader: &mut Reader<'_>,
     path: &AmlPath,
     visitor: &mut impl AmlVisitor,
 ) -> Result<(), AmlError> {
@@ -199,7 +200,7 @@ fn parse_prt_package(
     let outer_end = reader.position() + pkg_remaining;
 
     // NumElements
-    let _count = reader.read::<u8>().ok_or(AmlError::UnexpectedEnd)?;
+    let _count = reader.u8().ok_or(AmlError::UnexpectedEnd)?;
 
     // Parse inner packages
     while reader.position() < outer_end && !reader.is_at_end() {
@@ -210,7 +211,7 @@ fn parse_prt_package(
         reader.skip(1); // inner Package opcode
         let (inner_remaining, _) = decode_pkg_length(reader)?;
         let inner_end = reader.position() + inner_remaining;
-        let _inner_count = reader.read::<u8>().ok_or(AmlError::UnexpectedEnd)?;
+        let _inner_count = reader.u8().ok_or(AmlError::UnexpectedEnd)?;
 
         // Element 0: Address (Integer)
         let address = read_prt_integer(reader);
@@ -246,7 +247,7 @@ fn parse_prt_package(
 }
 
 /// Read an integer from a _PRT package element. Handles common AML integer encodings.
-fn read_prt_integer(reader: &mut BinaryReader<'_>) -> Option<u64> {
+fn read_prt_integer(reader: &mut Reader<'_>) -> Option<u64> {
     let remaining = reader.remaining();
     match remaining.first()? {
         0x00 => {
@@ -263,19 +264,19 @@ fn read_prt_integer(reader: &mut BinaryReader<'_>) -> Option<u64> {
         }
         0x0A => {
             reader.skip(1);
-            reader.read::<u8>().map(u64::from)
+            reader.u8().map(u64::from)
         }
         0x0B => {
             reader.skip(1);
-            reader.read::<u16>().map(u64::from)
+            reader.u16().map(u64::from)
         }
         0x0C => {
             reader.skip(1);
-            reader.read::<u32>().map(u64::from)
+            reader.u32().map(u64::from)
         }
         0x0E => {
             reader.skip(1);
-            reader.read::<u64>()
+            reader.u64()
         }
         _ => None,
     }
@@ -291,7 +292,7 @@ struct ResolvedData<'a> {
 
 /// Parse `DefScope`: 0x10 `PkgLength` `NameString` `TermList`
 fn parse_def_scope(
-    reader: &mut BinaryReader<'_>,
+    reader: &mut Reader<'_>,
     path: &mut AmlPath,
     visitor: &mut impl AmlVisitor,
 ) -> Result<(), AmlError> {
@@ -322,7 +323,7 @@ fn parse_def_scope(
 
 /// Parse `DefMethod`: 0x14 `PkgLength` `NameString` `MethodFlags` `TermList`
 fn parse_def_method(
-    reader: &mut BinaryReader<'_>,
+    reader: &mut Reader<'_>,
     path: &AmlPath,
     visitor: &mut impl AmlVisitor,
 ) -> Result<(), AmlError> {
@@ -330,7 +331,7 @@ fn parse_def_method(
     let abs_end = reader.position() + pkg_end;
 
     let name = read_name_seg(reader)?;
-    let method_flags = reader.read::<u8>().ok_or(AmlError::UnexpectedEnd)?;
+    let method_flags = reader.u8().ok_or(AmlError::UnexpectedEnd)?;
     let arg_count = method_flags & 0x07;
     let serialized = (method_flags & 0x08) != 0;
 
@@ -346,7 +347,7 @@ fn parse_def_method(
 
 /// Parse `DefDevice`: 0x5B 0x82 `PkgLength` `NameString` `TermList`
 fn parse_def_device(
-    reader: &mut BinaryReader<'_>,
+    reader: &mut Reader<'_>,
     path: &mut AmlPath,
     visitor: &mut impl AmlVisitor,
 ) -> Result<(), AmlError> {
@@ -377,7 +378,7 @@ fn parse_def_device(
 
 /// Parse `DefProcessor`: 0x5B 0x83 `PkgLength` `NameString` `ProcID` `PblkAddr` `PblkLen`
 fn parse_def_processor(
-    reader: &mut BinaryReader<'_>,
+    reader: &mut Reader<'_>,
     path: &AmlPath,
     visitor: &mut impl AmlVisitor,
 ) -> Result<(), AmlError> {
@@ -385,7 +386,7 @@ fn parse_def_processor(
     let abs_end = reader.position() + pkg_end;
 
     let name = read_name_seg(reader)?;
-    let proc_id = reader.read::<u8>().ok_or(AmlError::UnexpectedEnd)?;
+    let proc_id = reader.u8().ok_or(AmlError::UnexpectedEnd)?;
 
     visitor.processor(path, name, proc_id);
 
@@ -399,7 +400,7 @@ fn parse_def_processor(
 
 /// Parse `DefPowerRes`: 0x5B 0x84 `PkgLength` `NameString` `SystemLevel` `ResourceOrder`
 fn parse_def_power_res(
-    reader: &mut BinaryReader<'_>,
+    reader: &mut Reader<'_>,
     path: &AmlPath,
     visitor: &mut impl AmlVisitor,
 ) -> Result<(), AmlError> {
@@ -419,7 +420,7 @@ fn parse_def_power_res(
 
 /// Parse `DefThermalZone`: 0x5B 0x85 `PkgLength` `NameString` `TermList`
 fn parse_def_thermal_zone(
-    reader: &mut BinaryReader<'_>,
+    reader: &mut Reader<'_>,
     path: &mut AmlPath,
     visitor: &mut impl AmlVisitor,
 ) -> Result<(), AmlError> {
@@ -449,7 +450,7 @@ fn parse_def_thermal_zone(
 }
 
 /// Skip an `OpRegion`: `NameString` `RegionSpace` `RegionOffset` `RegionLen`
-fn skip_op_region(reader: &mut BinaryReader<'_>) -> Result<(), AmlError> {
+fn skip_op_region(reader: &mut Reader<'_>) -> Result<(), AmlError> {
     skip_name_string(reader)?;
     // RegionSpace (1 byte)
     reader.skip(1);
@@ -460,7 +461,7 @@ fn skip_op_region(reader: &mut BinaryReader<'_>) -> Result<(), AmlError> {
 }
 
 /// Skip a PkgLength-delimited block.
-fn skip_pkg_length_block(reader: &mut BinaryReader<'_>) -> Result<(), AmlError> {
+fn skip_pkg_length_block(reader: &mut Reader<'_>) -> Result<(), AmlError> {
     let (pkg_remaining, _) = decode_pkg_length(reader)?;
     let skip_to = (reader.position() + pkg_remaining).min(reader.len());
     let skip_amount = skip_to.saturating_sub(reader.position());
@@ -471,7 +472,7 @@ fn skip_pkg_length_block(reader: &mut BinaryReader<'_>) -> Result<(), AmlError> 
 // ─── Name parsing ───────────────────────────────────────────────────────────
 
 /// Read a single 4-byte `NameSeg` from the reader.
-fn read_name_seg(reader: &mut BinaryReader<'_>) -> Result<NameSeg, AmlError> {
+fn read_name_seg(reader: &mut Reader<'_>) -> Result<NameSeg, AmlError> {
     let bytes: [u8; 4] = reader.read().ok_or(AmlError::UnexpectedEnd)?;
     Ok(NameSeg(bytes))
 }
@@ -480,7 +481,7 @@ fn read_name_seg(reader: &mut BinaryReader<'_>) -> Result<NameSeg, AmlError> {
 ///
 /// For complex multi-segment paths, this returns the last segment which
 /// is the local name within the current scope.
-fn read_name_path(reader: &mut BinaryReader<'_>, _path: &AmlPath) -> Result<NameSeg, AmlError> {
+fn read_name_path(reader: &mut Reader<'_>, _path: &AmlPath) -> Result<NameSeg, AmlError> {
     // Skip prefix chars: '\' (root), '^' (parent)
     loop {
         let remaining = reader.remaining();
@@ -516,7 +517,7 @@ fn read_name_path(reader: &mut BinaryReader<'_>, _path: &AmlPath) -> Result<Name
         // MultiNamePath
         0x2F => {
             reader.skip(1);
-            let seg_count = reader.read::<u8>().ok_or(AmlError::UnexpectedEnd)?;
+            let seg_count = reader.u8().ok_or(AmlError::UnexpectedEnd)?;
             let mut last = NameSeg(*b"____");
             for _ in 0..seg_count {
                 last = read_name_seg(reader)?;
@@ -530,7 +531,7 @@ fn read_name_path(reader: &mut BinaryReader<'_>, _path: &AmlPath) -> Result<Name
 }
 
 /// Skip a `NameString` without extracting it.
-fn skip_name_string(reader: &mut BinaryReader<'_>) -> Result<(), AmlError> {
+fn skip_name_string(reader: &mut Reader<'_>) -> Result<(), AmlError> {
     // Skip prefix chars
     loop {
         let remaining = reader.remaining();
@@ -561,7 +562,7 @@ fn skip_name_string(reader: &mut BinaryReader<'_>) -> Result<(), AmlError> {
         }
         0x2F => {
             reader.skip(1);
-            let seg_count = reader.read::<u8>().ok_or(AmlError::UnexpectedEnd)? as usize;
+            let seg_count = reader.u8().ok_or(AmlError::UnexpectedEnd)? as usize;
             reader.skip(seg_count * 4);
             Ok(())
         }
@@ -574,7 +575,7 @@ fn skip_name_string(reader: &mut BinaryReader<'_>) -> Result<(), AmlError> {
 }
 
 /// Skip remaining name characters after the first byte has already been read.
-fn skip_remaining_name_after_lead(reader: &mut BinaryReader<'_>, lead: u8) -> Result<(), AmlError> {
+fn skip_remaining_name_after_lead(reader: &mut Reader<'_>, lead: u8) -> Result<(), AmlError> {
     match lead {
         b'\\' | b'^' => skip_name_string(reader),
         b'.' => {
@@ -584,7 +585,7 @@ fn skip_remaining_name_after_lead(reader: &mut BinaryReader<'_>, lead: u8) -> Re
         }
         b'/' => {
             // MultiNamePath
-            let seg_count = reader.read::<u8>().ok_or(AmlError::UnexpectedEnd)? as usize;
+            let seg_count = reader.u8().ok_or(AmlError::UnexpectedEnd)? as usize;
             reader.skip(seg_count * 4);
             Ok(())
         }
@@ -604,8 +605,8 @@ fn skip_remaining_name_after_lead(reader: &mut BinaryReader<'_>, lead: u8) -> Re
 /// Returns `(remaining_bytes, total_pkg_length)` where `remaining_bytes` is
 /// the number of bytes after the `PkgLength` field itself that belong to this
 /// package.
-fn decode_pkg_length(reader: &mut BinaryReader<'_>) -> Result<(usize, usize), AmlError> {
-    let lead = reader.read::<u8>().ok_or(AmlError::UnexpectedEnd)?;
+fn decode_pkg_length(reader: &mut Reader<'_>) -> Result<(usize, usize), AmlError> {
+    let lead = reader.u8().ok_or(AmlError::UnexpectedEnd)?;
     let byte_count = (lead >> 6) & 0x03;
 
     if byte_count == 0 {
@@ -620,7 +621,7 @@ fn decode_pkg_length(reader: &mut BinaryReader<'_>) -> Result<(usize, usize), Am
     let mut length = (lead & 0x0F) as usize;
 
     for i in 0..byte_count {
-        let b = reader.read::<u8>().ok_or(AmlError::UnexpectedEnd)?;
+        let b = reader.u8().ok_or(AmlError::UnexpectedEnd)?;
         length |= (b as usize) << (4 + i * 8);
     }
 
@@ -633,7 +634,7 @@ fn decode_pkg_length(reader: &mut BinaryReader<'_>) -> Result<(usize, usize), Am
 // ─── Data object resolution ────────────────────────────────────────────────
 
 /// Try to resolve a `DataRefObject` (the value part of a `DefName`).
-fn resolve_data_object<'a>(reader: &mut BinaryReader<'a>) -> ResolvedData<'a> {
+fn resolve_data_object<'a>(reader: &mut Reader<'a>) -> ResolvedData<'a> {
     let remaining = reader.remaining();
     if remaining.is_empty() {
         return ResolvedData {
@@ -661,7 +662,7 @@ fn resolve_data_object<'a>(reader: &mut BinaryReader<'a>) -> ResolvedData<'a> {
         // ByteConst
         0x0A => {
             reader.skip(1);
-            match reader.read::<u8>() {
+            match reader.u8() {
                 Some(v) => AmlValue::Integer(u64::from(v)),
                 None => AmlValue::Unresolved,
             }
@@ -669,7 +670,7 @@ fn resolve_data_object<'a>(reader: &mut BinaryReader<'a>) -> ResolvedData<'a> {
         // WordConst
         0x0B => {
             reader.skip(1);
-            match reader.read::<u16>() {
+            match reader.u16() {
                 Some(v) => AmlValue::Integer(u64::from(v)),
                 None => AmlValue::Unresolved,
             }
@@ -677,7 +678,7 @@ fn resolve_data_object<'a>(reader: &mut BinaryReader<'a>) -> ResolvedData<'a> {
         // DWordConst
         0x0C => {
             reader.skip(1);
-            match reader.read::<u32>() {
+            match reader.u32() {
                 Some(v) => AmlValue::Integer(u64::from(v)),
                 None => AmlValue::Unresolved,
             }
@@ -695,7 +696,7 @@ fn resolve_data_object<'a>(reader: &mut BinaryReader<'a>) -> ResolvedData<'a> {
         // QWordConst
         0x0E => {
             reader.skip(1);
-            match reader.read::<u64>() {
+            match reader.u64() {
                 Some(v) => AmlValue::Integer(v),
                 None => AmlValue::Unresolved,
             }
@@ -731,7 +732,7 @@ fn resolve_data_object<'a>(reader: &mut BinaryReader<'a>) -> ResolvedData<'a> {
 /// EISAID encoding: `Buffer(4) { DWordConst }` where the `DWord` is the
 /// compressed EISA ID. Resource templates: buffers containing small/large
 /// resource descriptors terminated by an End Tag (0x79).
-fn try_resolve_buffer<'a>(reader: &mut BinaryReader<'a>) -> ResolvedData<'a> {
+fn try_resolve_buffer<'a>(reader: &mut Reader<'a>) -> ResolvedData<'a> {
     reader.skip(1); // skip 0x11 (Buffer op)
 
     let pkg_result = decode_pkg_length(reader);
@@ -757,11 +758,11 @@ fn try_resolve_buffer<'a>(reader: &mut BinaryReader<'a>) -> ResolvedData<'a> {
     let buf_size = match remaining[0] {
         0x0A => {
             reader.skip(1);
-            reader.read::<u8>().map(u32::from)
+            reader.u8().map(u32::from)
         }
         0x0C => {
             reader.skip(1);
-            reader.read::<u32>()
+            reader.u32()
         }
         0x00 => {
             reader.skip(1);
@@ -775,7 +776,7 @@ fn try_resolve_buffer<'a>(reader: &mut BinaryReader<'a>) -> ResolvedData<'a> {
         let remaining = reader.remaining();
         if remaining.first() == Some(&0x0C) {
             reader.skip(1);
-            if let Some(raw) = reader.read::<u32>() {
+            if let Some(raw) = reader.u32() {
                 skip_to(reader, body_end);
                 return ResolvedData {
                     value: AmlValue::EisaId(EisaId { raw }),
@@ -783,7 +784,7 @@ fn try_resolve_buffer<'a>(reader: &mut BinaryReader<'a>) -> ResolvedData<'a> {
                 };
             }
         } else if remaining.len() >= 4 {
-            if let Some(raw) = reader.read::<u32>() {
+            if let Some(raw) = reader.u32() {
                 skip_to(reader, body_end);
                 return ResolvedData {
                     value: AmlValue::EisaId(EisaId { raw }),
@@ -812,7 +813,7 @@ fn try_resolve_buffer<'a>(reader: &mut BinaryReader<'a>) -> ResolvedData<'a> {
 }
 
 /// Skip a data object (used when we need to skip `TermArgs` like in Return).
-fn skip_data_object(reader: &mut BinaryReader<'_>) -> Result<(), AmlError> {
+fn skip_data_object(reader: &mut Reader<'_>) -> Result<(), AmlError> {
     let remaining = reader.remaining();
     if remaining.is_empty() {
         return Err(AmlError::UnexpectedEnd);
@@ -857,8 +858,8 @@ fn skip_data_object(reader: &mut BinaryReader<'_>) -> Result<(), AmlError> {
 // ─── Helper functions ──────────────────────────────────────────────────────
 
 /// Skip a null-terminated string.
-fn skip_string(reader: &mut BinaryReader<'_>) {
-    while let Some(b) = reader.read::<u8>() {
+fn skip_string(reader: &mut Reader<'_>) {
+    while let Some(b) = reader.u8() {
         if b == 0 {
             return;
         }
@@ -866,7 +867,7 @@ fn skip_string(reader: &mut BinaryReader<'_>) {
 }
 
 /// Skip a `PkgLength` block body (`PkgLength` has not been consumed yet).
-fn skip_pkg_length_block_inner(reader: &mut BinaryReader<'_>) -> Result<(), AmlError> {
+fn skip_pkg_length_block_inner(reader: &mut Reader<'_>) -> Result<(), AmlError> {
     let (pkg_remaining, _) = decode_pkg_length(reader)?;
     let target = (reader.position() + pkg_remaining).min(reader.len());
     let amount = target.saturating_sub(reader.position());
@@ -875,8 +876,120 @@ fn skip_pkg_length_block_inner(reader: &mut BinaryReader<'_>) -> Result<(), AmlE
 }
 
 /// Advance reader to target position.
-fn skip_to(reader: &mut BinaryReader<'_>, target: usize) {
+fn skip_to(reader: &mut Reader<'_>, target: usize) {
     let target = target.min(reader.len());
     let amount = target.saturating_sub(reader.position());
     reader.skip(amount);
+}
+
+// ─── Reader ────────────────────────────────────────────────────────────────
+
+/// A cursor over AML bytecode.
+///
+/// The parser tracks package ends as absolute offsets into the scope it is
+/// walking, so the cursor keeps the whole buffer and a position rather than
+/// shrinking a slice. Reads go through zerocopy and fail without advancing
+/// when too few bytes remain.
+struct Reader<'a> {
+    data: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> Reader<'a> {
+    fn new(data: &'a [u8]) -> Self {
+        Self { data, pos: 0 }
+    }
+
+    /// Reads a `T` and advances past it.
+    fn read<T: FromBytes>(&mut self) -> Option<T> {
+        let (value, rest) = T::read_from_prefix(self.remaining()).ok()?;
+        self.pos = self.data.len() - rest.len();
+        Some(value)
+    }
+
+    fn u8(&mut self) -> Option<u8> {
+        self.read()
+    }
+
+    fn u16(&mut self) -> Option<u16> {
+        self.read::<U16>().map(U16::get)
+    }
+
+    fn u32(&mut self) -> Option<u32> {
+        self.read::<U32>().map(U32::get)
+    }
+
+    fn u64(&mut self) -> Option<u64> {
+        self.read::<U64>().map(U64::get)
+    }
+
+    /// Advances `n` bytes. Returns `false` without moving if fewer remain.
+    fn skip(&mut self, n: usize) -> bool {
+        if n > self.remaining().len() {
+            return false;
+        }
+        self.pos += n;
+        true
+    }
+
+    fn remaining(&self) -> &'a [u8] {
+        self.data.get(self.pos..).unwrap_or(&[])
+    }
+
+    fn position(&self) -> usize {
+        self.pos
+    }
+
+    fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    fn is_at_end(&self) -> bool {
+        self.pos >= self.data.len()
+    }
+
+    fn data(&self) -> &'a [u8] {
+        self.data
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct Names {
+        values: [Option<(NameSeg, u64)>; 4],
+        count: usize,
+    }
+
+    impl AmlVisitor for Names {
+        fn name_object(&mut self, _path: &AmlPath, name: NameSeg, value: &AmlValue) {
+            if let (AmlValue::Integer(v), Some(slot)) = (value, self.values.get_mut(self.count)) {
+                *slot = Some((name, *v));
+                self.count += 1;
+            }
+        }
+    }
+
+    #[test]
+    fn integer_constants_are_little_endian() {
+        #[rustfmt::skip]
+        let aml = [
+            // Name (WRD_, 0x1234)
+            0x08, b'W', b'R', b'D', b'_', 0x0B, 0x34, 0x12,
+            // Name (QWD_, 0x0102030405060708)
+            0x08, b'Q', b'W', b'D', b'_', 0x0E, 8, 7, 6, 5, 4, 3, 2, 1,
+            // Name (TRNC, DWordConst) with the value cut short.
+            0x08, b'T', b'R', b'N', b'C', 0x0C, 0xAA,
+        ];
+        let mut names = Names::default();
+        walk_aml(&aml, &mut names).unwrap();
+        assert_eq!(names.count, 2);
+        assert_eq!(names.values[0], Some((NameSeg(*b"WRD_"), 0x1234)));
+        assert_eq!(
+            names.values[1],
+            Some((NameSeg(*b"QWD_"), 0x0102_0304_0506_0708))
+        );
+    }
 }

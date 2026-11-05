@@ -9,8 +9,7 @@
 //! - AMD I/O Virtualization Technology (IOMMU) Specification, §5.2: IVRS Table
 //!   <https://www.amd.com/content/dam/amd/en/documents/processor-tech-docs/specifications/48882_IOMMU.pdf>
 
-use binparse::FromBytes;
-
+use crate::read::{u8_at, u16_at, u32_at, u64_at};
 use crate::sdt::SdtHeader;
 use crate::{AcpiError, AcpiHandler};
 
@@ -40,7 +39,7 @@ impl Ivrs {
     pub fn parse(handler: &impl AcpiHandler, phys: u64) -> Result<Self, AcpiError> {
         let table = crate::sdt::load_table(handler, phys, IVRS_SIGNATURE)?;
 
-        let iv_info = u32::read_at(table.data, SdtHeader::SIZE).ok_or(AcpiError::TruncatedData)?;
+        let iv_info = u32_at(table.data, SdtHeader::SIZE).ok_or(AcpiError::TruncatedData)?;
 
         let entries_offset = SdtHeader::SIZE + Self::FIELDS_SIZE;
         let entries_data = table.data.get(entries_offset..).unwrap_or(&[]);
@@ -124,9 +123,9 @@ impl Iterator for IvrsEntryIter<'_> {
             return None;
         }
 
-        let entry_type = u8::read_at(self.data, self.offset)?;
-        let flags = u8::read_at(self.data, self.offset + 1).unwrap_or(0);
-        let length = u16::read_at(self.data, self.offset + 2)?;
+        let entry_type = u8_at(self.data, self.offset)?;
+        let flags = u8_at(self.data, self.offset + 1).unwrap_or(0);
+        let length = u16_at(self.data, self.offset + 2)?;
         let length_usize = length as usize;
 
         if length_usize < 4 || self.offset + length_usize > self.data.len() {
@@ -144,11 +143,11 @@ impl Iterator for IvrsEntryIter<'_> {
             0x10 | 0x11 | 0x40 => IvrsEntry::Ivhd {
                 ivhd_type: entry_type,
                 flags,
-                device_id: u16::read_at(entry_data, 4).unwrap_or(0),
-                capability_offset: u16::read_at(entry_data, 6).unwrap_or(0),
-                iommu_base_address: u64::read_at(entry_data, 8).unwrap_or(0),
-                segment_group: u16::read_at(entry_data, 16).unwrap_or(0),
-                iommu_info: u16::read_at(entry_data, 18).unwrap_or(0),
+                device_id: u16_at(entry_data, 4).unwrap_or(0),
+                capability_offset: u16_at(entry_data, 6).unwrap_or(0),
+                iommu_base_address: u64_at(entry_data, 8).unwrap_or(0),
+                segment_group: u16_at(entry_data, 16).unwrap_or(0),
+                iommu_info: u16_at(entry_data, 18).unwrap_or(0),
             },
             // IVMD types: 0x20, 0x21, 0x22
             // device_id(u16) at +4, auxiliary_data(u16) at +6,
@@ -157,10 +156,10 @@ impl Iterator for IvrsEntryIter<'_> {
             0x20..=0x22 => IvrsEntry::Ivmd {
                 ivmd_type: entry_type,
                 flags,
-                device_id: u16::read_at(entry_data, 4).unwrap_or(0),
-                auxiliary_data: u16::read_at(entry_data, 6).unwrap_or(0),
-                start_address: u64::read_at(entry_data, 16).unwrap_or(0),
-                memory_block_length: u64::read_at(entry_data, 24).unwrap_or(0),
+                device_id: u16_at(entry_data, 4).unwrap_or(0),
+                auxiliary_data: u16_at(entry_data, 6).unwrap_or(0),
+                start_address: u64_at(entry_data, 16).unwrap_or(0),
+                memory_block_length: u64_at(entry_data, 24).unwrap_or(0),
             },
             _ => IvrsEntry::Unknown { entry_type, length },
         })

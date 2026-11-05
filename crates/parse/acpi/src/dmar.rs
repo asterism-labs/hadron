@@ -2,8 +2,7 @@
 //!
 //! The DMAR table describes the DMA remapping hardware units (DRHDs) and
 //! reserved memory regions (RMRRs) used by Intel's VT-d IOMMU. Entry headers
-//! use `u16` type and `u16` length fields, so we use a hand-written iterator
-//! rather than the `TableEntries` macro.
+//! use `u16` type and `u16` length fields.
 //!
 //! # References
 //!
@@ -12,8 +11,7 @@
 //! - `OSDev` Wiki: Intel VT-d
 //!   <https://wiki.osdev.org/Intel_VT-d>
 
-use binparse::FromBytes;
-
+use crate::read::{u8_at, u16_at, u64_at};
 use crate::sdt::SdtHeader;
 use crate::{AcpiError, AcpiHandler};
 
@@ -46,9 +44,8 @@ impl Dmar {
         let table = crate::sdt::load_table(handler, phys, DMAR_SIGNATURE)?;
 
         let haw_offset = SdtHeader::SIZE;
-        let host_address_width =
-            u8::read_at(table.data, haw_offset).ok_or(AcpiError::TruncatedData)?;
-        let flags = u8::read_at(table.data, haw_offset + 1).ok_or(AcpiError::TruncatedData)?;
+        let host_address_width = u8_at(table.data, haw_offset).ok_or(AcpiError::TruncatedData)?;
+        let flags = u8_at(table.data, haw_offset + 1).ok_or(AcpiError::TruncatedData)?;
 
         let entries_offset = SdtHeader::SIZE + Self::FIELDS_SIZE;
         let entries_data = table.data.get(entries_offset..).unwrap_or(&[]);
@@ -128,8 +125,8 @@ impl<'a> Iterator for DmarEntryIter<'a> {
             return None;
         }
 
-        let entry_type = u16::read_at(self.data, self.offset)?;
-        let length = u16::read_at(self.data, self.offset + 2)?;
+        let entry_type = u16_at(self.data, self.offset)?;
+        let length = u16_at(self.data, self.offset + 2)?;
         let length_usize = length as usize;
 
         if length_usize < 4 || self.offset + length_usize > self.data.len() {
@@ -143,9 +140,9 @@ impl<'a> Iterator for DmarEntryIter<'a> {
             // DRHD: flags(u8) at +4, reserved(u8) at +5, segment(u16) at +6,
             // register_base_address(u64) at +8, device scopes at +16
             0 => {
-                let flags = u8::read_at(entry_data, 4).unwrap_or(0);
-                let segment = u16::read_at(entry_data, 6).unwrap_or(0);
-                let register_base_address = u64::read_at(entry_data, 8).unwrap_or(0);
+                let flags = u8_at(entry_data, 4).unwrap_or(0);
+                let segment = u16_at(entry_data, 6).unwrap_or(0);
+                let register_base_address = u64_at(entry_data, 8).unwrap_or(0);
                 let device_scope_data = entry_data.get(16..).unwrap_or(&[]);
                 DmarEntry::Drhd {
                     flags,
@@ -157,9 +154,9 @@ impl<'a> Iterator for DmarEntryIter<'a> {
             // RMRR: reserved(u16) at +4, segment(u16) at +6,
             // base_address(u64) at +8, limit_address(u64) at +16, device scopes at +24
             1 => {
-                let segment = u16::read_at(entry_data, 6).unwrap_or(0);
-                let base_address = u64::read_at(entry_data, 8).unwrap_or(0);
-                let limit_address = u64::read_at(entry_data, 16).unwrap_or(0);
+                let segment = u16_at(entry_data, 6).unwrap_or(0);
+                let base_address = u64_at(entry_data, 8).unwrap_or(0);
+                let limit_address = u64_at(entry_data, 16).unwrap_or(0);
                 let device_scope_data = entry_data.get(24..).unwrap_or(&[]);
                 DmarEntry::Rmrr {
                     segment,
@@ -170,8 +167,8 @@ impl<'a> Iterator for DmarEntryIter<'a> {
             }
             // ATSR: flags(u8) at +4, segment(u16) at +6, device scopes at +8
             2 => {
-                let flags = u8::read_at(entry_data, 4).unwrap_or(0);
-                let segment = u16::read_at(entry_data, 6).unwrap_or(0);
+                let flags = u8_at(entry_data, 4).unwrap_or(0);
+                let segment = u16_at(entry_data, 6).unwrap_or(0);
                 let device_scope_data = entry_data.get(8..).unwrap_or(&[]);
                 DmarEntry::Atsr {
                     flags,
@@ -224,15 +221,15 @@ impl Iterator for DeviceScopeIter<'_> {
             return None;
         }
 
-        let scope_type = u8::read_at(self.data, self.offset)?;
-        let length = u8::read_at(self.data, self.offset + 1)? as usize;
+        let scope_type = u8_at(self.data, self.offset)?;
+        let length = u8_at(self.data, self.offset + 1)? as usize;
 
         if length < 6 || self.offset + length > self.data.len() {
             return None;
         }
 
-        let enumeration_id = u8::read_at(self.data, self.offset + 4).unwrap_or(0);
-        let start_bus = u8::read_at(self.data, self.offset + 5).unwrap_or(0);
+        let enumeration_id = u8_at(self.data, self.offset + 4).unwrap_or(0);
+        let start_bus = u8_at(self.data, self.offset + 5).unwrap_or(0);
 
         // Path entries start at offset 6, each is 2 bytes (device, function).
         let path_bytes = length.saturating_sub(6);
@@ -240,8 +237,8 @@ impl Iterator for DeviceScopeIter<'_> {
         let mut path = [(0u8, 0u8); 4];
         for (i, entry) in path.iter_mut().enumerate().take(path_count) {
             let off = self.offset + 6 + i * 2;
-            let dev = u8::read_at(self.data, off).unwrap_or(0);
-            let func = u8::read_at(self.data, off + 1).unwrap_or(0);
+            let dev = u8_at(self.data, off).unwrap_or(0);
+            let func = u8_at(self.data, off + 1).unwrap_or(0);
             *entry = (dev, func);
         }
 
