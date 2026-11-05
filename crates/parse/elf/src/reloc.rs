@@ -378,7 +378,7 @@ mod tests {
             r_addend: -4,
         };
         let (_, val) = compute_x86_64_reloc(&rela, 0x1000, 0, 0x2000).unwrap();
-        assert_eq!(val, RelocValue::U32((-0x1004_i32) as u32));
+        assert_eq!(val, RelocValue::U32(0u32.wrapping_sub(0x1004)));
     }
 
     #[test]
@@ -495,7 +495,7 @@ mod tests {
             r_addend: -1,
         };
         let (_, val) = compute_x86_64_reloc(&rela, 0, 0, 0).unwrap();
-        assert_eq!(val, RelocValue::U32((-1_i32) as u32));
+        assert_eq!(val, RelocValue::U32(u32::MAX));
     }
 
     #[test]

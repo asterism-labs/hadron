@@ -12,7 +12,7 @@ pub struct Console<'st> {
     _lifetime: PhantomData<&'st ()>,
 }
 
-impl<'st> Console<'st> {
+impl Console<'_> {
     pub(crate) fn new(raw: *mut SimpleTextOutputProtocol) -> Self {
         Self {
             raw,
@@ -24,6 +24,12 @@ impl<'st> Console<'st> {
     ///
     /// Internally converts to UCS-2 in 128-`u16` stack-allocated chunks.
     /// Newlines (`\n`) are translated to `\r\n`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the status from `OutputString` for the first chunk the firmware
+    /// rejects, for example `EFI_DEVICE_ERROR`. Chunks before it have already been
+    /// written.
     pub fn output_string(&self, s: &str) -> Result<(), EfiStatus> {
         const CHUNK: usize = 128;
         let mut buf = [0u16; CHUNK];
@@ -38,9 +44,9 @@ impl<'st> Console<'st> {
                     status.to_result()?;
                     i = 0;
                 }
-                buf[i] = b'\r' as u16;
+                buf[i] = u16::from(b'\r');
                 i += 1;
-                buf[i] = b'\n' as u16;
+                buf[i] = u16::from(b'\n');
                 i += 1;
             } else {
                 let code = if (ch as u32) > 0xFFFF {
@@ -71,6 +77,10 @@ impl<'st> Console<'st> {
     }
 
     /// Clear the console screen.
+    ///
+    /// # Errors
+    ///
+    /// Returns the status from `ClearScreen` if it fails, for example `EFI_DEVICE_ERROR`.
     pub fn clear_screen(&self) -> Result<(), EfiStatus> {
         let status = unsafe { ((*self.raw).clear_screen)(self.raw) };
         status.to_result()
@@ -79,6 +89,10 @@ impl<'st> Console<'st> {
     /// Set the text attribute (foreground and background colors).
     ///
     /// Use constants from [`simple_text::color`] for color values.
+    ///
+    /// # Errors
+    ///
+    /// Returns the status from `SetAttribute` if it fails, for example `EFI_DEVICE_ERROR`.
     pub fn set_attribute(&self, foreground: usize, background: usize) -> Result<(), EfiStatus> {
         let attr = simple_text::color::attribute(foreground, background);
         let status = unsafe { ((*self.raw).set_attribute)(self.raw, attr) };
@@ -86,18 +100,28 @@ impl<'st> Console<'st> {
     }
 
     /// Set the cursor position.
+    ///
+    /// # Errors
+    ///
+    /// Returns the status from `SetCursorPosition` if it fails, for example
+    /// `EFI_UNSUPPORTED` when the position is outside the current mode.
     pub fn set_cursor_position(&self, column: usize, row: usize) -> Result<(), EfiStatus> {
         let status = unsafe { ((*self.raw).set_cursor_position)(self.raw, column, row) };
         status.to_result()
     }
 
     /// Reset the console output device.
+    ///
+    /// # Errors
+    ///
+    /// Returns the status from `Reset` if it fails, for example `EFI_DEVICE_ERROR`.
     pub fn reset(&self) -> Result<(), EfiStatus> {
         let status = unsafe { ((*self.raw).reset)(self.raw, false) };
         status.to_result()
     }
 
     /// Returns the current console mode information.
+    #[must_use]
     pub fn mode(&self) -> &SimpleTextOutputMode {
         unsafe { &*(*self.raw).mode }
     }

@@ -28,10 +28,10 @@ impl InlineString {
         let len = bytes.len().min(INLINE_STRING_CAP);
         let mut buf = [0u8; INLINE_STRING_CAP];
         buf[..len].copy_from_slice(&bytes[..len]);
-        Self {
-            buf,
-            len: len as u8,
-        }
+        // `len` is at most `INLINE_STRING_CAP`, which fits in a `u8`.
+        #[allow(clippy::cast_possible_truncation)]
+        let len = len as u8;
+        Self { buf, len }
     }
 
     /// Returns the string as a UTF-8 `&str`.
@@ -72,7 +72,7 @@ impl EisaId {
         let c1 = (((swapped >> 26) & 0x1F) as u8) + b'@';
         let c2 = (((swapped >> 21) & 0x1F) as u8) + b'@';
         let c3 = (((swapped >> 16) & 0x1F) as u8) + b'@';
-        let product = swapped as u16;
+        let [_, _, product_hi, product_lo] = swapped.to_be_bytes();
 
         let hex_digit = |nibble: u8| -> u8 {
             if nibble < 10 {
@@ -86,10 +86,10 @@ impl EisaId {
             c1,
             c2,
             c3,
-            hex_digit((product >> 12) as u8 & 0xF),
-            hex_digit((product >> 8) as u8 & 0xF),
-            hex_digit((product >> 4) as u8 & 0xF),
-            hex_digit(product as u8 & 0xF),
+            hex_digit(product_hi >> 4),
+            hex_digit(product_hi & 0xF),
+            hex_digit(product_lo >> 4),
+            hex_digit(product_lo & 0xF),
         ]
     }
 }
@@ -101,8 +101,8 @@ impl EisaId {
 /// [`AmlValue::Unresolved`].
 #[derive(Debug, Clone, Copy)]
 pub enum AmlValue {
-    /// An integer constant (Zero, One, Ones, ByteConst, WordConst,
-    /// DWordConst, QWordConst).
+    /// An integer constant (Zero, One, Ones, `ByteConst`, `WordConst`,
+    /// `DWordConst`, `QWordConst`).
     Integer(u64),
     /// A compressed EISA/PnP device identifier.
     EisaId(EisaId),
@@ -118,7 +118,7 @@ pub enum AmlValue {
 pub enum AmlError {
     /// The AML stream ended unexpectedly.
     UnexpectedEnd,
-    /// A PkgLength encoding was invalid.
+    /// A `PkgLength` encoding was invalid.
     InvalidPkgLength,
     /// An [`AmlPath`](super::path::AmlPath) exceeded its maximum depth.
     PathOverflow,

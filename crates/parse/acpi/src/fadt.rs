@@ -74,7 +74,7 @@ impl Fadt {
 
     /// Minimum FADT length required to read all the fields we need.
     ///
-    /// We need up to offset 140 + 8 bytes = 148 bytes for x_dsdt.
+    /// We need up to offset 140 + 8 bytes = 148 bytes for `x_dsdt`.
     const MIN_LENGTH: usize = 148;
 
     /// Parse a FADT from the given physical address.

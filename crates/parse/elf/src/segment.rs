@@ -114,19 +114,19 @@ mod tests {
     use super::*;
     use crate::header::tests::{append_phdr, make_elf_header};
 
-    /// Build a minimal ELF with one PT_LOAD segment containing `payload`.
+    /// Build a minimal ELF with one `PT_LOAD` segment containing `payload`.
     fn make_elf_with_load_segment(payload: &[u8]) -> Vec<u8> {
         let mut buf = make_elf_header();
 
         // Segment data will be appended after header + 1 phdr
-        let data_offset = 64 + 56; // ehdr + 1 phdr
+        let data_offset: u64 = 64 + 56; // ehdr + 1 phdr
         let pf_r_x: u32 = 4 | 1; // PF_R | PF_X
 
         append_phdr(
             &mut buf,
             1, // PT_LOAD
             pf_r_x,
-            data_offset as u64,
+            data_offset,
             0x0040_0000,
             payload.len() as u64,
             payload.len() as u64 + 0x100, // memsz > filesz (BSS region)
@@ -182,22 +182,14 @@ mod tests {
         let pt_note: u32 = 4;
 
         // PT_LOAD segment
-        let data_offset = 64 + 56 * 3; // after 3 phdrs
-        append_phdr(&mut buf, 1, pf_r, data_offset as u64, 0x40_0000, 4, 4);
+        let data_offset: u64 = 64 + 56 * 3; // after 3 phdrs
+        append_phdr(&mut buf, 1, pf_r, data_offset, 0x40_0000, 4, 4);
 
         // PT_NOTE segment (should be skipped)
         append_phdr(&mut buf, pt_note, 0, 0, 0, 0, 0);
 
         // Another PT_LOAD segment
-        append_phdr(
-            &mut buf,
-            1,
-            pf_rw,
-            (data_offset + 4) as u64,
-            0x60_0000,
-            4,
-            0x1000,
-        );
+        append_phdr(&mut buf, 1, pf_rw, data_offset + 4, 0x60_0000, 4, 0x1000);
 
         // Append segment data
         buf.extend_from_slice(&[0xAA; 4]); // first segment data

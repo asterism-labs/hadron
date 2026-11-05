@@ -71,7 +71,7 @@ impl<'a> LineProgramIter<'a> {
             bytecode,
             cursor: 0,
             address: 0,
-            file: if header.version >= 5 { 0 } else { 1 },
+            file: u64::from(header.version < 5),
             line: 1,
             column: 0,
             is_stmt: header.default_is_stmt,
@@ -144,14 +144,14 @@ impl<'a> LineProgramIter<'a> {
         LineRow {
             address: self.address,
             file_index: self.file,
-            line: self.line.max(0) as u32,
+            line: u32::try_from(self.line.max(0)).unwrap_or(u32::MAX),
             column: self.column,
             is_stmt: self.is_stmt,
             end_sequence,
         }
     }
 
-    /// Resets the VM registers to their initial values (after end_sequence).
+    /// Resets the VM registers to their initial values (after `end_sequence`).
     fn reset_registers(&mut self) {
         self.address = 0;
         self.file = 1;
@@ -168,7 +168,7 @@ impl<'a> LineProgramIter<'a> {
     }
 }
 
-impl<'a> Iterator for LineProgramIter<'a> {
+impl Iterator for LineProgramIter<'_> {
     type Item = LineRow;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -181,7 +181,7 @@ impl<'a> Iterator for LineProgramIter<'a> {
 
             if opcode == DW_LNE_MARKER {
                 // Extended opcode
-                let length = self.read_uleb128()? as usize;
+                let length = usize::try_from(self.read_uleb128()?).ok()?;
                 if length == 0 || self.cursor >= self.bytecode.len() {
                     return None;
                 }
@@ -225,7 +225,7 @@ impl<'a> Iterator for LineProgramIter<'a> {
                         self.file = self.read_uleb128()?;
                     }
                     DW_LNS_SET_COLUMN => {
-                        self.column = self.read_uleb128()? as u32;
+                        self.column = u32::try_from(self.read_uleb128()?).unwrap_or(u32::MAX);
                     }
                     DW_LNS_NEGATE_STMT => {
                         self.is_stmt = !self.is_stmt;
@@ -296,7 +296,7 @@ mod tests {
         // default_is_stmt: 1
         buf.push(1);
         // line_base: -5
-        buf.push((-5i8) as u8);
+        buf.push((-5i8).to_le_bytes()[0]);
         // line_range: 14
         buf.push(14);
         // opcode_base: 13
@@ -310,14 +310,14 @@ mod tests {
         buf.push(0);
 
         let header_end = buf.len();
-        let header_length = (header_end - header_start) as u32;
+        let header_length = u32::try_from(header_end - header_start).unwrap();
         buf[header_length_pos..header_length_pos + 4].copy_from_slice(&header_length.to_le_bytes());
 
         // Append the bytecode
         buf.extend_from_slice(bytecode);
 
         // Fix unit_length
-        let unit_length = (buf.len() - 4) as u32;
+        let unit_length = u32::try_from(buf.len() - 4).unwrap();
         buf[0..4].copy_from_slice(&unit_length.to_le_bytes());
 
         buf
@@ -424,19 +424,12 @@ mod tests {
 
     #[test]
     fn set_file_and_column() {
-        let mut bytecode = Vec::new();
-        // DW_LNS_set_file to 3
-        bytecode.push(0x04);
-        bytecode.push(0x03);
-        // DW_LNS_set_column to 42
-        bytecode.push(0x05);
-        bytecode.push(42);
-        // DW_LNS_copy
-        bytecode.push(0x01);
-        // DW_LNE_end_sequence
-        bytecode.push(0x00);
-        bytecode.push(0x01);
-        bytecode.push(0x01);
+        let bytecode = [
+            0x04, 0x03, // DW_LNS_set_file to 3
+            0x05, 42,   // DW_LNS_set_column to 42
+            0x01, // DW_LNS_copy
+            0x00, 0x01, 0x01, // DW_LNE_end_sequence
+        ];
 
         let buf = make_program_with_bytecode(&bytecode);
         let header = LineProgramHeader::parse(&buf).unwrap();
@@ -449,15 +442,11 @@ mod tests {
 
     #[test]
     fn negate_stmt() {
-        let mut bytecode = Vec::new();
-        // DW_LNS_negate_stmt
-        bytecode.push(0x06);
-        // DW_LNS_copy
-        bytecode.push(0x01);
-        // DW_LNE_end_sequence
-        bytecode.push(0x00);
-        bytecode.push(0x01);
-        bytecode.push(0x01);
+        let bytecode = [
+            0x06, // DW_LNS_negate_stmt
+            0x01, // DW_LNS_copy
+            0x00, 0x01, 0x01, // DW_LNE_end_sequence
+        ];
 
         let buf = make_program_with_bytecode(&bytecode);
         let header = LineProgramHeader::parse(&buf).unwrap();
@@ -490,15 +479,13 @@ mod tests {
 
     #[test]
     fn const_add_pc() {
-        let mut bytecode = Vec::new();
-        // DW_LNS_const_add_pc
-        bytecode.push(DW_LNS_CONST_ADD_PC);
-        // DW_LNS_copy
-        bytecode.push(0x01);
-        // DW_LNE_end_sequence
-        bytecode.push(0x00);
-        bytecode.push(0x01);
-        bytecode.push(0x01);
+        let bytecode = [
+            DW_LNS_CONST_ADD_PC,
+            0x01, // DW_LNS_copy
+            0x00,
+            0x01,
+            0x01, // DW_LNE_end_sequence
+        ];
 
         let buf = make_program_with_bytecode(&bytecode);
         let header = LineProgramHeader::parse(&buf).unwrap();

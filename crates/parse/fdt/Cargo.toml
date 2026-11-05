@@ -10,7 +10,7 @@ readme.workspace = true
 publish = true
 
 [features]
-alloc = []
+alloc = [  ]
 
 [dependencies]
 hadron-binparse = { workspace = true }

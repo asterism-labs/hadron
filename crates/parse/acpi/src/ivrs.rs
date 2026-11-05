@@ -53,7 +53,7 @@ impl Ivrs {
 
     /// Returns an iterator over the IVRS entries (IVHDs and IVMDs).
     #[must_use]
-    pub fn entries(&self) -> IvrsEntryIter {
+    pub fn entries(&self) -> IvrsEntryIter<'_> {
         IvrsEntryIter {
             data: self.entries_data,
             offset: 0,
@@ -154,7 +154,7 @@ impl Iterator for IvrsEntryIter<'_> {
             // device_id(u16) at +4, auxiliary_data(u16) at +6,
             // reserved(u64) at +8, start_address(u64) at +16,
             // memory_block_length(u64) at +24
-            0x20 | 0x21 | 0x22 => IvrsEntry::Ivmd {
+            0x20..=0x22 => IvrsEntry::Ivmd {
                 ivmd_type: entry_type,
                 flags,
                 device_id: u16::read_at(entry_data, 4).unwrap_or(0),

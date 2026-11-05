@@ -33,7 +33,7 @@ use syn::{Data, DeriveInput, Fields, parse_macro_input};
 #[proc_macro_derive(FromBytes)]
 pub fn derive_from_bytes(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    match derive_impl(input) {
+    match derive_impl(&input) {
         Ok(tokens) => tokens.into(),
         Err(err) => err.to_compile_error().into(),
     }
@@ -77,7 +77,7 @@ pub fn derive_table_entries(input: TokenStream) -> TokenStream {
     }
 }
 
-fn derive_impl(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+fn derive_impl(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let name = &input.ident;
 
     // Verify #[repr(C)] or #[repr(C, packed)].

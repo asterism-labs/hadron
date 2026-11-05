@@ -219,7 +219,7 @@ mod tests {
     /// Appends an `FDT_PROP` token.
     fn emit_prop(v: &mut Vec<u8>, name_offset: u32, data: &[u8]) {
         v.extend_from_slice(&be32(node::FDT_PROP));
-        v.extend_from_slice(&be32(data.len() as u32));
+        v.extend_from_slice(&be32(u32::try_from(data.len()).unwrap()));
         v.extend_from_slice(&be32(name_offset));
         v.extend_from_slice(data);
         pad4(v);
@@ -231,12 +231,12 @@ mod tests {
     }
 
     /// Builds a strings block from a list of names.
-    /// Returns (strings_block_bytes, Vec<offset_for_each_name>).
+    /// Returns (`strings_block_bytes`, Vec<`offset_for_each_name`>).
     fn build_strings(names: &[&str]) -> (Vec<u8>, Vec<u32>) {
         let mut block = Vec::new();
         let mut offsets = Vec::new();
         for name in names {
-            offsets.push(block.len() as u32);
+            offsets.push(u32::try_from(block.len()).unwrap());
             block.extend_from_slice(name.as_bytes());
             block.push(0);
         }
@@ -264,15 +264,15 @@ mod tests {
 
         // Header
         dtb.extend_from_slice(&be32(0xd00d_feed)); // magic
-        dtb.extend_from_slice(&be32(total_size as u32)); // totalsize
-        dtb.extend_from_slice(&be32(struct_off as u32)); // off_dt_struct
-        dtb.extend_from_slice(&be32(strings_off as u32)); // off_dt_strings
+        dtb.extend_from_slice(&be32(u32::try_from(total_size).unwrap())); // totalsize
+        dtb.extend_from_slice(&be32(u32::try_from(struct_off).unwrap())); // off_dt_struct
+        dtb.extend_from_slice(&be32(u32::try_from(strings_off).unwrap())); // off_dt_strings
         dtb.extend_from_slice(&be32(mem_rsv_off)); // off_mem_rsvmap
         dtb.extend_from_slice(&be32(17)); // version
         dtb.extend_from_slice(&be32(16)); // last_comp_version
         dtb.extend_from_slice(&be32(boot_cpuid)); // boot_cpuid_phys
-        dtb.extend_from_slice(&be32(strings_block.len() as u32)); // size_dt_strings
-        dtb.extend_from_slice(&be32(struct_block.len() as u32)); // size_dt_struct
+        dtb.extend_from_slice(&be32(u32::try_from(strings_block.len()).unwrap())); // size_dt_strings
+        dtb.extend_from_slice(&be32(u32::try_from(struct_block.len()).unwrap())); // size_dt_struct
 
         // Reservation entries
         for &(addr, size) in reservations {

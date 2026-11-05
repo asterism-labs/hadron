@@ -418,6 +418,8 @@ mod tests {
     const SYM_SIZE: usize = ELF64_SYM_SIZE;
 
     /// Append a section header to the ELF buffer and bump `e_shnum`.
+    // One argument per ELF64 section header field, in on-disk order.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn append_section(
         buf: &mut Vec<u8>,
         sh_name: u32,

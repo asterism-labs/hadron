@@ -72,9 +72,8 @@ impl<'a> Iterator for DebugLine<'a> {
         let unit_data = &remaining[..total];
         self.offset += total;
 
-        let header = match LineProgramHeader::parse(unit_data) {
-            Ok(h) => h,
-            Err(_) => return self.next(), // skip malformed units
+        let Ok(header) = LineProgramHeader::parse(unit_data) else {
+            return self.next(); // skip malformed units
         };
 
         Some(LineProgramUnit { header, unit_data })

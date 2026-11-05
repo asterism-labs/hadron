@@ -48,7 +48,7 @@ impl Srat {
 
     /// Returns an iterator over the SRAT affinity entries.
     #[must_use]
-    pub fn entries(&self) -> SratEntryIter {
+    pub fn entries(&self) -> SratEntryIter<'_> {
         SratEntry::iter(self.entries_data)
     }
 }

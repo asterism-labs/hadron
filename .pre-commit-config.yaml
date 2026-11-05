@@ -1,0 +1,48 @@
+default_install_hook_types: [pre-commit, commit-msg]
+
+repos:
+  - repo: builtin
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+        args: [--fix, lf]
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: check-yaml
+
+      # Commit messages: `type(scope): summary`, at most 72 characters,
+      # lowercase start, no trailing period, no Co-Authored-By trailers.
+      - id: require-pattern
+        name: commit subject format
+        stages: [commit-msg]
+        args:
+          - --multiline
+          - '\A(?:(?:fixup|squash|amend)! .*|(?:feat|fix|refactor|docs|test|chore|ci|perf|style|build)\([a-z0-9/_-]+\): [^A-Z\s][^\n]*[^.\s])(?:\n|\z)'
+      - id: require-pattern
+        name: commit subject length
+        stages: [commit-msg]
+        args: [--multiline, '\A[^\n]{1,72}(?:\n|\z)']
+      - id: check-commit-trailers
+        stages: [commit-msg]
+        args: [--deny, Co-Authored-By]
+
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: cargo fmt --all --check
+        language: system
+        types: [rust]
+        pass_filenames: false
+      - id: taplo-fmt
+        name: taplo fmt
+        entry: taplo fmt --check
+        language: system
+        types: [toml]
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --workspace --all-targets -- -D warnings
+        language: system
+        types_or: [rust, toml]
+        pass_filenames: false

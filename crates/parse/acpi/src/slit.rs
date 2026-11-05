@@ -71,7 +71,7 @@ impl Slit {
         if from >= self.num_localities || to >= self.num_localities {
             return None;
         }
-        let index = (from * self.num_localities + to) as usize;
-        self.matrix_data.get(index).copied()
+        let index = from.checked_mul(self.num_localities)?.checked_add(to)?;
+        self.matrix_data.get(usize::try_from(index).ok()?).copied()
     }
 }

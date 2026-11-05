@@ -80,7 +80,7 @@ mod tests {
         // 128 = 0x80 0x01
         assert_eq!(decode_uleb128(&[0x80, 0x01]), Some((128, 2)));
         // 624485 = 0xE5 0x8E 0x26
-        assert_eq!(decode_uleb128(&[0xE5, 0x8E, 0x26]), Some((624485, 3)));
+        assert_eq!(decode_uleb128(&[0xE5, 0x8E, 0x26]), Some((624_485, 3)));
     }
 
     #[test]
@@ -107,7 +107,7 @@ mod tests {
         // -2 = 0x7e
         assert_eq!(decode_sleb128(&[0x7e]), Some((-2, 1)));
         // -123456 = 0xC0 0xBB 0x78
-        assert_eq!(decode_sleb128(&[0xC0, 0xBB, 0x78]), Some((-123456, 3)));
+        assert_eq!(decode_sleb128(&[0xC0, 0xBB, 0x78]), Some((-123_456, 3)));
     }
 
     #[test]

@@ -136,7 +136,7 @@ impl BaseRevision {
     pub fn loaded_revision(&self) -> u64 {
         // SAFETY: The bootloader writes to this cell before control is passed to the kernel,
         // and no concurrent writes occur after that point.
-        unsafe { self.0.as_ref_unchecked()[1] }
+        unsafe { (*self.0.get())[1] }
     }
 
     /// Returns the requested revision.
@@ -144,7 +144,7 @@ impl BaseRevision {
     pub fn revision(&self) -> u64 {
         // SAFETY: The bootloader writes to this cell before control is passed to the kernel,
         // and no concurrent writes occur after that point.
-        unsafe { self.0.as_ref_unchecked()[2] }
+        unsafe { (*self.0.get())[2] }
     }
 
     /// Checks if the requested revision is supported by this crate.

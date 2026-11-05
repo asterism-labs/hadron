@@ -74,7 +74,6 @@
 
 #![no_main]
 #![no_std]
-#![feature(unsafe_cell_access)]
 
 mod request;
 mod response;

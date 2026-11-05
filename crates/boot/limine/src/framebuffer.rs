@@ -187,7 +187,7 @@ impl RawFramebuffer {
                     framebuffer.modes = modes;
                     framebuffer
                 }
-                _ => panic!("Unsupported framebuffer revision: {}", revision),
+                _ => panic!("Unsupported framebuffer revision: {revision}"),
             }
         }
     }

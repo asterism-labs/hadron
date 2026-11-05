@@ -53,7 +53,7 @@ pub enum AcpiResource {
         /// Whether the region is writable.
         writable: bool,
     },
-    /// 64-bit memory region from QWord address space (large resource tag 0x0A).
+    /// 64-bit memory region from `QWord` address space (large resource tag 0x0A).
     Memory64 {
         /// Base physical address.
         base: u64,
@@ -92,10 +92,6 @@ impl<'a> ResourceIter<'a> {
         Self { data, pos: 0 }
     }
 
-    fn remaining(&self) -> &'a [u8] {
-        self.data.get(self.pos..).unwrap_or(&[])
-    }
-
     fn read_u8(&mut self) -> Option<u8> {
         let v = *self.data.get(self.pos)?;
         self.pos += 1;
@@ -103,8 +99,8 @@ impl<'a> ResourceIter<'a> {
     }
 
     fn read_u16_le(&mut self) -> Option<u16> {
-        let lo = *self.data.get(self.pos)? as u16;
-        let hi = *self.data.get(self.pos + 1)? as u16;
+        let lo = u16::from(*self.data.get(self.pos)?);
+        let hi = u16::from(*self.data.get(self.pos + 1)?);
         self.pos += 2;
         Some(lo | (hi << 8))
     }
@@ -156,12 +152,11 @@ impl<'a> ResourceIter<'a> {
                     (true, false)
                 };
                 // Find first set bit in mask
-                let irq = mask.trailing_zeros();
-                if irq >= 16 {
-                    return None;
-                }
+                let irq = u8::try_from(mask.trailing_zeros())
+                    .ok()
+                    .filter(|&irq| irq < 16)?;
                 Some(AcpiResource::Irq {
-                    irq: irq as u8,
+                    irq,
                     edge_triggered,
                     active_low,
                 })
@@ -177,13 +172,12 @@ impl<'a> ResourceIter<'a> {
                 if length > 2 {
                     self.skip(length - 2);
                 }
-                let channel = channel_mask.trailing_zeros();
-                if channel >= 8 {
-                    return None;
-                }
+                let channel = u8::try_from(channel_mask.trailing_zeros())
+                    .ok()
+                    .filter(|&channel| channel < 8)?;
                 let bus_master = (flags & 0x04) != 0;
                 Some(AcpiResource::Dma {
-                    channel: channel as u8,
+                    channel,
                     bus_master,
                 })
             }
@@ -203,7 +197,7 @@ impl<'a> ResourceIter<'a> {
                 }
                 Some(AcpiResource::Io {
                     base: min_base,
-                    length: range_len as u16,
+                    length: u16::from(range_len),
                 })
             }
             // Fixed I/O port descriptor (tag type 0x09)
@@ -241,22 +235,20 @@ impl<'a> ResourceIter<'a> {
         let body_start = self.pos;
 
         let result = match tag_type {
-            // 24-bit memory range (tag 0x01) — rarely used, skip
-            0x01 => None,
             // 32-bit memory range (tag 0x05)
             0x05 => {
                 if length < 9 {
                     None
                 } else {
                     let flags = self.read_u8()?;
-                    let _min = self.read_u32_le()?;
+                    let min = self.read_u32_le()?;
                     let _max = self.read_u32_le()?;
                     // Descriptor also has alignment and length
                     if length >= 17 {
                         let _alignment = self.read_u32_le()?;
                         let range_len = self.read_u32_le()?;
                         Some(AcpiResource::Memory32 {
-                            base: _min,
+                            base: min,
                             length: range_len,
                             writable: (flags & 0x01) != 0,
                         })
@@ -280,37 +272,8 @@ impl<'a> ResourceIter<'a> {
                     })
                 }
             }
-            // DWord address space (tag 0x07) — decode as memory if resource type = 0
-            0x07 => {
-                if length < 23 {
-                    None
-                } else {
-                    let resource_type = self.read_u8()?;
-                    let _general_flags = self.read_u8()?;
-                    let type_flags = self.read_u8()?;
-                    let _granularity = self.read_u32_le()?;
-                    let min = self.read_u32_le()?;
-                    let _max = self.read_u32_le()?;
-                    let _translation = self.read_u32_le()?;
-                    let range_len = self.read_u32_le()?;
-                    if resource_type == 0 {
-                        // Memory range
-                        Some(AcpiResource::Memory32 {
-                            base: min,
-                            length: range_len,
-                            writable: (type_flags & 0x01) != 0,
-                        })
-                    } else if resource_type == 1 {
-                        // I/O range
-                        Some(AcpiResource::Io {
-                            base: min as u16,
-                            length: range_len as u16,
-                        })
-                    } else {
-                        None
-                    }
-                }
-            }
+            // DWord address space (tag 0x07)
+            0x07 => self.parse_dword_address(length),
             // Extended IRQ descriptor (tag 0x09)
             0x09 => {
                 if length < 6 {
@@ -332,30 +295,9 @@ impl<'a> ResourceIter<'a> {
                     }
                 }
             }
-            // QWord address space (tag 0x0A) — decode as memory if resource type = 0
-            0x0A => {
-                if length < 43 {
-                    None
-                } else {
-                    let resource_type = self.read_u8()?;
-                    let _general_flags = self.read_u8()?;
-                    let type_flags = self.read_u8()?;
-                    let _granularity = self.read_u64_le()?;
-                    let min = self.read_u64_le()?;
-                    let _max = self.read_u64_le()?;
-                    let _translation = self.read_u64_le()?;
-                    let range_len = self.read_u64_le()?;
-                    if resource_type == 0 {
-                        Some(AcpiResource::Memory64 {
-                            base: min,
-                            length: range_len,
-                            writable: (type_flags & 0x01) != 0,
-                        })
-                    } else {
-                        None
-                    }
-                }
-            }
+            // QWord address space (tag 0x0A)
+            0x0A => self.parse_qword_address(length),
+            // 24-bit memory range (tag 0x01, rarely used) and unknown tags — skip
             _ => None,
         };
 
@@ -363,9 +305,70 @@ impl<'a> ResourceIter<'a> {
         self.pos = body_start + length;
         result
     }
+    /// Parse the body of a `DWord` address space descriptor.
+    ///
+    /// Decodes memory (resource type 0) and I/O (resource type 1) ranges.
+    fn parse_dword_address(&mut self, length: usize) -> Option<AcpiResource> {
+        if length < 23 {
+            None
+        } else {
+            let resource_type = self.read_u8()?;
+            let _general_flags = self.read_u8()?;
+            let type_flags = self.read_u8()?;
+            let _granularity = self.read_u32_le()?;
+            let min = self.read_u32_le()?;
+            let _max = self.read_u32_le()?;
+            let _translation = self.read_u32_le()?;
+            let range_len = self.read_u32_le()?;
+            if resource_type == 0 {
+                // Memory range
+                Some(AcpiResource::Memory32 {
+                    base: min,
+                    length: range_len,
+                    writable: (type_flags & 0x01) != 0,
+                })
+            } else if resource_type == 1 {
+                // I/O range. I/O ports are 16 bits wide; a range that does not
+                // fit is not representable as `AcpiResource::Io` and is skipped.
+                match (u16::try_from(min), u16::try_from(range_len)) {
+                    (Ok(base), Ok(length)) => Some(AcpiResource::Io { base, length }),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        }
+    }
+
+    /// Parse the body of a `QWord` address space descriptor.
+    ///
+    /// Decodes memory ranges (resource type 0) only.
+    fn parse_qword_address(&mut self, length: usize) -> Option<AcpiResource> {
+        if length < 43 {
+            None
+        } else {
+            let resource_type = self.read_u8()?;
+            let _general_flags = self.read_u8()?;
+            let type_flags = self.read_u8()?;
+            let _granularity = self.read_u64_le()?;
+            let min = self.read_u64_le()?;
+            let _max = self.read_u64_le()?;
+            let _translation = self.read_u64_le()?;
+            let range_len = self.read_u64_le()?;
+            if resource_type == 0 {
+                Some(AcpiResource::Memory64 {
+                    base: min,
+                    length: range_len,
+                    writable: (type_flags & 0x01) != 0,
+                })
+            } else {
+                None
+            }
+        }
+    }
 }
 
-impl<'a> Iterator for ResourceIter<'a> {
+impl Iterator for ResourceIter<'_> {
     type Item = AcpiResource;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -402,6 +405,7 @@ impl<'a> Iterator for ResourceIter<'a> {
 /// (i.e., the initializer data from a `Buffer` AML object). The iterator yields
 /// resources until the End Tag descriptor (0x79) is encountered or the data is
 /// exhausted.
+#[must_use]
 pub fn parse_resource_template(data: &[u8]) -> ResourceIter<'_> {
     ResourceIter::new(data)
 }
@@ -410,6 +414,7 @@ pub fn parse_resource_template(data: &[u8]) -> ResourceIter<'_> {
 ///
 /// A resource template starts with a valid descriptor tag and should end with
 /// an End Tag (0x79). This is a quick heuristic check, not a full validation.
+#[must_use]
 pub fn looks_like_resource_template(data: &[u8]) -> bool {
     if data.is_empty() {
         return false;
@@ -420,7 +425,7 @@ pub fn looks_like_resource_template(data: &[u8]) -> bool {
     let valid_start = if first & 0x80 != 0 {
         // Large descriptor: tag type 0x01-0x0F are common
         let tag = first & 0x7F;
-        tag >= 0x01 && tag <= 0x0E
+        (0x01..=0x0E).contains(&tag)
     } else {
         // Small descriptor: check known tag types
         let tag_type = (first >> 3) & 0x0F;
@@ -432,7 +437,7 @@ pub fn looks_like_resource_template(data: &[u8]) -> bool {
     }
 
     // Check for End Tag somewhere in the buffer
-    data.iter().any(|&b| b == 0x79)
+    data.contains(&0x79)
 }
 
 #[cfg(test)]
@@ -595,7 +600,7 @@ mod tests {
     fn empty_template() {
         let data = [0x79, 0x00]; // just end tag
         let resources: Vec<_> = parse_resource_template(&data).collect();
-        assert!(resources.is_empty());
+        assert_eq!(resources, Vec::new());
     }
 
     #[test]

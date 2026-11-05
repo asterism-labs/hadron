@@ -14,7 +14,7 @@ bench = false
 doctest = false
 
 [features]
-alloc = []
+alloc = [  ]
 
 [dependencies]
 hadron-binparse = { workspace = true }

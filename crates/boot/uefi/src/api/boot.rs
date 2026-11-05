@@ -19,23 +19,34 @@ impl<'st> BootServices<'st> {
     }
 
     /// Locate a protocol interface registered in the handle database.
+    ///
+    /// # Errors
+    ///
+    /// Returns the status from `LocateProtocol` if it fails (for example
+    /// `EFI_NOT_FOUND` when no handle supports `P`), or `EFI_NOT_FOUND` if the
+    /// firmware reports success but returns a null interface.
     pub fn locate_protocol<P: Protocol>(&self) -> Result<&'st mut P::Raw, EfiStatus> {
         let mut interface: *mut c_void = core::ptr::null_mut();
         let status = unsafe {
             (self.raw.locate_protocol)(
-                &P::GUID as *const EfiGuid,
+                core::ptr::from_ref::<EfiGuid>(&P::GUID),
                 core::ptr::null_mut(),
-                &mut interface,
+                &raw mut interface,
             )
         };
         status.to_result()?;
         if interface.is_null() {
             return Err(EfiStatus::NOT_FOUND);
         }
-        Ok(unsafe { &mut *(interface as *mut P::Raw) })
+        Ok(unsafe { &mut *interface.cast::<P::Raw>() })
     }
 
     /// Allocate pages from the system memory.
+    ///
+    /// # Errors
+    ///
+    /// Returns the status from `AllocatePages` if it fails, for example
+    /// `EFI_OUT_OF_RESOURCES` or `EFI_NOT_FOUND` when the pages cannot be allocated.
     pub fn allocate_pages(
         &self,
         alloc_type: EfiAllocateType,
@@ -44,12 +55,17 @@ impl<'st> BootServices<'st> {
     ) -> Result<EfiPhysicalAddress, EfiStatus> {
         let mut address: EfiPhysicalAddress = 0;
         let status =
-            unsafe { (self.raw.allocate_pages)(alloc_type, memory_type, pages, &mut address) };
+            unsafe { (self.raw.allocate_pages)(alloc_type, memory_type, pages, &raw mut address) };
         status.to_result()?;
         Ok(address)
     }
 
     /// Free previously allocated pages.
+    ///
+    /// # Errors
+    ///
+    /// Returns the status from `FreePages` if it fails, for example
+    /// `EFI_NOT_FOUND` when the range was not allocated with `AllocatePages`.
     pub fn free_pages(&self, address: EfiPhysicalAddress, pages: usize) -> Result<(), EfiStatus> {
         let status = unsafe { (self.raw.free_pages)(address, pages) };
         status.to_result()
@@ -59,6 +75,11 @@ impl<'st> BootServices<'st> {
     ///
     /// The caller provides a buffer that will be filled with memory descriptors.
     /// The buffer should be aligned to `EfiMemoryDescriptor` alignment.
+    ///
+    /// # Errors
+    ///
+    /// Returns the status from `GetMemoryMap` if it fails, for example
+    /// `EFI_BUFFER_TOO_SMALL` when `buf` cannot hold the whole map.
     pub fn get_memory_map<'buf>(&self, buf: &'buf mut [u8]) -> Result<MemoryMap<'buf>, EfiStatus> {
         let mut map_size = buf.len();
         let mut map_key: usize = 0;
@@ -67,11 +88,11 @@ impl<'st> BootServices<'st> {
 
         let status = unsafe {
             (self.raw.get_memory_map)(
-                &mut map_size,
+                &raw mut map_size,
                 buf.as_mut_ptr(),
-                &mut map_key,
-                &mut desc_size,
-                &mut desc_version,
+                &raw mut map_key,
+                &raw mut desc_size,
+                &raw mut desc_version,
             )
         };
         status.to_result()?;
@@ -85,12 +106,21 @@ impl<'st> BootServices<'st> {
     }
 
     /// Stall (busy-wait) for the given number of microseconds.
+    ///
+    /// # Errors
+    ///
+    /// Returns the status from `Stall` if the firmware reports an error.
     pub fn stall(&self, microseconds: usize) -> Result<(), EfiStatus> {
         let status = unsafe { (self.raw.stall)(microseconds) };
         status.to_result()
     }
 
     /// Set the system watchdog timer.
+    ///
+    /// # Errors
+    ///
+    /// Returns the status from `SetWatchdogTimer` if it fails, for example
+    /// `EFI_UNSUPPORTED` when the platform has no watchdog timer.
     pub fn set_watchdog_timer(&self, timeout: usize, watchdog_code: u64) -> Result<(), EfiStatus> {
         let status =
             unsafe { (self.raw.set_watchdog_timer)(timeout, watchdog_code, 0, core::ptr::null()) };
@@ -98,6 +128,7 @@ impl<'st> BootServices<'st> {
     }
 
     /// Returns the image handle.
+    #[must_use]
     pub fn image_handle(&self) -> EfiHandle {
         self.image_handle
     }

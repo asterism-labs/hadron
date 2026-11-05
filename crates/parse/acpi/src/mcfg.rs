@@ -7,7 +7,7 @@
 //!
 //! - PCI Firmware Specification 3.0, §4.1.2: MCFG Table
 //!   <https://pcisig.com/specifications>
-//! - OSDev Wiki: PCI Express
+//! - `OSDev` Wiki: PCI Express
 //!   <https://wiki.osdev.org/PCI_Express>
 
 use hadron_binparse::{FixedEntryIter, FromBytes};

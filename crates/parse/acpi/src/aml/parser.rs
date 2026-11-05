@@ -26,16 +26,14 @@ use super::visitor::AmlVisitor;
 /// Returns [`AmlError`] if the bytecode is malformed or truncated.
 pub fn walk_aml(data: &[u8], visitor: &mut impl AmlVisitor) -> Result<(), AmlError> {
     let mut path = AmlPath::new();
-    parse_term_list(data, data.len(), &mut path, visitor)
+    parse_term_list(data, data.len(), &mut path, visitor);
+    Ok(())
 }
 
-/// Parse a TermList (sequence of TermObj) up to `end` bytes from `data` start.
-fn parse_term_list(
-    data: &[u8],
-    end: usize,
-    path: &mut AmlPath,
-    visitor: &mut impl AmlVisitor,
-) -> Result<(), AmlError> {
+/// Parse a `TermList` (sequence of `TermObj`) up to `end` bytes from `data` start.
+///
+/// Errors inside the list stop the walk of this scope only, so this never fails.
+fn parse_term_list(data: &[u8], end: usize, path: &mut AmlPath, visitor: &mut impl AmlVisitor) {
     let mut reader = BinaryReader::new(data);
 
     while reader.position() < end && reader.position() < reader.len() {
@@ -45,11 +43,9 @@ fn parse_term_list(
             break;
         }
     }
-
-    Ok(())
 }
 
-/// Parse a single TermObj and dispatch to the visitor.
+/// Parse a single `TermObj` and dispatch to the visitor.
 fn parse_term_obj(
     reader: &mut BinaryReader<'_>,
     scope_end: usize,
@@ -78,8 +74,6 @@ fn parse_term_obj(
             match ext_op {
                 // DefOpRegion — skip
                 0x80 => skip_op_region(reader),
-                // DefField — skip via PkgLength
-                0x81 => skip_pkg_length_block(reader),
                 // DefDevice
                 0x82 => parse_def_device(reader, path, visitor),
                 // DefProcessor
@@ -94,14 +88,13 @@ fn parse_term_obj(
                     reader.skip(1);
                     Ok(())
                 }
-                // DefIndexField, DefBankField — skip via PkgLength
-                0x86 | 0x87 => skip_pkg_length_block(reader),
                 // DefCreateField variants — skip
                 0x13 | 0x0D => {
                     // Skip to end: these have complex operands. Best effort.
                     Err(AmlError::InvalidAml)
                 }
-                // Unknown extended opcode — try to skip via PkgLength
+                // DefField (0x81), DefIndexField (0x86), DefBankField (0x87),
+                // and unknown extended opcodes — skip via PkgLength
                 _ => skip_pkg_length_block(reader),
             }
         }
@@ -133,16 +126,9 @@ fn parse_term_obj(
             Ok(())
         }
 
-        // DefBuffer — PkgLength ...
-        0x11 => skip_pkg_length_block(reader),
-        // DefPackage / DefVarPackage
-        0x12 | 0x13 => skip_pkg_length_block(reader),
-
-        // Zero, One, Ones — no operands
-        0x00 | 0x01 | 0xFF => Ok(()),
-
-        // Local0-Local7, Arg0-Arg6 — no operands
-        0x60..=0x67 | 0x68..=0x6E => Ok(()),
+        // DefBuffer (0x11), DefPackage / DefVarPackage (0x12, 0x13),
+        // DefIf, DefElse, DefWhile (0xA0-0xA2) — PkgLength blocks
+        0x11..=0x13 | 0xA0..=0xA2 => skip_pkg_length_block(reader),
 
         // DefStore, DefAdd, etc. — complex operands, skip as unknown
         // NameString (lead name char A-Z or _)
@@ -153,22 +139,15 @@ fn parse_term_obj(
             Ok(())
         }
 
-        // DefIf, DefElse, DefWhile — PkgLength blocks
-        0xA0 | 0xA1 | 0xA2 => skip_pkg_length_block(reader),
-
         // DefReturn — skip the return value object
         0xA4 => {
             // Return has one TermArg — try to skip it
             skip_data_object(reader)
         }
 
-        // NoOp
-        0xA3 => Ok(()),
-
-        // DefBreak
-        0xA5 => Ok(()),
-
-        // Other — skip one byte (best effort)
+        // Zero, One, Ones (0x00, 0x01, 0xFF), Local0-Local7 and Arg0-Arg6
+        // (0x60-0x6E), NoOp (0xA3), DefBreak (0xA5) have no operands.
+        // Any other opcode is skipped after its first byte (best effort).
         _ => Ok(()),
     }
 }
@@ -176,7 +155,7 @@ fn parse_term_obj(
 /// `_PRT` name segment for detecting PCI routing tables.
 const PRT_SEG: NameSeg = NameSeg(*b"_PRT");
 
-/// Parse DefName: 0x08 NameString DataRefObject
+/// Parse `DefName`: 0x08 `NameString` `DataRefObject`
 fn parse_def_name(
     reader: &mut BinaryReader<'_>,
     path: &AmlPath,
@@ -206,7 +185,7 @@ fn parse_def_name(
 /// Parse a `_PRT` Package: each element is a Package of 4 elements:
 /// `(Address:Integer, Pin:Integer, Source:NameOrZero, SourceIndex:Integer)`.
 ///
-/// For hardwired routing (Source = 0), the GSI = SourceIndex directly.
+/// For hardwired routing (Source = 0), the GSI = `SourceIndex` directly.
 /// For link-device routing (Source = Name), we skip the entry since resolving
 /// link devices requires method evaluation.
 fn parse_prt_package(
@@ -238,23 +217,24 @@ fn parse_prt_package(
         // Element 1: Pin (Integer)
         let pin = read_prt_integer(reader);
         // Element 2: Source (NameString or Zero)
-        let source_is_zero = match reader.remaining().first() {
-            Some(&0x00) => {
-                reader.skip(1);
-                true
-            }
-            _ => {
-                // It's a name reference — skip it
-                let _ = skip_name_string(reader);
-                false
-            }
+        let source_is_zero = if let Some(&0x00) = reader.remaining().first() {
+            reader.skip(1);
+            true
+        } else {
+            // It's a name reference — skip it
+            let _ = skip_name_string(reader);
+            false
         };
         // Element 3: SourceIndex (Integer)
         let source_index = read_prt_integer(reader);
 
         if source_is_zero {
-            if let (Some(addr), Some(p), Some(gsi)) = (address, pin, source_index) {
-                visitor.prt_entry(path, addr, p as u8, gsi as u32);
+            // Pin is 0-3 and a GSI is 32 bits wide; entries outside that range are malformed
+            // and skipped.
+            let pin = pin.and_then(|p| u8::try_from(p).ok());
+            let gsi = source_index.and_then(|g| u32::try_from(g).ok());
+            if let (Some(addr), Some(p), Some(gsi)) = (address, pin, gsi) {
+                visitor.prt_entry(path, addr, p, gsi);
             }
         }
 
@@ -309,7 +289,7 @@ struct ResolvedData<'a> {
     resource_template: Option<&'a [u8]>,
 }
 
-/// Parse DefScope: 0x10 PkgLength NameString TermList
+/// Parse `DefScope`: 0x10 `PkgLength` `NameString` `TermList`
 fn parse_def_scope(
     reader: &mut BinaryReader<'_>,
     path: &mut AmlPath,
@@ -327,7 +307,7 @@ fn parse_def_scope(
     let block_len = abs_end
         .saturating_sub(reader.position())
         .min(remaining.len());
-    parse_term_list(&remaining[..block_len], block_len, path, visitor)?;
+    parse_term_list(&remaining[..block_len], block_len, path, visitor);
 
     // Advance reader past the scope body
     let skip_to = abs_end.min(reader.len());
@@ -340,7 +320,7 @@ fn parse_def_scope(
     Ok(())
 }
 
-/// Parse DefMethod: 0x14 PkgLength NameString MethodFlags TermList
+/// Parse `DefMethod`: 0x14 `PkgLength` `NameString` `MethodFlags` `TermList`
 fn parse_def_method(
     reader: &mut BinaryReader<'_>,
     path: &AmlPath,
@@ -364,7 +344,7 @@ fn parse_def_method(
     Ok(())
 }
 
-/// Parse DefDevice: 0x5B 0x82 PkgLength NameString TermList
+/// Parse `DefDevice`: 0x5B 0x82 `PkgLength` `NameString` `TermList`
 fn parse_def_device(
     reader: &mut BinaryReader<'_>,
     path: &mut AmlPath,
@@ -383,7 +363,7 @@ fn parse_def_device(
     let block_len = abs_end
         .saturating_sub(reader.position())
         .min(remaining.len());
-    parse_term_list(&remaining[..block_len], block_len, path, visitor)?;
+    parse_term_list(&remaining[..block_len], block_len, path, visitor);
 
     let skip_to = abs_end.min(reader.len());
     let skip_amount = skip_to.saturating_sub(reader.position());
@@ -395,7 +375,7 @@ fn parse_def_device(
     Ok(())
 }
 
-/// Parse DefProcessor: 0x5B 0x83 PkgLength NameString ProcID PblkAddr PblkLen
+/// Parse `DefProcessor`: 0x5B 0x83 `PkgLength` `NameString` `ProcID` `PblkAddr` `PblkLen`
 fn parse_def_processor(
     reader: &mut BinaryReader<'_>,
     path: &AmlPath,
@@ -417,7 +397,7 @@ fn parse_def_processor(
     Ok(())
 }
 
-/// Parse DefPowerRes: 0x5B 0x84 PkgLength NameString SystemLevel ResourceOrder
+/// Parse `DefPowerRes`: 0x5B 0x84 `PkgLength` `NameString` `SystemLevel` `ResourceOrder`
 fn parse_def_power_res(
     reader: &mut BinaryReader<'_>,
     path: &AmlPath,
@@ -437,7 +417,7 @@ fn parse_def_power_res(
     Ok(())
 }
 
-/// Parse DefThermalZone: 0x5B 0x85 PkgLength NameString TermList
+/// Parse `DefThermalZone`: 0x5B 0x85 `PkgLength` `NameString` `TermList`
 fn parse_def_thermal_zone(
     reader: &mut BinaryReader<'_>,
     path: &mut AmlPath,
@@ -456,7 +436,7 @@ fn parse_def_thermal_zone(
     let block_len = abs_end
         .saturating_sub(reader.position())
         .min(remaining.len());
-    parse_term_list(&remaining[..block_len], block_len, path, visitor)?;
+    parse_term_list(&remaining[..block_len], block_len, path, visitor);
 
     let skip_to = abs_end.min(reader.len());
     let skip_amount = skip_to.saturating_sub(reader.position());
@@ -468,7 +448,7 @@ fn parse_def_thermal_zone(
     Ok(())
 }
 
-/// Skip an OpRegion: NameString RegionSpace RegionOffset RegionLen
+/// Skip an `OpRegion`: `NameString` `RegionSpace` `RegionOffset` `RegionLen`
 fn skip_op_region(reader: &mut BinaryReader<'_>) -> Result<(), AmlError> {
     skip_name_string(reader)?;
     // RegionSpace (1 byte)
@@ -490,13 +470,13 @@ fn skip_pkg_length_block(reader: &mut BinaryReader<'_>) -> Result<(), AmlError> 
 
 // ─── Name parsing ───────────────────────────────────────────────────────────
 
-/// Read a single 4-byte NameSeg from the reader.
+/// Read a single 4-byte `NameSeg` from the reader.
 fn read_name_seg(reader: &mut BinaryReader<'_>) -> Result<NameSeg, AmlError> {
     let bytes: [u8; 4] = reader.read().ok_or(AmlError::UnexpectedEnd)?;
     Ok(NameSeg(bytes))
 }
 
-/// Read an AML name path (handling prefix chars) and return the final NameSeg.
+/// Read an AML name path (handling prefix chars) and return the final `NameSeg`.
 ///
 /// For complex multi-segment paths, this returns the last segment which
 /// is the local name within the current scope.
@@ -549,7 +529,7 @@ fn read_name_path(reader: &mut BinaryReader<'_>, _path: &AmlPath) -> Result<Name
     }
 }
 
-/// Skip a NameString without extracting it.
+/// Skip a `NameString` without extracting it.
 fn skip_name_string(reader: &mut BinaryReader<'_>) -> Result<(), AmlError> {
     // Skip prefix chars
     loop {
@@ -619,10 +599,10 @@ fn skip_remaining_name_after_lead(reader: &mut BinaryReader<'_>, lead: u8) -> Re
 
 // ─── PkgLength decoding ────────────────────────────────────────────────────
 
-/// Decode an ACPI PkgLength field (1-4 bytes).
+/// Decode an ACPI `PkgLength` field (1-4 bytes).
 ///
 /// Returns `(remaining_bytes, total_pkg_length)` where `remaining_bytes` is
-/// the number of bytes after the PkgLength field itself that belong to this
+/// the number of bytes after the `PkgLength` field itself that belong to this
 /// package.
 fn decode_pkg_length(reader: &mut BinaryReader<'_>) -> Result<(usize, usize), AmlError> {
     let lead = reader.read::<u8>().ok_or(AmlError::UnexpectedEnd)?;
@@ -652,7 +632,7 @@ fn decode_pkg_length(reader: &mut BinaryReader<'_>) -> Result<(usize, usize), Am
 
 // ─── Data object resolution ────────────────────────────────────────────────
 
-/// Try to resolve a DataRefObject (the value part of a DefName).
+/// Try to resolve a `DataRefObject` (the value part of a `DefName`).
 fn resolve_data_object<'a>(reader: &mut BinaryReader<'a>) -> ResolvedData<'a> {
     let remaining = reader.remaining();
     if remaining.is_empty() {
@@ -748,7 +728,7 @@ fn resolve_data_object<'a>(reader: &mut BinaryReader<'a>) -> ResolvedData<'a> {
 
 /// Try to resolve a Buffer data object as either an EISAID or resource template.
 ///
-/// EISAID encoding: `Buffer(4) { DWordConst }` where the DWord is the
+/// EISAID encoding: `Buffer(4) { DWordConst }` where the `DWord` is the
 /// compressed EISA ID. Resource templates: buffers containing small/large
 /// resource descriptors terminated by an End Tag (0x79).
 fn try_resolve_buffer<'a>(reader: &mut BinaryReader<'a>) -> ResolvedData<'a> {
@@ -831,7 +811,7 @@ fn try_resolve_buffer<'a>(reader: &mut BinaryReader<'a>) -> ResolvedData<'a> {
     }
 }
 
-/// Skip a data object (used when we need to skip TermArgs like in Return).
+/// Skip a data object (used when we need to skip `TermArgs` like in Return).
 fn skip_data_object(reader: &mut BinaryReader<'_>) -> Result<(), AmlError> {
     let remaining = reader.remaining();
     if remaining.is_empty() {
@@ -839,10 +819,6 @@ fn skip_data_object(reader: &mut BinaryReader<'_>) -> Result<(), AmlError> {
     }
 
     match remaining[0] {
-        0x00 | 0x01 | 0xFF => {
-            reader.skip(1);
-            Ok(())
-        }
         0x0A => {
             reader.skip(2);
             Ok(())
@@ -864,15 +840,13 @@ fn skip_data_object(reader: &mut BinaryReader<'_>) -> Result<(), AmlError> {
             reader.skip(9);
             Ok(())
         }
-        0x11 | 0x12 | 0x13 => {
+        0x11..=0x13 => {
             reader.skip(1);
             skip_pkg_length_block_inner(reader)
         }
-        0x60..=0x6E => {
-            reader.skip(1);
-            Ok(())
-        }
         b'A'..=b'Z' | b'_' | b'\\' | b'^' => skip_name_string(reader),
+        // Zero, One, Ones, Local0-Local7, Arg0-Arg6, and anything unknown:
+        // a single opcode byte.
         _ => {
             reader.skip(1);
             Ok(())
@@ -891,7 +865,7 @@ fn skip_string(reader: &mut BinaryReader<'_>) {
     }
 }
 
-/// Skip a PkgLength block body (PkgLength has not been consumed yet).
+/// Skip a `PkgLength` block body (`PkgLength` has not been consumed yet).
 fn skip_pkg_length_block_inner(reader: &mut BinaryReader<'_>) -> Result<(), AmlError> {
     let (pkg_remaining, _) = decode_pkg_length(reader)?;
     let target = (reader.position() + pkg_remaining).min(reader.len());

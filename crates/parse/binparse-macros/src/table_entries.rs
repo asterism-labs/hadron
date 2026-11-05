@@ -6,28 +6,14 @@
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
-use syn::{Data, DeriveInput, Expr, Fields, Ident, Lit, Meta, Variant};
-
-/// Parsed metadata from `#[table_entries(...)]` on the enum.
-struct TableEntriesAttrs {
-    /// Type of the type_field (e.g. `u8`).
-    type_field_ty: Ident,
-    /// Type of the length_field (e.g. `u8`).
-    length_field_ty: Ident,
-}
+use syn::{Data, DeriveInput, Fields, Ident, Lit, Variant};
 
 /// Parsed metadata from `#[entry(...)]` on a variant.
 struct EntryVariantAttrs {
     /// The type ID value for this entry.
-    type_id: u64,
+    type_id: u8,
     /// Minimum length (in bytes) for this entry.
     min_length: usize,
-}
-
-/// Parsed metadata from `#[field(...)]` on a variant field.
-struct FieldAttrs {
-    /// Byte offset within the entry data.
-    offset: usize,
 }
 
 /// A parsed entry variant with its fields.
@@ -54,18 +40,15 @@ struct ParsedField {
 pub fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
     let enum_name = &input.ident;
 
-    // Parse `#[table_entries(type_field = u8, length_field = u8)]`.
-    let table_attrs = parse_table_entries_attrs(input)?;
+    // Validate `#[table_entries(type_field = u8, length_field = u8)]`.
+    parse_table_entries_attrs(input)?;
 
     // Must be an enum.
-    let data_enum = match &input.data {
-        Data::Enum(e) => e,
-        _ => {
-            return Err(syn::Error::new_spanned(
-                enum_name,
-                "TableEntries can only be derived for enums",
-            ));
-        }
+    let Data::Enum(data_enum) = &input.data else {
+        return Err(syn::Error::new_spanned(
+            enum_name,
+            "TableEntries can only be derived for enums",
+        ));
     };
 
     // Parse each variant.
@@ -94,32 +77,7 @@ pub fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
     // Generate match arms for each entry type.
     let match_arms: Vec<TokenStream> = entry_variants
         .iter()
-        .map(|v| {
-            let variant_ident = &v.ident;
-            let type_id = v.attrs.type_id as u8;
-            let min_length = v.attrs.min_length;
-
-            let field_reads: Vec<TokenStream> = v
-                .fields
-                .iter()
-                .map(|f| {
-                    let field_ident = &f.ident;
-                    let field_ty = &f.ty;
-                    let offset = f.offset;
-                    quote! {
-                        #field_ident: <#field_ty as hadron_binparse::FromBytes>::read_at(
-                            entry_data, #offset
-                        ).unwrap_or_default()
-                    }
-                })
-                .collect();
-
-            quote! {
-                #type_id if length >= #min_length => #enum_name::#variant_ident {
-                    #(#field_reads),*
-                }
-            }
-        })
+        .map(|v| entry_match_arm(enum_name, v))
         .collect();
 
     // Generate fallback arm.
@@ -188,13 +146,41 @@ pub fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
     })
 }
 
+/// Generates the match arm that decodes one entry variant from `entry_data`.
+fn entry_match_arm(enum_name: &Ident, v: &ParsedVariant) -> TokenStream {
+    let variant_ident = &v.ident;
+    let type_id = v.attrs.type_id;
+    let min_length = v.attrs.min_length;
+
+    let field_reads = v.fields.iter().map(|f| {
+        let field_ident = &f.ident;
+        let field_ty = &f.ty;
+        let offset = f.offset;
+        quote! {
+            #field_ident: <#field_ty as hadron_binparse::FromBytes>::read_at(
+                entry_data, #offset
+            ).unwrap_or_default()
+        }
+    });
+
+    quote! {
+        #type_id if length >= #min_length => #enum_name::#variant_ident {
+            #(#field_reads),*
+        }
+    }
+}
+
 /// Checks if an attribute list contains a given attribute name.
 fn has_attr(attrs: &[syn::Attribute], name: &str) -> bool {
     attrs.iter().any(|a| a.path().is_ident(name))
 }
 
-/// Parses `#[table_entries(type_field = u8, length_field = u8)]`.
-fn parse_table_entries_attrs(input: &DeriveInput) -> syn::Result<TableEntriesAttrs> {
+/// Validates that `#[table_entries(type_field = u8, length_field = u8)]` is present
+/// and names both fields.
+///
+/// The generated iterator always reads a one-byte type and a one-byte length,
+/// so the field types are checked for presence only.
+fn parse_table_entries_attrs(input: &DeriveInput) -> syn::Result<()> {
     let attr = input
         .attrs
         .iter()
@@ -220,12 +206,13 @@ fn parse_table_entries_attrs(input: &DeriveInput) -> syn::Result<TableEntriesAtt
         Ok(())
     })?;
 
-    Ok(TableEntriesAttrs {
-        type_field_ty: type_field_ty
-            .ok_or_else(|| syn::Error::new_spanned(attr, "missing type_field"))?,
-        length_field_ty: length_field_ty
-            .ok_or_else(|| syn::Error::new_spanned(attr, "missing length_field"))?,
-    })
+    if type_field_ty.is_none() {
+        return Err(syn::Error::new_spanned(attr, "missing type_field"));
+    }
+    if length_field_ty.is_none() {
+        return Err(syn::Error::new_spanned(attr, "missing length_field"));
+    }
+    Ok(())
 }
 
 /// Parses `#[entry(type_id = N, min_length = M)]` on a variant.
@@ -249,7 +236,7 @@ fn parse_entry_attrs(variant: &Variant) -> syn::Result<EntryVariantAttrs> {
             meta.input.parse::<syn::Token![=]>()?;
             let lit: Lit = meta.input.parse()?;
             if let Lit::Int(lit_int) = lit {
-                type_id = Some(lit_int.base10_parse::<u64>()?);
+                type_id = Some(lit_int.base10_parse::<u8>()?);
             }
         } else if meta.path.is_ident("min_length") {
             meta.input.parse::<syn::Token![=]>()?;

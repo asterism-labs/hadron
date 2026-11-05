@@ -26,6 +26,7 @@ pub unsafe trait FromBytes: Sized + Copy {
     /// Reads a value of type `Self` from the start of `bytes`.
     ///
     /// Returns `None` if `bytes` is shorter than `size_of::<Self>()`.
+    #[must_use]
     fn read_from(bytes: &[u8]) -> Option<Self> {
         if bytes.len() < core::mem::size_of::<Self>() {
             return None;

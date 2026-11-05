@@ -317,13 +317,13 @@ pub(crate) mod tests {
         buf[32..40].copy_from_slice(&(ELF64_EHDR_SIZE as u64).to_le_bytes());
         // e_shoff: 0 (no sections by default) at offset 40..48
         // e_ehsize
-        buf[52..54].copy_from_slice(&(ELF64_EHDR_SIZE as u16).to_le_bytes());
+        buf[52..54].copy_from_slice(&u16::try_from(ELF64_EHDR_SIZE).unwrap().to_le_bytes());
         // e_phentsize
-        buf[54..56].copy_from_slice(&(ELF64_PHDR_SIZE as u16).to_le_bytes());
+        buf[54..56].copy_from_slice(&u16::try_from(ELF64_PHDR_SIZE).unwrap().to_le_bytes());
         // e_phnum: 0 (no program headers by default)
         buf[56..58].copy_from_slice(&0u16.to_le_bytes());
         // e_shentsize: default to ELF64_SHDR_SIZE
-        buf[58..60].copy_from_slice(&(ELF64_SHDR_SIZE as u16).to_le_bytes());
+        buf[58..60].copy_from_slice(&u16::try_from(ELF64_SHDR_SIZE).unwrap().to_le_bytes());
         // e_shnum: 0 (no sections by default)
         buf[60..62].copy_from_slice(&0u16.to_le_bytes());
         // e_shstrndx: 0
@@ -368,7 +368,7 @@ pub(crate) mod tests {
         assert_eq!(hdr.e_entry, 0x0040_1000);
         assert_eq!(hdr.e_phoff, ELF64_EHDR_SIZE as u64);
         assert_eq!(hdr.e_phnum, 0);
-        assert_eq!(hdr.e_phentsize, ELF64_PHDR_SIZE as u16);
+        assert_eq!(usize::from(hdr.e_phentsize), ELF64_PHDR_SIZE);
     }
 
     #[test]
@@ -477,7 +477,7 @@ pub(crate) mod tests {
         ];
         for err in &errors {
             let msg = format!("{err}");
-            assert!(!msg.is_empty());
+            assert_ne!(msg, "");
         }
     }
 }

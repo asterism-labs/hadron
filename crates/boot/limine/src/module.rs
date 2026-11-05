@@ -43,7 +43,7 @@
 use core::ffi::c_char;
 
 bitflags::bitflags! {
-    /// Flags for InternalModule
+    /// Flags for `InternalModule`
     #[repr(C)]
     pub struct InternalModuleFlags: u64 {
         /// Indicates that the module is required

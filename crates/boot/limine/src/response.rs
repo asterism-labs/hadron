@@ -64,7 +64,7 @@ impl<T> Response<T> {
     pub fn get(&self) -> Option<&T> {
         // SAFETY: The bootloader writes to this cell before control is passed to the kernel.
         // After boot, this is only read and never written, so no data races can occur.
-        let inner = unsafe { self.inner.as_ref_unchecked() };
+        let inner = unsafe { &*self.inner.get() };
         // SAFETY: The NonNull pointer, if present, was set by the bootloader and points to
         // a valid response structure that lives for the lifetime of the kernel.
         inner.as_ref().map(|ptr| unsafe { ptr.as_ref() })

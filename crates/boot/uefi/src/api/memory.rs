@@ -25,11 +25,13 @@ impl<'buf> MemoryMap<'buf> {
     }
 
     /// The map key, needed for `ExitBootServices`.
+    #[must_use]
     pub fn map_key(&self) -> usize {
         self.map_key
     }
 
     /// Number of descriptors in the map.
+    #[must_use]
     pub fn len(&self) -> usize {
         if self.descriptor_size == 0 {
             return 0;
@@ -38,21 +40,25 @@ impl<'buf> MemoryMap<'buf> {
     }
 
     /// Returns `true` if the map contains no descriptors.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
     /// The firmware-reported descriptor size (may exceed `size_of::<EfiMemoryDescriptor>()`).
+    #[must_use]
     pub fn descriptor_size(&self) -> usize {
         self.descriptor_size
     }
 
     /// The firmware-reported descriptor version.
+    #[must_use]
     pub fn descriptor_version(&self) -> u32 {
         self.descriptor_version
     }
 
     /// Returns an iterator over the memory descriptors.
+    #[must_use]
     pub fn iter(&self) -> MemoryMapIter<'buf> {
         MemoryMapIter {
             buffer: self.buffer,
@@ -85,9 +91,17 @@ impl<'buf> Iterator for MemoryMapIter<'buf> {
         if self.descriptor_size == 0 || self.offset + self.descriptor_size > self.buffer.len() {
             return None;
         }
-        let ptr = self.buffer[self.offset..].as_ptr() as *const EfiMemoryDescriptor;
+        // The alignment is checked below before the pointer is dereferenced.
+        #[allow(clippy::cast_ptr_alignment)]
+        let ptr = self.buffer[self.offset..]
+            .as_ptr()
+            .cast::<EfiMemoryDescriptor>();
+        if !ptr.is_aligned() {
+            return None;
+        }
         self.offset += self.descriptor_size;
-        // SAFETY: The firmware wrote valid descriptors at this stride.
+        // SAFETY: The firmware wrote valid descriptors at this stride, and `ptr` is
+        // aligned for `EfiMemoryDescriptor`.
         Some(unsafe { &*ptr })
     }
 }

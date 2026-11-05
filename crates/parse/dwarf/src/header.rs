@@ -116,7 +116,7 @@ impl<'a> LineProgramHeader<'a> {
         let version = u16::from_le_bytes([data[offset], data[offset + 1]]);
         offset += 2;
 
-        if version < 4 || version > 5 {
+        if !(4..=5).contains(&version) {
             return Err(DwarfError::UnsupportedVersion);
         }
 
@@ -147,46 +147,22 @@ impl<'a> LineProgramHeader<'a> {
         }
 
         // minimum_instruction_length (u8)
-        if offset >= data.len() {
-            return Err(DwarfError::Truncated);
-        }
-        let minimum_instruction_length = data[offset];
-        offset += 1;
+        let minimum_instruction_length = read_u8(data, &mut offset)?;
 
         // maximum_operations_per_instruction (u8) — present in v4+
-        if offset >= data.len() {
-            return Err(DwarfError::Truncated);
-        }
-        let maximum_operations_per_instruction = data[offset];
-        offset += 1;
+        let maximum_operations_per_instruction = read_u8(data, &mut offset)?;
 
         // default_is_stmt (u8)
-        if offset >= data.len() {
-            return Err(DwarfError::Truncated);
-        }
-        let default_is_stmt = data[offset] != 0;
-        offset += 1;
+        let default_is_stmt = read_u8(data, &mut offset)? != 0;
 
         // line_base (i8)
-        if offset >= data.len() {
-            return Err(DwarfError::Truncated);
-        }
-        let line_base = data[offset] as i8;
-        offset += 1;
+        let line_base = i8::from_le_bytes([read_u8(data, &mut offset)?]);
 
         // line_range (u8)
-        if offset >= data.len() {
-            return Err(DwarfError::Truncated);
-        }
-        let line_range = data[offset];
-        offset += 1;
+        let line_range = read_u8(data, &mut offset)?;
 
         // opcode_base (u8)
-        if offset >= data.len() {
-            return Err(DwarfError::Truncated);
-        }
-        let opcode_base = data[offset];
-        offset += 1;
+        let opcode_base = read_u8(data, &mut offset)?;
 
         // standard_opcode_lengths array (opcode_base - 1 entries)
         let mut standard_opcode_lengths = [0u8; MAX_STANDARD_OPCODE_LENGTHS];
@@ -194,13 +170,14 @@ impl<'a> LineProgramHeader<'a> {
         if offset + num_standard > data.len() {
             return Err(DwarfError::Truncated);
         }
-        for i in 0..num_standard.min(MAX_STANDARD_OPCODE_LENGTHS) {
-            standard_opcode_lengths[i] = data[offset + i];
-        }
+        let stored = num_standard.min(MAX_STANDARD_OPCODE_LENGTHS);
+        standard_opcode_lengths[..stored].copy_from_slice(&data[offset..offset + stored]);
         offset += num_standard;
 
         let mut directories = [None; MAX_DIRECTORIES];
         let mut dir_count = 0;
+        // No allocator in `no_std`: the file table is stored inline in the header.
+        #[allow(clippy::large_stack_arrays)]
         let mut files = [None; MAX_FILES];
         let mut file_count = 0;
 
@@ -246,14 +223,12 @@ impl<'a> LineProgramHeader<'a> {
     #[must_use]
     pub fn file(&self, file_index: u64) -> Option<&FileEntry<'a>> {
         let idx = if self.version >= 5 {
-            file_index as usize
+            file_index
         } else {
             // DWARF v4: 1-based, so index 1 maps to files[0]
-            if file_index == 0 {
-                return None;
-            }
-            (file_index - 1) as usize
+            file_index.checked_sub(1)?
         };
+        let idx = usize::try_from(idx).ok()?;
         if idx < self.file_count {
             self.files[idx].as_ref()
         } else {
@@ -264,7 +239,7 @@ impl<'a> LineProgramHeader<'a> {
     /// Returns the directory name at the given index.
     #[must_use]
     pub fn directory(&self, dir_index: u64) -> Option<&'a str> {
-        let idx = dir_index as usize;
+        let idx = usize::try_from(dir_index).ok()?;
         if idx < self.dir_count {
             self.directories[idx]
         } else {
@@ -517,7 +492,7 @@ enum FormValue {
 
 impl FormValue {
     /// Extracts a `&str` from the form value.
-    fn as_str<'a>(self, data: &'a [u8]) -> Result<&'a str, DwarfError> {
+    fn as_str(self, data: &[u8]) -> Result<&str, DwarfError> {
         match self {
             Self::StringOffset(off, len) => {
                 if off + len > data.len() {
@@ -594,6 +569,13 @@ fn read_form_value(
     }
 }
 
+/// Read one byte at `*offset` and advance past it.
+fn read_u8(data: &[u8], offset: &mut usize) -> Result<u8, DwarfError> {
+    let byte = *data.get(*offset).ok_or(DwarfError::Truncated)?;
+    *offset += 1;
+    Ok(byte)
+}
+
 /// Read a NUL-terminated UTF-8 string from data at the given offset.
 fn read_nul_str(data: &[u8], offset: usize) -> Result<&str, DwarfError> {
     if offset >= data.len() {
@@ -634,7 +616,7 @@ mod tests {
         // default_is_stmt: 1
         buf.push(1);
         // line_base: -5 (0xFB as i8)
-        buf.push((-5i8) as u8);
+        buf.push((-5i8).to_le_bytes()[0]);
         // line_range: 14
         buf.push(14);
         // opcode_base: 13
@@ -656,7 +638,7 @@ mod tests {
         let header_end = buf.len();
 
         // Fix header_length
-        let header_length = (header_end - header_start) as u32;
+        let header_length = u32::try_from(header_end - header_start).unwrap();
         buf[header_length_pos..header_length_pos + 4].copy_from_slice(&header_length.to_le_bytes());
 
         // Add a minimal line program (just DW_LNE_end_sequence)
@@ -666,7 +648,7 @@ mod tests {
         buf.push(0x01); // DW_LNE_end_sequence
 
         // Fix unit_length
-        let unit_length = (buf.len() - 4) as u32;
+        let unit_length = u32::try_from(buf.len() - 4).unwrap();
         buf[0..4].copy_from_slice(&unit_length.to_le_bytes());
 
         buf

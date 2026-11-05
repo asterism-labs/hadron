@@ -1,5 +1,5 @@
 {
-  description = "Hadron legacy kernel development shell";
+  description = "Hadron kernel development shell";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 
@@ -17,13 +17,12 @@
     {
       devShells = forAllSystems (pkgs: {
         default = pkgs.mkShell {
-          # rustup reads rust-toolchain.toml; gluon needs OpenSSL through git2.
+          # rustup reads rust-toolchain.toml.
           packages = with pkgs; [
             rustup
-            just
-            pkg-config
-            openssl
             qemu
+            prek
+            taplo
           ];
         };
       });

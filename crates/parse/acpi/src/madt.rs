@@ -68,7 +68,7 @@ impl Madt {
 
     /// Returns an iterator over the MADT interrupt controller entries.
     #[must_use]
-    pub fn entries(&self) -> MadtEntryIter {
+    pub fn entries(&self) -> MadtEntryIter<'_> {
         MadtEntry::iter(self.entries_data)
     }
 }

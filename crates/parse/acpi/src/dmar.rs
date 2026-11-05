@@ -9,7 +9,7 @@
 //!
 //! - Intel VT-d Specification, §8: DMA Remapping Reporting Structure
 //!   <https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html>
-//! - OSDev Wiki: Intel VT-d
+//! - `OSDev` Wiki: Intel VT-d
 //!   <https://wiki.osdev.org/Intel_VT-d>
 
 use hadron_binparse::FromBytes;
@@ -24,7 +24,7 @@ pub const DMAR_SIGNATURE: &[u8; 4] = b"DMAR";
 pub struct Dmar {
     /// Width of the host address (N means addresses are N+1 bits wide).
     pub host_address_width: u8,
-    /// DMAR flags (bit 0: INTR_REMAP, bit 1: X2APIC_OPT_OUT).
+    /// DMAR flags (bit 0: `INTR_REMAP`, bit 1: `X2APIC_OPT_OUT`).
     pub flags: u8,
     /// Byte slice covering the remapping structure entries.
     entries_data: &'static [u8],
@@ -62,7 +62,7 @@ impl Dmar {
 
     /// Returns an iterator over the DMAR remapping structure entries.
     #[must_use]
-    pub fn entries(&self) -> DmarEntryIter {
+    pub fn entries(&self) -> DmarEntryIter<'_> {
         DmarEntryIter {
             data: self.entries_data,
             offset: 0,
@@ -75,7 +75,7 @@ impl Dmar {
 pub enum DmarEntry<'a> {
     /// Type 0: DMA Remapping Hardware Unit Definition (DRHD).
     Drhd {
-        /// Flags (bit 0: INCLUDE_PCI_ALL).
+        /// Flags (bit 0: `INCLUDE_PCI_ALL`).
         flags: u8,
         /// PCI segment number.
         segment: u16,
@@ -97,7 +97,7 @@ pub enum DmarEntry<'a> {
     },
     /// Type 2: Root Port ATS Capability Reporting (ATSR).
     Atsr {
-        /// Flags (bit 0: ALL_PORTS).
+        /// Flags (bit 0: `ALL_PORTS`).
         flags: u8,
         /// PCI segment number.
         segment: u16,
@@ -238,21 +238,25 @@ impl Iterator for DeviceScopeIter<'_> {
         let path_bytes = length.saturating_sub(6);
         let path_count = (path_bytes / 2).min(4);
         let mut path = [(0u8, 0u8); 4];
-        for i in 0..path_count {
+        for (i, entry) in path.iter_mut().enumerate().take(path_count) {
             let off = self.offset + 6 + i * 2;
             let dev = u8::read_at(self.data, off).unwrap_or(0);
             let func = u8::read_at(self.data, off + 1).unwrap_or(0);
-            path[i] = (dev, func);
+            *entry = (dev, func);
         }
 
         self.offset += length;
+
+        // `path_count` is capped at 4 above.
+        #[allow(clippy::cast_possible_truncation)]
+        let path_len = path_count as u8;
 
         Some(DeviceScope {
             scope_type,
             enumeration_id,
             start_bus,
             path,
-            path_len: path_count as u8,
+            path_len,
         })
     }
 }

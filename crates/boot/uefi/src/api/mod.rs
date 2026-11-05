@@ -147,25 +147,33 @@ impl SystemTable<Boot> {
     }
 
     /// Returns the image handle.
+    #[must_use]
     pub fn image_handle(&self) -> EfiHandle {
         self.handle
     }
 
     /// Borrow the boot services table.
+    #[must_use]
     pub fn boot_services(&self) -> BootServices<'_> {
         let bs = unsafe { &*(*self.raw).boot_services };
         BootServices::new(bs, self.handle)
     }
 
     /// Get a console wrapper for standard output.
+    #[must_use]
     pub fn console_out(&self) -> Console<'_> {
-        let raw = unsafe { (*self.raw).console_out as *mut SimpleTextOutputProtocol };
+        let raw = unsafe { (*self.raw).console_out.cast::<SimpleTextOutputProtocol>() };
         Console::new(raw)
     }
 
     /// Get a console wrapper for standard error.
+    #[must_use]
     pub fn console_err(&self) -> Console<'_> {
-        let raw = unsafe { (*self.raw).standard_error as *mut SimpleTextOutputProtocol };
+        let raw = unsafe {
+            (*self.raw)
+                .standard_error
+                .cast::<SimpleTextOutputProtocol>()
+        };
         Console::new(raw)
     }
 
@@ -176,6 +184,14 @@ impl SystemTable<Boot> {
     ///
     /// The caller must provide a buffer for the memory map (8 KiB is a safe default).
     /// On success, returns the runtime system table and the final memory map.
+    ///
+    /// # Errors
+    ///
+    /// Returns the status from `GetMemoryMap` if it fails, for example
+    /// `EFI_BUFFER_TOO_SMALL` when `buf` cannot hold the map. Returns the status from
+    /// `ExitBootServices` if it fails. When it fails with `EFI_INVALID_PARAMETER`
+    /// (a stale map key), the map is fetched again and the exit retried once, and the
+    /// errors of that retry are returned instead.
     pub fn exit_boot_services(
         self,
         buf: &mut [u8],
@@ -190,11 +206,11 @@ impl SystemTable<Boot> {
 
         let status = unsafe {
             (bs.get_memory_map)(
-                &mut map_size,
+                &raw mut map_size,
                 buf.as_mut_ptr(),
-                &mut map_key,
-                &mut desc_size,
-                &mut desc_version,
+                &raw mut map_key,
+                &raw mut desc_size,
+                &raw mut desc_version,
             )
         };
         status.to_result()?;
@@ -217,11 +233,11 @@ impl SystemTable<Boot> {
             map_size = buf.len();
             let status = unsafe {
                 (bs.get_memory_map)(
-                    &mut map_size,
+                    &raw mut map_size,
                     buf.as_mut_ptr(),
-                    &mut map_key,
-                    &mut desc_size,
-                    &mut desc_version,
+                    &raw mut map_key,
+                    &raw mut desc_size,
+                    &raw mut desc_version,
                 )
             };
             status.to_result()?;
@@ -244,11 +260,13 @@ impl SystemTable<Boot> {
 
 impl SystemTable<Runtime> {
     /// Returns a reference to the runtime services table.
+    #[must_use]
     pub fn runtime_services(&self) -> &table::RuntimeServices {
         unsafe { &*(*self.raw).runtime_services }
     }
 
     /// Returns the UEFI configuration tables.
+    #[must_use]
     pub fn configuration_tables(&self) -> &[table::ConfigurationTable] {
         unsafe {
             let st = &*self.raw;

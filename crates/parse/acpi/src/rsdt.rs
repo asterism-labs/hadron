@@ -137,9 +137,8 @@ pub fn find_all_tables_in_rsdt<'a, H: AcpiHandler>(
     // Map the RSDT/XSDT header to learn the total table length.
     // SAFETY: caller provides a valid physical address.
     let header_data = unsafe { handler.map_physical_region(rsdt_addr, SdtHeader::SIZE) };
-    let total_len = SdtHeader::read_from_bytes(header_data)
-        .map(|h| h.length() as usize)
-        .unwrap_or(SdtHeader::SIZE);
+    let total_len =
+        SdtHeader::read_from_bytes(header_data).map_or(SdtHeader::SIZE, |h| h.length() as usize);
 
     let entries_data = if total_len > SdtHeader::SIZE {
         // SAFETY: caller provides a valid physical address, total_len from header.
