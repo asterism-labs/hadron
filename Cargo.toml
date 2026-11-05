@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = [ "crates/*/*" ]
+members = [ "crates/*/*", "kernel/*" ]
 
 [workspace.package]
 version = "0.1.0"
@@ -19,10 +19,10 @@ arch-x86_64 = { path = "crates/arch/x86_64" }
 dwarf = { path = "crates/parse/dwarf" }
 elf = { path = "crates/parse/elf" }
 fdt = { path = "crates/parse/fdt" }
-ktest = { path = "crates/kernel/ktest" }
+ktest = { path = "kernel/ktest" }
 limine = { path = "crates/boot/limine" }
 linkset = { path = "crates/core/linkset" }
-mm = { path = "crates/kernel/mm" }
+mm = { path = "kernel/mm" }
 uefi = { path = "crates/boot/uefi" }
 
 # External dependencies

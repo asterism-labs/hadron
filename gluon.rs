@@ -49,7 +49,7 @@ fn main() -> Result<()> {
         .target(x86_64)
         .config(true)
         .package("kernel")
-        .linker_script("crates/kernel/kernel/kernel.ld")
+        .linker_script("kernel/kernel/kernel.ld")
         .rustc_flag("-Crelocation-model=static");
 
     // Gluon builds a package for one target only, so the libraries do not

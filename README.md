@@ -10,19 +10,23 @@ one CPU, and exits.
 
 ## Layout
 
+`crates/` holds libraries that do not depend on Hadron. Another kernel
+could use them unchanged. `kernel/` holds the kernel and the crates
+written for it.
+
 | Path | Contents |
 |------|----------|
 | `crates/arch/x86_64` | x86_64 addresses, page tables, descriptor tables and the TSS |
 | `crates/boot/uefi` | UEFI type bindings and protocol definitions |
 | `crates/boot/limine` | Limine boot protocol bindings |
 | `crates/core/linkset` | Access to data collected in linker sections |
-| `crates/kernel/kernel` | The kernel |
-| `crates/kernel/ktest` | Kernel test registration |
-| `crates/kernel/mm` | Memory map, frame allocators, page table mapper and heap |
 | `crates/parse/acpi` | ACPI table parser and static AML namespace walker |
 | `crates/parse/dwarf` | DWARF line-program parser |
 | `crates/parse/elf` | ELF64 parser and x86_64 relocations |
 | `crates/parse/fdt` | Flattened device tree parser |
+| `kernel/kernel` | The kernel |
+| `kernel/ktest` | Kernel test registration |
+| `kernel/mm` | Memory map, frame allocators, page table mapper and heap |
 
 ## Development
 
