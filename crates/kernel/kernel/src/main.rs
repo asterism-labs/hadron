@@ -1,8 +1,9 @@
 //! The Hadron kernel.
 //!
-//! It boots through Limine, sets up COM1 as the console, the GDT and the
-//! IDT, switches to its own page tables, builds the physical memory map and
-//! frame allocator, maps the heap, and exits QEMU through the `isa-debug-exit` device.
+//! It boots through Limine, sets up the boot CPU's per-CPU block, COM1 as
+//! the console, the GDT and the IDT, switches to its own page tables,
+//! builds the physical memory map and frame allocator, maps the heap, and
+//! exits QEMU through the `isa-debug-exit` device.
 //!
 //! Built with Gluon's `test` profile, it runs the kernel tests after boot
 //! instead. See `ktest.rs`.
@@ -32,6 +33,8 @@ mod ktest;
 mod memory;
 #[cfg(all(target_os = "none", target_arch = "x86_64"))]
 mod panic;
+#[cfg(all(target_os = "none", target_arch = "x86_64"))]
+mod percpu;
 #[cfg(all(target_os = "none", target_arch = "x86_64"))]
 mod sync;
 

@@ -5,7 +5,7 @@ use core::mem::MaybeUninit;
 use core::ops::{Deref, DerefMut};
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
-use crate::arch::x86_64::cpu;
+use crate::percpu::IrqGuard;
 
 /// No value yet.
 const EMPTY: u8 = 0;
@@ -69,8 +69,9 @@ impl<T> WriteOnce<T> {
 /// A spin lock that masks interrupts on this CPU while it is held.
 ///
 /// Masking interrupts keeps an interrupt handler from spinning on a lock
-/// the code it interrupted already holds. It is the heap's lock until the
-/// kernel's locking model exists, and is not meant for general use.
+/// the code it interrupted already holds. It guards the heap, the frame
+/// allocator and the kernel page tables until the kernel's locking model
+/// exists, and is not meant for general use.
 pub(crate) struct IrqSpinLock<T> {
     locked: AtomicBool,
     value: UnsafeCell<T>,
@@ -91,7 +92,7 @@ impl<T> IrqSpinLock<T> {
 
     /// Masks interrupts, then spins until the lock is free.
     pub(crate) fn lock(&self) -> IrqSpinLockGuard<'_, T> {
-        let interrupts = cpu::save_and_disable_interrupts();
+        let irq = IrqGuard::new();
         while self
             .locked
             .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
@@ -101,16 +102,17 @@ impl<T> IrqSpinLock<T> {
         }
         IrqSpinLockGuard {
             lock: self,
-            interrupts,
+            _irq: irq,
         }
     }
 }
 
 /// Access to the value of a held [`IrqSpinLock`]. Dropping it releases the
-/// lock and restores the interrupt flag.
+/// lock, then drops its [`IrqGuard`].
 pub(crate) struct IrqSpinLockGuard<'a, T> {
     lock: &'a IrqSpinLock<T>,
-    interrupts: bool,
+    /// Dropped after `drop` releases the lock.
+    _irq: IrqGuard,
 }
 
 impl<T> Deref for IrqSpinLockGuard<'_, T> {
@@ -132,7 +134,6 @@ impl<T> DerefMut for IrqSpinLockGuard<'_, T> {
 impl<T> Drop for IrqSpinLockGuard<'_, T> {
     fn drop(&mut self) {
         self.lock.locked.store(false, Ordering::Release);
-        cpu::restore_interrupts(self.interrupts);
     }
 }
 

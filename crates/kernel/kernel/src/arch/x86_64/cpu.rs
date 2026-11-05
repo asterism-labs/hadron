@@ -5,8 +5,10 @@ use core::arch::asm;
 /// Masks maskable interrupts on this CPU.
 pub(crate) fn disable_interrupts() {
     // SAFETY: `cli` only clears the interrupt flag. Code that later relies on
-    // interrupts would hang, so only the panic path and boot call this.
-    unsafe { asm!("cli", options(nomem, nostack)) };
+    // interrupts would hang, so only the panic path and boot call this. The
+    // block may touch memory, so the compiler keeps memory accesses on their
+    // side of it.
+    unsafe { asm!("cli", options(nostack)) };
 }
 
 /// Stops this CPU for good. Interrupts are masked first, so `hlt` does not
@@ -113,11 +115,15 @@ pub(crate) unsafe fn switch_stack(top: u64, entry: extern "C" fn(u64) -> !, arg:
 const RFLAGS_IF: u64 = 1 << 9;
 
 /// Masks interrupts and returns whether they were enabled before.
+///
+/// Neither this nor [`restore_interrupts`] is marked `nomem`, so the
+/// compiler does not move memory accesses across them. Code between the two
+/// runs with interrupts masked.
 pub(crate) fn save_and_disable_interrupts() -> bool {
     let rflags: u64;
     // SAFETY: `pushfq; pop` reads RFLAGS through the stack, and `cli` only
     // clears IF. The caller restores IF with `restore_interrupts`.
-    unsafe { asm!("pushfq", "pop {}", "cli", out(reg) rflags, options(nomem, preserves_flags)) };
+    unsafe { asm!("pushfq", "pop {}", "cli", out(reg) rflags, options(preserves_flags)) };
     rflags & RFLAGS_IF != 0
 }
 
@@ -126,6 +132,69 @@ pub(crate) fn save_and_disable_interrupts() -> bool {
 pub(crate) fn restore_interrupts(enabled: bool) {
     if enabled {
         // SAFETY: the caller had interrupts enabled before masking them.
-        unsafe { asm!("sti", options(nomem, nostack)) };
+        unsafe { asm!("sti", options(nostack)) };
     }
+}
+
+/// `IA32_GS_BASE`, the GS segment base (Vol. 4, Table 2-2).
+const IA32_GS_BASE: u32 = 0xc000_0101;
+
+/// Sets the GS base to `base`.
+///
+/// Loading a selector into GS resets the base, so nothing in the kernel
+/// does.
+///
+/// # Safety
+///
+/// Code that reads through GS, such as [`read_gs`], must find what it
+/// expects at `base`.
+pub(crate) unsafe fn set_gs_base(base: u64) {
+    #[allow(clippy::cast_possible_truncation)] // `wrmsr` takes the halves
+    let (low, high) = (base as u32, (base >> 32) as u32);
+    // SAFETY: `IA32_GS_BASE` exists on every 64-bit CPU, and the caller
+    // vouches for the value.
+    unsafe {
+        asm!(
+            "wrmsr",
+            in("ecx") IA32_GS_BASE,
+            in("eax") low,
+            in("edx") high,
+            options(nostack, preserves_flags),
+        );
+    }
+}
+
+/// The GS base.
+pub(crate) fn gs_base() -> u64 {
+    let (low, high): (u32, u32);
+    // SAFETY: reading `IA32_GS_BASE` has no side effects.
+    unsafe {
+        asm!(
+            "rdmsr",
+            in("ecx") IA32_GS_BASE,
+            out("eax") low,
+            out("edx") high,
+            options(nomem, nostack, preserves_flags),
+        );
+    }
+    u64::from(high) << 32 | u64::from(low)
+}
+
+/// Reads the `u64` at offset 0 from the GS base.
+///
+/// # Safety
+///
+/// The GS base must point at a readable, initialized `u64`.
+pub(crate) unsafe fn read_gs() -> u64 {
+    let value: u64;
+    // SAFETY: the caller vouches for the GS base. The block is not `pure`,
+    // so the compiler reads GS every time instead of reusing an old value.
+    unsafe {
+        asm!(
+            "mov {}, gs:[0]",
+            out(reg) value,
+            options(nostack, preserves_flags, readonly),
+        );
+    }
+    value
 }

@@ -5,7 +5,8 @@ use limine::{BaseRevision, BootloaderInfoRequest, RequestsEndMarker, RequestsSta
 use crate::arch::x86_64::qemu::{self, ExitCode};
 use crate::arch::x86_64::{gdt, idt};
 use crate::console::{self, kprintln};
-use crate::memory::{self, Memory};
+use crate::memory;
+use crate::percpu;
 
 #[used]
 #[unsafe(link_section = ".limine_requests_start")]
@@ -26,6 +27,8 @@ static REQUESTS_END: RequestsEndMarker = RequestsEndMarker::new();
 /// Entry point. Limine jumps here, as named by `ENTRY` in `kernel.ld`.
 #[unsafe(no_mangle)]
 extern "C" fn kmain() -> ! {
+    // Locks mask interrupts through the per-CPU block, so it comes first.
+    percpu::init_boot_cpu();
     // With no console there is nowhere to report the error, so boot goes on.
     let _ = console::init();
     gdt::init();
@@ -51,17 +54,18 @@ extern "C" fn kmain() -> ! {
 }
 
 /// Runs on the kernel's own page tables and boot stack, after
-/// [`memory::init`]. It owns physical memory from here on.
-#[allow(clippy::needless_pass_by_value)] // takes ownership on purpose
-fn kmain_paged(mut memory: Memory) -> ! {
+/// [`memory::init`].
+fn kmain_paged() -> ! {
     const MIB: u64 = 1 << 20;
-    crate::heap::init(&mut memory);
-    let usable = memory.map.total(mm::RegionKind::Usable);
+    crate::heap::init();
+    let usable = memory::map().total(mm::RegionKind::Usable);
+    let (free, count) = {
+        let frames = memory::frames();
+        (frames.free_frames(), frames.frame_count())
+    };
     kprintln!(
-        "hadron: {} MiB usable, {} of {} frames free",
-        usable / MIB,
-        memory.frames.free_frames(),
-        memory.frames.frame_count()
+        "hadron: {} MiB usable, {free} of {count} frames free",
+        usable / MIB
     );
     kprintln!("hadron: {} KiB heap", crate::heap::free_bytes() / 1024);
     if hadron_config::KTEST {

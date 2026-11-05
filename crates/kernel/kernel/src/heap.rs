@@ -11,7 +11,7 @@ use core::ptr::{self, NonNull};
 use arch_x86_64::paging::{PAGE_SIZE, PageSize, PageTableFlags};
 use mm::Heap;
 
-use crate::memory::{HEAP, HEAP_SIZE, Memory};
+use crate::memory::{self, HEAP, HEAP_SIZE};
 use crate::sync::IrqSpinLock;
 
 /// The global allocator's state.
@@ -48,22 +48,27 @@ unsafe impl GlobalAlloc for KernelHeap {
 /// # Panics
 ///
 /// Panics if called twice or if there are not enough frames.
-pub(crate) fn init(memory: &mut Memory) {
-    let mut page = HEAP;
-    while page < HEAP + HEAP_SIZE {
-        let frame = memory.frames.allocate().expect("frames for the heap");
-        memory
-            .kernel
-            .map(
-                page,
-                frame.start(),
-                PageSize::Size4K,
-                PageTableFlags::WRITABLE | PageTableFlags::NO_EXECUTE,
-                &mut memory.frames,
-            )
-            .expect("the heap region is unmapped");
-        page = page + PAGE_SIZE;
+pub(crate) fn init() {
+    {
+        let mut tables = memory::kernel_tables();
+        let mut frames = memory::frames();
+        let mut page = HEAP;
+        while page < HEAP + HEAP_SIZE {
+            let frame = frames.allocate().expect("frames for the heap");
+            tables
+                .map(
+                    page,
+                    frame.start(),
+                    PageSize::Size4K,
+                    PageTableFlags::WRITABLE | PageTableFlags::NO_EXECUTE,
+                    &mut *frames,
+                )
+                .expect("the heap region is unmapped");
+            page = page + PAGE_SIZE;
+        }
     }
+    // The page table and frame locks are released: the heap's lock comes
+    // first in the order.
     let mut heap = KERNEL_HEAP.0.lock();
     assert!(heap.is_none(), "heap::init called twice");
     #[allow(clippy::cast_possible_truncation)] // fits on a 64-bit target

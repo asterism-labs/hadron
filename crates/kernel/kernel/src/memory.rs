@@ -23,6 +23,18 @@
 //! Everything built in stage 1 is kept as physical addresses, so it stays
 //! valid after the direct map moves. The Limine alias stays mapped until
 //! the kernel reclaims bootloader memory, which it does not do yet.
+//!
+//! After [`init`], three statics hold the results, since interrupt
+//! handlers and the global allocator need them and have no caller to pass
+//! them in:
+//!
+//! - [`map`]: the memory map, written once and read without a lock;
+//! - [`frames`]: the frame allocator, behind an [`IrqSpinLock`];
+//! - [`kernel_tables`]: the kernel's page tables, behind an [`IrqSpinLock`].
+//!
+//! Until the kernel has lock levels, the order is by convention: take
+//! [`kernel_tables`] before [`frames`], and never take the heap's lock
+//! while holding either.
 
 use core::mem::size_of;
 
@@ -37,6 +49,7 @@ use mm::{
 };
 
 use crate::arch::x86_64::cpu;
+use crate::sync::{IrqSpinLock, IrqSpinLockGuard, WriteOnce};
 
 #[used]
 #[unsafe(link_section = ".limine_requests")]
@@ -90,32 +103,55 @@ const BOOT_STACK_TOP: VirtAddr = VirtAddr::new(BOOT_STACK_BOTTOM.as_u64() + BOOT
 const _: () = assert!(DIRECT_MAP.offset() + DIRECT_MAP_SIZE <= HEAP.as_u64());
 const _: () = assert!(HEAP.as_u64() + HEAP_SIZE <= STACKS.as_u64());
 
-/// Physical memory, owned by the boot CPU until the locking model exists.
-pub(crate) struct Memory {
-    /// What each range of physical memory holds.
-    pub(crate) map: MemoryMap<'static>,
-    /// Free and used frames.
-    pub(crate) frames: BitmapFrameAllocator<'static>,
-    /// The kernel's page tables, the ones in CR3.
-    pub(crate) kernel: Mapper,
+static MAP: WriteOnce<MemoryMap<'static>> = WriteOnce::new();
+static FRAMES: WriteOnce<IrqSpinLock<BitmapFrameAllocator<'static>>> = WriteOnce::new();
+static KERNEL_TABLES: WriteOnce<IrqSpinLock<Mapper>> = WriteOnce::new();
+
+const INIT_RAN: &str = "memory::init ran";
+
+/// What each range of physical memory holds.
+///
+/// # Panics
+///
+/// Panics before [`init`].
+pub(crate) fn map() -> &'static MemoryMap<'static> {
+    MAP.get().expect(INIT_RAN)
+}
+
+/// Locks the frame allocator. Take [`kernel_tables`] first when holding
+/// both.
+///
+/// # Panics
+///
+/// Panics before [`init`].
+pub(crate) fn frames() -> IrqSpinLockGuard<'static, BitmapFrameAllocator<'static>> {
+    FRAMES.get().expect(INIT_RAN).lock()
+}
+
+/// Locks the kernel's page tables, the ones in CR3.
+///
+/// # Panics
+///
+/// Panics before [`init`].
+pub(crate) fn kernel_tables() -> IrqSpinLockGuard<'static, Mapper> {
+    KERNEL_TABLES.get().expect(INIT_RAN).lock()
 }
 
 /// What stage 1 passes to stage 2 across the stack switch.
 struct Handoff {
     bump: BumpAllocator,
     root: PhysFrame,
-    next: fn(Memory) -> !,
+    next: fn() -> !,
 }
 
 /// Switches to the kernel's page tables and boot stack, builds the memory
-/// map and frame allocator, and calls `next` with them. Limine's stack is
-/// abandoned.
+/// map and frame allocator, and calls `next`. Limine's stack is abandoned.
 ///
 /// # Panics
 ///
-/// Panics if Limine did not answer the memory requests or the memory map
-/// is unusable.
-pub(crate) fn init(next: fn(Memory) -> !) -> ! {
+/// Panics if called twice, if Limine did not answer the memory requests,
+/// or if the memory map is unusable.
+pub(crate) fn init(next: fn() -> !) -> ! {
     let hhdm = HHDM.response().expect("Limine answers the HHDM request");
     let limine = DirectMap::new(hhdm.hhdm_base);
     let memmap = MEMMAP
@@ -196,11 +232,10 @@ extern "C" fn stage2(handoff: u64) -> ! {
     let (used_start, used_end) = bump.used();
     frames.mark_used(used_start, used_end);
 
-    next(Memory {
-        map,
-        frames,
-        kernel,
-    })
+    MAP.init(map);
+    FRAMES.init(IrqSpinLock::new(frames));
+    KERNEL_TABLES.init(IrqSpinLock::new(kernel));
+    next()
 }
 
 const BOOT_MEMORY: &str = "the largest usable region holds the boot page tables";
