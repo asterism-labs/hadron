@@ -3,27 +3,21 @@
 version = 4
 
 [[package]]
-name = "bitflags"
-version = "2.13.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
-
-[[package]]
-name = "hadron-acpi"
+name = "acpi"
 version = "0.1.0"
 dependencies = [
- "hadron-binparse",
+ "binparse",
 ]
 
 [[package]]
-name = "hadron-binparse"
+name = "binparse"
 version = "0.1.0"
 dependencies = [
- "hadron-binparse-macros",
+ "binparse-macros",
 ]
 
 [[package]]
-name = "hadron-binparse-macros"
+name = "binparse-macros"
 version = "0.1.0"
 dependencies = [
  "proc-macro2",
@@ -32,23 +26,25 @@ dependencies = [
 ]
 
 [[package]]
-name = "hadron-dwarf"
+name = "bitflags"
+version = "2.13.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
+
+[[package]]
+name = "dwarf"
 version = "0.1.0"
 
 [[package]]
-name = "hadron-elf"
+name = "elf"
 version = "0.1.0"
 
 [[package]]
-name = "hadron-fdt"
+name = "fdt"
 version = "0.1.0"
 dependencies = [
- "hadron-binparse",
+ "binparse",
 ]
-
-[[package]]
-name = "hadron-linkset"
-version = "0.1.0"
 
 [[package]]
 name = "limine"
@@ -56,6 +52,10 @@ version = "0.1.0"
 dependencies = [
  "bitflags",
 ]
+
+[[package]]
+name = "linkset"
+version = "0.1.0"
 
 [[package]]
 name = "proc-macro2"

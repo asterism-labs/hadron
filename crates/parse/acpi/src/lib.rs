@@ -1,4 +1,4 @@
-//! `hadron-acpi` --- a standalone, `no_std` ACPI table parser.
+//! `acpi` --- a standalone, `no_std` ACPI table parser.
 //!
 //! This crate provides types and functions for parsing the core ACPI tables
 //! that a kernel needs during early boot: RSDP, RSDT/XSDT, MADT, HPET,

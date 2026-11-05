@@ -9,7 +9,7 @@
 //! - AMD I/O Virtualization Technology (IOMMU) Specification, §5.2: IVRS Table
 //!   <https://www.amd.com/content/dam/amd/en/documents/processor-tech-docs/specifications/48882_IOMMU.pdf>
 
-use hadron_binparse::FromBytes;
+use binparse::FromBytes;
 
 use crate::sdt::SdtHeader;
 use crate::{AcpiError, AcpiHandler};

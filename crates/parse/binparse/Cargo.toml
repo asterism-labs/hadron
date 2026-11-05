@@ -1,5 +1,5 @@
 [package]
-name = "hadron-binparse"
+name = "binparse"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,10 +7,10 @@ authors.workspace = true
 repository.workspace = true
 license.workspace = true
 readme.workspace = true
-publish = true
+publish.workspace = true
 
 [dependencies]
-hadron-binparse-macros = { path = "../binparse-macros" }
+binparse-macros = { path = "../binparse-macros" }
 
 [lints]
 workspace = true

@@ -1,4 +1,4 @@
-# hadron-acpi
+# acpi
 
 A standalone, `no_std` ACPI table parser for the Hadron kernel. This crate provides types and iterators for parsing the core ACPI tables needed during early boot --- RSDP, RSDT/XSDT, MADT, FADT, HPET, MCFG, SRAT, SLIT, DMAR, IVRS, and BGRT --- as well as an AML bytecode walker for extracting the ACPI namespace from DSDT/SSDT tables. All table iteration is done through safe byte-slice iterators backed by an `AcpiHandler` trait that maps physical memory on demand. The crate does not depend on `alloc` by default; enable the `alloc` feature to use the `NamespaceBuilder` which collects namespace nodes into a `Vec`.
 

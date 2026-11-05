@@ -1,6 +1,6 @@
-# hadron-binparse
+# binparse
 
-Safe binary data parsing primitives for `no_std` environments. Provides the `FromBytes` trait for reading `#[repr(C)]` structs from raw byte buffers, a `BinaryReader` cursor for sequential reads, and a `FixedEntryIter` for iterating over uniform-sized entries. Re-exports `#[derive(FromBytes)]` and `#[derive(TableEntries)]` from `hadron-binparse-macros`.
+Safe binary data parsing primitives for `no_std` environments. Provides the `FromBytes` trait for reading `#[repr(C)]` structs from raw byte buffers, a `BinaryReader` cursor for sequential reads, and a `FixedEntryIter` for iterating over uniform-sized entries. Re-exports `#[derive(FromBytes)]` and `#[derive(TableEntries)]` from `binparse-macros`.
 
 ## Features
 

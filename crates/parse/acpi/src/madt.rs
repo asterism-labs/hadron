@@ -9,7 +9,7 @@
 //! - ACPI Specification 6.5, §5.2.12: Multiple APIC Description Table (MADT)
 //!   <https://uefi.org/specs/ACPI/6.5/>
 
-use hadron_binparse::{FromBytes, TableEntries};
+use binparse::{FromBytes, TableEntries};
 
 use crate::sdt::SdtHeader;
 use crate::{AcpiError, AcpiHandler};

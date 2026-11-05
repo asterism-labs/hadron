@@ -10,7 +10,7 @@
 //! - `OSDev` Wiki: PCI Express
 //!   <https://wiki.osdev.org/PCI_Express>
 
-use hadron_binparse::{FixedEntryIter, FromBytes};
+use binparse::{FixedEntryIter, FromBytes};
 
 use crate::sdt::SdtHeader;
 use crate::{AcpiError, AcpiHandler};

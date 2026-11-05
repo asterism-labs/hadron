@@ -1,6 +1,6 @@
 //! FDT header types and big-endian primitives.
 
-use hadron_binparse::FromBytes;
+use binparse::FromBytes;
 
 /// FDT magic number: `0xd00dfeed` in big-endian.
 pub const FDT_MAGIC: u32 = 0xd00d_feed;

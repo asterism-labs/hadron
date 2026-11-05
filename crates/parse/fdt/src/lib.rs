@@ -1,4 +1,4 @@
-//! `hadron-fdt` --- a standalone, `no_std` Flattened Device Tree (DTB) parser.
+//! `fdt` --- a standalone, `no_std` Flattened Device Tree (DTB) parser.
 //!
 //! This crate parses DTB blobs as defined by the Devicetree Specification.
 //! It provides zero-copy access to nodes, properties, and memory reservations
@@ -29,7 +29,7 @@ pub use node::FdtNode;
 pub use property::{FdtProperty, PropertyIter, StrListIter};
 pub use reservation::{MemReservation, MemReservationIter};
 
-use hadron_binparse::FromBytes;
+use binparse::FromBytes;
 use header::{FDT_MAGIC, FDT_MIN_COMPAT_VERSION, RawFdtHeader};
 
 /// Errors that can occur during FDT parsing.

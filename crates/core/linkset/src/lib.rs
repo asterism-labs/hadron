@@ -20,7 +20,7 @@
 /// # Examples
 ///
 /// ```ignore
-/// hadron_linkset::declare_linkset! {
+/// linkset::declare_linkset! {
 ///     /// Returns all PCI driver entries.
 ///     pub fn pci_driver_entries() -> [PciDriverEntry],
 ///     section = "hadron_pci_drivers"
@@ -64,7 +64,7 @@ macro_rules! declare_linkset {
 /// # Examples
 ///
 /// ```ignore
-/// hadron_linkset::linkset_entry!("hadron_pci_drivers",
+/// linkset::linkset_entry!("hadron_pci_drivers",
 ///     AHCI_ENTRY: PciDriverEntry = PciDriverEntry { ... }
 /// );
 /// ```
@@ -85,7 +85,7 @@ macro_rules! linkset_entry {
 /// # Examples
 ///
 /// ```ignore
-/// hadron_linkset::declare_linkset_blob! {
+/// linkset::declare_linkset_blob! {
 ///     /// Returns the embedded HKIF data.
 ///     pub fn hkif_data() -> &[u8],
 ///     section = "hadron_hkif"

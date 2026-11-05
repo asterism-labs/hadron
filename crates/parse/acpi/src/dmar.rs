@@ -12,7 +12,7 @@
 //! - `OSDev` Wiki: Intel VT-d
 //!   <https://wiki.osdev.org/Intel_VT-d>
 
-use hadron_binparse::FromBytes;
+use binparse::FromBytes;
 
 use crate::sdt::SdtHeader;
 use crate::{AcpiError, AcpiHandler};

@@ -9,7 +9,7 @@
 //! - ACPI Specification 6.5, §5.2.5: Root System Description Pointer (RSDP)
 //!   <https://uefi.org/specs/ACPI/6.5/>
 
-use hadron_binparse::FromBytes;
+use binparse::FromBytes;
 
 use crate::{AcpiError, AcpiHandler};
 

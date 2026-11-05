@@ -6,7 +6,7 @@
 //! # Usage
 //!
 //! ```
-//! use hadron_elf::ElfFile;
+//! use elf::ElfFile;
 //!
 //! fn load_elf(data: &[u8]) {
 //!     let elf = ElfFile::parse(data).expect("valid ELF");

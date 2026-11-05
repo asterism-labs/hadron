@@ -1,8 +1,8 @@
 [package]
-name = "hadron-binparse-macros"
+name = "binparse-macros"
 version = "0.1.0"
 edition = "2024"
-publish = true
+publish.workspace = true
 
 [lib]
 proc-macro = true

@@ -1,7 +1,7 @@
 //! Memory reservation block parsing.
 
 use crate::header::Be64;
-use hadron_binparse::FromBytes;
+use binparse::FromBytes;
 
 /// A single memory reservation entry from the FDT reservation block.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

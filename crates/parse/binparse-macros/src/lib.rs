@@ -1,6 +1,6 @@
 //! Proc-macro crate for `#[derive(FromBytes)]` and `#[derive(TableEntries)]`.
 //!
-//! - `FromBytes` generates `unsafe impl hadron_binparse::FromBytes for T {}`
+//! - `FromBytes` generates `unsafe impl binparse::FromBytes for T {}`
 //!   with compile-time assertions verifying `#[repr(C)]` layout and that all
 //!   field types implement `FromBytes`.
 //! - `TableEntries` generates an iterator over variable-length TLV entries in
@@ -12,7 +12,7 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{Data, DeriveInput, Fields, parse_macro_input};
 
-/// Derives `hadron_binparse::FromBytes` for a `#[repr(C)]` struct.
+/// Derives `binparse::FromBytes` for a `#[repr(C)]` struct.
 ///
 /// # Requirements
 ///
@@ -125,7 +125,7 @@ fn derive_impl(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
                 quote! {
                     #[doc(hidden)]
                     #[allow(non_camel_case_types, dead_code)]
-                    struct #assert_name where #ty: hadron_binparse::FromBytes;
+                    struct #assert_name where #ty: binparse::FromBytes;
                 }
             })
             .collect::<Vec<_>>(),
@@ -139,7 +139,7 @@ fn derive_impl(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
                 quote! {
                     #[doc(hidden)]
                     #[allow(non_camel_case_types, dead_code)]
-                    struct #assert_name where #ty: hadron_binparse::FromBytes;
+                    struct #assert_name where #ty: binparse::FromBytes;
                 }
             })
             .collect::<Vec<_>>(),
@@ -155,6 +155,6 @@ fn derive_impl(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
         // 1. The struct has #[repr(C)] layout.
         // 2. All field types implement FromBytes (checked via where-clause assertions).
         // 3. The struct must also be Copy (enforced by the trait bound).
-        unsafe impl #impl_generics hadron_binparse::FromBytes for #name #ty_generics #where_clause {}
+        unsafe impl #impl_generics binparse::FromBytes for #name #ty_generics #where_clause {}
     })
 }

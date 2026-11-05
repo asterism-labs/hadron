@@ -1,4 +1,4 @@
-# hadron-elf
+# elf
 
 A minimal, zero-allocation ELF64 parser for the Hadron kernel. Parses ELF64 headers, `PT_LOAD` segments, section headers, symbol tables, string tables, and `SHT_RELA` relocation entries from raw byte slices. Supports `ET_EXEC`, `ET_DYN`, and `ET_REL` file types targeting x86-64. Contains no unsafe code.
 

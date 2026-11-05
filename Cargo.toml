@@ -14,14 +14,14 @@ publish = false
 
 [workspace.dependencies]
 # Internal crates
-hadron-acpi = { path = "crates/parse/acpi" }
-hadron-binparse = { path = "crates/parse/binparse" }
-hadron-binparse-macros = { path = "crates/parse/binparse-macros" }
-hadron-dwarf = { path = "crates/parse/dwarf" }
-hadron-elf = { path = "crates/parse/elf" }
-hadron-fdt = { path = "crates/parse/fdt" }
-hadron-linkset = { path = "crates/core/linkset" }
+acpi = { path = "crates/parse/acpi" }
+binparse = { path = "crates/parse/binparse" }
+binparse-macros = { path = "crates/parse/binparse-macros" }
+dwarf = { path = "crates/parse/dwarf" }
+elf = { path = "crates/parse/elf" }
+fdt = { path = "crates/parse/fdt" }
 limine = { path = "crates/boot/limine" }
+linkset = { path = "crates/core/linkset" }
 uefi = { path = "crates/boot/uefi" }
 
 # External dependencies

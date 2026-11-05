@@ -11,7 +11,7 @@
 //! - IA-PC HPET Specification 1.0a
 //!   <https://www.intel.com/content/dam/www/public/us/en/documents/technical-specifications/software-developers-hpet-spec-1-0a.pdf>
 
-use hadron_binparse::FromBytes;
+use binparse::FromBytes;
 
 use crate::sdt::SdtHeader;
 use crate::{AcpiError, AcpiHandler};

@@ -1,4 +1,4 @@
-# hadron-dwarf
+# dwarf
 
 A minimal, zero-allocation DWARF `.debug_line` parser for the Hadron kernel. Provides zero-copy parsing of DWARF v4 and v5 line number programs, yielding address-to-source-line mappings for use in kernel stack trace symbolication. Contains no unsafe code.
 

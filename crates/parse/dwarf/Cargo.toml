@@ -1,5 +1,5 @@
 [package]
-name = "hadron-dwarf"
+name = "dwarf"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,7 +7,7 @@ authors.workspace = true
 repository.workspace = true
 license.workspace = true
 readme.workspace = true
-publish = true
+publish.workspace = true
 description = "Minimal DWARF .debug_line parser for Hadron OS"
 
 [dependencies]

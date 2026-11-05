@@ -8,7 +8,7 @@
 //! - ACPI Specification 6.5, §5.2.22: Boot Graphics Resource Table (BGRT)
 //!   <https://uefi.org/specs/ACPI/6.5/>
 
-use hadron_binparse::FromBytes;
+use binparse::FromBytes;
 
 use crate::sdt::SdtHeader;
 use crate::{AcpiError, AcpiHandler};

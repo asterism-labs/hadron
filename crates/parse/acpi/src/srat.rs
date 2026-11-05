@@ -8,7 +8,7 @@
 //! - ACPI Specification 6.5, §5.2.16: System Resource Affinity Table (SRAT)
 //!   <https://uefi.org/specs/ACPI/6.5/>
 
-use hadron_binparse::TableEntries;
+use binparse::TableEntries;
 
 use crate::sdt::SdtHeader;
 use crate::{AcpiError, AcpiHandler};

@@ -10,7 +10,7 @@
 //! - ACPI Specification 6.5, Ch. 20: ACPI Machine Language (AML) Specification
 //!   <https://uefi.org/specs/ACPI/6.5/>
 
-use hadron_binparse::BinaryReader;
+use binparse::BinaryReader;
 
 use super::path::{AmlPath, NameSeg};
 use super::value::{AmlError, AmlValue, EisaId, InlineString};

@@ -10,7 +10,7 @@
 //! - ACPI Specification 6.5, §5.2.9: Fixed ACPI Description Table (FADT)
 //!   <https://uefi.org/specs/ACPI/6.5/>
 
-use hadron_binparse::FromBytes;
+use binparse::FromBytes;
 
 use crate::{AcpiError, AcpiHandler};
 

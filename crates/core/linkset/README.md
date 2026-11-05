@@ -1,4 +1,4 @@
-# hadron-linkset
+# linkset
 
 Safe, declarative macros for reading typed data from linker sections. This
 `no_std` crate encapsulates the unsafe patterns needed to access

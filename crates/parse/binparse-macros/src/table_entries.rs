@@ -157,7 +157,7 @@ fn entry_match_arm(enum_name: &Ident, v: &ParsedVariant) -> TokenStream {
         let field_ty = &f.ty;
         let offset = f.offset;
         quote! {
-            #field_ident: <#field_ty as hadron_binparse::FromBytes>::read_at(
+            #field_ident: <#field_ty as binparse::FromBytes>::read_at(
                 entry_data, #offset
             ).unwrap_or_default()
         }

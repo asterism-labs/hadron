@@ -6,7 +6,7 @@
 //! # Usage
 //!
 //! ```
-//! use hadron_dwarf::DebugLine;
+//! use dwarf::DebugLine;
 //!
 //! fn parse_lines(debug_line_data: &[u8]) {
 //!     for unit in DebugLine::new(debug_line_data) {

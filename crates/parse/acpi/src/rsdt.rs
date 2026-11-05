@@ -12,7 +12,7 @@
 //! - ACPI Specification 6.5, §5.2.8: Extended System Description Table (XSDT)
 //!   <https://uefi.org/specs/ACPI/6.5/>
 
-use hadron_binparse::FromBytes;
+use binparse::FromBytes;
 
 use crate::AcpiHandler;
 use crate::sdt::SdtHeader;
