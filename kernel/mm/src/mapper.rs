@@ -11,7 +11,7 @@
 
 use core::ops::Range;
 
-use arch_x86_64::paging::{Level, PageSize, PageTable, PageTableEntry, PageTableFlags};
+use arch_x86_64::paging::{Level, PageSize, PageTableEntry, PageTableFlags};
 use arch_x86_64::{PhysAddr, VirtAddr};
 
 use crate::direct_map::DirectMap;
@@ -379,9 +379,12 @@ impl Mapper {
         frames: &mut impl FrameAllocator,
     ) -> Result<PhysFrame, MapError> {
         let frame = frames.allocate_frame().ok_or(MapError::OutOfFrames)?;
+        // Zero in place: writing `PageTable::new()` builds the 4 KiB table
+        // on the stack first in unoptimized builds, which overflows a
+        // kernel thread's stack. All zero bits is `PageTable::new()`.
         // SAFETY: the allocator hands out unused frames, and the caller of
         // `new` or `empty` guarantees they are reachable through `direct`.
-        unsafe { direct.table(frame.start()).write(PageTable::new()) };
+        unsafe { core::ptr::write_bytes(direct.table(frame.start()), 0, 1) };
         Ok(frame)
     }
 
@@ -400,6 +403,13 @@ impl Mapper {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_table_is_all_zero_bits() {
+        // `new_table` zeroes frames in place on this assumption.
+        let table = arch_x86_64::paging::PageTable::new();
+        assert!(table.entries.iter().all(|entry| entry.bits() == 0));
+    }
     use crate::testing::FakeMemory;
 
     const RW_NX: PageTableFlags = PageTableFlags::WRITABLE.union(PageTableFlags::NO_EXECUTE);
