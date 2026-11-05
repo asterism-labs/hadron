@@ -9,7 +9,7 @@
 //! - ACPI Specification 6.5, §5.2.12: Multiple APIC Description Table (MADT)
 //!   <https://uefi.org/specs/ACPI/6.5/>
 
-use crate::read::{split_u8_entry, u8_at, u16_at, u32_at};
+use crate::read::{split_u8_entry, u8_at, u16_at, u32_at, u64_at};
 use crate::sdt::SdtHeader;
 use crate::{AcpiError, AcpiHandler};
 
@@ -100,7 +100,7 @@ pub enum MadtEntry {
         flags: u16,
     },
 
-    /// Type 4: Non-Maskable Interrupt Source.
+    /// Type 3: Non-Maskable Interrupt Source.
     NmiSource {
         /// MPS INTI flags.
         flags: u16,
@@ -108,7 +108,7 @@ pub enum MadtEntry {
         gsi: u32,
     },
 
-    /// Type 5: Local APIC NMI.
+    /// Type 4: Local APIC NMI.
     LocalApicNmi {
         /// ACPI processor UID (0xFF means all processors).
         acpi_processor_id: u8,
@@ -116,6 +116,13 @@ pub enum MadtEntry {
         flags: u16,
         /// Local APIC LINT pin (0 or 1).
         lint: u8,
+    },
+
+    /// Type 5: Local APIC Address Override. When present, every local APIC
+    /// is at this 64-bit address instead of [`Madt::local_apic_address`].
+    LocalApicAddressOverride {
+        /// Physical address of the local APIC.
+        address: u64,
     },
 
     /// An entry type that we do not parse, or a known type that is shorter
@@ -151,14 +158,17 @@ impl MadtEntry {
                 gsi: u32_at(entry, 4)?,
                 flags: u16_at(entry, 8)?,
             },
-            4 => Self::NmiSource {
+            3 => Self::NmiSource {
                 flags: u16_at(entry, 2)?,
                 gsi: u32_at(entry, 4)?,
             },
-            5 => Self::LocalApicNmi {
+            4 => Self::LocalApicNmi {
                 acpi_processor_id: u8_at(entry, 2)?,
                 flags: u16_at(entry, 3)?,
                 lint: u8_at(entry, 5)?,
+            },
+            5 => Self::LocalApicAddressOverride {
+                address: u64_at(entry, 4)?,
             },
             _ => return None,
         })
@@ -204,8 +214,12 @@ mod tests {
             1, 12, 3, 0, 0x00, 0x00, 0xC0, 0xFE, 0, 0, 0, 0,
             // Interrupt source override: IRQ 0 -> GSI 2, flags 0x000F.
             2, 10, 0, 0, 2, 0, 0, 0, 0x0F, 0x00,
+            // NMI source: flags 0x000D, GSI 7.
+            3, 8, 0x0D, 0x00, 7, 0, 0, 0,
             // Local APIC NMI at an unaligned u16.
-            5, 6, 0xFF, 0x05, 0x00, 1,
+            4, 6, 0xFF, 0x05, 0x00, 1,
+            // Local APIC address override: 0x1_FEE0_0000.
+            5, 12, 0, 0, 0x00, 0x00, 0xE0, 0xFE, 1, 0, 0, 0,
         ];
         let mut iter = entries(&data);
         assert_eq!(
@@ -235,10 +249,23 @@ mod tests {
         );
         assert_eq!(
             iter.next(),
+            Some(MadtEntry::NmiSource {
+                flags: 0x0D,
+                gsi: 7
+            })
+        );
+        assert_eq!(
+            iter.next(),
             Some(MadtEntry::LocalApicNmi {
                 acpi_processor_id: 0xFF,
                 flags: 5,
                 lint: 1
+            })
+        );
+        assert_eq!(
+            iter.next(),
+            Some(MadtEntry::LocalApicAddressOverride {
+                address: 0x1_FEE0_0000
             })
         );
         assert_eq!(iter.next(), None);
