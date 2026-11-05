@@ -3,7 +3,7 @@
 //!
 //! [`init`] maps the registers, enables the APIC, wires LINT0 and LINT1 as
 //! the MADT says, calibrates the timer against the PIT and starts it at
-//! [`HZ`]. Register offsets and bits are from SDM Vol. 3A §12.
+//! [`HZ`]. Register offsets and bits are from SDM Vol. 3A chapter 13.
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -137,7 +137,7 @@ fn lint(madt: &Madt, lint: u8) -> u32 {
         .find(|nmi| nmi.lint == lint && (nmi.acpi_id.is_none() || nmi.acpi_id == acpi_id));
     match nmi {
         // NMIs are edge triggered whatever the flags say (SDM Vol. 3A
-        // §12.5.1), so only the polarity matters.
+        // §13.5.1), so only the polarity matters.
         Some(nmi) if nmi.flags & INTI_ACTIVE_LOW == INTI_ACTIVE_LOW => LVT_NMI | LVT_ACTIVE_LOW,
         Some(_) => LVT_NMI,
         None => LVT_MASKED,
