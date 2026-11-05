@@ -7,22 +7,24 @@
 //! # Request-Response Pattern
 //!
 //! All requests follow a similar pattern:
-//! 1. Create a static request structure with the `.new()` constructor
-//! 2. Place it in the `.requests` section using the `#[link_section]` attribute
-//! 3. Mark it with `#[used]` to prevent the linker from removing it
-//! 4. After boot, call `.response()` to get the filled-in response
+//! 1. Declare every request in one [`requests!`](crate::requests) block,
+//!    which places them between the start and end markers
+//! 2. After boot, call `.response()` to get the filled-in response
 //!
 //! # Example
 //!
 //! ```no_run
-//! use limine::MemMapRequest;
+//! use limine::{BaseRevision, MemMapRequest};
 //!
-//! #[used]
-//! #[link_section = ".requests"]
-//! static MEMMAP_REQUEST: MemMapRequest = MemMapRequest::new();
+//! limine::requests! {
+//!     static REQUESTS: Requests {
+//!         base_revision: BaseRevision = BaseRevision::new(),
+//!         memmap: MemMapRequest = MemMapRequest::new(),
+//!     }
+//! }
 //!
 //! fn use_memory_map() {
-//!     if let Some(response) = MEMMAP_REQUEST.response() {
+//!     if let Some(response) = REQUESTS.memmap.response() {
 //!         for entry in response.entries() {
 //!             // Process memory map entry
 //!         }
@@ -102,6 +104,63 @@ impl RequestsEndMarker {
     pub const fn new() -> Self {
         Self(Self::ID)
     }
+}
+
+/// Declares a struct that holds the given requests between a
+/// [`RequestsStartMarker`] and a [`RequestsEndMarker`], and a `#[used]`
+/// static of it.
+///
+/// Limine scans only the memory between the two markers, so every request
+/// the executable makes, the [`BaseRevision`] included, belongs in one
+/// `requests!` block. The struct is `#[repr(C)]`, so the fields stay in
+/// order between the markers, and the static needs no linker section.
+///
+/// ```no_run
+/// use limine::{BaseRevision, HhdmRequest};
+///
+/// limine::requests! {
+///     static REQUESTS: Requests {
+///         base_revision: BaseRevision = BaseRevision::new(),
+///         hhdm: HhdmRequest = HhdmRequest::new(),
+///     }
+/// }
+///
+/// fn hhdm_offset() -> Option<u64> {
+///     REQUESTS.hhdm.response().map(|hhdm| hhdm.offset)
+/// }
+/// ```
+#[macro_export]
+macro_rules! requests {
+    (
+        $(#[$meta:meta])*
+        $vis:vis static $name:ident: $ty:ident {
+            $(
+                $(#[$field_meta:meta])*
+                $field_vis:vis $field:ident: $field_ty:ty = $init:expr
+            ),* $(,)?
+        }
+    ) => {
+        /// Limine's requests, between the start and end markers.
+        // Limine reads every field. The kernel may never read some.
+        #[allow(dead_code)]
+        #[repr(C)]
+        $vis struct $ty {
+            __start_marker: $crate::RequestsStartMarker,
+            $(
+                $(#[$field_meta])*
+                $field_vis $field: $field_ty,
+            )*
+            __end_marker: $crate::RequestsEndMarker,
+        }
+
+        $(#[$meta])*
+        #[used]
+        $vis static $name: $ty = $ty {
+            __start_marker: $crate::RequestsStartMarker::new(),
+            $($field: $init,)*
+            __end_marker: $crate::RequestsEndMarker::new(),
+        };
+    };
 }
 
 /// The base revision tag, which tells the bootloader which base revision of the

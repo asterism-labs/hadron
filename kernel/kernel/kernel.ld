@@ -5,7 +5,6 @@ ENTRY(kmain)
 
 PHDRS
 {
-    limine_requests PT_LOAD;
     text            PT_LOAD;
     rodata          PT_LOAD;
     data            PT_LOAD;
@@ -16,20 +15,8 @@ SECTIONS
     . = 0xffffffff80000000;
     __kernel_start = .;
 
-    /* Limine looks for requests between the start and end markers.
-       KEEP stops the linker from dropping them, since no code
-       references them. */
     /* The kernel maps each part with its own permissions, using the
        __*_start and __*_end symbols. Each part starts on a page. */
-    .limine_requests : {
-        __requests_start = .;
-        KEEP(*(.limine_requests_start))
-        KEEP(*(.limine_requests))
-        KEEP(*(.limine_requests_end))
-        __requests_end = .;
-    } :limine_requests
-
-    . = ALIGN(CONSTANT(MAXPAGESIZE));
     .text : {
         __text_start = .;
         *(.text .text.*)
@@ -56,6 +43,12 @@ SECTIONS
     .data : {
         __data_start = .;
         *(.data .data.*)
+    } :data
+    /* The libraries are built position independent, so they reach
+       statics through the GOT. Placed here, the kernel maps it with
+       the data. Left to the linker, it lands outside every part. */
+    .got : {
+        *(.got .got.*)
     } :data
     .bss : {
         *(.bss .bss.*) *(COMMON)

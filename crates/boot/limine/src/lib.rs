@@ -7,7 +7,7 @@
 //! # Overview
 //!
 //! The Limine protocol works through a request-response mechanism:
-//! 1. The kernel declares static request structures in a special section
+//! 1. The kernel declares its requests in one [`requests!`] block
 //! 2. The bootloader fills in the corresponding response structures before passing control to the kernel
 //! 3. The kernel can then query the responses to get information about the system
 //!
@@ -35,35 +35,31 @@
 //! ```no_run
 //! use limine::*;
 //!
-//! // Declare requests as static variables
-//! #[used]
-//! #[link_section = ".requests"]
-//! static BASE_REVISION: BaseRevision = BaseRevision::new();
-//!
-//! #[used]
-//! #[link_section = ".requests"]
-//! static MEMMAP_REQUEST: MemMapRequest = MemMapRequest::new();
-//!
-//! #[used]
-//! #[link_section = ".requests"]
-//! static FRAMEBUFFER_REQUEST: FramebufferRequest = FramebufferRequest::new();
+//! // Declare every request in one block, between the start and end markers
+//! limine::requests! {
+//!     static REQUESTS: Requests {
+//!         base_revision: BaseRevision = BaseRevision::new(),
+//!         memmap: MemMapRequest = MemMapRequest::new(),
+//!         framebuffer: FramebufferRequest = FramebufferRequest::new(),
+//!     }
+//! }
 //!
 //! // In your kernel entry point, query the responses
 //! fn kernel_main() {
 //!     // Check base revision compatibility
-//!     if !BASE_REVISION.is_supported() {
+//!     if !REQUESTS.base_revision.is_supported() {
 //!         panic!("Unsupported Limine protocol revision");
 //!     }
 //!
 //!     // Get memory map
-//!     if let Some(memmap_response) = MEMMAP_REQUEST.response() {
+//!     if let Some(memmap_response) = REQUESTS.memmap.response() {
 //!         for entry in memmap_response.entries() {
 //!             // Process memory map entries
 //!         }
 //!     }
 //!
 //!     // Get framebuffer
-//!     if let Some(fb_response) = FRAMEBUFFER_REQUEST.response() {
+//!     if let Some(fb_response) = REQUESTS.framebuffer.response() {
 //!         for framebuffer in fb_response.framebuffers() {
 //!             // Use framebuffer
 //!         }

@@ -411,8 +411,6 @@ fn allocate_slice<T: Copy>(bump: &mut BumpAllocator, len: usize, value: T) -> &'
 }
 
 unsafe extern "C" {
-    static __requests_start: u8;
-    static __requests_end: u8;
     static __text_start: u8;
     static __text_end: u8;
     static __rodata_start: u8;
@@ -423,17 +421,10 @@ unsafe extern "C" {
 
 /// The parts of the kernel image `kernel.ld` lays out, with the
 /// permissions each gets.
-fn image_parts() -> [(VirtAddr, VirtAddr, PageTableFlags); 4] {
+fn image_parts() -> [(VirtAddr, VirtAddr, PageTableFlags); 3] {
     let addr = |symbol: *const u8| VirtAddr::from_ptr(symbol);
     let nx = PageTableFlags::NO_EXECUTE;
-    // Limine writes the responses before the kernel starts, so the
-    // requests are read-only from here on.
     [
-        (
-            addr(&raw const __requests_start),
-            addr(&raw const __requests_end),
-            nx,
-        ),
         (
             addr(&raw const __text_start),
             addr(&raw const __text_end),
@@ -484,8 +475,7 @@ ktest::ktest! {
     fn kernel_image_is_writable_or_executable_never_both() {
         let w = PageTableFlags::WRITABLE;
         let nx = PageTableFlags::NO_EXECUTE;
-        let [requests, text, rodata, data] = image_parts();
-        for (start, end, expected) in [requests, text, rodata, data] {
+        for (start, end, expected) in image_parts() {
             let mut page = start.align_down(PAGE_SIZE);
             while page < end {
                 let flags = translate(page).expect("the image is mapped").flags;

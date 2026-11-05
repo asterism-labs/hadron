@@ -9,50 +9,30 @@ use limine::memmap::{MemMapEntry, MemMapEntryType};
 use limine::paging::PagingMode;
 use limine::{
     BaseRevision, BootloaderInfoRequest, ExecutableAddressRequest, HhdmRequest, MemMapRequest,
-    PagingModeRequest, RequestsEndMarker, RequestsStartMarker,
+    PagingModeRequest,
 };
 use mm::{DirectMap, Region, RegionKind};
 
 use super::BootInfo;
 use crate::console::kprintln;
 
-#[used]
-#[unsafe(link_section = ".limine_requests_start")]
-static REQUESTS_START: RequestsStartMarker = RequestsStartMarker::new();
-
-#[used]
-#[unsafe(link_section = ".limine_requests")]
-static BASE_REVISION: BaseRevision = BaseRevision::new();
-
-#[used]
-#[unsafe(link_section = ".limine_requests")]
-static BOOTLOADER_INFO: BootloaderInfoRequest = BootloaderInfoRequest::new();
-
-#[used]
-#[unsafe(link_section = ".limine_requests")]
-static HHDM: HhdmRequest = HhdmRequest::new();
-
-#[used]
-#[unsafe(link_section = ".limine_requests")]
-static MEMMAP: MemMapRequest = MemMapRequest::new();
-
-#[used]
-#[unsafe(link_section = ".limine_requests")]
-static EXECUTABLE_ADDRESS: ExecutableAddressRequest = ExecutableAddressRequest::new();
-
-/// The kernel uses 4-level paging only. Limine picks 4-level paging when
-/// the request is missing, but the request makes the choice explicit.
-#[used]
-#[unsafe(link_section = ".limine_requests")]
-static PAGING_MODE: PagingModeRequest = PagingModeRequest::new(
-    PagingMode::Paging4Level,
-    PagingMode::Paging4Level,
-    PagingMode::Paging4Level,
-);
-
-#[used]
-#[unsafe(link_section = ".limine_requests_end")]
-static REQUESTS_END: RequestsEndMarker = RequestsEndMarker::new();
+limine::requests! {
+    static REQUESTS: Requests {
+        base_revision: BaseRevision = BaseRevision::new(),
+        bootloader_info: BootloaderInfoRequest = BootloaderInfoRequest::new(),
+        hhdm: HhdmRequest = HhdmRequest::new(),
+        memmap: MemMapRequest = MemMapRequest::new(),
+        executable_address: ExecutableAddressRequest = ExecutableAddressRequest::new(),
+        /// The kernel uses 4-level paging only. Limine picks 4-level
+        /// paging when the request is missing, but the request makes the
+        /// choice explicit.
+        paging_mode: PagingModeRequest = PagingModeRequest::new(
+            PagingMode::Paging4Level,
+            PagingMode::Paging4Level,
+            PagingMode::Paging4Level,
+        ),
+    }
+}
 
 /// The most memory map entries the kernel takes. Limine merges adjacent
 /// entries of the same kind, so maps stay far below this.
@@ -95,8 +75,8 @@ fn take_regions() -> &'static mut [Region; MAX_REGIONS] {
 /// mode with interrupts masked, the kernel mapped at its link address,
 /// and a stack of at least 64 KiB.
 pub unsafe fn enter() -> ! {
-    // SAFETY: the caller is Limine's entry point, as above. `PAGING_MODE`
-    // asks for 4-level paging. `kernel_main` checks the CPU state.
+    // SAFETY: the caller is Limine's entry point, as above. The paging
+    // mode request asks for 4-level paging. `kernel_main` checks the CPU state.
     // `boot_info` explains why its `BootInfo` is sound.
     unsafe { super::kernel_main(boot_info) }
 }
@@ -111,18 +91,23 @@ pub unsafe fn enter() -> ! {
 /// map entries.
 fn boot_info() -> BootInfo {
     assert!(
-        BASE_REVISION.is_supported(),
+        REQUESTS.base_revision.is_supported(),
         "Limine supports base revision {}",
-        BASE_REVISION.revision_slot()
+        REQUESTS.base_revision.revision_slot()
     );
-    if let Some(revision) = BASE_REVISION.loaded_revision() {
+    if let Some(revision) = REQUESTS.base_revision.loaded_revision() {
         kprintln!("hadron: Limine base revision {revision}");
     }
-    let hhdm = HHDM.response().expect("Limine answers the HHDM request");
-    let memmap = MEMMAP
+    let hhdm = REQUESTS
+        .hhdm
+        .response()
+        .expect("Limine answers the HHDM request");
+    let memmap = REQUESTS
+        .memmap
         .response()
         .expect("Limine answers the memory map request");
-    let executable = EXECUTABLE_ADDRESS
+    let executable = REQUESTS
+        .executable_address
         .response()
         .expect("Limine answers the executable address request");
 
@@ -138,7 +123,8 @@ fn boot_info() -> BootInfo {
     }
     let regions: &'static [Region; MAX_REGIONS] = regions;
 
-    let (name, version) = BOOTLOADER_INFO
+    let (name, version) = REQUESTS
+        .bootloader_info
         .response()
         .map_or(("an unknown bootloader", ""), |info| {
             (info.name(), info.version())
