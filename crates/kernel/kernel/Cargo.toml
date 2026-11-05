@@ -1,0 +1,24 @@
+[package]
+name = "kernel"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+readme.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "kernel"
+path = "src/main.rs"
+test = false
+bench = false
+
+# Only the bare-metal build uses Limine. On the host the crate is an empty
+# program.
+[target.'cfg(target_os = "none")'.dependencies]
+limine = { workspace = true }
+
+[lints]
+workspace = true

@@ -31,6 +31,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "kernel"
+version = "0.1.0"
+dependencies = [
+ "limine",
+]
+
+[[package]]
 name = "limine"
 version = "0.1.0"
 dependencies = [
