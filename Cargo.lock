@@ -41,6 +41,7 @@ dependencies = [
  "arch-x86_64",
  "ktest",
  "limine",
+ "mm",
 ]
 
 [[package]]
@@ -60,6 +61,13 @@ dependencies = [
 [[package]]
 name = "linkset"
 version = "0.1.0"
+
+[[package]]
+name = "mm"
+version = "0.1.0"
+dependencies = [
+ "arch-x86_64",
+]
 
 [[package]]
 name = "proc-macro2"

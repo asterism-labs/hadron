@@ -5,6 +5,7 @@ use limine::{BaseRevision, BootloaderInfoRequest, RequestsEndMarker, RequestsSta
 use crate::arch::x86_64::qemu::{self, ExitCode};
 use crate::arch::x86_64::{gdt, idt};
 use crate::console::{self, kprintln};
+use crate::memory::{self, Memory};
 
 #[used]
 #[unsafe(link_section = ".limine_requests_start")]
@@ -46,6 +47,21 @@ extern "C" fn kmain() -> ! {
     if let Some(revision) = BASE_REVISION.loaded_revision() {
         kprintln!("hadron: Limine base revision {revision}");
     }
+    memory::init(kmain_paged)
+}
+
+/// Runs on the kernel's own page tables and boot stack, after
+/// [`memory::init`]. It owns physical memory from here on.
+#[allow(clippy::needless_pass_by_value)] // takes ownership on purpose
+fn kmain_paged(memory: Memory) -> ! {
+    const MIB: u64 = 1 << 20;
+    let usable = memory.map.total(mm::RegionKind::Usable);
+    kprintln!(
+        "hadron: {} MiB usable, {} of {} frames free",
+        usable / MIB,
+        memory.frames.free_frames(),
+        memory.frames.frame_count()
+    );
     if hadron_config::KTEST {
         crate::ktest::run();
     }

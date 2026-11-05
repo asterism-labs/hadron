@@ -1,0 +1,21 @@
+[package]
+name = "mm"
+description = "Physical memory map, frame allocators and the x86_64 page table mapper."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+readme.workspace = true
+publish.workspace = true
+
+[lib]
+bench = false
+doctest = false
+
+[dependencies]
+arch-x86_64 = { workspace = true }
+
+[lints]
+workspace = true

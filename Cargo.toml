@@ -22,6 +22,7 @@ fdt = { path = "crates/parse/fdt" }
 ktest = { path = "crates/kernel/ktest" }
 limine = { path = "crates/boot/limine" }
 linkset = { path = "crates/core/linkset" }
+mm = { path = "crates/kernel/mm" }
 uefi = { path = "crates/boot/uefi" }
 
 # External dependencies

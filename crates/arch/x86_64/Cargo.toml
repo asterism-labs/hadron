@@ -1,6 +1,6 @@
 [package]
 name = "arch-x86_64"
-description = "x86_64 descriptor tables, segment selectors and the TSS, as plain data."
+description = "x86_64 addresses, page tables, descriptor tables and the TSS, as plain data."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

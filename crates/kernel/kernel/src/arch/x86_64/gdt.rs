@@ -66,8 +66,8 @@ impl InterruptStack {
     }
 }
 
-/// The boot CPU's double fault stack. It has no guard page yet, since the
-/// kernel does not manage its own page tables.
+/// The boot CPU's double fault stack. It sits in `.bss`, so it has no
+/// guard page. The TSS is loaded before the kernel's page tables exist.
 static DOUBLE_FAULT_STACK: InterruptStack =
     InterruptStack(UnsafeCell::new([0; DOUBLE_FAULT_STACK_SIZE]));
 

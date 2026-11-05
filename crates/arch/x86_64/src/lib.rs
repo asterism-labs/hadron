@@ -1,5 +1,6 @@
-//! `x86_64` system structures as plain data: segment selectors, segment and
-//! system descriptors, the GDT and LDT, the 64-bit TSS, the IDT and the CPU
+//! `x86_64` system structures as plain data: physical and virtual
+//! addresses, 4-level page tables, segment selectors, segment and system
+//! descriptors, the GDT and LDT, the 64-bit TSS, the IDT and the CPU
 //! exceptions.
 //!
 //! The crate has no inline assembly. The kernel's `arch::x86_64` module
@@ -9,17 +10,21 @@
 //! References are to the Intel SDM, Volume 3A: §3.4.2 (segment selectors),
 //! §3.4.5 (segment descriptors), §3.5 (system descriptor types) and the
 //! chapter on task management for the 64-bit TSS and its descriptor, §6.3
-//! (exceptions) and §6.14 (64-bit interrupt handling).
+//! (exceptions) and §6.14 (64-bit interrupt handling), and §5.5 (4-level
+//! paging).
 
 #![cfg_attr(not(test), no_std)]
 
+mod addr;
 mod descriptor;
 mod exception;
 mod idt;
+pub mod paging;
 mod segment;
 mod table;
 mod tss;
 
+pub use addr::{PHYS_ADDR_BITS, PhysAddr, VIRT_ADDR_BITS, VirtAddr};
 pub use descriptor::{SegmentDescriptor, SystemDescriptor, SystemType};
 pub use exception::Exception;
 pub use idt::{GateDescriptor, GateType, Idt, IstIndex, VECTORS};

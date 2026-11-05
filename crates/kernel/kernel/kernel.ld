@@ -18,17 +18,28 @@ SECTIONS
     /* Limine looks for requests between the start and end markers.
        KEEP stops the linker from dropping them, since no code
        references them. */
+    /* The kernel maps each part with its own permissions, using the
+       __*_start and __*_end symbols. Each part starts on a page. */
     .limine_requests : {
+        __requests_start = .;
         KEEP(*(.limine_requests_start))
         KEEP(*(.limine_requests))
         KEEP(*(.limine_requests_end))
+        __requests_end = .;
     } :limine_requests
 
     . = ALIGN(CONSTANT(MAXPAGESIZE));
-    .text : { *(.text .text.*) } :text
+    .text : {
+        __text_start = .;
+        *(.text .text.*)
+        __text_end = .;
+    } :text
 
     . = ALIGN(CONSTANT(MAXPAGESIZE));
-    .rodata : { *(.rodata .rodata.*) } :rodata
+    .rodata : {
+        __rodata_start = .;
+        *(.rodata .rodata.*)
+    } :rodata
 
     /* Tests registered with ktest!. The runner reads the array between
        the two symbols. KEEP stops the linker from dropping the entries,
@@ -37,11 +48,18 @@ SECTIONS
         __ktest_start = .;
         KEEP(*(.ktest))
         __ktest_end = .;
+        __rodata_end = .;
     } :rodata
 
     . = ALIGN(CONSTANT(MAXPAGESIZE));
-    .data : { *(.data .data.*) } :data
-    .bss : { *(.bss .bss.*) *(COMMON) } :data
+    .data : {
+        __data_start = .;
+        *(.data .data.*)
+    } :data
+    .bss : {
+        *(.bss .bss.*) *(COMMON)
+        __data_end = .;
+    } :data
 
     /DISCARD/ : { *(.eh_frame*) *(.note .note.*) }
 }

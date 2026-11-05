@@ -21,6 +21,7 @@ bench = false
 arch-x86_64 = { workspace = true }
 ktest = { workspace = true }
 limine = { workspace = true }
+mm = { workspace = true }
 
 [lints]
 workspace = true

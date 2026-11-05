@@ -4,19 +4,20 @@ Hadron is a monolithic kernel written in Rust. It targets x86_64 first and
 aarch64 second.
 
 This branch is a rewrite from scratch. It holds the no_std crates carried
-over from the previous kernel and a placeholder kernel that boots through
-Limine, prints one line on the serial port and exits.
+over from the previous kernel and a kernel that boots through Limine, sets
+up its own page tables and frame allocator, and exits.
 
 ## Layout
 
 | Path | Contents |
 |------|----------|
-| `crates/arch/x86_64` | x86_64 descriptor tables, selectors and the TSS |
+| `crates/arch/x86_64` | x86_64 addresses, page tables, descriptor tables and the TSS |
 | `crates/boot/uefi` | UEFI type bindings and protocol definitions |
 | `crates/boot/limine` | Limine boot protocol bindings |
 | `crates/core/linkset` | Access to data collected in linker sections |
 | `crates/kernel/kernel` | The kernel |
 | `crates/kernel/ktest` | Kernel test registration |
+| `crates/kernel/mm` | Memory map, frame allocators and the page table mapper |
 | `crates/parse/acpi` | ACPI table parser and static AML namespace walker |
 | `crates/parse/dwarf` | DWARF line-program parser |
 | `crates/parse/elf` | ELF64 parser and x86_64 relocations |
