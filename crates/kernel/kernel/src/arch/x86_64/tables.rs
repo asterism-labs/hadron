@@ -112,3 +112,28 @@ pub(crate) unsafe fn lldt(selector: SegmentSelector) {
         asm!("lldt {0:x}", in(reg) selector.bits(), options(readonly, nostack, preserves_flags));
     }
 }
+
+/// Loads the IDT register.
+///
+/// # Safety
+///
+/// `pointer` must describe a valid IDT that stays at that address while
+/// any CPU uses it, and whose gates point at handlers that follow the
+/// interrupt calling convention.
+pub(crate) unsafe fn lidt(pointer: &DescriptorTablePointer) {
+    // SAFETY: the caller vouches for the table. `lidt` reads only the
+    // ten-byte operand.
+    unsafe {
+        asm!("lidt [{}]", in(reg) pointer, options(readonly, nostack, preserves_flags));
+    }
+}
+
+/// Reads the IDT register.
+pub(crate) fn sidt() -> DescriptorTablePointer {
+    let mut pointer = DescriptorTablePointer { limit: 0, base: 0 };
+    // SAFETY: `sidt` writes only the ten-byte operand, which is `pointer`.
+    unsafe {
+        asm!("sidt [{}]", in(reg) &raw mut pointer, options(nostack, preserves_flags));
+    }
+    pointer
+}

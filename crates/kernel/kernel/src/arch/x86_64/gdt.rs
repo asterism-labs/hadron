@@ -17,12 +17,16 @@
 //!
 //! Each CPU needs its own GDT and TSS, since `ltr` marks the TSS descriptor
 //! busy. Only the boot CPU runs, so there is one of each.
+//!
+//! The TSS gives double faults their own stack, IST1, so a double fault
+//! caused by a bad kernel stack still reaches its handler.
 
+use core::cell::UnsafeCell;
 use core::ptr;
 
 use arch_x86_64::{
-    Gdt, PrivilegeLevel, SegmentDescriptor, SegmentSelector, SystemDescriptor, TableIndicator,
-    TaskStateSegment,
+    Gdt, IstIndex, PrivilegeLevel, SegmentDescriptor, SegmentSelector, SystemDescriptor,
+    TableIndicator, TaskStateSegment,
 };
 
 use super::tables;
@@ -38,6 +42,34 @@ pub(crate) const USER_DATA: SegmentSelector = selector(4, PrivilegeLevel::Ring3)
 pub(crate) const USER_CODE: SegmentSelector = selector(5, PrivilegeLevel::Ring3);
 /// The boot CPU's TSS.
 pub(crate) const TSS: SegmentSelector = selector(6, PrivilegeLevel::Ring0);
+
+/// The interrupt stack the double fault gate names.
+pub(crate) const DOUBLE_FAULT_IST: IstIndex = IstIndex::new(1);
+
+/// Size of the double fault stack.
+const DOUBLE_FAULT_STACK_SIZE: usize = 16 * 1024;
+
+/// A stack only the CPU uses, through RSP. The SDM leaves IST alignment to
+/// the OS, so the stack is 16-byte aligned like the frames the CPU pushes
+/// without an IST.
+#[repr(C, align(16))]
+struct InterruptStack(UnsafeCell<[u8; DOUBLE_FAULT_STACK_SIZE]>);
+
+// SAFETY: Rust code never reads or writes the stack. Only the CPU does, by
+// switching RSP to it.
+unsafe impl Sync for InterruptStack {}
+
+impl InterruptStack {
+    /// The address just past the highest byte, which goes in the TSS.
+    fn top(&self) -> u64 {
+        self.0.get() as u64 + DOUBLE_FAULT_STACK_SIZE as u64
+    }
+}
+
+/// The boot CPU's double fault stack. It has no guard page yet, since the
+/// kernel does not manage its own page tables.
+static DOUBLE_FAULT_STACK: InterruptStack =
+    InterruptStack(UnsafeCell::new([0; DOUBLE_FAULT_STACK_SIZE]));
 
 /// Number of 8-byte slots, counting the TSS's two.
 const SLOTS: usize = 8;
@@ -86,7 +118,9 @@ static BSP_GDT: WriteOnce<Gdt<SLOTS>> = WriteOnce::new();
 ///
 /// Panics if called twice.
 pub(crate) fn init() {
-    let tss = BSP_TSS.init(TaskStateSegment::new());
+    let mut tss = TaskStateSegment::new();
+    tss.set_interrupt_stack(DOUBLE_FAULT_IST, DOUBLE_FAULT_STACK.top());
+    let tss = BSP_TSS.init(tss);
     let mut gdt = SEGMENTS;
     let tss_descriptor =
         SystemDescriptor::tss(ptr::from_ref(tss) as u64, TaskStateSegment::limit());
@@ -112,6 +146,15 @@ ktest::ktest! {
         assert_eq!(tables::sgdt(), gdt.pointer());
         assert_eq!(tables::code_segment(), KERNEL_CODE);
         assert_eq!(tables::task_register(), TSS);
+    }
+}
+
+ktest::ktest! {
+    fn tss_points_ist1_at_the_double_fault_stack() {
+        let tss = BSP_TSS.get().expect("gdt::init ran before the tests");
+        let stacks = tss.interrupt_stacks;
+        assert_eq!(stacks[0], DOUBLE_FAULT_STACK.top());
+        assert_eq!(stacks[0] % 16, 0);
     }
 }
 

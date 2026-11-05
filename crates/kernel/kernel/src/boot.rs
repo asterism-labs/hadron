@@ -2,8 +2,8 @@
 
 use limine::{BaseRevision, BootloaderInfoRequest, RequestsEndMarker, RequestsStartMarker};
 
-use crate::arch::x86_64::gdt;
 use crate::arch::x86_64::qemu::{self, ExitCode};
+use crate::arch::x86_64::{gdt, idt};
 use crate::console::{self, kprintln};
 
 #[used]
@@ -28,6 +28,7 @@ extern "C" fn kmain() -> ! {
     // With no console there is nowhere to report the error, so boot goes on.
     let _ = console::init();
     gdt::init();
+    idt::init();
 
     if !BASE_REVISION.is_supported() {
         kprintln!(

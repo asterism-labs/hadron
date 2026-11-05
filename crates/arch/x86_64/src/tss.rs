@@ -6,6 +6,8 @@
 
 use core::mem::size_of;
 
+use crate::idt::IstIndex;
+
 /// The 104-byte 64-bit TSS. Its 8-byte fields sit at 4-byte offsets, so
 /// the struct is packed to 4.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,6 +46,12 @@ impl TaskStateSegment {
         }
     }
 
+    /// Sets the stack the CPU switches to for gates that name `index`.
+    /// `top` is the address just past the stack's highest byte.
+    pub const fn set_interrupt_stack(&mut self, index: IstIndex, top: u64) {
+        self.interrupt_stacks[index.get() as usize - 1] = top;
+    }
+
     /// The limit for this TSS's descriptor: its size minus one.
     #[must_use]
     pub const fn limit() -> u32 {
@@ -69,6 +77,16 @@ mod tests {
         assert_eq!(offset_of!(TaskStateSegment, privilege_stacks), 4);
         assert_eq!(offset_of!(TaskStateSegment, interrupt_stacks), 36);
         assert_eq!(offset_of!(TaskStateSegment, iomap_base), 102);
+    }
+
+    #[test]
+    fn ist_1_is_the_first_interrupt_stack() {
+        let mut tss = TaskStateSegment::new();
+        tss.set_interrupt_stack(IstIndex::new(1), 0x1000);
+        tss.set_interrupt_stack(IstIndex::new(7), 0x7000);
+        let stacks = tss.interrupt_stacks;
+        assert_eq!(stacks[0], 0x1000);
+        assert_eq!(stacks[6], 0x7000);
     }
 
     #[test]
