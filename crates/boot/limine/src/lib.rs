@@ -17,11 +17,18 @@
 //! - [`request`] - Request structures that the kernel uses to ask for information
 //! - [`response`] - Response structures that the bootloader fills in
 //! - [`file`] - File representations provided by the bootloader
+//! - [`flanterm`] - Flanterm framebuffer terminal parameters
 //! - [`framebuffer`] - Framebuffer and video mode structures
 //! - [`memmap`] - Memory map entries and iterators
 //! - [`module`] - Module definitions for kernel modules
 //! - [`mp`] - Multiprocessor information for different architectures
 //! - [`paging`] - Paging mode definitions
+//!
+//! # Base revision
+//!
+//! [`BaseRevision::new`] requests base revision 6, the current one. Base revisions 0 to 5
+//! are deprecated. Doc comments that depend on the base revision describe revision 6 and
+//! note where older revisions differ.
 //!
 //! # Usage Example
 //!
@@ -68,17 +75,17 @@
 //!
 //! - Zero-cost abstractions over the raw Limine protocol
 //! - Type-safe request and response handling
-//! - Architecture-specific support (`x86_64`, `aarch64`, `riscv64`)
+//! - Architecture-specific support (`x86_64`, `aarch64`, `riscv64`, `loongarch64`)
 //! - Iterator-based interfaces for lists of entries
 //! - No heap allocations required
 
-#![no_main]
-#![no_std]
+#![cfg_attr(not(test), no_std)]
 
 mod request;
 mod response;
 
 pub mod file;
+pub mod flanterm;
 pub mod framebuffer;
 pub mod memmap;
 pub mod module;

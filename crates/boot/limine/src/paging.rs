@@ -16,7 +16,7 @@
 //!
 //! ## RISC-V
 //! - **Sv39**: 39-bit virtual address space (512 GiB)
-//! - **Sv48**: 48-bit virtual address space (256 TiB)
+//! - **Sv48**: 48-bit virtual address space (256 TiB), the default
 //! - **Sv57**: 57-bit virtual address space (128 PiB)
 //!
 //! ## `LoongArch64`
@@ -70,4 +70,32 @@ pub enum PagingMode {
     /// 4-level paging (standard `LoongArch64` paging mode).
     #[cfg(target_arch = "loongarch64")]
     Paging4Level = 0,
+}
+
+impl PagingMode {
+    /// The mode the bootloader assumes as preferred and maximum when no Paging Mode
+    /// Request is present.
+    #[cfg(any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "loongarch64"
+    ))]
+    pub const DEFAULT: Self = Self::Paging4Level;
+    /// The mode the bootloader assumes as preferred and maximum when no Paging Mode
+    /// Request is present.
+    #[cfg(target_arch = "riscv64")]
+    pub const DEFAULT: Self = Self::RiscvSv48;
+
+    /// The lowest mode the bootloader accepts when no Paging Mode Request is present, or
+    /// when request revision 0 is used.
+    #[cfg(any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "loongarch64"
+    ))]
+    pub const MIN: Self = Self::Paging4Level;
+    /// The lowest mode the bootloader accepts when no Paging Mode Request is present, or
+    /// when request revision 0 is used.
+    #[cfg(target_arch = "riscv64")]
+    pub const MIN: Self = Self::RiscvSv39;
 }

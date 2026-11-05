@@ -150,30 +150,32 @@ impl core::fmt::Debug for Uuid {
 pub struct File {
     /// Revision of the file structure.
     pub revision: u64,
-    /// Address of the file in memory.
+    /// Address of the file in memory, aligned to at least 4 KiB.
     pub address: *const c_void,
     /// Size of the file in bytes.
     pub size: u64,
-    /// Path to the file as a C string.
+    /// Path of the file within its volume, with a leading slash, as a C string.
     pub path: *const c_char,
     /// Additional string associated with the file as a C string.
     pub string: *const c_char,
     /// Media type of the file.
     pub media_type: MediaType,
     _unused: u32,
-    /// TFTP IP address if applicable.
-    pub tftp_ip: u32,
-    /// TFTP port if applicable.
+    /// IPv4 address of the TFTP server the file came from, in dotted-decimal octet
+    /// order. All zero if the file did not come from TFTP.
+    pub tftp_ipv4: [u8; 4],
+    /// Port of the TFTP server the file came from.
     pub tftp_port: u32,
-    /// Partition index if applicable.
+    /// 1-based index of the partition the file came from, or 0 if invalid or
+    /// unpartitioned.
     pub partition_index: u32,
-    /// MBR disk ID if applicable.
+    /// MBR disk ID of the disk the file came from, or 0 if unknown.
     pub mbr_disk_id: u32,
-    /// GPT disk UUID if applicable.
+    /// GPT disk UUID of the disk the file came from, or all zero if unset.
     pub gpt_disk_uuid: Uuid,
-    /// GPT partition UUID if applicable.
+    /// GPT partition UUID of the partition the file came from, or all zero if unset.
     pub gpt_part_uuid: Uuid,
-    /// Partition UUID if applicable.
+    /// UUID of the filesystem the file came from, or all zero if unset.
     pub part_uuid: Uuid,
 }
 
@@ -240,5 +242,37 @@ impl<'a> Iterator for FileIter<'a> {
         let file = unsafe { self.files[self.index].as_ref() };
         self.index += 1;
         Some(file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use core::mem::offset_of;
+
+    use super::*;
+
+    #[test]
+    fn file_layout() {
+        assert_eq!(offset_of!(File, address), 8);
+        assert_eq!(offset_of!(File, size), 16);
+        assert_eq!(offset_of!(File, path), 24);
+        assert_eq!(offset_of!(File, string), 32);
+        assert_eq!(offset_of!(File, media_type), 40);
+        assert_eq!(offset_of!(File, tftp_ipv4), 48);
+        assert_eq!(offset_of!(File, tftp_port), 52);
+        assert_eq!(offset_of!(File, partition_index), 56);
+        assert_eq!(offset_of!(File, mbr_disk_id), 60);
+        assert_eq!(offset_of!(File, gpt_disk_uuid), 64);
+        assert_eq!(offset_of!(File, gpt_part_uuid), 80);
+        assert_eq!(offset_of!(File, part_uuid), 96);
+        assert_eq!(size_of::<File>(), 112);
+        assert_eq!(size_of::<Uuid>(), 16);
+    }
+
+    #[test]
+    fn media_types_match_spec() {
+        assert_eq!(MediaType::Generic as u32, 0);
+        assert_eq!(MediaType::Optical as u32, 1);
+        assert_eq!(MediaType::Tftp as u32, 2);
     }
 }

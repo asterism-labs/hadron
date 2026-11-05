@@ -22,6 +22,7 @@
 //! - [`MemMapEntryType::BootloaderReclaimable`] - Used by bootloader (can be reclaimed)
 //! - [`MemMapEntryType::KernelAndModules`] - Contains kernel and module data
 //! - [`MemMapEntryType::Framebuffer`] - Framebuffer memory
+//! - [`MemMapEntryType::ReservedMapped`] - Reserved, but mapped in the HHDM
 //!
 //! # Example
 //!
@@ -67,8 +68,13 @@ pub enum MemMapEntryType {
     KernelAndModules = 6,
     /// Framebuffer memory.
     Framebuffer = 7,
-    /// ACPI Tables memory.
-    AcpiTables = 8,
+    /// Reserved memory that the bootloader maps in the HHDM (base revision 4 or later).
+    ///
+    /// From base revision 4, these entries hold the ACPI tables that firmware did not
+    /// already place in an ACPI reclaimable or ACPI NVS region. From base revision 5, they
+    /// also hold the SMBIOS entry points and tables, EFI runtime services code and data,
+    /// and the EFI system table with the data it references.
+    ReservedMapped = 8,
 }
 
 /// A single entry in the memory map.
@@ -116,5 +122,32 @@ impl Iterator for MemMapIter<'_> {
         // SAFETY: Each NonNull<MemMapEntry> in the slice was provided by the bootloader
         // and points to a valid MemMapEntry structure that lives for the lifetime of the kernel.
         Some(unsafe { entry_ptr.as_ref() })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use core::mem::offset_of;
+
+    use super::*;
+
+    #[test]
+    fn entry_types_match_spec() {
+        assert_eq!(MemMapEntryType::Usable as u64, 0);
+        assert_eq!(MemMapEntryType::Reserved as u64, 1);
+        assert_eq!(MemMapEntryType::AcpiReclaimable as u64, 2);
+        assert_eq!(MemMapEntryType::AcpiNvs as u64, 3);
+        assert_eq!(MemMapEntryType::BadMemory as u64, 4);
+        assert_eq!(MemMapEntryType::BootloaderReclaimable as u64, 5);
+        assert_eq!(MemMapEntryType::KernelAndModules as u64, 6);
+        assert_eq!(MemMapEntryType::Framebuffer as u64, 7);
+        assert_eq!(MemMapEntryType::ReservedMapped as u64, 8);
+    }
+
+    #[test]
+    fn entry_layout() {
+        assert_eq!(offset_of!(MemMapEntry, length), 8);
+        assert_eq!(offset_of!(MemMapEntry, type_), 16);
+        assert_eq!(size_of::<MemMapEntry>(), 24);
     }
 }

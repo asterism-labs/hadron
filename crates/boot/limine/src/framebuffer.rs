@@ -162,34 +162,30 @@ impl RawFramebuffer {
     /// The caller must ensure that `fb` points to a valid `RawFramebuffer` structure
     /// matching the specified `revision`.
     ///
-    /// # Panics
-    ///
-    /// Panics if `revision` is not 0 or 1.
+    /// Revision 1 and later carry the video mode list. Response revisions are backwards
+    /// compatible, so any revision above 1 is read as revision 1.
     #[must_use]
     pub unsafe fn to_fb(revision: u64, fb: NonNull<RawFramebuffer>) -> Framebuffer {
         // SAFETY: The caller guarantees that `fb` points to a valid RawFramebuffer
         // and that `revision` matches the actual layout of the data.
-        unsafe {
-            match revision {
-                0 => fb.as_ref().v0.to_framebuffer(),
-                1 => {
-                    let mut framebuffer = fb.as_ref().v1.inner.to_framebuffer();
-                    // SAFETY: For revision 1, the bootloader provides a valid pointer
-                    // to `mode_count` video mode references.
-                    #[expect(
-                        clippy::cast_possible_truncation,
-                        reason = "pixel format fields fit in usize"
-                    )]
-                    let modes = core::slice::from_raw_parts(
-                        fb.as_ref().v1.modes.as_ptr(),
-                        fb.as_ref().v1.mode_count as usize,
-                    );
-                    framebuffer.modes = modes;
-                    framebuffer
-                }
-                _ => panic!("Unsupported framebuffer revision: {revision}"),
-            }
+        let raw = unsafe { fb.as_ref() };
+        if revision == 0 {
+            // SAFETY: Revision 0 uses the `v0` layout.
+            return unsafe { raw.v0.to_framebuffer() };
         }
+        // SAFETY: Revision 1 and later use the `v1` layout.
+        let v1 = unsafe { raw.v1 };
+        let mut framebuffer = v1.inner.to_framebuffer();
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "Limine protocol fields fit in target width"
+        )]
+        // SAFETY: For revision 1 and later, the bootloader provides a valid pointer to
+        // `mode_count` video mode references.
+        let modes =
+            unsafe { core::slice::from_raw_parts(v1.modes.as_ptr(), v1.mode_count as usize) };
+        framebuffer.modes = modes;
+        framebuffer
     }
 }
 
@@ -242,4 +238,39 @@ pub struct Framebuffer {
     pub default_mode: VideoMode,
     /// Available video modes that the framebuffer supports.
     pub modes: &'static [&'static VideoMode],
+}
+
+#[cfg(test)]
+mod tests {
+    use core::mem::offset_of;
+
+    use super::*;
+
+    #[test]
+    fn framebuffer_layout() {
+        assert_eq!(offset_of!(RawFramebufferV0, width), 8);
+        assert_eq!(offset_of!(RawFramebufferV0, height), 16);
+        assert_eq!(offset_of!(RawFramebufferV0, pitch), 24);
+        assert_eq!(offset_of!(RawFramebufferV0, bpp), 32);
+        assert_eq!(offset_of!(RawFramebufferV0, memory_model), 34);
+        assert_eq!(offset_of!(RawFramebufferV0, red_mask_size), 35);
+        assert_eq!(offset_of!(RawFramebufferV0, blue_mask_shift), 40);
+        assert_eq!(offset_of!(RawFramebufferV0, edid_size), 48);
+        assert_eq!(offset_of!(RawFramebufferV0, edid), 56);
+        assert_eq!(size_of::<RawFramebufferV0>(), 64);
+        assert_eq!(offset_of!(RawFramebufferV1, mode_count), 64);
+        assert_eq!(offset_of!(RawFramebufferV1, modes), 72);
+        assert_eq!(size_of::<RawFramebufferV1>(), 80);
+    }
+
+    #[test]
+    fn video_mode_layout() {
+        assert_eq!(offset_of!(VideoMode, width), 8);
+        assert_eq!(offset_of!(VideoMode, height), 16);
+        assert_eq!(offset_of!(VideoMode, bpp), 24);
+        assert_eq!(offset_of!(VideoMode, memory_model), 26);
+        assert_eq!(offset_of!(VideoMode, blue_mask_shift), 32);
+        assert_eq!(size_of::<VideoMode>(), 40);
+        assert_eq!(MemoryModel::RGB as u8, 1);
+    }
 }

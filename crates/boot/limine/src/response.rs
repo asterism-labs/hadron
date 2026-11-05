@@ -34,11 +34,13 @@ use core::{cell::UnsafeCell, ffi::c_char, ptr::NonNull};
 
 use crate::{
     file::{File, FileIter},
+    flanterm::FlantermFbInitParams,
     framebuffer::{FramebufferIter, RawFramebuffer},
     memmap::{MemMapEntry, MemMapIter},
-    mp::MpInfo,
     paging::PagingMode,
 };
+
+pub use crate::mp::MpResponse;
 
 /// A wrapper around a response pointer that may be null.
 ///
@@ -151,7 +153,7 @@ pub enum FirmwareType {
     Efi32 = 1,
     /// UEFI 64-bit firmware.
     Efi64 = 2,
-    /// ARM 64-bit firmware with SBI.
+    /// RISC-V SBI firmware.
     Sbi = 3,
 }
 
@@ -176,8 +178,9 @@ pub struct StackSizeResponse {
 pub struct HhdmResponse {
     /// The revision of this response structure.
     pub revision: u64,
-    /// Virtual base address of the Higher Half Direct Mapping (unless revision == 3, then
-    /// physical).
+    /// The virtual address at which the Higher Half Direct Map starts. Add it to a physical
+    /// address to get the HHDM virtual address. This is always a virtual address, for
+    /// every base revision.
     pub hhdm_base: u64,
 }
 
@@ -214,50 +217,6 @@ pub struct PagingModeResponse {
     pub revision: u64,
     /// The paging mode selected by the bootloader.
     pub paging_mode: PagingMode,
-}
-
-/// The response structure for the Multiprocessor Information Request.
-///
-/// Note: The `flags` field is `u32` per the Limine protocol spec, not `u64`.
-/// On x86_64, `bsp_lapic_id` (u32) follows immediately after flags with no
-/// padding, making the struct naturally packed to offset 16 for `cpu_count`.
-#[repr(C)]
-pub struct MpResponse {
-    /// The revision of this response structure.
-    pub revision: u64,
-    /// Bitflags indicating CPU features and capabilities.
-    ///
-    /// Bit0: x2APIC has been enabled (x86 only)
-    pub flags: u32,
-    /// The Local APIC ID of the bootstrap processor (`x86_64` only).
-    #[cfg(target_arch = "x86_64")]
-    pub bsp_lapic_id: u32,
-    /// The MPIDR value of the bootstrap processor (`AArch64` only).
-    #[cfg(target_arch = "aarch64")]
-    pub bsp_mpidr: u64,
-    /// The Hart ID of the bootstrap processor (RISC-V only).
-    #[cfg(target_arch = "riscv64")]
-    pub bsp_hartid: u64,
-    /// The number of CPUs detected in the system.
-    pub cpu_count: u64,
-    cpus: NonNull<NonNull<MpInfo>>,
-}
-
-impl MpResponse {
-    /// Returns an iterator over the CPU information entries.
-    pub fn cpus(&self) -> impl Iterator<Item = &'static MpInfo> {
-        // SAFETY: The bootloader provides a valid pointer to an array of `cpu_count`
-        // NonNull<MpInfo> pointers, all pointing to valid MpInfo structures.
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "Limine protocol fields fit in target width"
-        )]
-        let cpus_slice =
-            unsafe { core::slice::from_raw_parts(self.cpus.as_ptr(), self.cpu_count as usize) };
-        // SAFETY: Each NonNull<MpInfo> in the slice points to a valid, static MpInfo structure
-        // provided by the bootloader.
-        cpus_slice.iter().map(|ptr| unsafe { ptr.as_ref() })
-    }
 }
 
 /// RISC-V-specific response structure for retrieving the BSP hart ID.
@@ -338,7 +297,8 @@ impl ModuleResponse {
 pub struct RsdpResponse {
     /// The revision of this response structure.
     pub revision: u64,
-    /// Virtual address of the RSDP structure if `base_revision` != 3.
+    /// Address of the RSDP. This is an HHDM virtual address, except in base revision 3,
+    /// where it is physical.
     pub rsdp_addr: u64,
 }
 
@@ -347,9 +307,11 @@ pub struct RsdpResponse {
 pub struct SmbiosResponse {
     /// The revision of this response structure.
     pub revision: u64,
-    /// Address of the 32-bit SMBIOS entry point, or 0 if not available.
-    pub entry_32_addr: u32,
-    /// Address of the 64-bit SMBIOS entry point, or 0 if not available.
+    /// Address of the 32-bit SMBIOS entry point, or 0 if not present. This is an HHDM
+    /// virtual address, except in base revisions 3 and 4, where it is physical.
+    pub entry_32_addr: u64,
+    /// Address of the 64-bit SMBIOS entry point, or 0 if not present. This is an HHDM
+    /// virtual address, except in base revisions 3 and 4, where it is physical.
     pub entry_64_addr: u64,
 }
 
@@ -358,7 +320,8 @@ pub struct SmbiosResponse {
 pub struct EfiSystemTableResponse {
     /// The revision of this response structure.
     pub revision: u64,
-    /// Physical address of the EFI System Table if `base_revision` >= 3.
+    /// Address of the EFI system table. This is an HHDM virtual address, except in base
+    /// revisions 3 and 4, where it is physical.
     pub system_table_addr: u64,
 }
 
@@ -367,14 +330,15 @@ pub struct EfiSystemTableResponse {
 pub struct EfiMemoryMapResponse {
     /// The revision of this response structure.
     pub revision: u64,
-    /// Pointer to the EFI memory map data.
+    /// HHDM virtual address of the EFI memory map, in bootloader-reclaimable memory.
+    /// Subtract the HHDM offset before passing it to `SetVirtualAddressMap()`.
     pub memory_map: NonNull<u8>,
     /// Total size of the memory map in bytes.
     pub memory_map_size: u64,
-    /// Size of each memory descriptor entry.
+    /// Size of each memory descriptor in bytes.
     pub descriptor_size: u64,
     /// Version of the memory descriptor format.
-    pub descriptor_version: u32,
+    pub descriptor_version: u64,
 }
 
 /// The response structure for the Date at Boot Request.
@@ -382,7 +346,7 @@ pub struct EfiMemoryMapResponse {
 pub struct DateAtBootResponse {
     /// The revision of this response structure.
     pub revision: u64,
-    /// UNIX timestamp representing the date at boot time.
+    /// UNIX timestamp, in seconds, read from the RTC at boot.
     pub timestamp: i64,
 }
 
@@ -402,7 +366,7 @@ pub struct ExecutableAddressResponse {
 pub struct DeviceTreeBlobResponse {
     /// The revision of this response structure.
     pub revision: u64,
-    /// Virtual address of the Device Tree Blob.
+    /// HHDM virtual address of the Device Tree Blob, in bootloader-reclaimable memory.
     pub dtb_addr: u64,
 }
 
@@ -417,4 +381,227 @@ pub struct BootloaderPerformanceResponse {
     pub init_us: u64,
     /// Time of handoff to the kernel in microseconds.
     pub exec_us: u64,
+}
+
+/// Format of a TPM event log, as found in [`TpmEventLogResponse::format`].
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TpmEventLogFormat(pub u64);
+
+impl TpmEventLogFormat {
+    /// TCG 1.2 (SHA-1) event log format.
+    pub const TCG_1_2: Self = Self(1);
+    /// TCG 2.0 (crypto agile) event log format.
+    pub const TCG_2: Self = Self(2);
+}
+
+/// The response structure for the TPM Event Log Request.
+#[repr(C)]
+pub struct TpmEventLogResponse {
+    /// The revision of this response structure.
+    pub revision: u64,
+    /// Format of the event log.
+    pub format: TpmEventLogFormat,
+    /// Size in bytes of the raw event data.
+    pub size: u64,
+    address: *const u8,
+}
+
+impl TpmEventLogResponse {
+    /// Returns the raw event stream, in the format given by [`Self::format`].
+    ///
+    /// The bytes live in bootloader-reclaimable memory. The slice is empty if
+    /// [`Self::size`] is 0.
+    #[must_use]
+    pub fn event_log(&self) -> &[u8] {
+        if self.size == 0 || self.address.is_null() {
+            return &[];
+        }
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "Limine protocol fields fit in target width"
+        )]
+        // SAFETY: For a non-zero size, the bootloader provides a valid HHDM pointer to
+        // `size` bytes that stay valid for the lifetime of the kernel.
+        unsafe {
+            core::slice::from_raw_parts(self.address, self.size as usize)
+        }
+    }
+}
+
+/// The response structure for the x86-64 Keep IOMMU Request.
+///
+/// Its presence means the bootloader left firmware-enabled IOMMUs enabled.
+#[repr(C)]
+pub struct KeepIommuResponse {
+    /// The revision of this response structure.
+    pub revision: u64,
+}
+
+/// The response structure for the TSC Frequency Request.
+#[repr(C)]
+pub struct TscFrequencyResponse {
+    /// The revision of this response structure.
+    pub revision: u64,
+    /// Frequency of the primary timestamp counter, in Hz. The bootloader measures it on a
+    /// best-effort basis, so it may not be exact.
+    pub frequency: u64,
+}
+
+/// The response structure for the Flanterm FB Init Params Request.
+#[repr(C)]
+pub struct FlantermFbInitParamsResponse {
+    /// The revision of this response structure.
+    pub revision: u64,
+    /// The number of entries. Equal to the framebuffer count of the framebuffer response.
+    pub entry_count: u64,
+    entries: NonNull<NonNull<FlantermFbInitParams>>,
+}
+
+impl FlantermFbInitParamsResponse {
+    /// Returns an iterator over the entries.
+    ///
+    /// Entry `i` belongs to framebuffer `i` of the framebuffer response. A framebuffer that
+    /// cannot hold a Flanterm terminal, such as one that is not 32 bits per pixel, has an
+    /// all-zero entry.
+    pub fn entries(&self) -> impl Iterator<Item = &FlantermFbInitParams> {
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "Limine protocol fields fit in target width"
+        )]
+        // SAFETY: The bootloader provides a valid pointer to an array of `entry_count`
+        // non-null pointers to `FlantermFbInitParams` structures.
+        let entries = unsafe {
+            core::slice::from_raw_parts(self.entries.as_ptr(), self.entry_count as usize)
+        };
+        // SAFETY: Each pointer in the array points to a valid `FlantermFbInitParams` that
+        // lives in bootloader-reclaimable memory for the lifetime of the kernel.
+        entries.iter().map(|ptr| unsafe { ptr.as_ref() })
+    }
+}
+
+/// The response structure for the Entropy Request.
+#[repr(C)]
+pub struct EntropyResponse {
+    /// The revision of this response structure.
+    pub revision: u64,
+    /// The number of random values provided. This is the requested count, unless that
+    /// exceeds a limit set by the bootloader.
+    pub value_count: u64,
+    values: *const u64,
+}
+
+impl EntropyResponse {
+    /// Returns the random values. The slice is empty if [`Self::value_count`] is 0.
+    #[must_use]
+    pub fn values(&self) -> &[u64] {
+        if self.value_count == 0 || self.values.is_null() {
+            return &[];
+        }
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "Limine protocol fields fit in target width"
+        )]
+        // SAFETY: For a non-zero count, the bootloader provides a valid, aligned HHDM
+        // pointer to `value_count` values that stay valid for the lifetime of the kernel.
+        unsafe {
+            core::slice::from_raw_parts(self.values, self.value_count as usize)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use core::mem::offset_of;
+
+    use super::*;
+
+    #[test]
+    fn response_header_sizes() {
+        assert_eq!(size_of::<StackSizeResponse>(), 8);
+        assert_eq!(size_of::<EntryPointResponse>(), 8);
+        assert_eq!(size_of::<KeepIommuResponse>(), 8);
+        assert_eq!(size_of::<ExecutableCmdlineResponse>(), 16);
+        assert_eq!(size_of::<FirmwareTypeResponse>(), 16);
+        assert_eq!(size_of::<HhdmResponse>(), 16);
+        assert_eq!(size_of::<PagingModeResponse>(), 16);
+        assert_eq!(size_of::<BspHartIdResponse>(), 16);
+        assert_eq!(size_of::<ExecutableFileResponse>(), 16);
+        assert_eq!(size_of::<RsdpResponse>(), 16);
+        assert_eq!(size_of::<EfiSystemTableResponse>(), 16);
+        assert_eq!(size_of::<DateAtBootResponse>(), 16);
+        assert_eq!(size_of::<DeviceTreeBlobResponse>(), 16);
+        assert_eq!(size_of::<TscFrequencyResponse>(), 16);
+    }
+
+    #[test]
+    fn bootloader_info_layout() {
+        assert_eq!(offset_of!(BootloaderInfoResponse, name), 8);
+        assert_eq!(offset_of!(BootloaderInfoResponse, version), 16);
+        assert_eq!(size_of::<BootloaderInfoResponse>(), 24);
+    }
+
+    #[test]
+    fn list_response_layouts() {
+        assert_eq!(offset_of!(FramebufferResponse, framebuffer_count), 8);
+        assert_eq!(offset_of!(FramebufferResponse, framebuffers), 16);
+        assert_eq!(size_of::<FramebufferResponse>(), 24);
+        assert_eq!(offset_of!(MemMapResponse, entry_count), 8);
+        assert_eq!(offset_of!(MemMapResponse, entries), 16);
+        assert_eq!(size_of::<MemMapResponse>(), 24);
+        assert_eq!(offset_of!(ModuleResponse, module_count), 8);
+        assert_eq!(offset_of!(ModuleResponse, modules), 16);
+        assert_eq!(size_of::<ModuleResponse>(), 24);
+        assert_eq!(offset_of!(FlantermFbInitParamsResponse, entry_count), 8);
+        assert_eq!(offset_of!(FlantermFbInitParamsResponse, entries), 16);
+        assert_eq!(size_of::<FlantermFbInitParamsResponse>(), 24);
+        assert_eq!(offset_of!(EntropyResponse, value_count), 8);
+        assert_eq!(offset_of!(EntropyResponse, values), 16);
+        assert_eq!(size_of::<EntropyResponse>(), 24);
+    }
+
+    #[test]
+    fn smbios_layout() {
+        assert_eq!(offset_of!(SmbiosResponse, entry_32_addr), 8);
+        assert_eq!(offset_of!(SmbiosResponse, entry_64_addr), 16);
+        assert_eq!(size_of::<SmbiosResponse>(), 24);
+    }
+
+    #[test]
+    fn efi_memory_map_layout() {
+        assert_eq!(offset_of!(EfiMemoryMapResponse, memory_map), 8);
+        assert_eq!(offset_of!(EfiMemoryMapResponse, memory_map_size), 16);
+        assert_eq!(offset_of!(EfiMemoryMapResponse, descriptor_size), 24);
+        assert_eq!(offset_of!(EfiMemoryMapResponse, descriptor_version), 32);
+        assert_eq!(size_of::<EfiMemoryMapResponse>(), 40);
+    }
+
+    #[test]
+    fn address_and_timing_layouts() {
+        assert_eq!(offset_of!(ExecutableAddressResponse, phys_base), 8);
+        assert_eq!(offset_of!(ExecutableAddressResponse, virt_base), 16);
+        assert_eq!(size_of::<ExecutableAddressResponse>(), 24);
+        assert_eq!(offset_of!(BootloaderPerformanceResponse, reset_us), 8);
+        assert_eq!(offset_of!(BootloaderPerformanceResponse, init_us), 16);
+        assert_eq!(offset_of!(BootloaderPerformanceResponse, exec_us), 24);
+        assert_eq!(size_of::<BootloaderPerformanceResponse>(), 32);
+    }
+
+    #[test]
+    fn tpm_event_log_layout() {
+        assert_eq!(offset_of!(TpmEventLogResponse, format), 8);
+        assert_eq!(offset_of!(TpmEventLogResponse, size), 16);
+        assert_eq!(offset_of!(TpmEventLogResponse, address), 24);
+        assert_eq!(size_of::<TpmEventLogResponse>(), 32);
+        assert_eq!(TpmEventLogFormat::TCG_1_2.0, 1);
+        assert_eq!(TpmEventLogFormat::TCG_2.0, 2);
+    }
+
+    #[test]
+    fn firmware_type_values() {
+        assert_eq!(FirmwareType::Bios as u64, 0);
+        assert_eq!(FirmwareType::Efi32 as u64, 1);
+        assert_eq!(FirmwareType::Efi64 as u64, 2);
+        assert_eq!(FirmwareType::Sbi as u64, 3);
+    }
 }

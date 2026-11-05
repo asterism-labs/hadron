@@ -34,6 +34,7 @@ use core::cell::UnsafeCell;
 
 use crate::{
     module::InternalModule,
+    mp::MpRequestFlags,
     paging::PagingMode,
     response::{self as res, Response},
 };
@@ -103,7 +104,13 @@ impl RequestsEndMarker {
     }
 }
 
-/// Structure representing the base revision of the Limine protocol.
+/// The base revision tag, which tells the bootloader which base revision of the
+/// protocol the executable expects.
+///
+/// The tag is three `u64` slots. The first two hold the magic in [`Self::ID`]. The third
+/// holds the requested revision. The bootloader sets the third slot to 0 if it supports
+/// that revision, and from base revision 3 it also writes the revision it actually used
+/// into the second slot.
 #[repr(C, align(8))]
 pub struct BaseRevision(UnsafeCell<[u64; 3]>);
 
@@ -117,40 +124,55 @@ impl BaseRevision {
     /// The Limine ID for the Base Revision.
     pub const ID: [u64; 2] = [0xf956_2b2d_5c95_a6c8, 0x6a7b_3849_4453_6bdc];
 
-    /// Creates a new `BaseRevision` with the recommended base revision (4).
+    /// The base revision that [`Self::new`] requests.
+    ///
+    /// Base revisions 0 to 5 are deprecated, so this is 6.
+    pub const LATEST: u64 = 6;
+
+    /// Creates a new `BaseRevision` that requests base revision 6.
     #[must_use]
     pub const fn new() -> Self {
-        Self::with_base_revision(4)
+        Self::with_base_revision(Self::LATEST)
     }
 
-    /// Creates a new `BaseRevision` with the specified base revision.
+    /// Creates a new `BaseRevision` that requests `revision`.
     ///
-    /// Some revisions may not work nicely with this crate, and must be handled manually.
+    /// The doc comments in this crate describe base revision 6. Older revisions change
+    /// some behaviour, such as whether addresses are physical or virtual, and the caller
+    /// must handle those differences.
     #[must_use]
     pub const fn with_base_revision(revision: u64) -> Self {
         Self(UnsafeCell::new([Self::ID[0], Self::ID[1], revision]))
     }
 
-    /// Returns the loaded base revision.
+    /// Returns the base revision the bootloader used to load the executable.
+    ///
+    /// Returns `None` if the bootloader did not write it. Bootloaders that support base
+    /// revision 3 or later always write it; older ones leave the magic in place.
     #[must_use]
-    pub fn loaded_revision(&self) -> u64 {
+    pub fn loaded_revision(&self) -> Option<u64> {
         // SAFETY: The bootloader writes to this cell before control is passed to the kernel,
         // and no concurrent writes occur after that point.
-        unsafe { (*self.0.get())[1] }
+        let loaded = unsafe { (*self.0.get())[1] };
+        (loaded != Self::ID[1]).then_some(loaded)
     }
 
-    /// Returns the requested revision.
+    /// Returns the raw third slot of the tag.
+    ///
+    /// Before boot, and after boot if the bootloader does not support the requested
+    /// revision, this is the requested revision. After boot it is 0 if the bootloader
+    /// supports the requested revision. Use [`Self::is_supported`] to test for support.
     #[must_use]
-    pub fn revision(&self) -> u64 {
+    pub fn revision_slot(&self) -> u64 {
         // SAFETY: The bootloader writes to this cell before control is passed to the kernel,
         // and no concurrent writes occur after that point.
         unsafe { (*self.0.get())[2] }
     }
 
-    /// Checks if the requested revision is supported by this crate.
+    /// Returns whether the bootloader supports the requested base revision.
     #[must_use]
     pub fn is_supported(&self) -> bool {
-        self.revision() == 0
+        self.revision_slot() == 0
     }
 }
 
@@ -420,25 +442,24 @@ impl FramebufferRequest {
     /// The Limine ID for the Framebuffer Request.
     pub const ID: [u64; 4] = limine_id!(0x9d58_27dc_d881_dd75, 0xa314_8604_f6fa_b11b);
 
-    /// Creates a new `FramebufferRequest` with the recommended revision (1).
+    /// Creates a new `FramebufferRequest` with the recommended revision (0).
+    ///
+    /// The video mode list comes with response revision 1, which needs no newer request.
     #[must_use]
     pub const fn new() -> Self {
-        Self::with_revision(1)
+        Self::with_revision(0)
     }
 
     /// Creates a new `FramebufferRequest` with the specified revision.
     ///
-    /// Only revision 0 and 1 are currently defined.
+    /// Only revision 0 is currently defined.
     ///
     /// # Panics
     ///
-    /// Panics if `revision` is greater than 1.
+    /// Panics if `revision` is not 0.
     #[must_use]
     pub const fn with_revision(revision: u64) -> Self {
-        assert!(
-            revision <= 1,
-            "Only revision 0 and 1 are currently defined."
-        );
+        assert!(revision == 0, "Only revision 0 is currently defined.");
         Self {
             id: Self::ID,
             revision,
@@ -528,10 +549,8 @@ pub struct MpRequest {
     id: [u64; 4],
     revision: u64,
     response: Response<res::MpResponse>,
-    /// Configuration flags for multiprocessor setup.
-    ///
-    /// Bit 0: Enable x2APIC mode if supported (`x86_64` only)
-    pub flags: u64,
+    /// Flags that change how the bootloader starts the processors.
+    pub flags: MpRequestFlags,
 }
 
 impl MpRequest {
@@ -540,7 +559,7 @@ impl MpRequest {
 
     /// Creates a new `MpRequest` with the recommended revision (0).
     #[must_use]
-    pub const fn new(flags: u64) -> Self {
+    pub const fn new(flags: MpRequestFlags) -> Self {
         Self::with_revision(0, flags)
     }
 
@@ -552,7 +571,7 @@ impl MpRequest {
     ///
     /// Panics if `revision` is not 0.
     #[must_use]
-    pub const fn with_revision(revision: u64, flags: u64) -> Self {
+    pub const fn with_revision(revision: u64, flags: MpRequestFlags) -> Self {
         assert!(revision == 0, "Only revision 0 is currently defined.");
         Self {
             id: Self::ID,
@@ -682,7 +701,8 @@ pub struct EntryPointRequest {
     id: [u64; 4],
     revision: u64,
     response: Response<res::EntryPointResponse>,
-    /// The address to jump to as the entry point.
+    /// The address to jump to as the entry point. It must be a function inside the
+    /// loaded executable image.
     pub entry_point_address: u64,
 }
 
@@ -783,9 +803,10 @@ pub struct ModuleRequest {
     revision: u64,
     response: Response<res::ModuleResponse>,
 
-    /// The number of internal modules to request.
+    /// The number of internal modules to request. Read from request revision 1.
     pub internal_module_count: u64,
-    /// Pointer to an array of internal module specifications.
+    /// Pointer to an array of `internal_module_count` pointers to internal module
+    /// specifications. Read from request revision 1.
     pub internal_modules: *const *const InternalModule,
 }
 
@@ -798,29 +819,36 @@ impl ModuleRequest {
     /// The Limine ID for the Module Request.
     pub const ID: [u64; 4] = limine_id!(0x3e7e_2797_02be_32af, 0xca1c_4f3b_d128_0cee);
 
-    /// Creates a new `ModuleRequest` with the recommended revision (0).
+    /// Creates a new `ModuleRequest` with the recommended revision (1).
+    ///
+    /// Revision 1 is the first revision in which the bootloader reads the internal
+    /// modules.
     #[must_use]
     pub const fn new(
         internal_modules: *const *const InternalModule,
         internal_module_count: u64,
     ) -> Self {
-        Self::with_revision(0, internal_modules, internal_module_count)
+        Self::with_revision(1, internal_modules, internal_module_count)
     }
 
     /// Creates a new `ModuleRequest` with the specified revision.
     ///
-    /// Only revision 0 is currently defined.
+    /// Only revision 0 and 1 are currently defined. Revision 0 ignores the internal
+    /// modules.
     ///
     /// # Panics
     ///
-    /// Panics if `revision` is not 0.
+    /// Panics if `revision` is greater than 1.
     #[must_use]
     pub const fn with_revision(
         revision: u64,
         internal_modules: *const *const InternalModule,
         internal_module_count: u64,
     ) -> Self {
-        assert!(revision == 0, "Only revision 0 is currently defined.");
+        assert!(
+            revision <= 1,
+            "Only revision 0 and 1 are currently defined."
+        );
         Self {
             id: Self::ID,
             revision,
@@ -1245,5 +1273,443 @@ impl BootloaderPerformanceRequest {
     #[must_use]
     pub fn response(&self) -> Option<&res::BootloaderPerformanceResponse> {
         self.response.get()
+    }
+}
+
+/// Request structure for the TPM event log.
+///
+/// This request retrieves a copy of the firmware's TCG event log, captured through
+/// `EFI_TCG2_PROTOCOL.GetEventLog()` before boot services exit. No response is provided
+/// without a TPM or without `EFI_TCG2_PROTOCOL`.
+#[repr(C, align(8))]
+pub struct TpmEventLogRequest {
+    id: [u64; 4],
+    revision: u64,
+    response: Response<res::TpmEventLogResponse>,
+}
+
+impl Default for TpmEventLogRequest {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TpmEventLogRequest {
+    /// The Limine ID for the TPM Event Log Request.
+    pub const ID: [u64; 4] = limine_id!(0x98e0_94fc_7e76_e979, 0xee8d_8775_c54e_1d1f);
+
+    /// Creates a new `TpmEventLogRequest` with the recommended revision (0).
+    #[must_use]
+    pub const fn new() -> Self {
+        Self::with_revision(0)
+    }
+
+    /// Creates a new `TpmEventLogRequest` with the specified revision.
+    ///
+    /// Only revision 0 is currently defined.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `revision` is not 0.
+    #[must_use]
+    pub const fn with_revision(revision: u64) -> Self {
+        assert!(revision == 0, "Only revision 0 is currently defined.");
+        Self {
+            id: Self::ID,
+            revision,
+            response: Response::empty(),
+        }
+    }
+
+    /// Returns a reference to the `TpmEventLogResponse` if it is available.
+    #[must_use]
+    pub fn response(&self) -> Option<&res::TpmEventLogResponse> {
+        self.response.get()
+    }
+}
+
+/// Request structure that asks the bootloader to keep IOMMUs enabled (`x86_64` only).
+///
+/// From base revision 5, the bootloader disables every Intel VT-d and AMD-Vi IOMMU before
+/// handoff unless this request is present. No response is provided on other
+/// architectures.
+#[repr(C, align(8))]
+pub struct KeepIommuRequest {
+    id: [u64; 4],
+    revision: u64,
+    response: Response<res::KeepIommuResponse>,
+}
+
+impl Default for KeepIommuRequest {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl KeepIommuRequest {
+    /// The Limine ID for the x86-64 Keep IOMMU Request.
+    pub const ID: [u64; 4] = limine_id!(0x8eba_abe5_1f49_0179, 0x2aa8_6a59_ffb4_ab0f);
+
+    /// Creates a new `KeepIommuRequest` with the recommended revision (0).
+    #[must_use]
+    pub const fn new() -> Self {
+        Self::with_revision(0)
+    }
+
+    /// Creates a new `KeepIommuRequest` with the specified revision.
+    ///
+    /// Only revision 0 is currently defined.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `revision` is not 0.
+    #[must_use]
+    pub const fn with_revision(revision: u64) -> Self {
+        assert!(revision == 0, "Only revision 0 is currently defined.");
+        Self {
+            id: Self::ID,
+            revision,
+            response: Response::empty(),
+        }
+    }
+
+    /// Returns a reference to the `KeepIommuResponse` if it is available.
+    #[must_use]
+    pub fn response(&self) -> Option<&res::KeepIommuResponse> {
+        self.response.get()
+    }
+}
+
+/// Request structure for the frequency of the primary timestamp counter.
+///
+/// The primary timestamp counter is the one read by `RDTSC` on `x86_64`, `CNTPCT_EL0` on
+/// `AArch64`, `RDTIME` on RISC-V and `RDTIME.D` on `LoongArch64`. No response is provided
+/// if the bootloader cannot determine the frequency.
+#[repr(C, align(8))]
+pub struct TscFrequencyRequest {
+    id: [u64; 4],
+    revision: u64,
+    response: Response<res::TscFrequencyResponse>,
+}
+
+impl Default for TscFrequencyRequest {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TscFrequencyRequest {
+    /// The Limine ID for the TSC Frequency Request.
+    pub const ID: [u64; 4] = limine_id!(0x10f2_ee1d_87d1_95e4, 0xf747_a2b7_8f6d_db31);
+
+    /// Creates a new `TscFrequencyRequest` with the recommended revision (0).
+    #[must_use]
+    pub const fn new() -> Self {
+        Self::with_revision(0)
+    }
+
+    /// Creates a new `TscFrequencyRequest` with the specified revision.
+    ///
+    /// Only revision 0 is currently defined.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `revision` is not 0.
+    #[must_use]
+    pub const fn with_revision(revision: u64) -> Self {
+        assert!(revision == 0, "Only revision 0 is currently defined.");
+        Self {
+            id: Self::ID,
+            revision,
+            response: Response::empty(),
+        }
+    }
+
+    /// Returns a reference to the `TscFrequencyResponse` if it is available.
+    #[must_use]
+    pub fn response(&self) -> Option<&res::TscFrequencyResponse> {
+        self.response.get()
+    }
+}
+
+/// Request structure for the parameters the bootloader used to set up its Flanterm
+/// framebuffer terminals.
+///
+/// This feature needs a [`FramebufferRequest`] as well. No response is provided if no
+/// framebuffer is available.
+#[repr(C, align(8))]
+pub struct FlantermFbInitParamsRequest {
+    id: [u64; 4],
+    revision: u64,
+    response: Response<res::FlantermFbInitParamsResponse>,
+}
+
+impl Default for FlantermFbInitParamsRequest {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl FlantermFbInitParamsRequest {
+    /// The Limine ID for the Flanterm FB Init Params Request.
+    pub const ID: [u64; 4] = limine_id!(0x3259_399f_e7c5_f126, 0xe01c_1c8c_5db9_d1a9);
+
+    /// Creates a new `FlantermFbInitParamsRequest` with the recommended revision (0).
+    #[must_use]
+    pub const fn new() -> Self {
+        Self::with_revision(0)
+    }
+
+    /// Creates a new `FlantermFbInitParamsRequest` with the specified revision.
+    ///
+    /// Only revision 0 is currently defined.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `revision` is not 0.
+    #[must_use]
+    pub const fn with_revision(revision: u64) -> Self {
+        assert!(revision == 0, "Only revision 0 is currently defined.");
+        Self {
+            id: Self::ID,
+            revision,
+            response: Response::empty(),
+        }
+    }
+
+    /// Returns a reference to the `FlantermFbInitParamsResponse` if it is available.
+    #[must_use]
+    pub fn response(&self) -> Option<&res::FlantermFbInitParamsResponse> {
+        self.response.get()
+    }
+}
+
+/// Request structure for random 64-bit values.
+///
+/// The bootloader draws the values from the strongest source it has, such as CPU
+/// instructions or firmware services, and falls back to weaker sources where nothing
+/// stronger exists. They suit seeding an RNG.
+#[repr(C, align(8))]
+pub struct EntropyRequest {
+    id: [u64; 4],
+    revision: u64,
+    response: Response<res::EntropyResponse>,
+    /// The number of random 64-bit values requested.
+    pub value_count: u64,
+}
+
+impl EntropyRequest {
+    /// The Limine ID for the Entropy Request.
+    pub const ID: [u64; 4] = limine_id!(0x65ea_8025_5d56_82c5, 0x9117_2407_23f4_93eb);
+
+    /// Creates a new `EntropyRequest` with the recommended revision (0).
+    #[must_use]
+    pub const fn new(value_count: u64) -> Self {
+        Self::with_revision(0, value_count)
+    }
+
+    /// Creates a new `EntropyRequest` with the specified revision.
+    ///
+    /// Only revision 0 is currently defined.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `revision` is not 0.
+    #[must_use]
+    pub const fn with_revision(revision: u64, value_count: u64) -> Self {
+        assert!(revision == 0, "Only revision 0 is currently defined.");
+        Self {
+            id: Self::ID,
+            revision,
+            response: Response::empty(),
+            value_count,
+        }
+    }
+
+    /// Returns a reference to the `EntropyResponse` if it is available.
+    #[must_use]
+    pub fn response(&self) -> Option<&res::EntropyResponse> {
+        self.response.get()
+    }
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::unreadable_literal,
+    reason = "IDs are written as in the spec, so they can be compared to it by eye"
+)]
+mod tests {
+    use core::mem::offset_of;
+
+    use super::*;
+
+    #[test]
+    fn request_ids_match_spec() {
+        /// Checks a request ID against `LIMINE_COMMON_MAGIC` and two words from the spec.
+        fn check(actual: [u64; 4], a: u64, b: u64) {
+            assert_eq!(actual, [0xc7b1dd30df4c8b88, 0x0a82e883a194f07b, a, b]);
+        }
+        check(
+            BootloaderInfoRequest::ID,
+            0xf55038d8e2a1202f,
+            0x279426fcf5f59740,
+        );
+        check(
+            ExecutableCmdlineRequest::ID,
+            0x4b161536e598651e,
+            0xb390ad4a2f1f303a,
+        );
+        check(
+            FirmwareTypeRequest::ID,
+            0x8c2f75d90bef28a8,
+            0x7045a4688eac00c3,
+        );
+        check(StackSizeRequest::ID, 0x224ef0460a8e8926, 0xe1cb0fc25f46ea3d);
+        check(HhdmRequest::ID, 0x48dcf1cb8ad2b852, 0x63984e959a98244b);
+        check(
+            FramebufferRequest::ID,
+            0x9d5827dcd881dd75,
+            0xa3148604f6fab11b,
+        );
+        check(
+            PagingModeRequest::ID,
+            0x95c1a0edab0944cb,
+            0xa4e5cb3842f7488a,
+        );
+        check(MpRequest::ID, 0x95a67b819a1b857e, 0xa0b61b723b6a73e0);
+        check(BspHartIdRequest::ID, 0x1369359f025525f9, 0x2ff2a56178391bb6);
+        check(MemMapRequest::ID, 0x67cf3d9d378a806f, 0xe304acdfc50c3c62);
+        check(
+            EntryPointRequest::ID,
+            0x13d86c035a1cd3e1,
+            0x2b0caa89d8f3026a,
+        );
+        check(
+            ExecutableFileRequest::ID,
+            0xad97e90e83f1ed67,
+            0x31eb5d1c5ff23b69,
+        );
+        check(ModuleRequest::ID, 0x3e7e279702be32af, 0xca1c4f3bd1280cee);
+        check(RsdpRequest::ID, 0xc5e77b6b397e7b43, 0x27637845accdcf3c);
+        check(SmbiosRequest::ID, 0x9e9046f11e095391, 0xaa4a520fefbde5ee);
+        check(
+            EfiSystemTableRequest::ID,
+            0x5ceba5163eaaf6d6,
+            0x0a6981610cf65fcc,
+        );
+        check(
+            TpmEventLogRequest::ID,
+            0x98e094fc7e76e979,
+            0xee8d8775c54e1d1f,
+        );
+        check(
+            EfiMemoryMapRequest::ID,
+            0x7df62a431d6872d5,
+            0xa4fcdfb3e57306c8,
+        );
+        check(
+            DateAtBootRequest::ID,
+            0x502746e184c088aa,
+            0xfbc5ec83e6327893,
+        );
+        check(
+            ExecutableAddressRequest::ID,
+            0x71ba76863cc55f63,
+            0xb2644a48c516a487,
+        );
+        check(
+            DeviceTreeBlobRequest::ID,
+            0xb40ddb48fb54bac7,
+            0x545081493f81ffb7,
+        );
+        check(
+            BootloaderPerformanceRequest::ID,
+            0x6b50ad9bf36d13ad,
+            0xdc4c7e88fc759e17,
+        );
+        check(KeepIommuRequest::ID, 0x8ebaabe51f490179, 0x2aa86a59ffb4ab0f);
+        check(
+            TscFrequencyRequest::ID,
+            0x10f2ee1d87d195e4,
+            0xf747a2b78f6ddb31,
+        );
+        check(
+            FlantermFbInitParamsRequest::ID,
+            0x3259399fe7c5f126,
+            0xe01c1c8c5db9d1a9,
+        );
+        check(EntropyRequest::ID, 0x65ea80255d5682c5, 0x9117240723f493eb);
+    }
+
+    #[test]
+    fn markers_match_spec() {
+        assert_eq!(
+            RequestsStartMarker::ID,
+            [
+                0xf6b8f4b39de7d1ae,
+                0xfab91a6940fcb9cf,
+                0x785c6ed015d3e316,
+                0x181e920a7852b9d9
+            ]
+        );
+        assert_eq!(
+            RequestsEndMarker::ID,
+            [0xadc0e0531bb10d03, 0x9572709f31764c62]
+        );
+        assert_eq!(BaseRevision::ID, [0xf9562b2d5c95a6c8, 0x6a7b384944536bdc]);
+    }
+
+    #[test]
+    fn base_revision_requests_six() {
+        let tag = BaseRevision::new();
+        // SAFETY: The test owns `tag`, so nothing else reads or writes it.
+        assert_eq!(
+            unsafe { *tag.0.get() },
+            [0xf9562b2d5c95a6c8, 0x6a7b384944536bdc, 6]
+        );
+        assert_eq!(tag.revision_slot(), 6);
+        assert!(!tag.is_supported());
+    }
+
+    #[test]
+    fn loaded_revision_is_none_until_written() {
+        let tag = BaseRevision::new();
+        assert_eq!(tag.loaded_revision(), None);
+        // SAFETY: The test owns `tag`, so nothing else reads or writes it. This mimics
+        // what the bootloader writes when it supports the requested revision.
+        unsafe { *tag.0.get() = [BaseRevision::ID[0], 6, 0] };
+        assert_eq!(tag.loaded_revision(), Some(6));
+        assert!(tag.is_supported());
+    }
+
+    #[test]
+    fn request_layouts_match_spec() {
+        assert_eq!(size_of::<BaseRevision>(), 24);
+        assert_eq!(size_of::<RequestsStartMarker>(), 32);
+        assert_eq!(size_of::<RequestsEndMarker>(), 16);
+        assert_eq!(offset_of!(HhdmRequest, revision), 32);
+        assert_eq!(offset_of!(HhdmRequest, response), 40);
+        assert_eq!(size_of::<HhdmRequest>(), 48);
+        assert_eq!(offset_of!(StackSizeRequest, stack_size), 48);
+        assert_eq!(offset_of!(PagingModeRequest, mode), 48);
+        assert_eq!(offset_of!(PagingModeRequest, max_mode), 56);
+        assert_eq!(offset_of!(PagingModeRequest, min_mode), 64);
+        assert_eq!(offset_of!(MpRequest, flags), 48);
+        assert_eq!(size_of::<MpRequest>(), 56);
+        assert_eq!(offset_of!(EntryPointRequest, entry_point_address), 48);
+        assert_eq!(offset_of!(ModuleRequest, internal_module_count), 48);
+        assert_eq!(offset_of!(ModuleRequest, internal_modules), 56);
+        assert_eq!(offset_of!(EntropyRequest, value_count), 48);
+    }
+
+    #[test]
+    fn default_revisions() {
+        assert_eq!(FramebufferRequest::new().revision, 0);
+        assert_eq!(
+            PagingModeRequest::new(PagingMode::DEFAULT, PagingMode::MIN, PagingMode::DEFAULT)
+                .revision,
+            1
+        );
+        assert_eq!(ModuleRequest::new(core::ptr::null(), 0).revision, 1);
     }
 }

@@ -64,7 +64,7 @@ extern "C" fn kmain() -> ! {
         let _ = writeln!(
             Serial,
             "hadron: Limine does not support base revision {}",
-            BASE_REVISION.revision()
+            BASE_REVISION.revision_slot()
         );
         exit_qemu(EXIT_FAILURE);
     }
@@ -74,6 +74,9 @@ extern "C" fn kmain() -> ! {
             (info.name(), info.version())
         });
     let _ = writeln!(Serial, "hadron: booted by {name} {version}");
+    if let Some(revision) = BASE_REVISION.loaded_revision() {
+        let _ = writeln!(Serial, "hadron: Limine base revision {revision}");
+    }
     if hadron_config::KTEST {
         crate::ktest::run();
     }
