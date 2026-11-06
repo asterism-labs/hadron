@@ -17,8 +17,9 @@ use arch_x86_64::{PhysAddr, VirtAddr};
 use mm::{DirectMap, Region};
 
 use crate::arch::x86_64::qemu::{self, ExitCode};
-use crate::arch::x86_64::{cpu, gdt, idt, lapic, pic};
+use crate::arch::x86_64::{cpu, gdt, idt, lapic, pic, tsc};
 use crate::console::{self, kprintln};
+use crate::time::ClockSource;
 use crate::{acpi, heap, memory, percpu, sched, time};
 
 /// EFER.LMA, bit 10: long mode is active.
@@ -143,7 +144,18 @@ fn kmain_paged(info: BootInfo) -> ! {
         per_ms,
         lapic::HZ
     );
-    time::install(&lapic::TickClock);
+    // The TSC reads in a few cycles, so it wins when it keeps time.
+    let clock: &'static dyn ClockSource = match tsc::init() {
+        Ok(tsc) => {
+            kprintln!("hadron: invariant TSC at {} kHz", tsc.frequency() / 1000);
+            tsc
+        }
+        Err(why) => {
+            kprintln!("hadron: not using the TSC: {why}");
+            &lapic::TickClock
+        }
+    };
+    time::install(clock);
     kprintln!("hadron: clock source is {}", time::source_name());
     sched::init();
     // SAFETY: the PICs are masked. The local APIC delivers only its timer
