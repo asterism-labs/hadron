@@ -39,7 +39,7 @@ use core::task::{Context, Poll, Waker};
 use thread::{EXITED, PARKED, READY, RUNNING};
 pub(crate) use thread::{Thread, spawn};
 
-use crate::arch::x86_64::context;
+use crate::arch::x86_64::{context, cpu};
 use crate::percpu::{self, IrqGuard};
 use crate::sync::{IrqSpinLock, levels};
 
@@ -107,19 +107,25 @@ pub(crate) fn init() {
     cpu.idle.set(Arc::into_raw(idle));
 }
 
-/// Runs the idle loop on the boot thread for good.
+/// Runs the idle loop on the boot thread for good. It halts the CPU
+/// while no thread is ready, and an interrupt that wakes one ends the
+/// halt.
 ///
 /// # Panics
 ///
-/// Panics when no thread is ready, since nothing can wake one until the
-/// kernel handles device or timer interrupts.
+/// Panics if called with interrupts masked, since then no interrupt could
+/// end the halt.
 pub(crate) fn run_idle() -> ! {
     loop {
-        let ready = !RUN_QUEUE.lock().is_empty();
-        assert!(
-            ready,
-            "every thread is blocked, and no interrupt can wake one yet"
-        );
+        let enabled = cpu::save_and_disable_interrupts();
+        assert!(enabled, "the idle thread runs with interrupts enabled");
+        if RUN_QUEUE.lock().is_empty() {
+            // SAFETY: boot enabled interrupts, so every interrupt that can
+            // arrive has a handler, and no `IrqGuard` is alive here.
+            unsafe { cpu::enable_interrupts_and_halt() };
+        } else {
+            cpu::restore_interrupts(enabled);
+        }
         yield_now();
     }
 }

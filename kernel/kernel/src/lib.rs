@@ -47,6 +47,8 @@ mod percpu;
 mod sched;
 #[cfg(all(target_os = "none", target_arch = "x86_64"))]
 mod sync;
+#[cfg(all(target_os = "none", target_arch = "x86_64"))]
+mod time;
 
 /// The kernel binary's main thread: runs the kernel tests under Gluon's
 /// `test` profile, else returns, and QEMU exits with success.

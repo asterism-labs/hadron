@@ -299,6 +299,23 @@ pub(crate) unsafe fn gs_dec_u32(offset: usize) -> bool {
     zero != 0
 }
 
+/// Enables maskable interrupts and halts until the next one arrives.
+///
+/// `sti` holds interrupts off until after the next instruction (SDM Vol.
+/// 2B, STI), so an interrupt that arrives after the caller last checked
+/// for work still ends the halt instead of being taken before it.
+///
+/// # Safety
+///
+/// As for [`enable_interrupts`]. No `IrqGuard` may be alive, since it
+/// expects interrupts to stay masked.
+pub(crate) unsafe fn enable_interrupts_and_halt() {
+    // SAFETY: the caller guarantees no unhandled interrupt can arrive and
+    // that nothing expects interrupts masked. `hlt` returns after the
+    // interrupt's handler does.
+    unsafe { asm!("sti", "hlt", options(nostack)) };
+}
+
 /// Whether maskable interrupts are enabled on this CPU.
 pub(crate) fn interrupts_enabled() -> bool {
     let rflags: u64;

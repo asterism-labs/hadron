@@ -170,10 +170,12 @@ pub(crate) fn ticks() -> u64 {
     TICKS.load(Ordering::Relaxed)
 }
 
-/// The timer handler: counts the tick and asks for a thread switch, which
-/// the interrupt exit makes.
+/// The timer handler: counts the tick, wakes the sleepers whose deadline
+/// it reaches, and asks for a thread switch, which the interrupt exit
+/// makes.
 fn tick() {
     TICKS.fetch_add(1, Ordering::Relaxed);
+    crate::time::expire();
     percpu::current(&IrqGuard::new()).set_need_resched();
 }
 

@@ -10,10 +10,12 @@
 use alloc::collections::VecDeque;
 use core::pin::Pin;
 use core::task::{Context, Poll, Waker};
+use core::time::Duration;
 
 use super::level::levels;
 use super::spin::IrqSpinLock;
 use crate::sched;
+use crate::time::{self, TimedOut};
 
 /// Wakers waiting for something. Wakes are IRQ-safe.
 pub(crate) struct WaitQueue {
@@ -46,6 +48,27 @@ impl WaitQueue {
     #[track_caller]
     pub(crate) fn block_until(&self, condition: impl FnMut() -> bool) {
         sched::block_on(self.wait_until(condition));
+    }
+
+    /// Blocks the current thread until `condition` returns true or
+    /// `duration` passes, whichever comes first.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TimedOut`] if `duration` passed with `condition` still
+    /// false.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the thread may not sleep (see [`sched::might_sleep`]).
+    #[track_caller]
+    pub(crate) fn block_until_timeout(
+        &self,
+        condition: impl FnMut() -> bool,
+        duration: Duration,
+    ) -> Result<(), TimedOut> {
+        let deadline = time::deadline_after(duration);
+        sched::block_on(time::timeout(deadline, self.wait_until(condition)))
     }
 
     /// Wakes the waiter that registered first.
@@ -123,5 +146,37 @@ impl<F> WaitUntil<'_, F> {
 impl<F> Drop for WaitUntil<'_, F> {
     fn drop(&mut self) {
         self.finish();
+    }
+}
+
+ktest::ktest! {
+    fn block_until_timeout_times_out_when_nothing_wakes() {
+        static QUEUE: WaitQueue = WaitQueue::new();
+        let start = time::now();
+        let result = QUEUE.block_until_timeout(|| false, Duration::from_millis(20));
+        assert_eq!(result, Err(TimedOut));
+        assert!(time::now().ticks() - start.ticks() >= 2, "waited the full 20 ms");
+    }
+}
+
+ktest::ktest! {
+    fn block_until_timeout_returns_ok_on_a_wake() {
+        use alloc::sync::Arc;
+        use core::sync::atomic::{AtomicBool, Ordering};
+
+        static QUEUE: WaitQueue = WaitQueue::new();
+        static READY: AtomicBool = AtomicBool::new(false);
+        let woke = Arc::new(AtomicBool::new(false));
+        let flag = woke.clone();
+        let waiter = sched::spawn("waiter", move || {
+            let result =
+                QUEUE.block_until_timeout(|| READY.load(Ordering::SeqCst), Duration::from_secs(10));
+            flag.store(result.is_ok(), Ordering::SeqCst);
+        });
+        sched::yield_now();
+        READY.store(true, Ordering::SeqCst);
+        QUEUE.wake_all();
+        waiter.join();
+        assert!(woke.load(Ordering::SeqCst), "the wake came before the timeout");
     }
 }

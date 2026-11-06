@@ -60,6 +60,9 @@ pub(crate) mod levels {
            KtestSpin
         => /// The wakers inside a `WaitQueue`.
            WaitQueue
+        => /// The timer queue of sleeping wakers. The timer interrupt
+           /// takes it.
+           Timers
         => /// The queue of threads ready to run. `Waker`s take it, so it
            /// comes after every lock that a waker may be woken under.
            RunQueue
