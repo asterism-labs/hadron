@@ -11,7 +11,8 @@ pub mod limine;
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicPtr, Ordering};
 
-use arch_x86_64::paging::PAGE_SIZE;
+use arch_x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
+use arch_x86_64::structures::paging::PAGE_SIZE;
 use arch_x86_64::{PhysAddr, VirtAddr};
 use mm::{DirectMap, Region};
 
@@ -20,14 +21,6 @@ use crate::arch::x86_64::{cpu, gdt, idt, lapic, pic};
 use crate::console::{self, kprintln};
 use crate::{acpi, heap, memory, percpu, sched};
 
-/// CR0.WP, bit 16: supervisor writes honour read-only pages.
-const CR0_WP: u64 = 1 << 16;
-/// CR0.PG, bit 31: paging.
-const CR0_PG: u64 = 1 << 31;
-/// CR4.PAE, bit 5: physical address extension, which long mode needs.
-const CR4_PAE: u64 = 1 << 5;
-/// CR4.LA57, bit 12: 5-level paging.
-const CR4_LA57: u64 = 1 << 12;
 /// EFER.LMA, bit 10: long mode is active.
 const EFER_LMA: u64 = 1 << 10;
 /// EFER.NXE, bit 11: the no-execute page bit.
@@ -87,12 +80,18 @@ fn check_cpu_state() {
         !cpu::interrupts_enabled(),
         "interrupts are masked at kernel entry"
     );
-    let cr0 = cpu::cr0();
-    assert!(cr0 & CR0_PG != 0, "paging is on at kernel entry");
-    assert!(cr0 & CR0_WP != 0, "CR0.WP is set at kernel entry");
-    let cr4 = cpu::cr4();
+    let cr0 = Cr0::read();
     assert!(
-        cr4 & CR4_PAE != 0 && cr4 & CR4_LA57 == 0,
+        cr0.contains(Cr0Flags::PAGING),
+        "paging is on at kernel entry"
+    );
+    assert!(
+        cr0.contains(Cr0Flags::WRITE_PROTECT),
+        "CR0.WP is set at kernel entry"
+    );
+    let cr4 = Cr4::read();
+    assert!(
+        cr4.contains(Cr4Flags::PHYSICAL_ADDRESS_EXTENSION) && !cr4.contains(Cr4Flags::LA57),
         "4-level paging is active at kernel entry"
     );
     let efer = cpu::efer();

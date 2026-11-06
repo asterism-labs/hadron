@@ -8,7 +8,7 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use arch_x86_64::VirtAddr;
-use arch_x86_64::paging::PAGE_SIZE;
+use arch_x86_64::structures::paging::PAGE_SIZE;
 
 use super::{cpu, irq, pit};
 use crate::acpi::Madt;

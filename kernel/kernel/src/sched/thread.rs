@@ -8,7 +8,7 @@ use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
 use arch_x86_64::VirtAddr;
-use arch_x86_64::paging::PAGE_SIZE;
+use arch_x86_64::structures::paging::PAGE_SIZE;
 
 use crate::arch::x86_64::context;
 use crate::memory::{self, KERNEL_STACK_SIZE, THREAD_STACKS};

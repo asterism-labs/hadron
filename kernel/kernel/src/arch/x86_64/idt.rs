@@ -2,9 +2,12 @@
 //! handlers run with interrupts masked. Double faults switch to their own
 //! stack.
 
-use arch_x86_64::{Exception, GateDescriptor, GateType, Idt, PrivilegeLevel};
+use arch_x86_64::instructions::tables;
+use arch_x86_64::structures::exception::Exception;
+use arch_x86_64::structures::idt::{GateDescriptor, GateType, Idt};
+use arch_x86_64::structures::segment::PrivilegeLevel;
 
-use super::{gdt, tables, trap};
+use super::{gdt, trap};
 use crate::sync::WriteOnce;
 
 /// The IDT. All CPUs can share it.

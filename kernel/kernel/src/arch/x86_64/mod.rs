@@ -12,5 +12,4 @@ pub(crate) mod pic;
 pub(crate) mod pit;
 pub(crate) mod port;
 pub(crate) mod qemu;
-pub(crate) mod tables;
 pub(crate) mod trap;

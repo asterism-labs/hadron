@@ -9,7 +9,7 @@ use alloc::vec::Vec;
 
 use ::acpi::{AcpiHandler, AcpiTables, MadtEntry};
 use arch_x86_64::PhysAddr;
-use arch_x86_64::paging::PAGE_SIZE;
+use arch_x86_64::structures::paging::PAGE_SIZE;
 
 use crate::memory::{self, DIRECT_MAP};
 use crate::sync::WriteOnce;

@@ -2,6 +2,8 @@
 
 use core::arch::asm;
 
+use arch_x86_64::registers::control::{Cr3, Cr3Flags, Cr4, Cr4Flags};
+
 /// Masks maskable interrupts on this CPU.
 pub(crate) fn disable_interrupts() {
     // SAFETY: `cli` only clears the interrupt flag. Code that later relies on
@@ -26,22 +28,6 @@ pub(crate) fn breakpoint() {
     // SAFETY: `int3` enters the #BP handler, which returns to the next
     // instruction with every register restored.
     unsafe { asm!("int3", options(nomem, nostack)) };
-}
-
-/// Reads CR0.
-pub(crate) fn cr0() -> u64 {
-    let value: u64;
-    // SAFETY: reading CR0 has no side effects.
-    unsafe { asm!("mov {}, cr0", out(reg) value, options(nomem, nostack, preserves_flags)) };
-    value
-}
-
-/// Reads CR4.
-pub(crate) fn cr4() -> u64 {
-    let value: u64;
-    // SAFETY: reading CR4 has no side effects.
-    unsafe { asm!("mov {}, cr4", out(reg) value, options(nomem, nostack, preserves_flags)) };
-    value
 }
 
 /// `IA32_EFER`, the extended feature enable register (Vol. 4, Table 2-2).
@@ -96,21 +82,9 @@ pub(crate) fn has_1g_pages() -> bool {
     max_extended >= 0x8000_0001 && __cpuid(0x8000_0001).edx & PAGE_1GB != 0
 }
 
-/// Reads CR2, which holds the address of the last page fault.
-pub(crate) fn cr2() -> u64 {
-    let value: u64;
-    // SAFETY: reading CR2 has no side effects.
-    unsafe { asm!("mov {}, cr2", out(reg) value, options(nomem, nostack, preserves_flags)) };
-    value
-}
-
-/// The PML4 frame CR3 points at. The low 12 bits, which hold PCID or
-/// cache flags, are dropped.
+/// The PML4 frame CR3 points at. The cache flags are dropped.
 pub(crate) fn cr3() -> mm::PhysFrame {
-    let value: u64;
-    // SAFETY: reading CR3 has no side effects.
-    unsafe { asm!("mov {}, cr3", out(reg) value, options(nomem, nostack, preserves_flags)) };
-    mm::PhysFrame::containing(arch_x86_64::PhysAddr::new(value & !0xfff))
+    mm::PhysFrame::containing(Cr3::read().0)
 }
 
 /// Loads `root` into CR3, then flushes every TLB entry, global ones
@@ -121,28 +95,17 @@ pub(crate) fn cr3() -> mm::PhysFrame {
 /// `root` must be a PML4 that maps the code, stack and data in use,
 /// including the caller's return address and everything it references.
 pub(crate) unsafe fn switch_page_tables(root: mm::PhysFrame) {
-    /// CR4.PGE, bit 7: global pages.
-    const CR4_PGE: u64 = 1 << 7;
     // SAFETY: the caller guarantees the new tables map everything in use.
-    // Clearing CR4.PGE flushes global entries, and restoring it turns
-    // global pages back on (Vol. 3A §5.10.4.1).
-    unsafe {
-        asm!(
-            "mov cr3, {root}",
-            "mov {cr4}, cr4",
-            "test {cr4}, {pge}",
-            "jz 2f",
-            "mov {tmp}, {cr4}",
-            "xor {tmp}, {pge}",
-            "mov cr4, {tmp}",
-            "mov cr4, {cr4}",
-            "2:",
-            root = in(reg) root.start().as_u64(),
-            cr4 = out(reg) _,
-            tmp = out(reg) _,
-            pge = in(reg) CR4_PGE,
-            options(nostack),
-        );
+    unsafe { Cr3::write(root.start(), Cr3Flags::empty()) };
+    let cr4 = Cr4::read();
+    if cr4.contains(Cr4Flags::PAGE_GLOBAL) {
+        // SAFETY: clearing CR4.PGE flushes global entries, and restoring it
+        // turns global pages back on (Vol. 3A §5.10.4.1). No other bit
+        // changes.
+        unsafe {
+            Cr4::write(cr4 - Cr4Flags::PAGE_GLOBAL);
+            Cr4::write(cr4);
+        }
     }
 }
 

@@ -48,7 +48,7 @@ use core::mem::size_of;
 use core::ops::Range;
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use arch_x86_64::paging::{Level, PAGE_SIZE, PageSize, PageTableFlags};
+use arch_x86_64::structures::paging::{Level, PAGE_SIZE, PageSize, PageTableFlags};
 use arch_x86_64::{PhysAddr, VirtAddr};
 use mm::allocators::{BitmapFrameAllocator, BumpAllocator};
 use mm::{

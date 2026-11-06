@@ -1,6 +1,6 @@
 //! The direct map: every physical address `p` is mapped at `p + offset`.
 
-use arch_x86_64::paging::PageTable;
+use arch_x86_64::structures::paging::PageTable;
 use arch_x86_64::{PhysAddr, VirtAddr};
 
 /// A direct map of physical memory at a fixed offset.

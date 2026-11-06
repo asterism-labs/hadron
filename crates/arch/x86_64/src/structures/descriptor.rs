@@ -1,7 +1,7 @@
 //! Segment descriptors (SDM Vol. 3A §3.4.5) and the 16-byte system
 //! descriptors of 64-bit mode (§3.5).
 
-use crate::segment::PrivilegeLevel;
+use crate::structures::segment::PrivilegeLevel;
 
 // Bits of the low 64-bit word, shared by both descriptor formats.
 /// Bits 0..16: limit bits 0..16.

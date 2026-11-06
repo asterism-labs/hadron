@@ -24,12 +24,14 @@
 use core::cell::UnsafeCell;
 use core::ptr;
 
-use arch_x86_64::{
-    Gdt, IstIndex, PrivilegeLevel, SegmentDescriptor, SegmentSelector, SystemDescriptor,
-    TableIndicator, TaskStateSegment,
-};
+use arch_x86_64::instructions::tables;
+use arch_x86_64::registers::segmentation::{Cs, Ds, Es, Ss};
+use arch_x86_64::structures::descriptor::{SegmentDescriptor, SystemDescriptor, SystemType};
+use arch_x86_64::structures::idt::IstIndex;
+use arch_x86_64::structures::segment::{PrivilegeLevel, SegmentSelector, TableIndicator};
+use arch_x86_64::structures::table::Gdt;
+use arch_x86_64::structures::tss::TaskStateSegment;
 
-use super::tables;
 use crate::sync::WriteOnce;
 
 /// Ring 0 code.
@@ -133,8 +135,11 @@ pub(crate) fn init() {
     // busy bit `ltr` writes does not change memory behind a live reference.
     unsafe {
         tables::lgdt(&pointer);
-        tables::load_code_segment(KERNEL_CODE);
-        tables::load_data_segments(KERNEL_DATA);
+        Cs::write(KERNEL_CODE);
+        // FS and GS are left alone, since their bases come from MSRs.
+        Ds::write(KERNEL_DATA);
+        Es::write(KERNEL_DATA);
+        Ss::write(KERNEL_DATA);
         tables::ltr(TSS);
         tables::lldt(SegmentSelector::NULL);
     }
@@ -144,8 +149,11 @@ ktest::ktest! {
     fn cpu_uses_the_kernel_gdt() {
         let gdt = BSP_GDT.get().expect("gdt::init ran before the tests");
         assert_eq!(tables::sgdt(), gdt.pointer());
-        assert_eq!(tables::code_segment(), KERNEL_CODE);
-        assert_eq!(tables::task_register(), TSS);
+        assert_eq!(Cs::read(), KERNEL_CODE);
+        assert_eq!(Ds::read(), KERNEL_DATA);
+        assert_eq!(Es::read(), KERNEL_DATA);
+        assert_eq!(Ss::read(), KERNEL_DATA);
+        assert_eq!(tables::str(), TSS);
     }
 }
 
@@ -161,7 +169,7 @@ ktest::ktest! {
 ktest::ktest! {
     fn ltr_marked_the_tss_busy() {
         let gdt = BSP_GDT.get().expect("gdt::init ran before the tests");
-        let ty = arch_x86_64::SystemType::of(gdt.slot(TSS.index()));
-        assert_eq!(ty, Some(arch_x86_64::SystemType::TssBusy));
+        let ty = SystemType::of(gdt.slot(TSS.index()));
+        assert_eq!(ty, Some(SystemType::TssBusy));
     }
 }

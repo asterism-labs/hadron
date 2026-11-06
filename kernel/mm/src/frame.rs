@@ -3,7 +3,7 @@
 use core::fmt;
 
 use arch_x86_64::PhysAddr;
-use arch_x86_64::paging::PAGE_SIZE;
+use arch_x86_64::structures::paging::PAGE_SIZE;
 
 /// A 4 KiB aligned, 4 KiB physical frame.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

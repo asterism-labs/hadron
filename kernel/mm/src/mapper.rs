@@ -11,7 +11,7 @@
 
 use core::ops::Range;
 
-use arch_x86_64::paging::{Level, PageSize, PageTableEntry, PageTableFlags};
+use arch_x86_64::structures::paging::{Level, PageSize, PageTableEntry, PageTableFlags};
 use arch_x86_64::{PhysAddr, VirtAddr};
 
 use crate::direct_map::DirectMap;
@@ -407,7 +407,7 @@ mod tests {
     #[test]
     fn empty_table_is_all_zero_bits() {
         // `new_table` zeroes frames in place on this assumption.
-        let table = arch_x86_64::paging::PageTable::new();
+        let table = arch_x86_64::structures::paging::PageTable::new();
         assert!(table.entries.iter().all(|entry| entry.bits() == 0));
     }
     use crate::testing::FakeMemory;

@@ -3,8 +3,8 @@
 use core::marker::PhantomData;
 use core::mem::size_of;
 
-use crate::descriptor::{SegmentDescriptor, SystemDescriptor};
-use crate::segment::{PrivilegeLevel, SegmentSelector, TableIndicator};
+use crate::structures::descriptor::{SegmentDescriptor, SystemDescriptor};
+use crate::structures::segment::{PrivilegeLevel, SegmentSelector, TableIndicator};
 
 /// The most slots a descriptor table can hold.
 const MAX_SLOTS: usize = 8192;
@@ -163,7 +163,7 @@ impl<K: TableKind, const N: usize> Default for DescriptorTable<K, N> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::descriptor::SystemType;
+    use crate::structures::descriptor::SystemType;
 
     #[test]
     fn pointer_is_ten_bytes() {

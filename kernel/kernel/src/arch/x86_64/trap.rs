@@ -19,9 +19,10 @@ use core::arch::global_asm;
 use core::fmt;
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use arch_x86_64::Exception;
+use arch_x86_64::registers::control::Cr2;
+use arch_x86_64::structures::exception::Exception;
 
-use super::{cpu, irq};
+use super::irq;
 use crate::console::kprintln;
 
 /// Number of vectors with a stub: all of them.
@@ -219,7 +220,7 @@ fn fatal(frame: &TrapFrame, exception: Option<Exception>) -> ! {
         frame.error_code
     );
     if exception == Some(Exception::PageFault) {
-        kprintln!("  address {:#018x}", cpu::cr2());
+        kprintln!("  address {:#018x}", Cr2::read());
     }
     kprintln!("{frame}");
     panic!("{name} at {:#x}", frame.rip);

@@ -6,7 +6,7 @@
 
 use core::mem::size_of;
 
-use crate::idt::IstIndex;
+use crate::structures::idt::IstIndex;
 
 /// The 104-byte 64-bit TSS. Its 8-byte fields sit at 4-byte offsets, so
 /// the struct is packed to 4.

@@ -4,6 +4,8 @@
 //     gluon clippy        lint every crate
 //     gluon run           boot the kernel under QEMU through UEFI and Limine
 //     gluon run -p test   boot the kernel and run the kernel tests
+//     gluon test          run the host tests, the integration tests and
+//                         the kernel tests
 
 use gluon_config::{Config, ConfigValue, Result};
 
@@ -11,6 +13,9 @@ use gluon_config::{Config, ConfigValue, Result};
 const LIBRARIES: &[&str] = &[
     "acpi", "arch-x86_64", "dwarf", "elf", "fdt", "ktest", "limine", "linkset", "mm", "uefi",
 ];
+
+/// Libraries whose unit tests run on the host.
+const HOST_TESTS: &[&str] = &["acpi", "arch-x86_64", "dwarf", "elf", "fdt", "limine", "mm"];
 
 pub fn config(cfg: &mut Config) -> Result<()> {
     cfg.project("hadron", "0.1.0").default_profile("dev");
@@ -39,6 +44,7 @@ pub fn config(cfg: &mut Config) -> Result<()> {
         .help("Check lock order at run time");
     cfg.preset("test").set("KTEST", ConfigValue::Bool(true));
     cfg.profile("test").inherits("dev").preset("test");
+    cfg.boot_test("ktest").profile("test");
 
     // x86_64-unknown-none links a position-independent executable by
     // default. Limine loads one only with a PT_DYNAMIC segment, so link a
@@ -57,6 +63,11 @@ pub fn config(cfg: &mut Config) -> Result<()> {
         libraries.package(name);
     }
     drop(libraries);
+    let mut host_tests = cfg.host_tests();
+    for name in HOST_TESTS {
+        host_tests = host_tests.package(name);
+    }
+    drop(host_tests);
 
     // To upgrade Limine, change the version and the hash. An empty hash
     // makes the build fail and print the hash of the file it fetched.

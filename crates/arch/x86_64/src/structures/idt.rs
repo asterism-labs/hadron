@@ -2,8 +2,8 @@
 
 use core::mem::size_of;
 
-use crate::segment::{PrivilegeLevel, SegmentSelector};
-use crate::table::DescriptorTablePointer;
+use crate::structures::segment::{PrivilegeLevel, SegmentSelector};
+use crate::structures::table::DescriptorTablePointer;
 
 /// Number of vectors in an IDT.
 pub const VECTORS: usize = 256;
@@ -193,7 +193,7 @@ impl Default for Idt {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::segment::TableIndicator;
+    use crate::structures::segment::TableIndicator;
 
     const KERNEL_CODE: SegmentSelector =
         SegmentSelector::new(1, TableIndicator::Global, PrivilegeLevel::Ring0);

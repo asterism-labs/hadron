@@ -4,7 +4,7 @@
 //! direct map offset is the allocation's address.
 
 use arch_x86_64::PhysAddr;
-use arch_x86_64::paging::{PAGE_SIZE, PageTable};
+use arch_x86_64::structures::paging::{PAGE_SIZE, PageTable};
 
 use crate::direct_map::DirectMap;
 use crate::frame::{FrameAllocator, PhysFrame};

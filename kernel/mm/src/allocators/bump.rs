@@ -5,7 +5,7 @@
 //! allocated when it takes over.
 
 use arch_x86_64::PhysAddr;
-use arch_x86_64::paging::PAGE_SIZE;
+use arch_x86_64::structures::paging::PAGE_SIZE;
 
 use crate::frame::{FrameAllocator, PhysFrame};
 

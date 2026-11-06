@@ -187,7 +187,7 @@ impl VirtAddr {
     /// The 9-bit table index this address selects at `level`.
     #[must_use]
     #[allow(clippy::cast_possible_truncation)] // masked to 9 bits
-    pub const fn table_index(self, level: crate::paging::Level) -> usize {
+    pub const fn table_index(self, level: crate::structures::paging::Level) -> usize {
         ((self.0 >> level.shift()) & 0x1ff) as usize
     }
 
@@ -234,7 +234,7 @@ impl fmt::LowerHex for VirtAddr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::paging::Level;
+    use crate::structures::paging::Level;
 
     #[test]
     fn phys_addr_rejects_bits_above_51() {

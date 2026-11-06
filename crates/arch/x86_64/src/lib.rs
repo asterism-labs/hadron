@@ -1,33 +1,24 @@
-//! `x86_64` system structures as plain data: physical and virtual
-//! addresses, 4-level page tables, segment selectors, segment and system
-//! descriptors, the GDT and LDT, the 64-bit TSS, the IDT and the CPU
-//! exceptions.
+//! `x86_64` CPU support for Hadron.
 //!
-//! The crate has no inline assembly. The kernel's `arch::x86_64` module
-//! loads these structures with `lgdt`, `lidt`, `ltr` and `lldt`, and the host test
-//! suite checks every encoding.
+//! - [`structures`]: system structures as plain data. Segment selectors,
+//!   segment and system descriptors, the GDT and LDT, the 64-bit TSS, the
+//!   IDT, the CPU exceptions and 4-level page tables.
+//! - [`registers`]: the control registers and the segment registers, with
+//!   typed flags.
+//! - [`instructions`]: the instructions that load and store the descriptor
+//!   table registers and the task register.
 //!
-//! References are to the Intel SDM, Volume 3A: §3.4.2 (segment selectors),
-//! §3.4.5 (segment descriptors), §3.5 (system descriptor types) and the
-//! chapter on task management for the 64-bit TSS and its descriptor, §6.3
-//! (exceptions) and §6.14 (64-bit interrupt handling), and §5.5 (4-level
-//! paging).
+//! Physical and virtual addresses sit at the crate root.
+//!
+//! The inline assembly in `registers` and `instructions` builds only for
+//! `x86_64`. Everything else, flag types included, builds on any host, and
+//! the host test suite checks every encoding.
 
 #![cfg_attr(not(test), no_std)]
 
 mod addr;
-mod descriptor;
-mod exception;
-mod idt;
-pub mod paging;
-mod segment;
-mod table;
-mod tss;
+pub mod instructions;
+pub mod registers;
+pub mod structures;
 
 pub use addr::{PHYS_ADDR_BITS, PhysAddr, VIRT_ADDR_BITS, VirtAddr};
-pub use descriptor::{SegmentDescriptor, SystemDescriptor, SystemType};
-pub use exception::Exception;
-pub use idt::{GateDescriptor, GateType, Idt, IstIndex, VECTORS};
-pub use segment::{PrivilegeLevel, SegmentSelector, TableIndicator};
-pub use table::{DescriptorTable, DescriptorTablePointer, Gdt, Global, Ldt, Local, TableKind};
-pub use tss::TaskStateSegment;
