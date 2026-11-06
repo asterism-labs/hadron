@@ -1,5 +1,5 @@
-//! ACPI: finds the tables through the RSDP and copies what the interrupt
-//! code needs from the MADT into [`Madt`].
+//! ACPI: finds the tables through the RSDP, copies what the interrupt
+//! code needs from the MADT into [`Madt`], and keeps where the HPET is.
 //!
 //! [`init`] reads the tables once, at boot, through the kernel's direct map.
 //! Firmware places them in ACPI-reclaimable or ACPI NVS memory, which the
@@ -7,10 +7,11 @@
 
 use alloc::vec::Vec;
 
-use ::acpi::{AcpiHandler, AcpiTables, MadtEntry};
+use ::acpi::{AcpiError, AcpiHandler, AcpiTables, MadtEntry};
 use arch_x86_64::PhysAddr;
 use arch_x86_64::structures::paging::PAGE_SIZE;
 
+use crate::console::kprintln;
 use crate::memory::{self, DIRECT_MAP};
 use crate::sync::WriteOnce;
 
@@ -78,6 +79,24 @@ pub(crate) struct LocalApicNmi {
 
 static MADT: WriteOnce<Madt> = WriteOnce::new();
 
+/// What the kernel keeps from the HPET table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Hpet {
+    /// Physical address of its register block.
+    pub(crate) address: PhysAddr,
+    /// Which HPET this is, when there are several.
+    pub(crate) number: u8,
+    /// The smallest period, in main counter ticks, that a comparator in
+    /// periodic mode can be set to without losing interrupts.
+    pub(crate) minimum_tick: u16,
+}
+
+/// The HPET table's contents, or `None` if there is no usable table.
+static HPET: WriteOnce<Option<Hpet>> = WriteOnce::new();
+
+/// The address space ID of system memory in a Generic Address Structure.
+const SYSTEM_MEMORY: u8 = 0;
+
 /// What the kernel keeps from the MADT.
 ///
 /// # Panics
@@ -97,7 +116,40 @@ pub(crate) fn init(rsdp: Option<PhysAddr>) -> &'static Madt {
     let rsdp = rsdp.expect("the bootloader found the ACPI RSDP");
     let tables = AcpiTables::new(rsdp.as_u64(), DirectMapHandler).expect("the ACPI RSDP is valid");
     let madt = tables.madt().expect("ACPI has a valid MADT");
+    HPET.init(read_hpet(&tables));
     MADT.init(Madt::read(&madt))
+}
+
+/// What the kernel keeps from the HPET table.
+///
+/// # Panics
+///
+/// Panics before [`init`].
+pub(crate) fn hpet() -> Option<&'static Hpet> {
+    HPET.get().expect("acpi::init ran").as_ref()
+}
+
+/// Reads the HPET table. A missing table means no HPET. A bad one is
+/// reported and treated as missing, since the kernel can boot without it.
+fn read_hpet(tables: &AcpiTables<DirectMapHandler>) -> Option<Hpet> {
+    let table = match tables.hpet() {
+        Ok(table) => table,
+        Err(AcpiError::TableNotFound) => return None,
+        Err(error) => {
+            kprintln!("hadron: ignoring an invalid HPET table: {error:?}");
+            return None;
+        }
+    };
+    let space = table.base_address.address_space_id;
+    if space != SYSTEM_MEMORY {
+        kprintln!("hadron: ignoring an HPET in address space {space}, not memory");
+        return None;
+    }
+    Some(Hpet {
+        address: PhysAddr::new(table.base_address.address),
+        number: table.hpet_number,
+        minimum_tick: table.minimum_tick,
+    })
 }
 
 impl Madt {
@@ -193,6 +245,14 @@ ktest::ktest! {
         assert_eq!(madt.io_apics.len(), 1);
         assert_eq!(madt.io_apics[0].address, PhysAddr::new(0xfec0_0000));
         assert_eq!(madt.io_apics[0].gsi_base, 0);
+    }
+}
+
+ktest::ktest! {
+    fn qemu_has_one_hpet_in_memory() {
+        let hpet = hpet().expect("q35 has an HPET");
+        assert_eq!(hpet.address, PhysAddr::new(0xfed0_0000));
+        assert_eq!(hpet.number, 0);
     }
 }
 

@@ -17,7 +17,7 @@ use arch_x86_64::{PhysAddr, VirtAddr};
 use mm::{DirectMap, Region};
 
 use crate::arch::x86_64::qemu::{self, ExitCode};
-use crate::arch::x86_64::{cpu, gdt, idt, lapic, pic, tsc};
+use crate::arch::x86_64::{cpu, gdt, hpet, idt, lapic, pic, tsc};
 use crate::console::{self, kprintln};
 use crate::time::ClockSource;
 use crate::{acpi, heap, memory, percpu, sched, time};
@@ -144,18 +144,7 @@ fn kmain_paged(info: BootInfo) -> ! {
         per_ms,
         lapic::HZ
     );
-    // The TSC reads in a few cycles, so it wins when it keeps time.
-    let clock: &'static dyn ClockSource = match tsc::init() {
-        Ok(tsc) => {
-            kprintln!("hadron: invariant TSC at {} kHz", tsc.frequency() / 1000);
-            tsc
-        }
-        Err(why) => {
-            kprintln!("hadron: not using the TSC: {why}");
-            &lapic::TickClock
-        }
-    };
-    time::install(clock);
+    time::install(choose_clock());
     kprintln!("hadron: clock source is {}", time::source_name());
     sched::init();
     // SAFETY: the PICs are masked. The local APIC delivers only its timer
@@ -164,6 +153,33 @@ fn kmain_paged(info: BootInfo) -> ! {
     // The main thread runs to the end of boot, so its handle is not needed.
     drop(sched::spawn("main", move || main_thread(info)));
     sched::run_idle()
+}
+
+/// Starts the TSC and the HPET, and returns the best clock source: the
+/// TSC, which reads in a few cycles, then the HPET, whose reads go to the
+/// chipset, then the local APIC tick count, which every CPU has.
+fn choose_clock() -> &'static dyn ClockSource {
+    let tsc = tsc::init();
+    let hpet = hpet::init();
+    match &hpet {
+        Ok(hpet) => kprintln!(
+            "hadron: HPET at {} kHz with {} comparators",
+            hpet.frequency() / 1000,
+            hpet.timers()
+        ),
+        Err(why) => kprintln!("hadron: not using the HPET: {why}"),
+    }
+    match tsc {
+        Ok(tsc) => {
+            kprintln!("hadron: invariant TSC at {} kHz", tsc.frequency() / 1000);
+            return tsc;
+        }
+        Err(why) => kprintln!("hadron: not using the TSC: {why}"),
+    }
+    match hpet {
+        Ok(hpet) => hpet,
+        Err(_) => &lapic::TickClock,
+    }
 }
 
 /// The first kernel thread: reports memory, gives back the bootloader's

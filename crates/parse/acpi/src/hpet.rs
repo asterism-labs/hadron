@@ -66,7 +66,8 @@ pub struct HpetTable {
     pub base_address: GenericAddress,
     /// HPET sequence number (used when multiple HPETs are present).
     pub hpet_number: u8,
-    /// Minimum clock tick in periodic mode, in femtoseconds.
+    /// The smallest period, in main counter ticks, that a comparator in
+    /// periodic mode can be set to without losing interrupts.
     pub minimum_tick: u16,
     /// Page protection and OEM attribute.
     pub page_protection: u8,
@@ -81,12 +82,16 @@ impl HpetTable {
     /// `HPET`, or [`AcpiError::InvalidChecksum`] if the checksum is invalid.
     pub fn parse(handler: &impl AcpiHandler, phys: u64) -> Result<Self, AcpiError> {
         let table = crate::sdt::load_table(handler, phys, HPET_SIGNATURE)?;
+        Self::read_fields(table.data).ok_or(AcpiError::TruncatedData)
+    }
 
-        let raw: HpetRaw =
-            crate::read::at(table.data, SdtHeader::SIZE).ok_or(AcpiError::TruncatedData)?;
+    /// Reads the fields from a whole table, header included. Returns
+    /// `None` if the table is too short.
+    fn read_fields(data: &[u8]) -> Option<Self> {
+        let raw: HpetRaw = crate::read::at(data, SdtHeader::SIZE)?;
         let gas = raw.base_address;
 
-        Ok(Self {
+        Some(Self {
             event_timer_block_id: raw.event_timer_block_id.get(),
             base_address: GenericAddress {
                 address_space_id: gas.address_space_id,
@@ -99,5 +104,36 @@ impl HpetTable {
             minimum_tick: raw.minimum_tick.get(),
             page_protection: raw.page_protection,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_the_fields_after_the_header() {
+        // QEMU's q35 table: one 64-bit HPET with 3 comparators at
+        // 0xFED0_0000.
+        let mut data = [0u8; 56];
+        data[36..40].copy_from_slice(&0x8086_A201u32.to_le_bytes());
+        // Generic address: system memory, 64 bits wide, offset 0.
+        data[40..44].copy_from_slice(&[0, 64, 0, 0]);
+        data[44..52].copy_from_slice(&0xFED0_0000u64.to_le_bytes());
+        data[52] = 0;
+        data[53..55].copy_from_slice(&128u16.to_le_bytes());
+        data[55] = 0;
+        let hpet = HpetTable::read_fields(&data).expect("56 bytes is a whole table");
+        assert_eq!(hpet.event_timer_block_id, 0x8086_A201);
+        assert_eq!(hpet.base_address.address_space_id, 0);
+        assert_eq!(hpet.base_address.register_bit_width, 64);
+        assert_eq!(hpet.base_address.address, 0xFED0_0000);
+        assert_eq!(hpet.hpet_number, 0);
+        assert_eq!(hpet.minimum_tick, 128);
+    }
+
+    #[test]
+    fn short_table_is_rejected() {
+        assert!(HpetTable::read_fields(&[0u8; 55]).is_none());
     }
 }
