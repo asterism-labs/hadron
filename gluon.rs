@@ -12,9 +12,7 @@ const LIBRARIES: &[&str] = &[
     "acpi", "arch-x86_64", "dwarf", "elf", "fdt", "ktest", "limine", "linkset", "mm", "uefi",
 ];
 
-fn main() -> Result<()> {
-    let mut cfg = Config::new();
-
+pub fn config(cfg: &mut Config) -> Result<()> {
     cfg.project("hadron", "0.1.0").default_profile("dev");
     let x86_64 = cfg.target("x86_64-unknown-none");
     cfg.cargo_workspace(".");
@@ -96,5 +94,5 @@ fn main() -> Result<()> {
         ])
         .success_exit_code(33);
 
-    cfg.emit()
+    Ok(())
 }
