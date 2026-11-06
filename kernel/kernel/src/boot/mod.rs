@@ -19,7 +19,7 @@ use mm::{DirectMap, Region};
 use crate::arch::x86_64::qemu::{self, ExitCode};
 use crate::arch::x86_64::{cpu, gdt, idt, lapic, pic};
 use crate::console::{self, kprintln};
-use crate::{acpi, heap, memory, percpu, sched};
+use crate::{acpi, heap, memory, percpu, sched, time};
 
 /// EFER.LMA, bit 10: long mode is active.
 const EFER_LMA: u64 = 1 << 10;
@@ -143,6 +143,8 @@ fn kmain_paged(info: BootInfo) -> ! {
         per_ms,
         lapic::HZ
     );
+    time::install(&lapic::TickClock);
+    kprintln!("hadron: clock source is {}", time::source_name());
     sched::init();
     // SAFETY: the PICs are masked. The local APIC delivers only its timer
     // and spurious vectors, which have handlers, and NMIs.

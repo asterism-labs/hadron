@@ -155,7 +155,8 @@ ktest::ktest! {
         let start = time::now();
         let result = QUEUE.block_until_timeout(|| false, Duration::from_millis(20));
         assert_eq!(result, Err(TimedOut));
-        assert!(time::now().ticks() - start.ticks() >= 2, "waited the full 20 ms");
+        let waited = time::now().duration_since(start);
+        assert!(waited >= Duration::from_millis(20), "waited {waited:?} of 20 ms");
     }
 }
 

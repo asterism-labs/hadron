@@ -170,6 +170,23 @@ pub(crate) fn ticks() -> u64 {
     TICKS.load(Ordering::Relaxed)
 }
 
+/// The timer tick count as a clock source, at [`HZ`] counts per second.
+pub(crate) struct TickClock;
+
+impl crate::time::ClockSource for TickClock {
+    fn name(&self) -> &'static str {
+        "local APIC ticks"
+    }
+
+    fn read(&self) -> u64 {
+        ticks()
+    }
+
+    fn frequency(&self) -> u64 {
+        HZ
+    }
+}
+
 /// The timer handler: counts the tick, wakes the sleepers whose deadline
 /// it reaches, and asks for a thread switch, which the interrupt exit
 /// makes.

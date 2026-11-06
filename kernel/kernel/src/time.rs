@@ -1,11 +1,13 @@
-//! Kernel time: instants, sleeping and timeouts.
+//! Kernel time: a clock source, instants, sleeping and timeouts.
 //!
-//! Time counts local APIC timer ticks, [`HZ`] per second. A deadline is
-//! the first tick at or after it, so a duration rounds up to whole ticks
-//! and a sleep never ends early.
+//! [`now`] reads the [`ClockSource`] that boot installs and converts its
+//! count to nanoseconds since the count started. A deadline adds one
+//! count of the source on top of the duration, since the current count is
+//! already partly over, so a sleep never ends early.
 //!
 //! Sleeping threads wait in one timer queue, ordered by deadline. The
-//! timer interrupt wakes every waiter whose deadline has passed. A
+//! local APIC timer interrupt wakes every waiter whose deadline has
+//! passed, so wakeups land on its ticks whatever the clock source. A
 //! [`Sleep`] dropped before its deadline takes its waker out of the queue.
 
 use alloc::collections::BTreeMap;
@@ -14,56 +16,128 @@ use core::pin::Pin;
 use core::task::{Context, Poll, Waker};
 use core::time::Duration;
 
-use crate::arch::x86_64::lapic::{self, HZ};
 use crate::sched;
-use crate::sync::{IrqSpinLock, levels};
+use crate::sync::{IrqSpinLock, WriteOnce, levels};
 
-/// A point in time, counted in timer ticks since the timer started.
+const NANOS_PER_SEC: u64 = 1_000_000_000;
+
+/// A counter that time is read from, such as a timer tick count, the TSC
+/// or the HPET main counter.
+pub(crate) trait ClockSource: Sync {
+    /// A short name for boot messages.
+    fn name(&self) -> &'static str;
+
+    /// The current count. It rises monotonically and never wraps, so a
+    /// source with a narrower counter must extend it.
+    fn read(&self) -> u64;
+
+    /// Counts per second. Fixed for the life of the source.
+    fn frequency(&self) -> u64;
+}
+
+/// The installed source, with its frequency and resolution read once.
+struct Clock {
+    source: &'static dyn ClockSource,
+    frequency: u64,
+    /// One count in nanoseconds, rounded up.
+    resolution: u64,
+}
+
+static CLOCK: WriteOnce<Clock> = WriteOnce::new();
+
+/// Makes `source` the clock that [`now`] reads. Boot calls this once.
+///
+/// # Panics
+///
+/// Panics if a source is already installed or `source` counts at 0 Hz.
+pub(crate) fn install(source: &'static dyn ClockSource) {
+    let frequency = source.frequency();
+    assert!(
+        frequency > 0,
+        "clock source {} counts at 0 Hz",
+        source.name()
+    );
+    CLOCK.init(Clock {
+        source,
+        frequency,
+        resolution: resolution(frequency),
+    });
+}
+
+fn clock() -> &'static Clock {
+    CLOCK.get().expect("time::install ran")
+}
+
+/// The name of the installed clock source.
+///
+/// # Panics
+///
+/// Panics before [`install`].
+pub(crate) fn source_name() -> &'static str {
+    clock().source.name()
+}
+
+/// `count` at `frequency` in nanoseconds, rounded down. Saturates at
+/// `u64::MAX`.
+fn to_nanos(count: u64, frequency: u64) -> u64 {
+    let nanos = u128::from(count) * u128::from(NANOS_PER_SEC) / u128::from(frequency);
+    u64::try_from(nanos).unwrap_or(u64::MAX)
+}
+
+/// One count at `frequency` in nanoseconds, rounded up.
+fn resolution(frequency: u64) -> u64 {
+    NANOS_PER_SEC.div_ceil(frequency)
+}
+
+/// A point in time, in nanoseconds since the clock source started.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct Instant {
-    ticks: u64,
+    nanos: u64,
 }
 
 impl Instant {
-    /// Timer ticks since the timer started.
-    pub(crate) fn ticks(self) -> u64 {
-        self.ticks
+    /// The time from `earlier` to this instant, or zero if `earlier` is
+    /// later.
+    pub(crate) fn duration_since(self, earlier: Self) -> Duration {
+        Duration::from_nanos(self.nanos.saturating_sub(earlier.nanos))
     }
 }
 
 impl Add<Duration> for Instant {
     type Output = Self;
 
-    /// The instant `duration` later, rounded up to a whole tick. Saturates
-    /// at the last representable tick.
+    /// The instant `duration` later. Saturates at the last representable
+    /// nanosecond, about 584 years in.
     fn add(self, duration: Duration) -> Self {
+        let nanos = u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX);
         Self {
-            ticks: self.ticks.saturating_add(ticks_in(duration)),
+            nanos: self.nanos.saturating_add(nanos),
         }
     }
 }
 
-/// `duration` in timer ticks, rounded up.
-fn ticks_in(duration: Duration) -> u64 {
-    let ticks = (duration.as_nanos() * u128::from(HZ)).div_ceil(1_000_000_000);
-    u64::try_from(ticks).unwrap_or(u64::MAX)
-}
-
 /// The current instant.
+///
+/// # Panics
+///
+/// Panics before [`install`].
 pub(crate) fn now() -> Instant {
+    let clock = clock();
     Instant {
-        ticks: lapic::ticks(),
+        nanos: to_nanos(clock.source.read(), clock.frequency),
     }
 }
 
 /// The earliest deadline that is at least `duration` from now.
 ///
-/// The current tick is already partly over, so this adds one tick on top
-/// of `now() + duration`.
+/// [`now`] rounds down to the last whole count, so this adds one count
+/// of the source on top of `now() + duration`.
+///
+/// # Panics
+///
+/// Panics before [`install`].
 pub(crate) fn deadline_after(duration: Duration) -> Instant {
-    Instant {
-        ticks: (now() + duration).ticks.saturating_add(1),
-    }
+    now() + duration + Duration::from_nanos(clock().resolution)
 }
 
 /// Blocks the current thread for at least `duration`.
@@ -103,14 +177,14 @@ static TIMERS: IrqSpinLock<levels::Timers, Timers> = IrqSpinLock::new(Timers {
 /// Wakes every waiter whose deadline has passed. The timer interrupt calls
 /// this after it counts the tick.
 pub(crate) fn expire() {
-    let now = now().ticks;
+    let now = now();
     loop {
         // One waker at a time, woken with the lock released, since waking
         // takes the run queue lock.
         let waker = {
             let mut timers = TIMERS.lock();
             match timers.waiting.first_entry() {
-                Some(entry) if entry.key().0 <= now => entry.remove(),
+                Some(entry) if entry.key().0 <= now.nanos => entry.remove(),
                 _ => break,
             }
         };
@@ -138,7 +212,7 @@ impl Sleep {
     }
 
     fn key(&self, id: u64) -> (u64, u64) {
-        (self.deadline.ticks, id)
+        (self.deadline.nanos, id)
     }
 }
 
@@ -148,7 +222,7 @@ impl Future for Sleep {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         let this = self.get_mut();
         let mut timers = TIMERS.lock();
-        // Checked under the lock: a tick counted after this load runs
+        // Checked under the lock: a timer tick after this check runs
         // `expire` only once the lock is free, and finds the entry.
         if now() >= this.deadline {
             let old = this
@@ -226,13 +300,28 @@ impl<F: Future> Future for Timeout<F> {
 }
 
 ktest::ktest! {
-    fn durations_round_up_to_whole_ticks() {
-        let tick = Duration::from_nanos(1_000_000_000 / HZ);
-        assert_eq!(ticks_in(Duration::ZERO), 0);
-        assert_eq!(ticks_in(Duration::from_nanos(1)), 1);
-        assert_eq!(ticks_in(tick), 1);
-        assert_eq!(ticks_in(tick + Duration::from_nanos(1)), 2);
-        assert_eq!(ticks_in(Duration::MAX), u64::MAX);
+    fn counts_convert_to_nanoseconds() {
+        // 100 Hz ticks, and a 3 GHz TSC.
+        assert_eq!(to_nanos(3, 100), 30_000_000);
+        assert_eq!(resolution(100), 10_000_000);
+        assert_eq!(to_nanos(3_000_000_000, 3_000_000_000), NANOS_PER_SEC);
+        assert_eq!(to_nanos(1, 3_000_000_000), 0);
+        assert_eq!(resolution(3_000_000_000), 1);
+        // A year at 3 GHz overflows `count * 1e9` in 64 bits.
+        let year = 365 * 24 * 3600;
+        assert_eq!(to_nanos(year * 3_000_000_000, 3_000_000_000), year * NANOS_PER_SEC);
+        assert_eq!(to_nanos(u64::MAX, 1), u64::MAX);
+    }
+}
+
+ktest::ktest! {
+    fn deadlines_add_one_count_of_the_source() {
+        let before = now();
+        let deadline = deadline_after(Duration::from_millis(5));
+        let added = deadline.duration_since(before);
+        let least = Duration::from_millis(5) + Duration::from_nanos(clock().resolution);
+        assert!(added >= least, "{added:?} added, expected at least {least:?}");
+        assert_eq!(Instant { nanos: u64::MAX - 1 } + Duration::MAX, Instant { nanos: u64::MAX });
     }
 }
 
@@ -240,10 +329,13 @@ ktest::ktest! {
     fn sleep_lasts_at_least_its_duration() {
         let start = now();
         sleep(Duration::from_millis(30));
-        let slept = now().ticks() - start.ticks();
-        // 30 ms is 3 ticks. Under emulation a tick can come late, so the
-        // upper bound leaves room.
-        assert!((3..=8).contains(&slept), "slept {slept} ticks for 30 ms");
+        let slept = now().duration_since(start);
+        // Wakeups land on 10 ms ticks, and under emulation a tick can come
+        // late, so the upper bound leaves room.
+        assert!(
+            (Duration::from_millis(30)..=Duration::from_millis(80)).contains(&slept),
+            "slept {slept:?} for 30 ms"
+        );
     }
 }
 
@@ -251,7 +343,7 @@ ktest::ktest! {
     fn sleep_until_a_past_deadline_returns_at_once() {
         let start = now();
         sleep_until(start);
-        assert!(now().ticks() - start.ticks() <= 1);
+        assert!(now().duration_since(start) <= Duration::from_millis(10));
     }
 }
 
