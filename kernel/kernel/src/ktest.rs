@@ -1,6 +1,6 @@
 //! Runner for the tests registered with [`ktest::ktest!`].
 //!
-//! Gluon's `test` profile sets the `KTEST` config option, and `kmain`
+//! Quon's `test` profile sets the `KTEST` config option, and `kmain`
 //! then calls [`run`] after boot. A failing test panics. The kernel has no
 //! unwinding, so the panic handler reports the test through
 //! [`report_panic`] and exits QEMU, and the run stops at that test.
@@ -46,7 +46,7 @@ pub(crate) fn report_panic() {
 }
 
 // Shows that a failing test fails the run. Run it with
-// `GLUON_KTEST_IGNORED=true gluon run -p test`.
+// `QUON_KTEST_IGNORED=true quon run -p test`.
 ktest::ktest! {
     #[ignore]
     fn fails_on_purpose() {

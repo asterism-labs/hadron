@@ -510,7 +510,7 @@ ktest::ktest! {
     fn might_sleep_reports_sleeping_under_a_spin_lock() {
         use crate::sync::{IrqSpinLock, levels::KtestSpin};
         // Shows the report. Run it with
-        // `GLUON_KTEST_IGNORED=true gluon run -p test`.
+        // `QUON_KTEST_IGNORED=true quon run -p test`.
         static LOCK: IrqSpinLock<KtestSpin, ()> = IrqSpinLock::new(());
         let _held = LOCK.lock();
         yield_now();

@@ -1,8 +1,8 @@
-//! QEMU's `isa-debug-exit` device, which `gluon.rs` adds to the machine.
+//! QEMU's `isa-debug-exit` device, which `quon.rs` adds to the machine.
 
 use super::{cpu, port};
 
-/// I/O port of the `isa-debug-exit` device, as set in `gluon.rs`.
+/// I/O port of the `isa-debug-exit` device, as set in `quon.rs`.
 const DEBUG_EXIT_PORT: u16 = 0xf4;
 
 /// Status the kernel reports when it leaves QEMU. QEMU exits with
@@ -10,7 +10,7 @@ const DEBUG_EXIT_PORT: u16 = 0xf4;
 #[derive(Clone, Copy, Debug)]
 #[repr(u32)]
 pub(crate) enum ExitCode {
-    /// QEMU exits with status 33, which `gluon.rs` names as success.
+    /// QEMU exits with status 33, which `quon.rs` names as success.
     Success = 0x10,
     /// QEMU exits with status 35.
     Failure = 0x11,

@@ -20,7 +20,7 @@ path = "src/main.rs"
 test = false
 bench = false
 
-# Each test is a kernel image that `gluon test` boots on its own.
+# Each test is a kernel image that `quon test` boots on its own.
 [[test]]
 name = "heap"
 harness = false

@@ -7,7 +7,7 @@
 //! The boot context then becomes the idle thread and starts the main
 //! kernel thread, which exits QEMU through the `isa-debug-exit` device.
 //!
-//! Built with Gluon's `test` profile, it runs the kernel tests after boot
+//! Built with Quon's `test` profile, it runs the kernel tests after boot
 //! instead. See `ktest.rs`.
 //!
 //! The binary in `main.rs` holds only the entry point Limine jumps to and
@@ -50,7 +50,7 @@ mod sync;
 #[cfg(all(target_os = "none", target_arch = "x86_64"))]
 mod time;
 
-/// The kernel binary's main thread: runs the kernel tests under Gluon's
+/// The kernel binary's main thread: runs the kernel tests under Quon's
 /// `test` profile, else returns, and QEMU exits with success.
 #[cfg(all(target_os = "none", target_arch = "x86_64"))]
 pub fn kmain() {

@@ -1,7 +1,7 @@
 //! Boots the kernel and allocates from the heap on the main thread.
 //!
 //! An integration test is a whole kernel image with its own entry point
-//! and panic handler. `gluon test` boots it on its own, and it passes
+//! and panic handler. `quon test` boots it on its own, and it passes
 //! when QEMU exits with success.
 
 #![cfg_attr(target_os = "none", no_std, no_main)]

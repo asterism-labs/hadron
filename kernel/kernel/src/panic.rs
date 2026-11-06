@@ -2,7 +2,7 @@
 //!
 //! The binary's `#[panic_handler]` calls [`handle`].
 //!
-//! Under QEMU the kernel exits with a failure status, so `gluon run` and
+//! Under QEMU the kernel exits with a failure status, so `quon run` and
 //! the test runner see the panic. On real hardware the CPU halts.
 
 use core::panic::PanicInfo;

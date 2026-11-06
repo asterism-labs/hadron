@@ -279,7 +279,7 @@ ktest::ktest! {
     fn lockdep_reports_locks_taken_out_of_order() {
         use crate::sync::{IrqSpinLock, levels::KtestSpin};
         // Shows the run-time checker's report. Run it with
-        // `GLUON_KTEST_IGNORED=true gluon run -p test`.
+        // `QUON_KTEST_IGNORED=true quon run -p test`.
         static LATE: IrqSpinLock<KtestSpin, ()> = IrqSpinLock::new(());
         let _late = LATE.lock();
         let _early = STACKS.lock();

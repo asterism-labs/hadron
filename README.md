@@ -45,21 +45,21 @@ The hooks check whitespace, final newlines, `cargo fmt`, `taplo fmt` and
 
 ## Building and running
 
-[Gluon](https://github.com/hxyulin/gluon) builds the crates for
+[Quon](https://github.com/hxyulin/quon) builds the crates for
 `x86_64-unknown-none` and boots the kernel under QEMU with Limine and OVMF.
-`gluon.rs` holds the build, and `limine.conf` the boot menu.
+`quon.rs` holds the build, and `limine.conf` the boot menu.
 
 ```sh
-gluon build          # build every crate into build/
-gluon clippy         # lint every crate for the kernel target
-gluon run            # boot the kernel under QEMU
+quon build          # build every crate into build/
+quon clippy         # lint every crate for the kernel target
+quon run            # boot the kernel under QEMU
 ```
 
-`gluon run` exits 0 when the kernel reports success through QEMU's
+`quon run` exits 0 when the kernel reports success through QEMU's
 `isa-debug-exit` device. The kernel console is COM3, which QEMU sends to
 the terminal. The firmware and Limine write to COM1 and COM2, and QEMU
 discards both. The first build downloads Limine's `BOOTX64.EFI`
-and checks it against the SHA-256 in `gluon.rs`.
+and checks it against the SHA-256 in `quon.rs`.
 
 ## Kernel tests
 
@@ -77,15 +77,15 @@ ktest::ktest! {
 Write `#[ignore]` before `fn` to keep a test out of the default run.
 
 ```sh
-gluon run -p test                          # run the tests
-GLUON_KTEST_IGNORED=true gluon run -p test # also run #[ignore] tests
+quon run -p test                          # run the tests
+QUON_KTEST_IGNORED=true quon run -p test # also run #[ignore] tests
 ```
 
 The `test` profile sets the `KTEST` config option. The kernel then prints
 one line per test on COM3 and exits QEMU with status 33 when
 every test passes. The kernel has no unwinding, so the first failing test
 ends the run: the panic handler prints `FAILED` and the panic message, and
-QEMU exits with status 35. `gluon run` exits 0 or 1 to match.
+QEMU exits with status 35. `quon run` exits 0 or 1 to match.
 
 ## History
 

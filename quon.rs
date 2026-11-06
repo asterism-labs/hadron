@@ -1,13 +1,13 @@
-// Gluon build for Hadron.
+// Quon build for Hadron.
 //
-//     gluon build         build every crate
-//     gluon clippy        lint every crate
-//     gluon run           boot the kernel under QEMU through UEFI and Limine
-//     gluon run -p test   boot the kernel and run the kernel tests
-//     gluon test          run the host tests, the integration tests and
+//     quon build         build every crate
+//     quon clippy        lint every crate
+//     quon run           boot the kernel under QEMU through UEFI and Limine
+//     quon run -p test   boot the kernel and run the kernel tests
+//     quon test          run the host tests, the integration tests and
 //                         the kernel tests
 
-use gluon_config::{Config, ConfigValue, Result};
+use quon_config::{Config, ConfigValue, Result};
 
 /// Workspace library crates. The kernel package is declared on its own.
 const LIBRARIES: &[&str] = &[
@@ -31,7 +31,7 @@ pub fn config(cfg: &mut Config) -> Result<()> {
 
     // The kernel reads these as `hadron_config::KTEST` and
     // `hadron_config::KTEST_IGNORED`. The `test` profile turns on KTEST.
-    // `GLUON_KTEST_IGNORED=true` also runs the `#[ignore]` tests.
+    // `QUON_KTEST_IGNORED=true` also runs the `#[ignore]` tests.
     cfg.config_bool("KTEST")
         .default_value(ConfigValue::Bool(false))
         .help("Run the kernel tests after boot instead of exiting");
@@ -57,7 +57,7 @@ pub fn config(cfg: &mut Config) -> Result<()> {
         .linker_script("kernel/kernel/kernel.ld")
         .rustc_flag("-Crelocation-model=static");
 
-    // Gluon builds a package for one target only, so the libraries do not
+    // Quon builds a package for one target only, so the libraries do not
     // build for aarch64-unknown-none yet.
     let mut libraries = cfg.group("libraries").target(x86_64);
     for name in LIBRARIES {
