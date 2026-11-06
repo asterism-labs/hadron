@@ -23,10 +23,11 @@ pub fn config(cfg: &mut Config) -> Result<()> {
     cfg.cargo_workspace(".");
 
     cfg.profile("dev")
+        .runner("qemu")
         .target(x86_64)
         .opt_level(0)
         .debug_info(true)
-        .boot_binary("kernel");
+        .run_binary("kernel");
 
     // The kernel reads these as `hadron_config::KTEST` and
     // `hadron_config::KTEST_IGNORED`. The `test` profile turns on KTEST.
@@ -85,7 +86,7 @@ pub fn config(cfg: &mut Config) -> Result<()> {
 
     // The kernel writes 0x10 to isa-debug-exit on success, and QEMU exits
     // with (0x10 << 1) | 1 = 33.
-    cfg.qemu("qemu-system-x86_64")
+    cfg.runner("qemu").qemu("qemu-system-x86_64")
         .machine("q35")
         .memory(256)
         .cores(1)
